@@ -167,12 +167,180 @@ def _print_results(results: list[_Result], do_global: bool) -> None:
             print(f"  {line}")
 
 
-def _index_phase(
-    sessions: list[tuple[Path, Path]], max_bytes: int, show_progress: bool
-) -> tuple[list[tuple[Path, Path, list[Path], int]], int, int, int]:
-    """Phase 1: walk every session, gathering files within the size cap.
-    Returns (indexed_sessions, total_files, total_bytes, total_skipped)."""
+def _rg_cmd(query: str, max_bytes: int, targets: list[str]) -> list[str]:
+    return [
+        "rg", "--no-heading", "-n", "-H", "-F",
+        "--color=never", "-C", "1",
+        f"--max-filesize={max_bytes}",
+        "--", query, *targets,
+    ]
+
+
+def _time_first_session_with_rg(
+    sessions: list[tuple[Path, Path]], query: str, max_bytes: int
+) -> float | None:
+    """Run rg on a single session as a rough timing sample. Returns the
+    wall-clock duration in seconds, or None if rg failed."""
+    sess, _ = sessions[0]
+    cmd = _rg_cmd(query, max_bytes, [str(sess.resolve())])
+    start = time.monotonic()
+    try:
+        res = subprocess.run(
+            cmd, stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+    except OSError:
+        return None
+    if res.returncode > 1:
+        return None
+    return time.monotonic() - start
+
+
+def _contents_search_with_rg(
+    sessions: list[tuple[Path, Path]],
+    query: str,
+    do_global: bool,
+    max_file_size_mb: float,
+) -> int:
     n = len(sessions)
+    noun = "session" if n == 1 else "sessions"
+    max_bytes = int(max_file_size_mb * 1024 * 1024)
+    show_progress = sys.stderr.isatty()
+
+    # Print the count immediately so the user sees something within ms.
+    print(
+        f"ccs: searching {n} {noun} for '{query}' "
+        f"(skipping files > {max_file_size_mb:g} MB)...",
+        file=sys.stderr,
+    )
+
+    # Crude up-front estimate: time ONE session, multiply by n. Cheap (typically
+    # <1s) and gives the user a worst-case ETA before the big run starts.
+    sample_time = _time_first_session_with_rg(sessions, query, max_bytes)
+    if sample_time is None:
+        print("ccs: rg failed on the first session; falling back to grep", file=sys.stderr)
+        return _contents_search_with_grep(
+            sessions, query, do_global, max_file_size_mb, workers=0,
+        )
+    rough_est = sample_time * n
+    print(
+        f"ccs: first session scanned in {_format_duration(sample_time)}; "
+        f"rough sequential estimate ~{_format_duration(rough_est)} for {n} {noun} "
+        f"(actual usually faster - rg parallelises internally).",
+        file=sys.stderr,
+    )
+
+    # Big run: one streaming rg invocation across all session dirs.
+    sess_by_dir: dict[str, tuple[Path, Path]] = {}
+    for sess, proj in sessions:
+        sess_by_dir[str(sess.resolve())] = (sess, proj)
+    cmd = _rg_cmd(query, max_bytes, list(sess_by_dir.keys()))
+
+    start = time.monotonic()
+    try:
+        proc = subprocess.Popen(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            text=True,
+            errors="replace",
+            bufsize=1,
+        )
+    except OSError:
+        return _contents_search_with_grep(
+            sessions, query, do_global, max_file_size_mb, workers=0,
+        )
+
+    progress = _Progress(show_progress)
+    output_lines: list[str] = []
+    last_update = start
+    assert proc.stdout is not None
+    try:
+        for line in proc.stdout:
+            output_lines.append(line.rstrip("\n"))
+            now = time.monotonic()
+            if show_progress and now - last_update >= 0.3:
+                last_update = now
+                elapsed = now - start
+                pct_est = min(99, int(100 * elapsed / max(rough_est, 0.001)))
+                progress.update(
+                    f"searching with rg... [{_format_duration(elapsed)} / "
+                    f"~{_format_duration(rough_est)} est, ~{pct_est}%]  "
+                    f"{len(output_lines)} match lines so far"
+                )
+        proc.wait()
+    except BaseException:
+        proc.kill()
+        proc.wait()
+        raise
+
+    progress.clear()
+    elapsed = time.monotonic() - start
+
+    if proc.returncode > 1:
+        print("ccs: rg failed; falling back to per-session grep", file=sys.stderr)
+        return _contents_search_with_grep(
+            sessions, query, do_global, max_file_size_mb, workers=0,
+        )
+
+    print(
+        f"ccs: searched {n} {noun} in {_format_duration(elapsed)} "
+        f"(estimate was {_format_duration(rough_est)})",
+        file=sys.stderr,
+    )
+
+    # Group output lines by session-dir prefix (longest-prefix wins so nested
+    # session dirs don't grab matches that belong to a deeper sibling).
+    sorted_keys = sorted(sess_by_dir.keys(), key=len, reverse=True)
+    grouped: dict[str, list[str]] = {}
+    for line in output_lines:
+        if line == "--":
+            continue
+        match_key = None
+        for k in sorted_keys:
+            if line.startswith(k + "/"):
+                match_key = k
+                break
+        if match_key is None:
+            continue
+        rel = line[len(match_key) + 1:]
+        grouped.setdefault(match_key, []).append(rel)
+
+    if not grouped:
+        print(f"ccs: no sessions match '{query}'", file=sys.stderr)
+        return 1
+
+    results: list[_Result] = []
+    for k, lines in grouped.items():
+        sess, proj = sess_by_dir[k]
+        date_key = session_start_date(sess.name)
+        assert date_key is not None
+        results.append(_Result(date_key, sess.name, proj, lines))
+    _print_results(results, do_global)
+    return 0
+
+
+def _contents_search_with_grep(
+    sessions: list[tuple[Path, Path]],
+    query: str,
+    do_global: bool,
+    max_file_size_mb: float,
+    workers: int,
+) -> int:
+    """Fallback path used when rg is unavailable. Plain grep has no
+    --max-filesize equivalent, so we keep an indexing pre-pass to enforce
+    the size cap at the Python layer."""
+    n = len(sessions)
+    noun = "session" if n == 1 else "sessions"
+    max_bytes = int(max_file_size_mb * 1024 * 1024)
+    show_progress = sys.stderr.isatty()
+
+    print(
+        f"ccs: indexing files in {n} {noun} "
+        f"(install ripgrep for ~3x speedup)...",
+        file=sys.stderr,
+    )
+
     indexed: list[tuple[Path, Path, list[Path], int]] = []
     total_files = 0
     total_bytes = 0
@@ -188,110 +356,28 @@ def _index_phase(
             f"indexing [{i}/{n}] {total_files} files, {_format_size(total_bytes)} so far"
         )
     progress.clear()
-    return indexed, total_files, total_bytes, total_skipped
 
+    skipped_msg = (
+        f" (skipped {total_skipped} files > {max_file_size_mb:g} MB)"
+        if total_skipped else ""
+    )
+    print(
+        f"ccs: indexed {total_files} files ({_format_size(total_bytes)}) "
+        f"across {n} {noun}{skipped_msg}",
+        file=sys.stderr,
+    )
+    if total_files == 0:
+        print(f"ccs: no sessions match '{query}'", file=sys.stderr)
+        return 1
 
-def _grep_with_streaming_rg(
-    indexed: list[tuple[Path, Path, list[Path], int]],
-    query: str,
-    max_bytes: int,
-    show_progress: bool,
-) -> tuple[list[_Result], float] | None:
-    """Single streaming rg invocation across all session dirs. Returns
-    (results, elapsed_seconds), or None if rg failed and the caller should
-    fall through to the per-session pool."""
-    sess_by_dir: dict[str, tuple[Path, Path]] = {}
-    sess_dirs: list[str] = []
-    for sess, proj, _, _ in indexed:
-        key = str(sess.resolve())
-        sess_by_dir[key] = (sess, proj)
-        sess_dirs.append(key)
-
-    cmd = [
-        "rg", "--no-heading", "-n", "-H", "-F",
-        "--color=never", "-C", "1",
-        f"--max-filesize={max_bytes}",
-        "--", query, *sess_dirs,
-    ]
-    start = time.monotonic()
-    try:
-        proc = subprocess.Popen(
-            cmd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL,
-            text=True,
-            errors="replace",
-            bufsize=1,
-        )
-    except OSError:
-        return None
-
-    progress = _Progress(show_progress)
-    output_lines: list[str] = []
-    last_update = start
-    assert proc.stdout is not None
-    try:
-        for line in proc.stdout:
-            output_lines.append(line.rstrip("\n"))
-            now = time.monotonic()
-            if show_progress and now - last_update >= 0.3:
-                last_update = now
-                progress.update(
-                    f"searching with rg... [elapsed {_format_duration(now - start)}]  "
-                    f"{len(output_lines)} match lines so far"
-                )
-        proc.wait()
-    except BaseException:
-        proc.kill()
-        proc.wait()
-        raise
-
-    progress.clear()
-    elapsed = time.monotonic() - start
-
-    if proc.returncode > 1:
-        # rg failed (not just "no matches"). Treat as fallback trigger.
-        return None
-
-    # Group output lines by session-dir prefix.
-    sorted_keys = sorted(sess_by_dir.keys(), key=len, reverse=True)
-    grouped: dict[str, list[str]] = {}
-    for line in output_lines:
-        if line == "--":
-            continue
-        # Strip leading "/abs/sess/" so output matches the per-session format.
-        match_key = None
-        for k in sorted_keys:
-            if line.startswith(k + "/"):
-                match_key = k
-                break
-        if match_key is None:
-            continue
-        rel = line[len(match_key) + 1:]
-        grouped.setdefault(match_key, []).append(rel)
-
-    results: list[_Result] = []
-    for k, lines in grouped.items():
-        sess, proj = sess_by_dir[k]
-        date_key = session_start_date(sess.name)
-        assert date_key is not None
-        results.append(_Result(date_key, sess.name, proj, lines))
-    return results, elapsed
-
-
-def _grep_with_per_session_pool(
-    indexed: list[tuple[Path, Path, list[Path], int]],
-    query: str,
-    workers: int,
-    show_progress: bool,
-    total_files: int,
-) -> tuple[list[_Result], float]:
-    """Fallback when rg isn't available: per-session grep_files via a thread
-    pool. Slower than the streaming-rg path but works with plain GNU grep."""
-    n = len(indexed)
     if workers <= 0:
         workers = os.cpu_count() or 4
     workers = max(1, min(workers, n or 1))
+    print(
+        f"ccs: searching with {workers} parallel "
+        f"{'worker' if workers == 1 else 'workers'}...",
+        file=sys.stderr,
+    )
 
     start = time.monotonic()
     results: list[_Result] = []
@@ -299,7 +385,6 @@ def _grep_with_per_session_pool(
     completed_files = 0
     completed_bytes = 0
     progress = _Progress(show_progress)
-
     with ThreadPoolExecutor(max_workers=workers) as pool:
         futures = {
             pool.submit(grep_files, files, query, 1, sess): (sess, proj, files, bytes_)
@@ -329,62 +414,7 @@ def _grep_with_per_session_pool(
                 f"ETA {_format_duration(eta)}"
             )
     progress.clear()
-    return results, time.monotonic() - start
-
-
-def _contents_search(
-    sessions: list[tuple[Path, Path]],
-    query: str,
-    do_global: bool,
-    max_file_size_mb: float,
-    workers: int,
-) -> int:
-    n = len(sessions)
-    noun = "session" if n == 1 else "sessions"
-    max_bytes = int(max_file_size_mb * 1024 * 1024)
-    show_progress = sys.stderr.isatty()
-
-    # ---- Phase 1: indexing ----
-    print(f"ccs: indexing files in {n} {noun}...", file=sys.stderr)
-    indexed, total_files, total_bytes, total_skipped = _index_phase(
-        sessions, max_bytes, show_progress
-    )
-
-    skipped_msg = (
-        f" (skipped {total_skipped} files > {max_file_size_mb:g} MB)"
-        if total_skipped else ""
-    )
-    print(
-        f"ccs: indexed {total_files} files ({_format_size(total_bytes)}) "
-        f"across {n} {noun}{skipped_msg}",
-        file=sys.stderr,
-    )
-
-    if total_files == 0:
-        print(f"ccs: no sessions match '{query}'", file=sys.stderr)
-        return 1
-
-    # ---- Phase 2: grep ----
-    rg_path = shutil.which("rg")
-    if rg_path:
-        print("ccs: searching with rg (single streaming invocation)...", file=sys.stderr)
-        outcome = _grep_with_streaming_rg(indexed, query, max_bytes, show_progress)
-        if outcome is None:
-            print("ccs: rg failed; falling back to per-session grep", file=sys.stderr)
-            results, elapsed = _grep_with_per_session_pool(
-                indexed, query, workers, show_progress, total_files
-            )
-        else:
-            results, elapsed = outcome
-    else:
-        print(
-            f"ccs: searching with per-session grep "
-            f"(install ripgrep for ~3x speedup)...",
-            file=sys.stderr,
-        )
-        results, elapsed = _grep_with_per_session_pool(
-            indexed, query, workers, show_progress, total_files
-        )
+    elapsed = time.monotonic() - start
 
     print(
         f"ccs: searched {total_files} files ({_format_size(total_bytes)}) "
@@ -395,9 +425,22 @@ def _contents_search(
     if not results:
         print(f"ccs: no sessions match '{query}'", file=sys.stderr)
         return 1
-
     _print_results(results, do_global)
     return 0
+
+
+def _contents_search(
+    sessions: list[tuple[Path, Path]],
+    query: str,
+    do_global: bool,
+    max_file_size_mb: float,
+    workers: int,
+) -> int:
+    if shutil.which("rg"):
+        return _contents_search_with_rg(sessions, query, do_global, max_file_size_mb)
+    return _contents_search_with_grep(
+        sessions, query, do_global, max_file_size_mb, workers,
+    )
 
 
 def main(argv: list[str] | None = None) -> int:

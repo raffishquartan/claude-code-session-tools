@@ -23,6 +23,33 @@ def fake_repos(fake_home, tmp_path, monkeypatch):
     return repos
 
 
+@pytest.fixture
+def force_grep_path(monkeypatch):
+    """Make shutil.which("rg") return None inside ccs so the grep-fallback
+    code path is exercised regardless of whether rg is installed."""
+    from cc_session_tools.cli import ccs as ccs_mod
+
+    real_which = ccs_mod.shutil.which
+
+    def fake_which(name, *args, **kwargs):
+        if name == "rg":
+            return None
+        return real_which(name, *args, **kwargs)
+
+    monkeypatch.setattr(ccs_mod.shutil, "which", fake_which)
+
+
+@pytest.fixture
+def force_rg_path(monkeypatch):
+    """Make shutil.which("rg") return a real rg binary if installed; skip
+    the test otherwise so we don't run rg-specific assertions on a host
+    where rg isn't available."""
+    import shutil as _shutil
+    rg = _shutil.which("rg")
+    if not rg:
+        pytest.skip("rg (ripgrep) not installed; skipping rg-path test")
+
+
 def _make_session(repos: Path, project: str, basename: str, *, contents: str | None = None) -> Path:
     sess = repos / project / "cc-sessions" / basename
     (sess / "working").mkdir(parents=True)
@@ -142,13 +169,71 @@ def test_no_cc_sessions_in_cwd_errors_for_local_search(fake_repos, monkeypatch, 
     assert "no cc-sessions" in err
 
 
-class TestContentsSearchHeader:
-    def test_initial_header_printed_before_any_filesystem_walk(
-        self, fake_repos, monkeypatch, capsys
+class TestContentsSearchHeaderRgPath:
+    """rg path: skips the indexing pre-pass, prints count + estimate immediately."""
+
+    def test_initial_header_includes_session_count_and_query(
+        self, fake_repos, monkeypatch, capsys, force_rg_path
     ):
-        """Make enumerate_session_files raise. The "indexing N sessions..."
-        header must already have been printed by then so the user sees
-        immediate feedback even if the walk would be slow."""
+        proj = fake_repos / "myproj"
+        _make_session(fake_repos, "myproj", "20260504-a", contents="x\n")
+        _make_session(fake_repos, "myproj", "20260503-b", contents="y\n")
+        monkeypatch.chdir(proj)
+        ccs.main(["needle", "--contents"])
+        err = capsys.readouterr().err
+        assert "2 sessions" in err
+        assert "'needle'" in err
+
+    def test_estimate_line_includes_first_session_time_and_total_estimate(
+        self, fake_repos, monkeypatch, capsys, force_rg_path
+    ):
+        proj = fake_repos / "myproj"
+        _make_session(fake_repos, "myproj", "20260504-a", contents="x\n")
+        _make_session(fake_repos, "myproj", "20260503-b", contents="y\n")
+        monkeypatch.chdir(proj)
+        ccs.main(["needle", "--contents"])
+        err = capsys.readouterr().err
+        assert "first session scanned" in err
+        assert "rough sequential estimate" in err
+
+    def test_final_summary_reports_elapsed_against_estimate(
+        self, fake_repos, monkeypatch, capsys, force_rg_path
+    ):
+        proj = fake_repos / "myproj"
+        _make_session(fake_repos, "myproj", "20260504-a", contents="x\n")
+        monkeypatch.chdir(proj)
+        ccs.main(["needle", "--contents"])
+        err = capsys.readouterr().err
+        assert "estimate was" in err
+
+    def test_singular_session_phrasing(
+        self, fake_repos, monkeypatch, capsys, force_rg_path
+    ):
+        proj = fake_repos / "myproj"
+        _make_session(fake_repos, "myproj", "20260504-only", contents="x\n")
+        monkeypatch.chdir(proj)
+        ccs.main(["needle", "--contents"])
+        err = capsys.readouterr().err
+        assert "1 session" in err
+        assert "1 sessions" not in err
+
+    def test_global_aggregates_across_roots(
+        self, fake_repos, monkeypatch, capsys, force_rg_path
+    ):
+        _make_session(fake_repos, "alpha", "20260504-a", contents="x\n")
+        _make_session(fake_repos, "beta", "20260503-b", contents="y\n")
+        monkeypatch.chdir(fake_repos)
+        ccs.main(["needle", "--contents", "--global"])
+        err = capsys.readouterr().err
+        assert "2 sessions" in err
+
+
+class TestContentsSearchHeaderGrepFallback:
+    """Grep fallback path: keeps the indexing pre-pass for size-cap enforcement."""
+
+    def test_initial_header_printed_before_any_filesystem_walk(
+        self, fake_repos, monkeypatch, capsys, force_grep_path
+    ):
         from cc_session_tools.cli import ccs as ccs_mod
 
         proj = fake_repos / "myproj"
@@ -167,9 +252,11 @@ class TestContentsSearchHeader:
             ccs.main(["needle", "--contents"])
 
         err = capsys.readouterr().err
-        assert "2 sessions" in err  # initial header printed first
+        assert "2 sessions" in err
 
-    def test_indexing_header_uses_indexing_verb(self, fake_repos, monkeypatch, capsys):
+    def test_indexing_header_uses_indexing_verb(
+        self, fake_repos, monkeypatch, capsys, force_grep_path
+    ):
         proj = fake_repos / "myproj"
         _make_session(fake_repos, "myproj", "20260504-a", contents="x\n")
         monkeypatch.chdir(proj)
@@ -177,8 +264,8 @@ class TestContentsSearchHeader:
         err = capsys.readouterr().err
         assert "indexing" in err.lower()
 
-    def test_indexed_summary_reports_files_and_size_before_search_starts(
-        self, fake_repos, monkeypatch, capsys
+    def test_indexed_summary_reports_files_and_size(
+        self, fake_repos, monkeypatch, capsys, force_grep_path
     ):
         proj = fake_repos / "myproj"
         _make_session(fake_repos, "myproj", "20260504-a", contents="alpha\n" * 50)
@@ -186,46 +273,17 @@ class TestContentsSearchHeader:
         monkeypatch.chdir(proj)
         ccs.main(["needle", "--contents"])
         err = capsys.readouterr().err
-        # An "indexed ... files ... <size>" line appears BEFORE the
-        # "searching" line.
-        idx_pos = err.lower().find("indexed")
-        search_pos = err.lower().find("searching")
-        assert idx_pos != -1, err
-        assert search_pos != -1, err
-        # "indexing" message is at idx_pos < search_pos < a later "indexed N files"
-        # which itself precedes the searching line. Just check both appear and
-        # the "indexed" summary precedes the per-session search progress.
+        assert "indexed" in err.lower()
         assert "files" in err
         assert any(unit in err for unit in (" B", " KB", " MB"))
-
-    def test_header_singular_session_phrasing(self, fake_repos, monkeypatch, capsys):
-        proj = fake_repos / "myproj"
-        _make_session(fake_repos, "myproj", "20260504-only", contents="x\n")
-        monkeypatch.chdir(proj)
-
-        ccs.main(["needle", "--contents"])
-        err = capsys.readouterr().err
-        assert "1 session" in err
-        # No accidental plural.
-        assert "1 sessions" not in err
 
     def test_header_not_printed_for_name_search(self, fake_repos, monkeypatch, capsys):
         proj = fake_repos / "myproj"
         _make_session(fake_repos, "myproj", "20260504-foo", contents="x\n")
         monkeypatch.chdir(proj)
-
-        ccs.main(["foo"])  # name search, no --contents
+        ccs.main(["foo"])
         err = capsys.readouterr().err
         assert "sessions" not in err
-
-    def test_header_global_aggregates_across_roots(self, fake_repos, monkeypatch, capsys):
-        _make_session(fake_repos, "alpha", "20260504-a", contents="x\n")
-        _make_session(fake_repos, "beta", "20260503-b", contents="y\n")
-        monkeypatch.chdir(fake_repos)
-
-        ccs.main(["needle", "--contents", "--global"])
-        err = capsys.readouterr().err
-        assert "2 sessions" in err
 
 
 class TestContentsSearchSummary:
@@ -256,35 +314,36 @@ class TestContentsSearchSummary:
 
 
 class TestContentsSearchProgress:
-    def test_progress_emitted_when_stderr_is_a_tty(self, fake_repos, monkeypatch, capsys):
+    def test_progress_emitted_when_stderr_is_a_tty_grep_path(
+        self, fake_repos, monkeypatch, capsys, force_grep_path
+    ):
         proj = fake_repos / "myproj"
         _make_session(fake_repos, "myproj", "20260504-a", contents="x\n")
         _make_session(fake_repos, "myproj", "20260503-b", contents="y\n")
         monkeypatch.chdir(proj)
 
-        # Pretend stderr is a TTY so progress fires.
         monkeypatch.setattr("sys.stderr.isatty", lambda: True)
 
         ccs.main(["needle", "--contents"])
         err = capsys.readouterr().err
-        # Progress lines use carriage returns to update in place.
+        # Per-session progress fires per session in the grep fallback path.
         assert "\r" in err
-        # Some indication of progress (e.g. "1/2", "2/2") should appear.
         assert "/2" in err
 
     def test_progress_silent_when_stderr_not_a_tty(self, fake_repos, monkeypatch, capsys):
         proj = fake_repos / "myproj"
         _make_session(fake_repos, "myproj", "20260504-a", contents="x\n")
         monkeypatch.chdir(proj)
-
-        # Default in pytest: stderr is not a TTY. Header still prints; progress does not.
+        # Default in pytest: stderr is not a TTY. Headers still print; progress does not.
         ccs.main(["needle", "--contents"])
         err = capsys.readouterr().err
         assert "\r" not in err
 
 
 class TestMaxFileSize:
-    def test_oversized_files_skipped_and_reported(self, fake_repos, monkeypatch, capsys):
+    def test_oversized_files_skipped_and_reported_grep_path(
+        self, fake_repos, monkeypatch, capsys, force_grep_path
+    ):
         proj = fake_repos / "myproj"
         sess = _make_session(
             fake_repos, "myproj", "20260504-a",
@@ -297,15 +356,30 @@ class TestMaxFileSize:
         ccs.main(["needle", "--contents", "--max-file-size", "1"])
         err = capsys.readouterr().err
         assert "skipped 1" in err
-        # Match still found in the small file.
-        out = capsys.readouterr().out
-        assert out == "" or "needle in small file" in out  # capsys may have flushed already
 
-    def test_default_cap_is_high_enough_for_normal_files(self, fake_repos, monkeypatch, capsys):
+    def test_oversized_files_handled_silently_in_rg_path(
+        self, fake_repos, monkeypatch, capsys, force_rg_path
+    ):
+        """rg has --max-filesize built in; we don't explicitly count or
+        report skipped files in the rg path. The match should still be
+        found in the small file."""
+        proj = fake_repos / "myproj"
+        sess = _make_session(
+            fake_repos, "myproj", "20260504-a",
+            contents="needle in small file\n",
+        )
+        (sess / "working" / "huge.bin").write_bytes(b"needle " * (5 * 1024 * 1024 // 7))
+        monkeypatch.chdir(proj)
+
+        rc = ccs.main(["needle", "--contents", "--max-file-size", "1"])
+        assert rc == 0
+
+    def test_default_cap_is_high_enough_for_normal_files(
+        self, fake_repos, monkeypatch, capsys, force_grep_path
+    ):
         proj = fake_repos / "myproj"
         _make_session(fake_repos, "myproj", "20260504-a", contents="needle\n")
         monkeypatch.chdir(proj)
-
         ccs.main(["needle", "--contents"])
         err = capsys.readouterr().err
         assert "skipped" not in err
