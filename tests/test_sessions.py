@@ -31,6 +31,18 @@ def test_session_start_date_returns_none_for_invalid():
     assert sessions.session_start_date("not-a-session") is None
 
 
+def test_session_tag_extracts_tag_from_simple_form():
+    assert sessions.session_tag("20260504-oneshot-foo") == "oneshot-foo"
+
+
+def test_session_tag_extracts_tag_from_to_form():
+    assert sessions.session_tag("20260504-to-20260509-oneshot-foo") == "oneshot-foo"
+
+
+def test_session_tag_returns_none_for_invalid():
+    assert sessions.session_tag("not-a-session") is None
+
+
 def test_iter_sessions_yields_only_session_dirs(tmp_path):
     cc = tmp_path / "cc-sessions"
     (cc / "20260504-foo").mkdir(parents=True)

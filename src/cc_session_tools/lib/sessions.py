@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Iterator
 
 SESSION_BASENAME_RE = re.compile(r"^(\d{8})(?:-to-\d{8})?-")
+SESSION_FULL_RE = re.compile(r"^(\d{8})(?:-to-\d{8})?-(.+)$")
 
 
 @dataclass(frozen=True)
@@ -29,6 +30,14 @@ def is_session_basename(name: str) -> bool:
 def session_start_date(name: str) -> str | None:
     m = SESSION_BASENAME_RE.match(name)
     return m.group(1) if m else None
+
+
+def session_tag(name: str) -> str | None:
+    """Return the tag portion of a session basename (the part after the
+    YYYYMMDD- prefix, or after the -to-YYYYMMDD- form), or None if the
+    basename does not match the session-name format."""
+    m = SESSION_FULL_RE.match(name)
+    return m.group(2) if m else None
 
 
 def iter_sessions(sessions_dir: Path) -> Iterator[Path]:
