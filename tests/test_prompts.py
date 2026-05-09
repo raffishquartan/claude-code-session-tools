@@ -95,3 +95,24 @@ def test_no_prompt_when_no_other_projects_and_first_term_far(fake_strict_root, c
     cwd.mkdir()
     result = prompts.maybe_correct_tag(cwd, "wildlydifferent", input_fn=lambda: "y")
     assert result == "oneshot-wildlydifferent"
+
+
+def test_missing_prefix_prompt_fires_when_first_term_distance_2_from_sibling(
+    fake_strict_root, capsys
+):
+    # "get" is Levenshtein distance 2 from "pbt" (all three chars differ by
+    # substitution). The real-world trigger: ccd "get-missing-png-files" from
+    # coparenting/ while pbt/ is a sibling project. The old guard used
+    # TYPO_DISTANCE_LIMIT (2) for the sibling check, so distance==2 silently
+    # suppressed the prompt and produced a bare validator error instead.
+    # OTHER_PROJECT_DISTANCE_LIMIT (1) fixes this: only genuine single-char
+    # near-misses suppress the prompt.
+    (fake_strict_root / "coparenting").mkdir()
+    (fake_strict_root / "pbt").mkdir()
+    cwd = fake_strict_root / "coparenting"
+    result = prompts.maybe_correct_tag(
+        cwd, "get-missing-png-files", input_fn=lambda: "y"
+    )
+    assert result == "coparenting-get-missing-png-files"
+    err = capsys.readouterr().err
+    assert "not a recognised project under the strict" in err
