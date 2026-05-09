@@ -2,10 +2,14 @@
 
 ## Overview
 
-`cc-session-tools` is a Python package plus two bundled Claude Code skills that manage
-Claude Code session directories (`cc-sessions/<YYYYMMDD>-<tag>/`). It solves the
-problem of finding, starting, and relocating sessions across multiple git projects
-without losing the JSONL transcript that the `claude --resume` picker depends on.
+`cc-session-tools` is a Python package plus three bundled Claude Code skills covering
+two concerns: (1) session management - starting, resuming, finding, and relocating
+Claude Code session directories; (2) usage analytics - parsing session JSONL files to
+produce token and dollar breakdowns by project, session, model, MCP server, and tool.
+
+Both concerns live in this repo because they both operate on Claude Code session data.
+Keeping them together minimises the number of repos that `claude-code-config-sync`
+(CCCS) must track as externally-managed skill sources.
 
 Design ethos:
 
@@ -70,6 +74,50 @@ likely tag typos and by `ccr` to fuzzy-match session basename fragments.
 the prompt text from the validation logic so wording can be tuned without touching
 the rules.
 
+### `src/claude_code_usage/`
+
+**`parser.py`** - Parses `~/.claude/projects/**/*.jsonl` session logs into a Pandas
+DataFrame. mtime-keyed Parquet cache means only changed JSONL files are re-parsed on
+subsequent runs.
+
+**`attribution.py`** - Token attribution. When one assistant message contains N
+`tool_use` blocks its tokens are split evenly across all N tools, giving per-tool
+token and cost totals.
+
+**`query.py`** - Multi-dimensional filtering and grouping. Accepts `--since/--until`,
+`--project`, `--session`, `--model`, `--mcp`, `--tool` and group-by combinations
+(`project, session, model, mcp, plugin, tool, day, week, month, year`).
+
+**`report.py`** - Formats query results as terminal tables and reconciles dollar
+totals against `ccusage` (external tool) for cross-validation.
+
+**`pricing.py`** - Per-token pricing data. Loads `data/pricing.json` (shipped with
+the package, resolved via `__file__`-relative path). Falls back to family-match for
+unknown model IDs. Can refresh from LiteLLM upstream; treats the local cache as fresh
+for 7 days.
+
+**`schema.py`** - JSONL schema validation. Validates each parsed record against an
+expected schema; unknown fields warn, missing required fields fail loudly.
+
+**`cache.py`** - Parquet cache management. mtime-keyed so incremental parses are
+sub-second on a warm cache.
+
+**`ccusage_wrapper.py`** - Thin wrapper around the `ccusage` CLI for dollar-total
+reconciliation.
+
+**`session_names.py`** - Maps JSONL file paths to session display names.
+
+**`parent_inference.py`** - Infers project context from session paths.
+
+**`cli.py`** - Entry point for the `claude-code-usage` command. Parses flags,
+calls query/report pipeline.
+
+### `data/pricing.json`
+
+Seed pricing data for the `pricing.py` module. Updated lazily from LiteLLM upstream
+(7-day TTL on the cache). Resolved at runtime via `__file__`-relative path so it
+works from any working directory.
+
 ### `skills/find-claude-code-session/`
 
 A Claude Code skill that wraps the `ccs` CLI. When the user asks to find a prior
@@ -101,6 +149,17 @@ command-line interface used by `ccd`'s bash wrapper.
 A `hooks/sessionstart-pending-rename.sh` hook detects sessions that were started with
 a placeholder tag and prompts the user to rename on resume.
 
+### `skills/claude-usage/`
+
+A Claude Code skill that wraps the `claude-code-usage` CLI. When the user asks
+about their Claude Code usage (token spend, costs, MCP usage, tool breakdown),
+the skill constructs a `claude-code-usage` invocation, runs it, and summarises
+the result in plain English without exposing raw tables unless asked. It reconciles
+dollar totals against `ccusage` for cross-validation.
+
+Dependency on the CLI: `claude-code-usage` must be on `PATH` (satisfied when
+`cc-session-tools` is installed as a package).
+
 ---
 
 ## Dependencies
@@ -110,28 +169,30 @@ a placeholder tag and prompts the user to rename on resume.
 - **ripgrep (`rg`)**: Optional. `ccs --contents` prefers `rg` for performance;
   falls back to threaded Python `grep` when `rg` is not on `PATH`.
 - **bats**: Test-only. Used for `skills/move-session/tests/test_hook.bats`.
+- **ccusage**: Optional, used by `claude_code_usage.ccusage_wrapper` for
+  dollar-total cross-validation. If not on `PATH`, the reconciliation step is
+  skipped gracefully.
 
 ### Python packages
 
-None. `pyproject.toml` declares no `[project.dependencies]`. The package uses
-the Python standard library only (pathlib, subprocess, re, json, argparse, etc.).
+Declared in `pyproject.toml` under `[project.dependencies]` (required by
+`claude_code_usage`; `cc_session_tools` itself uses only stdlib):
 
-### ccusage
-
-**Intentionally not depended on.** `ccusage` (at `~/repos/claude-code-usage-cli`,
-also on GitHub at `raffishquartan/claude-code-usage-cli`) is a separate
-token-cost reconciliation tool backed by the `claude-usage` skill. It analyses
-Claude Code token spend from session JSONL files. It is a consumer of the same
-JSONL data, not a dependency of this repo - they are siblings, not parent/child.
+- **pandas** ≥ 2.2 - DataFrame-based query and grouping
+- **pyarrow** ≥ 15.0 - Parquet cache backend
+- **jsonschema** ≥ 4.21 - JSONL schema validation
+- **platformdirs** ≥ 4.0 - OS-appropriate cache directory for the Parquet store
+- **httpx** ≥ 0.27 - LiteLLM pricing refresh
 
 ### Downstream dependents
 
 This repo is depended on by:
 
-- **`find-claude-code-session` and `move-session` skills** - deployed as symlinks
-  from `~/.claude/skills/<name>/` into this repo's `skills/<name>/`. Registered
-  as externally-managed in `~/repos/claude-code-config-sync/externally-managed-skills.yaml`
-  so the CCCS drift hook skips them.
+- **`find-claude-code-session`, `move-session`, and `claude-usage` skills** -
+  deployed as symlinks from `~/.claude/skills/<name>/` into this repo's
+  `skills/<name>/`. Registered as externally-managed in
+  `~/repos/claude-code-config-sync/externally-managed-skills.yaml` so the CCCS
+  drift hook skips them.
 - **`ccd`, `ccr`, `ms` bash wrappers** in `~/.bashrc` - thin wrappers around the
   installed Python entry points that also export the `CLAUDE_SESSION_TOOLS_*_ROOT`
   env vars before delegating to the Python CLI.
@@ -193,6 +254,7 @@ Skills are deployed as **symlinks**:
 ```
 ~/.claude/skills/find-claude-code-session/ -> ~/repos/claude-code-session-tools/skills/find-claude-code-session/
 ~/.claude/skills/move-session/             -> ~/repos/claude-code-session-tools/skills/move-session/
+~/.claude/skills/claude-usage/             -> ~/repos/claude-code-session-tools/skills/claude-usage/
 ```
 
 Changes to skill files take effect immediately (symlink - no deploy step needed).
@@ -209,7 +271,7 @@ The Python package itself (`cc_session_tools`) is installed as an editable insta
 ## Test layout
 
 ```
-tests/                          lib tests (run with: pytest tests/)
+tests/                          lib + claude_code_usage tests (pytest tests/)
   conftest.py                   autouse fixture: clears CLAUDE_SESSION_TOOLS_*_ROOT
   test_roots.py                 unit tests for lib/roots.py (including RootsConfigError)
   test_rules.py                 unit tests for lib/rules.py
@@ -221,6 +283,17 @@ tests/                          lib tests (run with: pytest tests/)
   test_levenshtein.py           unit tests for lib/levenshtein.py
   test_prompts.py               unit tests for lib/prompts.py
   test_tasklist.py              unit tests for lib/tasklist.py
+  test_attribution.py           unit tests for claude_code_usage/attribution.py
+  test_cache.py                 unit tests for claude_code_usage/cache.py
+  test_ccusage_wrapper.py       unit tests for claude_code_usage/ccusage_wrapper.py
+  test_cli.py                   integration tests for claude-code-usage CLI
+  test_parent_inference.py      unit tests for claude_code_usage/parent_inference.py
+  test_parser.py                unit tests for claude_code_usage/parser.py
+  test_pricing.py               unit tests for claude_code_usage/pricing.py
+  test_query.py                 unit tests for claude_code_usage/query.py
+  test_report.py                unit tests for claude_code_usage/report.py
+  test_schema.py                unit tests for claude_code_usage/schema.py
+  test_session_names.py         unit tests for claude_code_usage/session_names.py
 
 skills/move-session/tests/      move-session skill tests (88 tests)
   conftest.py                   fixtures: tmp_home, roots_file (env-var driven), make_session
@@ -236,6 +309,7 @@ Top-level `pytest` (from the repo root) discovers both suites via `pyproject.tom
 ```toml
 [tool.pytest.ini_options]
 testpaths = ["tests", "skills/move-session/tests"]
+pythonpath = ["src"]
 ```
 
 The move-session tests ensure the local `cc_session_tools` is used (not a stale
