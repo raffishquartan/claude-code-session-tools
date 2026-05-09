@@ -1,0 +1,102 @@
+{
+  "_source": "Hand-curated Anthropic API pricing as of 2026-05. Per-token USD.",
+  "_refreshed_at": "2026-05-09",
+  "models": {
+    "claude-opus-4-7": {
+      "input": 0.000015,
+      "output": 0.000075,
+      "cache_creation_5m": 0.00001875,
+      "cache_creation_1h": 0.00003,
+      "cache_read": 0.0000015
+    },
+    "claude-opus-4-6": {
+      "input": 0.000015,
+      "output": 0.000075,
+      "cache_creation_5m": 0.00001875,
+      "cache_creation_1h": 0.00003,
+      "cache_read": 0.0000015
+    },
+    "claude-opus-4-5": {
+      "input": 0.000015,
+      "output": 0.000075,
+      "cache_creation_5m": 0.00001875,
+      "cache_creation_1h": 0.00003,
+      "cache_read": 0.0000015
+    },
+    "claude-opus-4": {
+      "input": 0.000015,
+      "output": 0.000075,
+      "cache_creation_5m": 0.00001875,
+      "cache_creation_1h": 0.00003,
+      "cache_read": 0.0000015
+    },
+    "claude-sonnet-4-6": {
+      "input": 0.000003,
+      "output": 0.000015,
+      "cache_creation_5m": 0.00000375,
+      "cache_creation_1h": 0.000006,
+      "cache_read": 0.0000003
+    },
+    "claude-sonnet-4-5": {
+      "input": 0.000003,
+      "output": 0.000015,
+      "cache_creation_5m": 0.00000375,
+      "cache_creation_1h": 0.000006,
+      "cache_read": 0.0000003
+    },
+    "claude-sonnet-4": {
+      "input": 0.000003,
+      "output": 0.000015,
+      "cache_creation_5m": 0.00000375,
+      "cache_creation_1h": 0.000006,
+      "cache_read": 0.0000003
+    },
+    "claude-haiku-4-5": {
+      "input": 0.0000008,
+      "output": 0.000004,
+      "cache_creation_5m": 0.000001,
+      "cache_creation_1h": 0.0000016,
+      "cache_read": 0.00000008
+    },
+    "claude-haiku-4": {
+      "input": 0.0000008,
+      "output": 0.000004,
+      "cache_creation_5m": 0.000001,
+      "cache_creation_1h": 0.0000016,
+      "cache_read": 0.00000008
+    },
+    "claude-3-7-sonnet-20250219": {
+      "input": 0.000003,
+      "output": 0.000015,
+      "cache_creation_5m": 0.00000375,
+      "cache_creation_1h": 0.000006,
+      "cache_read": 0.0000003
+    },
+    "claude-3-5-sonnet-20241022": {
+      "input": 0.000003,
+      "output": 0.000015,
+      "cache_creation_5m": 0.00000375,
+      "cache_creation_1h": 0.000006,
+      "cache_read": 0.0000003
+    },
+    "claude-3-5-haiku-20241022": {
+      "input": 0.0000008,
+      "output": 0.000004,
+      "cache_creation_5m": 0.000001,
+      "cache_creation_1h": 0.0000016,
+      "cache_read": 0.00000008
+    },
+    "claude-3-opus-20240229": {
+      "input": 0.000015,
+      "output": 0.000075,
+      "cache_creation_5m": 0.00001875,
+      "cache_creation_1h": 0.00003,
+      "cache_read": 0.0000015
+    }
+  },
+  "family_fallbacks": {
+    "opus": "claude-opus-4-7",
+    "sonnet": "claude-sonnet-4-6",
+    "haiku": "claude-haiku-4-5"
+  }
+}
