@@ -109,3 +109,54 @@ def test_grep_session_skips_binary_files(tmp_path):
     text = "\n".join(out)
     assert "FLAMBE in text" in text
     assert "\x00" not in text
+
+
+class TestEnumerateSessionFiles:
+    def test_returns_files_and_total_bytes(self, tmp_path):
+        sess = tmp_path / "20260504-foo"
+        (sess / "working").mkdir(parents=True)
+        (sess / "working" / "a.md").write_text("hello\n")  # 6 bytes
+        (sess / "working" / "b.md").write_text("hi\n")  # 3 bytes
+
+        files, total_bytes, skipped = sessions.enumerate_session_files(sess)
+        assert {p.name for p in files} == {"a.md", "b.md"}
+        assert total_bytes == 9
+        assert skipped == 0
+
+    def test_max_bytes_skips_oversized_files(self, tmp_path):
+        sess = tmp_path / "20260504-foo"
+        sess.mkdir()
+        (sess / "small.md").write_text("hi")  # 2 bytes
+        (sess / "big.bin").write_bytes(b"x" * 1000)  # 1000 bytes
+
+        files, total_bytes, skipped = sessions.enumerate_session_files(sess, max_bytes=100)
+        assert {p.name for p in files} == {"small.md"}
+        assert total_bytes == 2
+        assert skipped == 1
+
+    def test_returns_empty_for_empty_session(self, tmp_path):
+        sess = tmp_path / "20260504-foo"
+        sess.mkdir()
+        files, total_bytes, skipped = sessions.enumerate_session_files(sess)
+        assert files == []
+        assert total_bytes == 0
+        assert skipped == 0
+
+
+class TestGrepFiles:
+    def test_grep_files_finds_matches_in_provided_files(self, tmp_path):
+        a = tmp_path / "a.md"
+        a.write_text("alpha\nFLAMBE here\nomega\n")
+        b = tmp_path / "b.md"
+        b.write_text("nothing\n")
+        out = sessions.grep_files([a, b], "FLAMBE", context=1, cwd=tmp_path)
+        text = "\n".join(out)
+        assert "FLAMBE here" in text
+
+    def test_grep_files_returns_empty_when_no_files(self, tmp_path):
+        assert sessions.grep_files([], "FLAMBE", context=1, cwd=tmp_path) == []
+
+    def test_grep_files_returns_empty_on_no_match(self, tmp_path):
+        a = tmp_path / "a.md"
+        a.write_text("nothing here\n")
+        assert sessions.grep_files([a], "FLAMBE", context=1, cwd=tmp_path) == []

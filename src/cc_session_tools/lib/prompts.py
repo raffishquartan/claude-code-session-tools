@@ -18,9 +18,12 @@ def maybe_correct_tag(
     real_pwd: Path,
     tag: str,
     *,
-    input_fn: Callable[[], str] = input,
+    input_fn: Callable[[], str] | None = None,
     stderr: TextIO | None = None,
 ) -> str:
+    if input_fn is None:
+        # Look up `input` lazily so tests can monkeypatch builtins.input.
+        input_fn = input
     if stderr is None:
         stderr = sys.stderr
 
