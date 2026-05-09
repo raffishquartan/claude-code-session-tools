@@ -6,6 +6,7 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 
+from cc_session_tools import __version__
 from cc_session_tools.lib.roots import load_session_roots
 from cc_session_tools.lib.sessions import (
     grep_session,
@@ -27,6 +28,7 @@ def _build_parser() -> argparse.ArgumentParser:
         prog="ccs",
         description="Search Claude Code sessions by name/date or file contents.",
     )
+    p.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     p.add_argument("query", help="Substring to match against session names (default) or contents.")
     p.add_argument("--contents", action="store_true",
                    help="Search session file contents (1 line of context).")

@@ -6,6 +6,7 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
+from cc_session_tools import __version__
 from cc_session_tools.lib import prompts, rules
 from cc_session_tools.lib.tasklist import id_for_project
 
@@ -21,6 +22,7 @@ def _build_parser() -> argparse.ArgumentParser:
         prog="ccd",
         description="Start a new Claude Code session with a pre-created cc-sessions/ dir.",
     )
+    p.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     p.add_argument("--force", action="store_true",
                    help="Skip root, project-name, and tag-prefix checks.")
     p.add_argument("tag", help="Name tag (no spaces; use dashes).")
