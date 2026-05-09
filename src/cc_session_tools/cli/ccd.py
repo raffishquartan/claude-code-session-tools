@@ -86,6 +86,10 @@ def main(argv: list[str] | None = None) -> int:
         "--remote-control", session_name,
         *(args.extra or []),
     ]
+    # Chdir to the resolved project path so Claude Code records its
+    # ~/.claude/projects/<encoded-cwd>/ key against the canonical, symlink-
+    # resolved path. Matches the original bash ccd's `cd "$real_pwd"` step.
+    os.chdir(real_pwd)
     launch_claude(cmd, env)
     return 0
 

@@ -92,6 +92,38 @@ def test_ccd_does_not_set_task_list_id_when_outside_roots(
     assert "CLAUDE_CODE_TASK_LIST_ID" not in captured_launch["env"]
 
 
+def test_ccd_chdirs_to_resolved_real_path_before_launch(
+    fake_home, tmp_path, monkeypatch, captured_launch
+):
+    """ccd must chdir to the canonical, symlink-resolved project path before
+    launching `claude`, so Claude Code records its ~/.claude/projects/<encoded-cwd>/
+    key against the canonical path (matches the original bash `cd "$real_pwd"`)."""
+    repos = tmp_path / "repos"
+    proj = repos / "myproj"
+    proj.mkdir(parents=True)
+    (fake_home / ".claude" / "cc-session-roots.txt").write_text(f"{repos}\n")
+
+    # Approach via a symlink to verify resolution to the real path.
+    link = tmp_path / "link-to-proj"
+    link.symlink_to(proj)
+    monkeypatch.chdir(link)
+
+    captured_chdir: list[Path] = []
+    real_chdir = __import__("os").chdir
+
+    def fake_chdir(p):
+        captured_chdir.append(Path(p))
+        real_chdir(p)
+
+    monkeypatch.setattr("os.chdir", fake_chdir)
+
+    rc = ccd.main(["mytag"])
+    assert rc == 0
+    # ccd should have chdir'd to the canonical resolved path, not the symlink.
+    assert captured_chdir, "ccd did not call os.chdir before launch"
+    assert captured_chdir[-1] == proj.resolve()
+
+
 def test_ccd_rejects_duplicate_session_with_helpful_message(
     fake_home, tmp_path, monkeypatch, capsys, captured_launch
 ):
