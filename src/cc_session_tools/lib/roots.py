@@ -1,37 +1,47 @@
+from __future__ import annotations
+
+import os
 from pathlib import Path
 
-
-def default_roots_file() -> Path:
-    return Path.home() / ".claude" / "cc-session-roots.txt"
-
-
-def strict_root_link() -> Path:
-    return Path.home() / "cc-claude-code"
+REPO_ROOT_ENV = "CLAUDE_SESSION_TOOLS_REPO_ROOT"
+PROJ_ROOT_ENV = "CLAUDE_SESSION_TOOLS_PROJ_ROOT"
 
 
-# Backwards-compatible aliases so callers that imported these as constants
-# still work, but evaluate at call time. `DEFAULT_ROOTS_FILE` is captured at
-# module-import time by older code; new code should call `default_roots_file()`.
-DEFAULT_ROOTS_FILE = default_roots_file()
-STRICT_ROOT_LINK = strict_root_link()
+def _resolve_env(name: str) -> Path | None:
+    val = os.environ.get(name)
+    if not val:
+        return None
+    p = Path(val).expanduser()
+    try:
+        real = p.resolve(strict=True)
+    except (FileNotFoundError, OSError):
+        return None
+    if not real.is_dir():
+        return None
+    return real
 
 
-def load_session_roots(roots_file: Path | None = None) -> list[Path]:
-    if roots_file is None:
-        roots_file = default_roots_file()
+def repo_root() -> Path | None:
+    """Loose root from CLAUDE_SESSION_TOOLS_REPO_ROOT. No naming conventions
+    are enforced for sessions started under this root beyond no-spaces."""
+    return _resolve_env(REPO_ROOT_ENV)
+
+
+def proj_root() -> Path | None:
+    """Strict (namespaced) root from CLAUDE_SESSION_TOOLS_PROJ_ROOT. Sessions
+    started under this root must use a `<project>-<label>` tag (see rules)."""
+    return _resolve_env(PROJ_ROOT_ENV)
+
+
+def load_session_roots() -> list[Path]:
+    """All configured session roots, in REPO,PROJ order, deduped, with
+    unconfigured / nonexistent entries silently skipped."""
     out: list[Path] = []
-    for raw in roots_file.read_text().splitlines():
-        line = raw.split("#", 1)[0].strip()
-        if not line:
-            continue
-        token = line.split()[0]
-        p = Path(token).expanduser()
-        try:
-            real = p.resolve(strict=True)
-        except (FileNotFoundError, OSError):
-            continue
-        if real.is_dir():
-            out.append(real)
+    seen: set[Path] = set()
+    for r in (repo_root(), proj_root()):
+        if r is not None and r not in seen:
+            out.append(r)
+            seen.add(r)
     return out
 
 
@@ -47,13 +57,13 @@ def is_valid_session_cwd(cwd_abs: Path, roots: list[Path]) -> bool:
     return matched_session_root(cwd_abs, roots) is not None
 
 
-def strict_root_path() -> Path | None:
-    try:
-        return strict_root_link().resolve(strict=True)
-    except (FileNotFoundError, OSError):
-        return None
-
-
 def is_strict_root(root: Path) -> bool:
-    sr = strict_root_path()
-    return sr is not None and root == sr
+    """A root is strict iff it equals the configured PROJ_ROOT."""
+    pr = proj_root()
+    return pr is not None and root == pr
+
+
+def strict_root_path() -> Path | None:
+    """Alias for proj_root(), preserved for callers that think in
+    strict-root terminology."""
+    return proj_root()

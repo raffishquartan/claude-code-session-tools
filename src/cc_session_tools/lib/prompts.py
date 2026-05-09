@@ -62,7 +62,8 @@ def maybe_correct_tag(
     if all(distance(first_term, p) > TYPO_DISTANCE_LIMIT for p in other_projects):
         suggested = f"{project_name}-{tag}"
         print(
-            f"ccd: '{first_term}' is not a recognised cc-claude-code project name.",
+            f"ccd: '{first_term}' is not a recognised project under the strict "
+            f"(PROJ) root.",
             file=stderr,
         )
         print(
