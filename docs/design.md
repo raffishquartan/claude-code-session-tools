@@ -1,0 +1,243 @@
+# cc-session-tools design
+
+## Overview
+
+`cc-session-tools` is a Python package plus two bundled Claude Code skills that manage
+Claude Code session directories (`cc-sessions/<YYYYMMDD>-<tag>/`). It solves the
+problem of finding, starting, and relocating sessions across multiple git projects
+without losing the JSONL transcript that the `claude --resume` picker depends on.
+
+Design ethos:
+
+- **No fallbacks.** If an environment variable is missing or wrong, the CLI errors
+  immediately with a precise, actionable message. Silent degradation (returning empty
+  lists, skipping bad config) hides misconfiguration until the user is confused.
+- **Thin CLIs, thick lib.** Business logic lives in `lib/`; the CLI scripts are wiring.
+  The bundled skills call the CLIs, not the lib directly - keeping the AI-to-shell
+  interface narrow and auditable.
+- **Stable error markers.** The string `[CST-ROOTS-CONFIG-ERROR]` is a first-class
+  part of the public CLI contract, not an implementation detail. Skills and wrappers
+  pattern-match on it so they can give useful diagnosis without parsing natural language.
+
+---
+
+## Components
+
+### `src/cc_session_tools/cli/`
+
+**`ccd.py`** - Start a new Claude Code session. Validates the current working
+directory against the configured session roots, checks the proposed tag suffix
+against naming rules (and against the project name for strict roots), then
+launches `claude` with the session display name already set. Includes Levenshtein
+fuzzy-matching to catch likely typos in the tag before committing.
+
+**`ccr.py`** - Resume an existing Claude Code session by fuzzy-matching a fragment
+against session basenames found in `cc-sessions/` under the configured roots. Rewrites
+the session directory name to encode the resumed-on date (`<start>-to-<today>-<tag>`)
+and calls `claude --resume` on the matched JSONL.
+
+**`ccs.py`** - Search Claude Code sessions by basename or file contents. Supports
+local search (current directory's `cc-sessions/`) and global search (all projects
+under the configured roots). Content search shells out to `ripgrep` when available,
+falls back to threaded Python `grep`. Exit code 0 on match, 1 on no match or config
+error.
+
+### `src/cc_session_tools/lib/`
+
+**`roots.py`** - Env-var-driven session root discovery. Defines `REPO_ROOT_ENV` and
+`PROJ_ROOT_ENV`, the `RootsConfigError` exception, and `load_session_roots()` which
+raises rather than silently degrading when configuration is absent or invalid. Also
+provides `repo_root()`, `proj_root()`, `is_strict_root()`, `matched_session_root()`,
+and `is_valid_session_cwd()` helpers used by the rules layer.
+
+**`rules.py`** - Session naming rules and validation. `check_session_init()` and
+`check_session_destination()` validate (cwd, tag) pairs against the configured roots,
+strict-root naming conventions, and tag format constraints. Re-exports the full public
+API from `roots.py` plus `RootsConfigError` so callers can import from one place.
+
+**`sessions.py`** - Session directory enumeration and content search. Provides
+`iter_sessions()` (sorted by start date), `session_start_date()`, `grep_session()`,
+`enumerate_session_files()`, and `grep_files()`.
+
+**`tasklist.py`** - Task list ID derivation. `id_for_project()` returns the Claude
+Code task-list ID for a given project directory by matching it against the configured
+roots - used so `ccd` can set `CLAUDE_CODE_TASK_LIST_ID` before launching Claude.
+
+**`levenshtein.py`** - Pure-Python Levenshtein distance. Used by `ccd` to detect
+likely tag typos and by `ccr` to fuzzy-match session basename fragments.
+
+**`prompts.py`** - Text prompts shown to the user when validation fails. Separates
+the prompt text from the validation logic so wording can be tuned without touching
+the rules.
+
+### `skills/find-claude-code-session/`
+
+A Claude Code skill that wraps the `ccs` CLI. When the user asks to find a prior
+session by name or content, the skill constructs a `ccs` invocation, escalates from
+local to global search if needed, and formats the results as `ccr <fragment>`
+commands the user can paste. It pattern-matches `[CST-ROOTS-CONFIG-ERROR]` on stderr
+to surface env-var diagnosis rather than a generic failure message.
+
+Dependency on the CLI: `ccs` must be on `PATH`. The skill does not import any Python
+library directly.
+
+### `skills/move-session/`
+
+A Claude Code skill that moves, renames, or move+renames a session while keeping the
+JSONL transcript resumable. It:
+
+1. Validates the source session and destination using `check_session_init()` /
+   `check_session_destination()` from `cc_session_tools.lib.rules`.
+2. Copies the session directory tree.
+3. Rewrites JSONL `cwd` fields to the destination path.
+4. Appends a tombstone record to the source JSONL so `claude --resume` on the old
+   session explains where it went.
+5. Generates a cleanup script for the user to run after verifying the move.
+
+It imports the lib via `scripts/cc_session_rules.py`, a thin shim that re-exports the
+public API. The shim preserves the `python3 cc_session_rules.py check-init ...`
+command-line interface used by `ccd`'s bash wrapper.
+
+A `hooks/sessionstart-pending-rename.sh` hook detects sessions that were started with
+a placeholder tag and prompts the user to rename on resume.
+
+---
+
+## Dependencies
+
+### External tools (not Python packages)
+
+- **ripgrep (`rg`)**: Optional. `ccs --contents` prefers `rg` for performance;
+  falls back to threaded Python `grep` when `rg` is not on `PATH`.
+- **bats**: Test-only. Used for `skills/move-session/tests/test_hook.bats`.
+
+### Python packages
+
+None. `pyproject.toml` declares no `[project.dependencies]`. The package uses
+the Python standard library only (pathlib, subprocess, re, json, argparse, etc.).
+
+### ccusage
+
+**Intentionally not depended on.** `ccusage` (at `~/repos/claude-code-usage-cli`,
+also on GitHub at `raffishquartan/claude-code-usage-cli`) is a separate
+token-cost reconciliation tool backed by the `claude-usage` skill. It analyses
+Claude Code token spend from session JSONL files. It is a consumer of the same
+JSONL data, not a dependency of this repo - they are siblings, not parent/child.
+
+### Downstream dependents
+
+This repo is depended on by:
+
+- **`find-claude-code-session` and `move-session` skills** - deployed as symlinks
+  from `~/.claude/skills/<name>/` into this repo's `skills/<name>/`. Registered
+  as externally-managed in `~/repos/claude-code-config-sync/externally-managed-skills.yaml`
+  so the CCCS drift hook skips them.
+- **`ccd`, `ccr`, `ms` bash wrappers** in `~/.bashrc` - thin wrappers around the
+  installed Python entry points that also export the `CLAUDE_SESSION_TOOLS_*_ROOT`
+  env vars before delegating to the Python CLI.
+
+---
+
+## Env-var contract
+
+> **This section is load-bearing. All callers (skills, bash wrappers, CI) depend
+> on the behaviour described here.**
+
+### `CLAUDE_SESSION_TOOLS_REPO_ROOT`
+
+The "loose" session root. Projects in direct subdirectories of this path can use any
+valid tag (no project-name prefix required). Typical value: `$HOME/repos`.
+
+### `CLAUDE_SESSION_TOOLS_PROJ_ROOT`
+
+The "strict" session root. Projects in direct subdirectories of this path must use
+a tag of the form `<project>-<descriptor>`, where `<project>` is the directory name
+(must match `^[a-z0-9]+$`) and `<descriptor>` is a non-empty alphanumeric label.
+Typical value: `$HOME/cc-claude-code`.
+
+### Mandatory for `--global` operations and new-session validation
+
+Both env vars are optional individually (you can set only one or both), but at least
+one must be set for any operation that needs to locate or validate a session root.
+If both are unset, or if any set var points to a non-existent path or a file rather
+than a directory, `load_session_roots()` raises `RootsConfigError` immediately.
+
+**There is intentionally no default fallback.** The env vars are the contract, and
+the contract surfaces clearly when violated. This prevents silent misconfiguration
+where operations appear to succeed but search an empty universe.
+
+### `[CST-ROOTS-CONFIG-ERROR]` - public CLI contract
+
+When `load_session_roots()` raises, the exception message always starts with the
+literal token `[CST-ROOTS-CONFIG-ERROR]`. This token is part of the **public CLI
+contract**: downstream skills and wrappers are expected to pattern-match on it.
+
+- Skills should relay the full error message verbatim - it is self-explanatory.
+- If a skill or wrapper sees a non-zero exit from `ccs`/`ccd`/`ccr` where stderr
+  does **not** contain `[CST-ROOTS-CONFIG-ERROR]`, it should treat the error as a
+  CLI version skew and prompt the user to check `ccs --version` and update the skill.
+
+### Shell inheritance
+
+Both env vars are typically exported in `~/.bashrc`. Any shell or process that wants
+to use `ccd`/`ccr`/`ccs`/`ms` must inherit them from its parent process. Non-interactive
+shells (such as Claude Code's Bash tool, which does not source `~/.bashrc`) inherit
+them only if Claude Code itself was launched from a shell that had them exported.
+
+---
+
+## Deployment model
+
+Skills are deployed as **symlinks**:
+
+```
+~/.claude/skills/find-claude-code-session/ -> ~/repos/claude-code-session-tools/skills/find-claude-code-session/
+~/.claude/skills/move-session/             -> ~/repos/claude-code-session-tools/skills/move-session/
+```
+
+Changes to skill files take effect immediately (symlink - no deploy step needed).
+
+The symlinks are maintained externally: CCCS (`claude-code-config-sync`) tracks them
+in `externally-managed-skills.yaml`. The CCCS drift hook skips these entries during
+its normal sync check, so changes are never overwritten by a drift-sync operation.
+
+The Python package itself (`cc_session_tools`) is installed as an editable install
+(`pip install -e .`) so CLI changes take effect without reinstallation.
+
+---
+
+## Test layout
+
+```
+tests/                          lib tests (run with: pytest tests/)
+  conftest.py                   autouse fixture: clears CLAUDE_SESSION_TOOLS_*_ROOT
+  test_roots.py                 unit tests for lib/roots.py (including RootsConfigError)
+  test_rules.py                 unit tests for lib/rules.py
+  test_sessions.py              unit tests for lib/sessions.py
+  test_cli_ccd.py               integration tests for ccd CLI
+  test_cli_ccr.py               integration tests for ccr CLI
+  test_cli_ccs.py               integration tests for ccs CLI
+  test_cli_version.py           --version flag tests
+  test_levenshtein.py           unit tests for lib/levenshtein.py
+  test_prompts.py               unit tests for lib/prompts.py
+  test_tasklist.py              unit tests for lib/tasklist.py
+
+skills/move-session/tests/      move-session skill tests (88 tests)
+  conftest.py                   fixtures: tmp_home, roots_file (env-var driven), make_session
+  test_detection.py             in-session detection, dry-run flag, CLAUDECODE env var
+  test_hook.bats                bash hook tests (requires bats)
+  test_integration.py           end-to-end subprocess tests of move_session.py
+  test_jsonl.py                 JSONL rewriting and tombstone logic
+  test_validators.py            validator functions re-exported via cc_session_rules shim
+```
+
+Top-level `pytest` (from the repo root) discovers both suites via `pyproject.toml`:
+
+```toml
+[tool.pytest.ini_options]
+testpaths = ["tests", "skills/move-session/tests"]
+```
+
+The move-session tests ensure the local `cc_session_tools` is used (not a stale
+installed version) by prepending the repo `src/` to `sys.path` in `conftest.py` and
+`PYTHONPATH` in the subprocess helper `_run()`.

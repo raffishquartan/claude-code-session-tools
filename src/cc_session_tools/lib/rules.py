@@ -6,6 +6,7 @@ from pathlib import Path
 from .roots import (
     PROJ_ROOT_ENV,
     REPO_ROOT_ENV,
+    RootsConfigError,
     is_strict_root,
     is_valid_session_cwd,
     load_session_roots,
@@ -25,6 +26,7 @@ __all__ = [
     "PROJECT_NAME_STRICT_RE",
     "PROJ_ROOT_ENV",
     "REPO_ROOT_ENV",
+    "RootsConfigError",
     "TAG_NEW_RE",
     "TAG_SUFFIX_FORMAT_RE",
     "check_session_destination",
@@ -42,15 +44,6 @@ __all__ = [
     "validate_strict_tag_suffix",
     "validate_tag_suffix_no_spaces",
 ]
-
-
-def _no_roots_error() -> str:
-    return (
-        f"no session roots configured: set ${REPO_ROOT_ENV} (loose, no naming "
-        f"conventions) and/or ${PROJ_ROOT_ENV} (strict, requires "
-        f"<project>-<label> tag) to a directory whose direct children are your "
-        f"projects"
-    )
 
 
 def _cwd_not_under_root_error(cwd_abs: Path, roots: list[Path], *, dst: bool = False) -> str:
@@ -131,21 +124,22 @@ def check_session_init(
         errors.append(err)
 
     if not force:
-        roots = load_session_roots()
-        if not roots:
-            errors.append(_no_roots_error())
-        else:
-            root = matched_session_root(cwd_abs, roots)
-            if root is None:
-                errors.append(_cwd_not_under_root_error(cwd_abs, roots))
-            elif is_strict_root(root):
-                project_name = cwd_abs.name
-                err = validate_strict_project_name(project_name)
-                if err:
-                    errors.append(err)
-                err = validate_strict_tag_suffix(tag_suffix, project_name)
-                if err:
-                    errors.append(err)
+        try:
+            roots = load_session_roots()
+        except RootsConfigError as e:
+            errors.append(str(e))
+            return (False, errors)
+        root = matched_session_root(cwd_abs, roots)
+        if root is None:
+            errors.append(_cwd_not_under_root_error(cwd_abs, roots))
+        elif is_strict_root(root):
+            project_name = cwd_abs.name
+            err = validate_strict_project_name(project_name)
+            if err:
+                errors.append(err)
+            err = validate_strict_tag_suffix(tag_suffix, project_name)
+            if err:
+                errors.append(err)
 
     return (not errors, errors)
 
@@ -167,21 +161,22 @@ def check_session_destination(
     tag_suffix = m.group(2) if m else dst_tag
 
     if not force:
-        roots = load_session_roots()
-        if not roots:
-            errors.append(_no_roots_error())
-        else:
-            root = matched_session_root(dst_cwd_abs, roots)
-            if root is None:
-                errors.append(_cwd_not_under_root_error(dst_cwd_abs, roots, dst=True))
-            elif is_strict_root(root):
-                project_name = dst_cwd_abs.name
-                err = validate_strict_project_name(project_name)
-                if err:
-                    errors.append(err)
-                err = validate_strict_tag_suffix(tag_suffix, project_name)
-                if err:
-                    errors.append(err)
+        try:
+            roots = load_session_roots()
+        except RootsConfigError as e:
+            errors.append(str(e))
+            return (False, errors)
+        root = matched_session_root(dst_cwd_abs, roots)
+        if root is None:
+            errors.append(_cwd_not_under_root_error(dst_cwd_abs, roots, dst=True))
+        elif is_strict_root(root):
+            project_name = dst_cwd_abs.name
+            err = validate_strict_project_name(project_name)
+            if err:
+                errors.append(err)
+            err = validate_strict_tag_suffix(tag_suffix, project_name)
+            if err:
+                errors.append(err)
 
     return (not errors, errors)
 
