@@ -35,8 +35,16 @@ def main(argv: list[str] | None = None) -> int:
     args = _build_parser().parse_args(argv)
     real_pwd = Path.cwd().resolve()
 
-    # Validate tag/cwd via shared rules.
-    ok, errors = rules.check_session_init(real_pwd, args.tag, force=args.force)
+    # Run the Levenshtein typo / missing-prefix prompts FIRST so that a tag
+    # like "test-foo" under the strict root can be corrected to "oneshot-test-foo"
+    # interactively, before the rules validator would reject it outright.
+    # The prompt is a no-op outside the strict (PROJ) root.
+    tag = args.tag
+    if not args.force:
+        tag = prompts.maybe_correct_tag(real_pwd, tag)
+
+    # Validate tag/cwd via shared rules (on the possibly-corrected tag).
+    ok, errors = rules.check_session_init(real_pwd, tag, force=args.force)
     if not ok:
         print("ccd: validation failed:", file=sys.stderr)
         for e in errors:
@@ -46,11 +54,6 @@ def main(argv: list[str] | None = None) -> int:
             print("  (use --force to bypass root and strict-root checks)",
                   file=sys.stderr)
         return 1
-
-    # Levenshtein typo / missing-prefix prompts (only under cc-claude-code).
-    tag = args.tag
-    if not args.force:
-        tag = prompts.maybe_correct_tag(real_pwd, tag)
 
     date_str = datetime.now().strftime("%Y%m%d")
     session_name = f"{date_str}-{tag}"
