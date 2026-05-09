@@ -110,28 +110,32 @@ def main(argv: list[str] | None = None) -> int:
                 continue
             sessions.append((sess, proj))
 
+    n = len(sessions)
     if args.contents:
-        total_files = 0
-        total_bytes = 0
-        for sess, _ in sessions:
-            f, b = _session_size(sess)
-            total_files += f
-            total_bytes += b
-        n = len(sessions)
+        # Print the count-only header IMMEDIATELY so the user gets feedback
+        # before any filesystem walking begins. The size is accumulated and
+        # reported in a final summary line at the end.
         noun = "session" if n == 1 else "sessions"
-        print(
-            f"ccs: searching {n} {noun} ({total_files} files, {_format_size(total_bytes)})",
-            file=sys.stderr,
-        )
+        print(f"ccs: searching {n} {noun}...", file=sys.stderr)
 
     show_progress = args.contents and sys.stderr.isatty()
     progress_width = 0  # widest line printed so we can clear it later
+    total_files = 0
+    total_bytes = 0
 
     results: list[_Result] = []
     for i, (sess, proj) in enumerate(sessions, start=1):
+        if args.contents:
+            f, b = _session_size(sess)
+            total_files += f
+            total_bytes += b
+
         if show_progress:
-            pct = int(100 * i / len(sessions))
-            line = f"\r[{i}/{len(sessions)}] ({pct}%) {sess.name}"
+            pct = int(100 * i / n)
+            line = (
+                f"\r[{i}/{n}] ({pct}%) {sess.name}  "
+                f"[{total_files} files, {_format_size(total_bytes)} so far]"
+            )
             progress_width = max(progress_width, len(line))
             sys.stderr.write(line)
             sys.stderr.flush()
@@ -151,6 +155,13 @@ def main(argv: list[str] | None = None) -> int:
         # Clear the progress line so it doesn't sit above the results.
         sys.stderr.write("\r" + " " * progress_width + "\r")
         sys.stderr.flush()
+
+    if args.contents:
+        print(
+            f"ccs: searched {total_files} files ({_format_size(total_bytes)}) "
+            f"across {n} {noun}",
+            file=sys.stderr,
+        )
 
     if not results:
         print(f"ccs: no sessions match '{args.query}'", file=sys.stderr)

@@ -143,20 +143,31 @@ def test_no_cc_sessions_in_cwd_errors_for_local_search(fake_repos, monkeypatch, 
 
 
 class TestContentsSearchHeader:
-    def test_header_shows_session_count_and_total_size(self, fake_repos, monkeypatch, capsys):
+    def test_header_prints_count_immediately_before_any_size_walk(
+        self, fake_repos, monkeypatch, capsys
+    ):
+        # Make _session_size raise to prove the header is emitted *before* any
+        # filesystem walking - if the header still appears, the count-only
+        # header is doing its job and the size pre-pass is gone.
+        from cc_session_tools.cli import ccs as ccs_mod
+
         proj = fake_repos / "myproj"
-        _make_session(fake_repos, "myproj", "20260504-a", contents="alpha\n" * 100)
-        _make_session(fake_repos, "myproj", "20260503-b", contents="beta\n" * 50)
-        _make_session(fake_repos, "myproj", "20260502-c", contents="gamma\n")
+        _make_session(fake_repos, "myproj", "20260504-a", contents="alpha\n")
+        _make_session(fake_repos, "myproj", "20260503-b", contents="beta\n")
         monkeypatch.chdir(proj)
 
-        ccs.main(["needle", "--contents"])
+        def boom(_):
+            raise AssertionError(
+                "ccs walked file sizes upfront - header must print before any rglob"
+            )
+
+        monkeypatch.setattr(ccs_mod, "_session_size", boom)
+
+        with pytest.raises(AssertionError, match="walked file sizes upfront"):
+            ccs.main(["needle", "--contents"])
+
         err = capsys.readouterr().err
-        # Must report "3 sessions" and a file count and a size unit.
-        assert "3 sessions" in err
-        assert "files" in err
-        # Either bytes, KB, or MB - we don't care which here, just that a unit appears.
-        assert any(unit in err for unit in (" B", " KB", " MB"))
+        assert "2 sessions" in err  # header printed first
 
     def test_header_singular_session_phrasing(self, fake_repos, monkeypatch, capsys):
         proj = fake_repos / "myproj"
@@ -186,6 +197,33 @@ class TestContentsSearchHeader:
         ccs.main(["needle", "--contents", "--global"])
         err = capsys.readouterr().err
         assert "2 sessions" in err
+
+
+class TestContentsSearchSummary:
+    def test_summary_reports_files_and_size_after_search(
+        self, fake_repos, monkeypatch, capsys
+    ):
+        proj = fake_repos / "myproj"
+        _make_session(fake_repos, "myproj", "20260504-a", contents="alpha\n" * 100)
+        _make_session(fake_repos, "myproj", "20260503-b", contents="beta\n" * 50)
+        monkeypatch.chdir(proj)
+
+        ccs.main(["needle", "--contents"])
+        err = capsys.readouterr().err
+        # Final summary line shows files searched and total size.
+        assert "files" in err
+        assert any(unit in err for unit in (" B", " KB", " MB"))
+
+    def test_no_summary_for_name_search(self, fake_repos, monkeypatch, capsys):
+        proj = fake_repos / "myproj"
+        _make_session(fake_repos, "myproj", "20260504-foo", contents="x\n")
+        monkeypatch.chdir(proj)
+
+        ccs.main(["foo"])
+        err = capsys.readouterr().err
+        assert "files" not in err
+        assert " KB" not in err
+        assert " MB" not in err
 
 
 class TestContentsSearchProgress:
