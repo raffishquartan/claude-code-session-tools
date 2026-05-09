@@ -169,6 +169,16 @@ def test_no_cc_sessions_in_cwd_errors_for_local_search(fake_repos, monkeypatch, 
     assert "no cc-sessions" in err
 
 
+def test_global_search_exits_nonzero_with_marker_when_env_vars_unset(monkeypatch, capsys):
+    # autouse fixture already clears env vars; this test confirms ccs --global
+    # exits 1 and prints [CST-ROOTS-CONFIG-ERROR] to stderr.
+    with pytest.raises(SystemExit) as exc_info:
+        ccs.main(["foo", "--global"])
+    assert exc_info.value.code == 1
+    err = capsys.readouterr().err
+    assert "[CST-ROOTS-CONFIG-ERROR]" in err
+
+
 class TestContentsSearchHeaderRgPath:
     """rg path: skips the indexing pre-pass, prints count + estimate immediately."""
 
