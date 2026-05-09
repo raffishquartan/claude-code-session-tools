@@ -40,5 +40,5 @@ ccs = "cc_session_tools.cli.ccs:main"
 where = ["src"]
 
 [tool.pytest.ini_options]
-testpaths = ["tests"]
+testpaths = ["tests", "skills/move-session/tests"]
 addopts = "-q"
