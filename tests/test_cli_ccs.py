@@ -16,10 +16,10 @@ def fake_home(tmp_path, monkeypatch):
 
 
 @pytest.fixture
-def fake_repos(fake_home, tmp_path):
+def fake_repos(fake_home, tmp_path, monkeypatch):
     repos = tmp_path / "repos"
     repos.mkdir()
-    (fake_home / ".claude" / "cc-session-roots.txt").write_text(f"{repos}\n")
+    monkeypatch.setenv("CLAUDE_SESSION_TOOLS_REPO_ROOT", str(repos))
     return repos
 
 

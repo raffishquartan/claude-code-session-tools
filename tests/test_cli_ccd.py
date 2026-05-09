@@ -27,14 +27,17 @@ def fake_home(tmp_path, monkeypatch):
     return home
 
 
+def _set_repo_root(monkeypatch, path: Path) -> None:
+    monkeypatch.setenv("CLAUDE_SESSION_TOOLS_REPO_ROOT", str(path))
+
+
 def test_ccd_creates_session_dir_and_launches_claude(
     fake_home, tmp_path, monkeypatch, captured_launch
 ):
-    # Set up a fake roots file pointing at tmp_path/repos.
     repos = tmp_path / "repos"
     proj = repos / "myproj"
     proj.mkdir(parents=True)
-    (fake_home / ".claude" / "cc-session-roots.txt").write_text(f"{repos}\n")
+    _set_repo_root(monkeypatch, repos)
 
     monkeypatch.chdir(proj)
     # Bypass strict-root prompts (proj is under repos, not the strict root).
@@ -63,7 +66,7 @@ def test_ccd_sets_env_vars_for_session_start_hook(
     repos = tmp_path / "repos"
     proj = repos / "myproj"
     proj.mkdir(parents=True)
-    (fake_home / ".claude" / "cc-session-roots.txt").write_text(f"{repos}\n")
+    _set_repo_root(monkeypatch, repos)
     monkeypatch.chdir(proj)
 
     ccd.main(["mytag"])
@@ -82,7 +85,7 @@ def test_ccd_does_not_set_task_list_id_when_outside_roots(
 ):
     repos = tmp_path / "repos"
     repos.mkdir()
-    (fake_home / ".claude" / "cc-session-roots.txt").write_text(f"{repos}\n")
+    _set_repo_root(monkeypatch, repos)
     elsewhere = tmp_path / "elsewhere"
     elsewhere.mkdir()
     monkeypatch.chdir(elsewhere)
@@ -101,7 +104,7 @@ def test_ccd_chdirs_to_resolved_real_path_before_launch(
     repos = tmp_path / "repos"
     proj = repos / "myproj"
     proj.mkdir(parents=True)
-    (fake_home / ".claude" / "cc-session-roots.txt").write_text(f"{repos}\n")
+    _set_repo_root(monkeypatch, repos)
 
     # Approach via a symlink to verify resolution to the real path.
     link = tmp_path / "link-to-proj"
@@ -130,7 +133,7 @@ def test_ccd_rejects_duplicate_session_with_helpful_message(
     repos = tmp_path / "repos"
     proj = repos / "myproj"
     proj.mkdir(parents=True)
-    (fake_home / ".claude" / "cc-session-roots.txt").write_text(f"{repos}\n")
+    _set_repo_root(monkeypatch, repos)
     monkeypatch.chdir(proj)
 
     # Pre-create the session dir for today's date.

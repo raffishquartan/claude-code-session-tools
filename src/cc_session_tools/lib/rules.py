@@ -4,12 +4,15 @@ import re
 from pathlib import Path
 
 from .roots import (
-    DEFAULT_ROOTS_FILE,
-    STRICT_ROOT_LINK,
-    default_roots_file,
+    PROJ_ROOT_ENV,
+    REPO_ROOT_ENV,
     is_strict_root,
+    is_valid_session_cwd,
     load_session_roots,
     matched_session_root,
+    proj_root,
+    repo_root,
+    strict_root_path,
 )
 
 PROJECT_NAME_STRICT_RE = re.compile(r"^[a-z0-9]+$")
@@ -17,14 +20,11 @@ TAG_SUFFIX_FORMAT_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9-]*$")
 DATE_PREFIX_RE = re.compile(r"^(\d{8})-(.*)$")
 TAG_NEW_RE = re.compile(r"^(\d{8})-([a-zA-Z0-9][a-zA-Z0-9-]*)$")
 
-# Re-export for backwards compatibility with the move-session skill, which
-# imports these names from the rules module.
-ROOTS_FILE = DEFAULT_ROOTS_FILE
 __all__ = [
     "DATE_PREFIX_RE",
     "PROJECT_NAME_STRICT_RE",
-    "ROOTS_FILE",
-    "STRICT_ROOT_LINK",
+    "PROJ_ROOT_ENV",
+    "REPO_ROOT_ENV",
     "TAG_NEW_RE",
     "TAG_SUFFIX_FORMAT_RE",
     "check_session_destination",
@@ -34,21 +34,40 @@ __all__ = [
     "is_valid_session_cwd",
     "load_session_roots",
     "matched_session_root",
+    "proj_root",
+    "repo_root",
     "strict_root_path",
     "validate_new_tag",
     "validate_strict_project_name",
     "validate_strict_tag_suffix",
     "validate_tag_suffix_no_spaces",
 ]
-# Re-export so callers can `from rules import is_valid_session_cwd, strict_root_path`.
-from .roots import is_valid_session_cwd, strict_root_path  # noqa: E402,F401
+
+
+def _no_roots_error() -> str:
+    return (
+        f"no session roots configured: set ${REPO_ROOT_ENV} (loose, no naming "
+        f"conventions) and/or ${PROJ_ROOT_ENV} (strict, requires "
+        f"<project>-<label> tag) to a directory whose direct children are your "
+        f"projects"
+    )
+
+
+def _cwd_not_under_root_error(cwd_abs: Path, roots: list[Path], *, dst: bool = False) -> str:
+    label = "destination cwd" if dst else "cwd"
+    return (
+        f"{label} not a direct subdirectory of any configured root:\n"
+        f"  {label}:  {cwd_abs}\n"
+        f"  roots: {[str(r) for r in roots]}\n"
+        f"  configure via ${REPO_ROOT_ENV} and/or ${PROJ_ROOT_ENV}"
+    )
 
 
 def validate_strict_project_name(project_name: str) -> str:
     if not PROJECT_NAME_STRICT_RE.match(project_name):
         return (
             f"project name '{project_name}' must match [a-z0-9]+ (no dashes, "
-            f"no uppercase) under the cc-claude-code root"
+            f"no uppercase) under the strict (PROJ) root"
         )
     return ""
 
@@ -112,18 +131,13 @@ def check_session_init(
         errors.append(err)
 
     if not force:
-        roots_file = default_roots_file()
-        roots = load_session_roots(roots_file)
+        roots = load_session_roots()
         if not roots:
-            errors.append(f"no usable roots in {roots_file}")
+            errors.append(_no_roots_error())
         else:
             root = matched_session_root(cwd_abs, roots)
             if root is None:
-                errors.append(
-                    f"cwd not a direct subdirectory of any root in {roots_file}:\n"
-                    f"  cwd:   {cwd_abs}\n"
-                    f"  roots: {[str(r) for r in roots]}"
-                )
+                errors.append(_cwd_not_under_root_error(cwd_abs, roots))
             elif is_strict_root(root):
                 project_name = cwd_abs.name
                 err = validate_strict_project_name(project_name)
@@ -153,18 +167,13 @@ def check_session_destination(
     tag_suffix = m.group(2) if m else dst_tag
 
     if not force:
-        roots_file = default_roots_file()
-        roots = load_session_roots(roots_file)
+        roots = load_session_roots()
         if not roots:
-            errors.append(f"no usable roots in {roots_file}")
+            errors.append(_no_roots_error())
         else:
             root = matched_session_root(dst_cwd_abs, roots)
             if root is None:
-                errors.append(
-                    f"destination cwd not a direct subdirectory of any root in {roots_file}:\n"
-                    f"  dst_cwd: {dst_cwd_abs}\n"
-                    f"  roots:   {[str(r) for r in roots]}"
-                )
+                errors.append(_cwd_not_under_root_error(dst_cwd_abs, roots, dst=True))
             elif is_strict_root(root):
                 project_name = dst_cwd_abs.name
                 err = validate_strict_project_name(project_name)

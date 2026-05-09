@@ -8,33 +8,12 @@ from cc_session_tools.lib import rules
 
 
 @pytest.fixture
-def tmp_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    home = tmp_path / "home"
-    home.mkdir()
-    (home / ".claude").mkdir()
-    monkeypatch.setenv("HOME", str(home))
-    # rules captures DEFAULT_ROOTS_FILE at import time, so we have to patch
-    # ROOTS_FILE for tests that exercise check_session_init.
-    monkeypatch.setattr(rules, "ROOTS_FILE", home / ".claude" / "cc-session-roots.txt")
-    return home
-
-
-@pytest.fixture
-def roots_file(tmp_home: Path, tmp_path: Path) -> Path:
+def projects_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """A configured loose root with the env var set to point at it."""
     root = tmp_path / "projects-root"
     root.mkdir()
-    rf = tmp_home / ".claude" / "cc-session-roots.txt"
-    rf.write_text(f"{root}\n")
-    monkey = pytest.MonkeyPatch()
-    monkey.setattr(rules, "load_session_roots",
-                   lambda roots_file=rf: [root.resolve()])
-    yield rf
-    monkey.undo()
-
-
-@pytest.fixture
-def projects_root(tmp_path: Path) -> Path:
-    return tmp_path / "projects-root"
+    monkeypatch.setenv("CLAUDE_SESSION_TOOLS_REPO_ROOT", str(root))
+    return root
 
 
 class TestEncodeCwd:
@@ -126,31 +105,54 @@ class TestMatchedSessionRoot:
 
 
 class TestCheckSessionInit:
-    def test_passes_when_cwd_under_root_and_tag_clean(self, tmp_home, roots_file, projects_root, monkeypatch):
-        monkeypatch.setattr(rules, "is_strict_root", lambda r: False)
+    def test_passes_when_cwd_under_repo_root_and_tag_clean(self, projects_root):
         cwd = projects_root / "myproj"
         cwd.mkdir()
         ok, errors = rules.check_session_init(cwd.resolve(), "any-tag")
         assert ok, errors
 
-    def test_fails_when_tag_has_spaces(self, tmp_home, roots_file, projects_root, monkeypatch):
-        monkeypatch.setattr(rules, "is_strict_root", lambda r: False)
+    def test_fails_when_tag_has_spaces(self, projects_root):
         cwd = projects_root / "myproj"
         cwd.mkdir()
         ok, errors = rules.check_session_init(cwd.resolve(), "tag with space")
         assert not ok
         assert any("must not contain spaces" in e for e in errors)
 
-    def test_force_skips_root_check(self, tmp_home, roots_file, monkeypatch):
-        monkeypatch.setattr(rules, "is_strict_root", lambda r: False)
+    def test_force_skips_root_check(self):
         outside = Path("/tmp/no-such-root/proj").resolve() if Path("/tmp").exists() else Path.cwd()
         ok, _ = rules.check_session_init(outside, "any-tag", force=True)
         assert ok
 
-    def test_strict_root_requires_project_prefix(self, tmp_home, roots_file, projects_root, monkeypatch):
-        monkeypatch.setattr(rules, "is_strict_root", lambda r: True)
-        cwd = projects_root / "oneshot"
+    def test_fails_with_helpful_error_when_no_roots_configured(self, tmp_path):
+        # Both env vars unset (autouse fixture clears them).
+        ok, errors = rules.check_session_init(tmp_path, "any-tag")
+        assert not ok
+        joined = "\n".join(errors)
+        assert "CLAUDE_SESSION_TOOLS_REPO_ROOT" in joined
+        assert "CLAUDE_SESSION_TOOLS_PROJ_ROOT" in joined
+
+    def test_strict_root_requires_project_prefix(self, tmp_path, monkeypatch):
+        proj_root = tmp_path / "proj-root"
+        proj_root.mkdir()
+        monkeypatch.setenv("CLAUDE_SESSION_TOOLS_PROJ_ROOT", str(proj_root))
+        cwd = proj_root / "oneshot"
         cwd.mkdir()
         ok, errors = rules.check_session_init(cwd.resolve(), "wrong-prefix")
         assert not ok
         assert any("must start with 'oneshot-'" in e for e in errors)
+
+    def test_strict_root_accepts_project_prefixed_tag(self, tmp_path, monkeypatch):
+        proj_root = tmp_path / "proj-root"
+        proj_root.mkdir()
+        monkeypatch.setenv("CLAUDE_SESSION_TOOLS_PROJ_ROOT", str(proj_root))
+        cwd = proj_root / "oneshot"
+        cwd.mkdir()
+        ok, errors = rules.check_session_init(cwd.resolve(), "oneshot-do-the-thing")
+        assert ok, errors
+
+    def test_loose_root_does_not_apply_strict_naming(self, projects_root):
+        # projects_root is configured as REPO_ROOT (loose), so any tag is fine.
+        cwd = projects_root / "MyProject-with-dashes"
+        cwd.mkdir()
+        ok, errors = rules.check_session_init(cwd.resolve(), "anything-goes")
+        assert ok, errors
