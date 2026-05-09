@@ -6,6 +6,7 @@ from pathlib import Path
 from .roots import (
     DEFAULT_ROOTS_FILE,
     STRICT_ROOT_LINK,
+    default_roots_file,
     is_strict_root,
     load_session_roots,
     matched_session_root,
@@ -111,14 +112,15 @@ def check_session_init(
         errors.append(err)
 
     if not force:
-        roots = load_session_roots()
+        roots_file = default_roots_file()
+        roots = load_session_roots(roots_file)
         if not roots:
-            errors.append(f"no usable roots in {ROOTS_FILE}")
+            errors.append(f"no usable roots in {roots_file}")
         else:
             root = matched_session_root(cwd_abs, roots)
             if root is None:
                 errors.append(
-                    f"cwd not a direct subdirectory of any root in {ROOTS_FILE}:\n"
+                    f"cwd not a direct subdirectory of any root in {roots_file}:\n"
                     f"  cwd:   {cwd_abs}\n"
                     f"  roots: {[str(r) for r in roots]}"
                 )
@@ -151,14 +153,15 @@ def check_session_destination(
     tag_suffix = m.group(2) if m else dst_tag
 
     if not force:
-        roots = load_session_roots()
+        roots_file = default_roots_file()
+        roots = load_session_roots(roots_file)
         if not roots:
-            errors.append(f"no usable roots in {ROOTS_FILE}")
+            errors.append(f"no usable roots in {roots_file}")
         else:
             root = matched_session_root(dst_cwd_abs, roots)
             if root is None:
                 errors.append(
-                    f"destination cwd not a direct subdirectory of any root in {ROOTS_FILE}:\n"
+                    f"destination cwd not a direct subdirectory of any root in {roots_file}:\n"
                     f"  dst_cwd: {dst_cwd_abs}\n"
                     f"  roots:   {[str(r) for r in roots]}"
                 )
