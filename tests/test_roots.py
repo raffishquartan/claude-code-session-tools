@@ -8,6 +8,7 @@ from cc_session_tools.lib import roots
 from cc_session_tools.lib.roots import (
     PROJ_ROOT_ENV,
     REPO_ROOT_ENV,
+    RootsConfigError,
     is_strict_root,
     load_session_roots,
     proj_root,
@@ -42,11 +43,31 @@ class TestRepoRoot:
         monkeypatch.setenv(REPO_ROOT_ENV, str(tmp_path / "no-such-dir"))
         assert repo_root() is None
 
+    def test_load_raises_when_repo_env_set_to_missing_path(self, tmp_path, monkeypatch):
+        monkeypatch.setenv(REPO_ROOT_ENV, str(tmp_path / "no-such-dir"))
+        with pytest.raises(RootsConfigError) as exc_info:
+            load_session_roots()
+        msg = str(exc_info.value)
+        assert "[CST-ROOTS-CONFIG-ERROR]" in msg
+        assert REPO_ROOT_ENV in msg
+        assert "does not exist" in msg
+
     def test_returns_none_when_path_is_a_file(self, tmp_path, monkeypatch):
         f = tmp_path / "not-a-dir"
         f.write_text("hi")
         monkeypatch.setenv(REPO_ROOT_ENV, str(f))
         assert repo_root() is None
+
+    def test_load_raises_when_repo_env_set_to_file(self, tmp_path, monkeypatch):
+        f = tmp_path / "not-a-dir"
+        f.write_text("hi")
+        monkeypatch.setenv(REPO_ROOT_ENV, str(f))
+        with pytest.raises(RootsConfigError) as exc_info:
+            load_session_roots()
+        msg = str(exc_info.value)
+        assert "[CST-ROOTS-CONFIG-ERROR]" in msg
+        assert REPO_ROOT_ENV in msg
+        assert "file" in msg
 
     def test_resolves_symlinks(self, tmp_path, monkeypatch):
         real = tmp_path / "real"
@@ -74,10 +95,12 @@ class TestProjRoot:
 
 
 class TestLoadSessionRoots:
-    def test_empty_when_neither_env_set(self, monkeypatch):
+    def test_raises_when_neither_env_set(self, monkeypatch):
         monkeypatch.delenv(REPO_ROOT_ENV, raising=False)
         monkeypatch.delenv(PROJ_ROOT_ENV, raising=False)
-        assert load_session_roots() == []
+        with pytest.raises(RootsConfigError) as exc_info:
+            load_session_roots()
+        assert "[CST-ROOTS-CONFIG-ERROR]" in str(exc_info.value)
 
     def test_returns_repo_only_when_proj_unset(self, tmp_path, monkeypatch):
         repo = tmp_path / "repos"
@@ -109,13 +132,17 @@ class TestLoadSessionRoots:
         monkeypatch.setenv(PROJ_ROOT_ENV, str(d))
         assert load_session_roots() == [d.resolve()]
 
-    def test_skips_unconfigured_root_silently(self, tmp_path, monkeypatch):
+    def test_raises_when_one_good_one_bad_env(self, tmp_path, monkeypatch):
         proj = tmp_path / "proj"
         proj.mkdir()
-        # REPO points at a missing dir; should be silently skipped, not error.
+        # PROJ is valid; REPO points at a missing path → must raise, not silently use PROJ only.
         monkeypatch.setenv(REPO_ROOT_ENV, str(tmp_path / "no-such"))
         monkeypatch.setenv(PROJ_ROOT_ENV, str(proj))
-        assert load_session_roots() == [proj.resolve()]
+        with pytest.raises(RootsConfigError) as exc_info:
+            load_session_roots()
+        msg = str(exc_info.value)
+        assert "[CST-ROOTS-CONFIG-ERROR]" in msg
+        assert REPO_ROOT_ENV in msg
 
 
 class TestIsStrictRoot:
