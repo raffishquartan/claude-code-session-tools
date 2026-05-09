@@ -4,13 +4,20 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "cc-session-tools"
-version = "0.4.0"
-description = "Claude Code session management CLI tools (ccd, ccr, ccs) and shared library"
+version = "0.5.0"
+description = "Claude Code session management and usage analysis CLI tools (ccd, ccr, ccs, claude-code-usage) and shared library"
 readme = "README.md"
 license = { file = "LICENSE" }
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 authors = [{ name = "raffishquartan" }]
-keywords = ["claude-code", "cli", "session-management"]
+keywords = ["claude-code", "cli", "session-management", "usage-analytics"]
+dependencies = [
+    "pandas>=2.2",
+    "pyarrow>=15.0",
+    "jsonschema>=4.21",
+    "platformdirs>=4.0",
+    "httpx>=0.27",
+]
 classifiers = [
     "Development Status :: 4 - Beta",
     "Environment :: Console",
@@ -35,6 +42,7 @@ Issues = "https://github.com/raffishquartan/claude-code-session-tools/issues"
 ccd = "cc_session_tools.cli.ccd:main"
 ccr = "cc_session_tools.cli.ccr:main"
 ccs = "cc_session_tools.cli.ccs:main"
+claude-code-usage = "claude_code_usage.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
@@ -42,3 +50,4 @@ where = ["src"]
 [tool.pytest.ini_options]
 testpaths = ["tests", "skills/move-session/tests"]
 addopts = "-q"
+pythonpath = ["src"]
