@@ -73,68 +73,124 @@ def _is_binary(sample: bytes) -> bool:
     return b"\x00" in sample
 
 
-def grep_session(session_dir: Path, query: str, context: int = 1) -> list[str]:
-    """Grep for `query` (fixed string, not regex) recursively in session_dir;
-    return a flat list of output lines including `path:line:content` for
-    matches and `path-line-content` for ±context lines, with `--` separators
-    between non-adjacent groups (standard grep -A/-B output).
+def enumerate_session_files(
+    session_dir: Path, max_bytes: int | None = None
+) -> tuple[list[Path], int, int]:
+    """Walk session_dir and return (files, total_bytes, skipped). When
+    max_bytes is set, files larger than that are excluded and counted in
+    `skipped`. Cheap (stat only, no read); used by ccs to give the user
+    an upfront indication of how much work the search will involve."""
+    files: list[Path] = []
+    total_bytes = 0
+    skipped = 0
+    for p in session_dir.rglob("*"):
+        if not p.is_file():
+            continue
+        try:
+            size = p.stat().st_size
+        except OSError:
+            continue
+        if max_bytes is not None and size > max_bytes:
+            skipped += 1
+            continue
+        files.append(p)
+        total_bytes += size
+    return files, total_bytes, skipped
 
-    Uses `rg` (ripgrep) or `grep` when available - both are 10-100x faster
-    than the pure-Python fallback on large session trees. Falls back to a
-    pure-Python implementation if neither external tool is on PATH (e.g. a
-    locked-down CI environment) or the subprocess fails unexpectedly."""
+
+def grep_session(session_dir: Path, query: str, context: int = 1) -> list[str]:
+    """Convenience wrapper: enumerate files in `session_dir` then grep them
+    via `grep_files`. Preserved for callers that don't need the two-phase
+    enumerate-then-grep flow."""
+    files, _, _ = enumerate_session_files(session_dir)
+    if not files:
+        return []
+    return grep_files(files, query, context=context, cwd=session_dir)
+
+
+def grep_files(
+    files: list[Path], query: str, context: int = 1, cwd: Path | None = None
+) -> list[str]:
+    """Grep `files` for `query` (fixed string, not regex). Returns a flat
+    list of output lines including `path:line:content` for matches and
+    `path-line-content` for ±context lines, with `--` separators between
+    non-adjacent groups (standard grep -A/-B output).
+
+    Prefers `rg` (ripgrep) > GNU `grep` > a pure-Python fallback.
+
+    `cwd` controls how paths are reported in the output (paths in subprocess
+    output are relative to cwd). Pass the session directory so output reads
+    `working/WORKLOG.md:42:...` rather than absolute paths."""
+    if not files:
+        return []
     if shutil.which("rg"):
-        out = _grep_with_rg(session_dir, query, context)
+        out = _grep_files_with_rg(files, query, context, cwd)
         if out is not None:
             return out
     if shutil.which("grep"):
-        out = _grep_with_grep(session_dir, query, context)
+        out = _grep_files_with_grep(files, query, context, cwd)
         if out is not None:
             return out
-    return _grep_python(session_dir, query, context)
+    return _grep_files_python(files, query, context)
 
 
-def _grep_with_grep(session_dir: Path, query: str, context: int) -> list[str] | None:
-    """Run GNU grep over the session tree. Returns None if grep failed in a
-    way that suggests we should fall through to the next runner."""
+def _relativize(files: list[Path], cwd: Path | None) -> list[str]:
+    if cwd is None:
+        return [str(f) for f in files]
+    out: list[str] = []
+    for f in files:
+        try:
+            out.append(str(f.relative_to(cwd)))
+        except ValueError:
+            out.append(str(f))
+    return out
+
+
+def _grep_files_with_grep(
+    files: list[Path], query: str, context: int, cwd: Path | None
+) -> list[str] | None:
+    """Run GNU grep over an explicit file list. Returns None on hard errors
+    so the caller can fall through to the next runner."""
+    paths = _relativize(files, cwd)
     cmd = [
-        "grep", "-rInHF", "--color=never",
+        "grep", "-InHF", "--color=never",
         "-A", str(context), "-B", str(context),
-        "--", query, ".",
+        "--", query, *paths,
     ]
     try:
         res = subprocess.run(
-            cmd, cwd=session_dir, capture_output=True,
+            cmd, cwd=cwd, capture_output=True,
             text=True, errors="replace",
         )
     except OSError:
         return None
-    # grep exit codes: 0=match, 1=no match, 2=error.
+    # grep exit codes: 0=match, 1=no match, 2=error. Treat large file lists
+    # that overrun ARG_MAX as a fall-through trigger (returncode 2 is also
+    # what grep returns for that, so the existing >1 check handles it).
     if res.returncode > 1:
         return None
     if not res.stdout:
         return []
-    # grep emits a trailing newline; rstrip then split keeps empty lines inside
-    # context blocks but drops the trailing one.
     return res.stdout.rstrip("\n").split("\n")
 
 
-def _grep_with_rg(session_dir: Path, query: str, context: int) -> list[str] | None:
-    """Run ripgrep. Output format is the same as grep's (path:line:content,
-    path-line-content for context, -- separators) when --no-heading is set."""
+def _grep_files_with_rg(
+    files: list[Path], query: str, context: int, cwd: Path | None
+) -> list[str] | None:
+    """Run ripgrep over an explicit file list."""
+    paths = _relativize(files, cwd)
     cmd = [
         "rg", "--no-heading", "-n", "-H", "-F",
         "--color=never", "-C", str(context),
-        "--", query, ".",
+        "--", query, *paths,
     ]
     try:
         res = subprocess.run(
-            cmd, cwd=session_dir, capture_output=True,
+            cmd, cwd=cwd, capture_output=True,
             text=True, errors="replace",
         )
     except OSError:
         return None
-    # rg exit codes: 0=match, 1=no match, 2=error.
     if res.returncode > 1:
         return None
     if not res.stdout:
@@ -142,13 +198,11 @@ def _grep_with_rg(session_dir: Path, query: str, context: int) -> list[str] | No
     return res.stdout.rstrip("\n").split("\n")
 
 
-def _grep_python(session_dir: Path, query: str, context: int) -> list[str]:
-    """Pure-Python fallback. Slower than grep/rg by 10-100x on large trees,
-    but always available."""
+def _grep_files_python(files: list[Path], query: str, context: int) -> list[str]:
+    """Pure-Python fallback. Slower than grep/rg by 10-100x on large trees."""
     out: list[str] = []
-    files = sorted(p for p in session_dir.rglob("*") if p.is_file())
     first_group = True
-    for f in files:
+    for f in sorted(files):
         try:
             sample = f.read_bytes()[:8192]
         except OSError:

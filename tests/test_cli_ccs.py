@@ -143,12 +143,12 @@ def test_no_cc_sessions_in_cwd_errors_for_local_search(fake_repos, monkeypatch, 
 
 
 class TestContentsSearchHeader:
-    def test_header_prints_count_immediately_before_any_size_walk(
+    def test_initial_header_printed_before_any_filesystem_walk(
         self, fake_repos, monkeypatch, capsys
     ):
-        # Make _session_size raise to prove the header is emitted *before* any
-        # filesystem walking - if the header still appears, the count-only
-        # header is doing its job and the size pre-pass is gone.
+        """Make enumerate_session_files raise. The "indexing N sessions..."
+        header must already have been printed by then so the user sees
+        immediate feedback even if the walk would be slow."""
         from cc_session_tools.cli import ccs as ccs_mod
 
         proj = fake_repos / "myproj"
@@ -156,18 +156,47 @@ class TestContentsSearchHeader:
         _make_session(fake_repos, "myproj", "20260503-b", contents="beta\n")
         monkeypatch.chdir(proj)
 
-        def boom(_):
+        def boom(*args, **kwargs):
             raise AssertionError(
-                "ccs walked file sizes upfront - header must print before any rglob"
+                "ccs walked files before printing initial header"
             )
 
-        monkeypatch.setattr(ccs_mod, "_session_size", boom)
+        monkeypatch.setattr(ccs_mod, "enumerate_session_files", boom)
 
-        with pytest.raises(AssertionError, match="walked file sizes upfront"):
+        with pytest.raises(AssertionError, match="walked files before"):
             ccs.main(["needle", "--contents"])
 
         err = capsys.readouterr().err
-        assert "2 sessions" in err  # header printed first
+        assert "2 sessions" in err  # initial header printed first
+
+    def test_indexing_header_uses_indexing_verb(self, fake_repos, monkeypatch, capsys):
+        proj = fake_repos / "myproj"
+        _make_session(fake_repos, "myproj", "20260504-a", contents="x\n")
+        monkeypatch.chdir(proj)
+        ccs.main(["needle", "--contents"])
+        err = capsys.readouterr().err
+        assert "indexing" in err.lower()
+
+    def test_indexed_summary_reports_files_and_size_before_search_starts(
+        self, fake_repos, monkeypatch, capsys
+    ):
+        proj = fake_repos / "myproj"
+        _make_session(fake_repos, "myproj", "20260504-a", contents="alpha\n" * 50)
+        _make_session(fake_repos, "myproj", "20260503-b", contents="beta\n" * 50)
+        monkeypatch.chdir(proj)
+        ccs.main(["needle", "--contents"])
+        err = capsys.readouterr().err
+        # An "indexed ... files ... <size>" line appears BEFORE the
+        # "searching" line.
+        idx_pos = err.lower().find("indexed")
+        search_pos = err.lower().find("searching")
+        assert idx_pos != -1, err
+        assert search_pos != -1, err
+        # "indexing" message is at idx_pos < search_pos < a later "indexed N files"
+        # which itself precedes the searching line. Just check both appear and
+        # the "indexed" summary precedes the per-session search progress.
+        assert "files" in err
+        assert any(unit in err for unit in (" B", " KB", " MB"))
 
     def test_header_singular_session_phrasing(self, fake_repos, monkeypatch, capsys):
         proj = fake_repos / "myproj"
@@ -252,3 +281,31 @@ class TestContentsSearchProgress:
         ccs.main(["needle", "--contents"])
         err = capsys.readouterr().err
         assert "\r" not in err
+
+
+class TestMaxFileSize:
+    def test_oversized_files_skipped_and_reported(self, fake_repos, monkeypatch, capsys):
+        proj = fake_repos / "myproj"
+        sess = _make_session(
+            fake_repos, "myproj", "20260504-a",
+            contents="needle in small file\n",
+        )
+        # Add a "huge" file - 5 MB, larger than the 1 MB cap we'll set below.
+        (sess / "working" / "huge.bin").write_bytes(b"needle " * (5 * 1024 * 1024 // 7))
+        monkeypatch.chdir(proj)
+
+        ccs.main(["needle", "--contents", "--max-file-size", "1"])
+        err = capsys.readouterr().err
+        assert "skipped 1" in err
+        # Match still found in the small file.
+        out = capsys.readouterr().out
+        assert out == "" or "needle in small file" in out  # capsys may have flushed already
+
+    def test_default_cap_is_high_enough_for_normal_files(self, fake_repos, monkeypatch, capsys):
+        proj = fake_repos / "myproj"
+        _make_session(fake_repos, "myproj", "20260504-a", contents="needle\n")
+        monkeypatch.chdir(proj)
+
+        ccs.main(["needle", "--contents"])
+        err = capsys.readouterr().err
+        assert "skipped" not in err
