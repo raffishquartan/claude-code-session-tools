@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from cc_session_tools import __version__
-from cc_session_tools.lib.roots import load_session_roots
+from cc_session_tools.lib.roots import RootsConfigError, load_session_roots
 from cc_session_tools.lib.sessions import (
     enumerate_session_files,
     grep_files,
@@ -52,7 +52,12 @@ def _collect_pairs(do_global: bool) -> list[tuple[Path, Path]]:
     """Return [(sessions_dir, project_dir), ...] for the search scope."""
     pairs: list[tuple[Path, Path]] = []
     if do_global:
-        for root in load_session_roots():
+        try:
+            roots = load_session_roots()
+        except RootsConfigError as e:
+            print(str(e), file=sys.stderr)
+            sys.exit(1)
+        for root in roots:
             for proj in root.iterdir():
                 if proj.is_dir():
                     cc = proj / "cc-sessions"

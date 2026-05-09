@@ -123,11 +123,12 @@ class TestCheckSessionInit:
         ok, _ = rules.check_session_init(outside, "any-tag", force=True)
         assert ok
 
-    def test_fails_with_helpful_error_when_no_roots_configured(self, tmp_path):
+    def test_fails_with_marker_error_when_no_roots_configured(self, tmp_path):
         # Both env vars unset (autouse fixture clears them).
         ok, errors = rules.check_session_init(tmp_path, "any-tag")
         assert not ok
         joined = "\n".join(errors)
+        assert "[CST-ROOTS-CONFIG-ERROR]" in joined
         assert "CLAUDE_SESSION_TOOLS_REPO_ROOT" in joined
         assert "CLAUDE_SESSION_TOOLS_PROJ_ROOT" in joined
 
