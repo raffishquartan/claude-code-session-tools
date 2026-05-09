@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import shutil
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -132,13 +133,18 @@ def main(argv: list[str] | None = None) -> int:
 
         if show_progress:
             pct = int(100 * i / n)
-            line = (
-                f"\r[{i}/{n}] ({pct}%) {sess.name}  "
-                f"[{total_files} files, {_format_size(total_bytes)} so far]"
-            )
-            progress_width = max(progress_width, len(line))
-            sys.stderr.write(line)
+            term_width = shutil.get_terminal_size((80, 20)).columns
+            prefix = f"[{i}/{n}] ({pct}%) "
+            suffix = f"  [{total_files} files, {_format_size(total_bytes)} so far]"
+            budget = max(20, term_width - len(prefix) - len(suffix) - 1)
+            name = sess.name if len(sess.name) <= budget else sess.name[: budget - 3] + "..."
+            line = prefix + name + suffix
+            # Pad with spaces so that a shorter line fully overwrites any
+            # leftover characters from a previous wider line.
+            padding = " " * max(0, progress_width - len(line))
+            sys.stderr.write("\r" + line + padding)
             sys.stderr.flush()
+            progress_width = max(progress_width, len(line))
 
         date_key = session_start_date(sess.name)
         # date_key is non-None - we filtered above.
