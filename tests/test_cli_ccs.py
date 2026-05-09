@@ -16,10 +16,10 @@ def fake_home(tmp_path, monkeypatch):
 
 
 @pytest.fixture
-def fake_repos(fake_home, tmp_path):
+def fake_repos(fake_home, tmp_path, monkeypatch):
     repos = tmp_path / "repos"
     repos.mkdir()
-    (fake_home / ".claude" / "cc-session-roots.txt").write_text(f"{repos}\n")
+    monkeypatch.setenv("CLAUDE_SESSION_TOOLS_REPO_ROOT", str(repos))
     return repos
 
 
@@ -140,3 +140,77 @@ def test_no_cc_sessions_in_cwd_errors_for_local_search(fake_repos, monkeypatch, 
     assert rc == 1
     err = capsys.readouterr().err
     assert "no cc-sessions" in err
+
+
+class TestContentsSearchHeader:
+    def test_header_shows_session_count_and_total_size(self, fake_repos, monkeypatch, capsys):
+        proj = fake_repos / "myproj"
+        _make_session(fake_repos, "myproj", "20260504-a", contents="alpha\n" * 100)
+        _make_session(fake_repos, "myproj", "20260503-b", contents="beta\n" * 50)
+        _make_session(fake_repos, "myproj", "20260502-c", contents="gamma\n")
+        monkeypatch.chdir(proj)
+
+        ccs.main(["needle", "--contents"])
+        err = capsys.readouterr().err
+        # Must report "3 sessions" and a file count and a size unit.
+        assert "3 sessions" in err
+        assert "files" in err
+        # Either bytes, KB, or MB - we don't care which here, just that a unit appears.
+        assert any(unit in err for unit in (" B", " KB", " MB"))
+
+    def test_header_singular_session_phrasing(self, fake_repos, monkeypatch, capsys):
+        proj = fake_repos / "myproj"
+        _make_session(fake_repos, "myproj", "20260504-only", contents="x\n")
+        monkeypatch.chdir(proj)
+
+        ccs.main(["needle", "--contents"])
+        err = capsys.readouterr().err
+        assert "1 session" in err
+        # No accidental plural.
+        assert "1 sessions" not in err
+
+    def test_header_not_printed_for_name_search(self, fake_repos, monkeypatch, capsys):
+        proj = fake_repos / "myproj"
+        _make_session(fake_repos, "myproj", "20260504-foo", contents="x\n")
+        monkeypatch.chdir(proj)
+
+        ccs.main(["foo"])  # name search, no --contents
+        err = capsys.readouterr().err
+        assert "sessions" not in err
+
+    def test_header_global_aggregates_across_roots(self, fake_repos, monkeypatch, capsys):
+        _make_session(fake_repos, "alpha", "20260504-a", contents="x\n")
+        _make_session(fake_repos, "beta", "20260503-b", contents="y\n")
+        monkeypatch.chdir(fake_repos)
+
+        ccs.main(["needle", "--contents", "--global"])
+        err = capsys.readouterr().err
+        assert "2 sessions" in err
+
+
+class TestContentsSearchProgress:
+    def test_progress_emitted_when_stderr_is_a_tty(self, fake_repos, monkeypatch, capsys):
+        proj = fake_repos / "myproj"
+        _make_session(fake_repos, "myproj", "20260504-a", contents="x\n")
+        _make_session(fake_repos, "myproj", "20260503-b", contents="y\n")
+        monkeypatch.chdir(proj)
+
+        # Pretend stderr is a TTY so progress fires.
+        monkeypatch.setattr("sys.stderr.isatty", lambda: True)
+
+        ccs.main(["needle", "--contents"])
+        err = capsys.readouterr().err
+        # Progress lines use carriage returns to update in place.
+        assert "\r" in err
+        # Some indication of progress (e.g. "1/2", "2/2") should appear.
+        assert "/2" in err
+
+    def test_progress_silent_when_stderr_not_a_tty(self, fake_repos, monkeypatch, capsys):
+        proj = fake_repos / "myproj"
+        _make_session(fake_repos, "myproj", "20260504-a", contents="x\n")
+        monkeypatch.chdir(proj)
+
+        # Default in pytest: stderr is not a TTY. Header still prints; progress does not.
+        ccs.main(["needle", "--contents"])
+        err = capsys.readouterr().err
+        assert "\r" not in err

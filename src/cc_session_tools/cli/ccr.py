@@ -5,6 +5,7 @@ import os
 import sys
 from pathlib import Path
 
+from cc_session_tools import __version__
 from cc_session_tools.lib.roots import load_session_roots
 from cc_session_tools.lib.sessions import find_matching_sessions, session_tag
 from cc_session_tools.lib.tasklist import id_for_project
@@ -23,6 +24,7 @@ def _build_parser() -> argparse.ArgumentParser:
         prog="ccr",
         description="Resume a Claude Code session by name-tag fragment.",
     )
+    p.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     p.add_argument("fragment", help="Substring to match against session basenames.")
     return p
 

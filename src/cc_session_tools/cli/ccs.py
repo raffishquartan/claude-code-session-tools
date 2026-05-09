@@ -6,6 +6,7 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 
+from cc_session_tools import __version__
 from cc_session_tools.lib.roots import load_session_roots
 from cc_session_tools.lib.sessions import (
     grep_session,
@@ -27,6 +28,7 @@ def _build_parser() -> argparse.ArgumentParser:
         prog="ccs",
         description="Search Claude Code sessions by name/date or file contents.",
     )
+    p.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     p.add_argument("query", help="Substring to match against session names (default) or contents.")
     p.add_argument("--contents", action="store_true",
                    help="Search session file contents (1 line of context).")
@@ -63,6 +65,31 @@ def _display_path(p: Path) -> str:
     return f"~/{rel}"
 
 
+def _session_size(session_dir: Path) -> tuple[int, int]:
+    """Return (file_count, total_bytes) for files under session_dir.
+    Unreadable files are silently counted as 0 bytes / not counted."""
+    files = 0
+    total = 0
+    for p in session_dir.rglob("*"):
+        if p.is_file():
+            files += 1
+            try:
+                total += p.stat().st_size
+            except OSError:
+                pass
+    return files, total
+
+
+def _format_size(n: int) -> str:
+    if n < 1024:
+        return f"{n} B"
+    if n < 1024 * 1024:
+        return f"{n / 1024:.1f} KB"
+    if n < 1024 * 1024 * 1024:
+        return f"{n / (1024 * 1024):.1f} MB"
+    return f"{n / (1024 * 1024 * 1024):.1f} GB"
+
+
 def main(argv: list[str] | None = None) -> int:
     args = _build_parser().parse_args(argv)
 
@@ -74,20 +101,56 @@ def main(argv: list[str] | None = None) -> int:
             print("ccs: no cc-sessions/ in current directory", file=sys.stderr)
         return 1
 
-    results: list[_Result] = []
+    # Build the full session list once. For contents search we also use it to
+    # report progress and emit a header.
+    sessions: list[tuple[Path, Path]] = []  # (session_dir, project_dir)
     for cc, proj in pairs:
         for sess in iter_sessions(cc):
-            date_key = session_start_date(sess.name)
-            if date_key is None:
+            if session_start_date(sess.name) is None:
                 continue
-            if args.contents:
-                ctx = grep_session(sess, args.query)
-                if not ctx:
-                    continue
+            sessions.append((sess, proj))
+
+    if args.contents:
+        total_files = 0
+        total_bytes = 0
+        for sess, _ in sessions:
+            f, b = _session_size(sess)
+            total_files += f
+            total_bytes += b
+        n = len(sessions)
+        noun = "session" if n == 1 else "sessions"
+        print(
+            f"ccs: searching {n} {noun} ({total_files} files, {_format_size(total_bytes)})",
+            file=sys.stderr,
+        )
+
+    show_progress = args.contents and sys.stderr.isatty()
+    progress_width = 0  # widest line printed so we can clear it later
+
+    results: list[_Result] = []
+    for i, (sess, proj) in enumerate(sessions, start=1):
+        if show_progress:
+            pct = int(100 * i / len(sessions))
+            line = f"\r[{i}/{len(sessions)}] ({pct}%) {sess.name}"
+            progress_width = max(progress_width, len(line))
+            sys.stderr.write(line)
+            sys.stderr.flush()
+
+        date_key = session_start_date(sess.name)
+        # date_key is non-None - we filtered above.
+        assert date_key is not None
+        if args.contents:
+            ctx = grep_session(sess, args.query)
+            if ctx:
                 results.append(_Result(date_key, sess.name, proj, ctx))
-            else:
-                if args.query in sess.name:
-                    results.append(_Result(date_key, sess.name, proj, []))
+        else:
+            if args.query in sess.name:
+                results.append(_Result(date_key, sess.name, proj, []))
+
+    if show_progress:
+        # Clear the progress line so it doesn't sit above the results.
+        sys.stderr.write("\r" + " " * progress_width + "\r")
+        sys.stderr.flush()
 
     if not results:
         print(f"ccs: no sessions match '{args.query}'", file=sys.stderr)

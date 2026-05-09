@@ -67,7 +67,7 @@ def test_missing_prefix_prompt_when_first_term_far_from_all_projects_and_user_ac
     )
     assert result == "oneshot-fix-bashrc"
     err = capsys.readouterr().err
-    assert "not a recognised cc-claude-code project name" in err
+    assert "not a recognised project under the strict" in err
 
 
 def test_missing_prefix_prompt_decline_exits(fake_strict_root):
