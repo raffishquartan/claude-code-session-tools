@@ -27,25 +27,32 @@ These tools add three things on top:
 
 ### Install the tools
 
-For end users, [`pipx`](https://pipx.pypa.io/) is the cleanest option - it installs the three commands into an isolated venv and drops them on your `$PATH`:
+The simplest path is [`pipx`](https://pipx.pypa.io/), which installs the commands into
+an isolated venv and puts them on your `$PATH`:
 
 ```sh
-pipx install git+https://github.com/raffishquartan/claude-code-session-tools.git
+pipx install cc-session-tools
 ```
 
-Or for a hackable, editable install in a clone:
+If you use [`uv`](https://docs.astral.sh/uv/):
 
 ```sh
-git clone https://github.com/raffishquartan/claude-code-session-tools.git
-cd claude-code-session-tools
-pip install -e .
+uv tool install cc-session-tools
 ```
 
-Either way, `ccd`, `ccr`, and `ccs` will be available on your `$PATH`. Verify:
+Either way, `ccd`, `ccr`, `ccs`, and `claude-code-usage` will be available on your
+`$PATH`. Verify:
 
 ```sh
 ccd --version
 ```
+
+> **Installing from source (pre-release or offline):**
+> ```sh
+> git clone https://github.com/raffishquartan/claude-code-session-tools.git
+> cd claude-code-session-tools
+> uv tool install .
+> ```
 
 ## Configuration: where do your sessions live?
 
@@ -169,11 +176,19 @@ Add `cc-sessions/` to your project's `.gitignore` if you don't want session arte
 ```sh
 git clone https://github.com/raffishquartan/claude-code-session-tools.git
 cd claude-code-session-tools
-pip install -e .
-pytest
+uv sync --extra dev
+uv run pytest
 ```
 
-Tests run on Python 3.10, 3.11, and 3.12 (see `.github/workflows/ci.yml`).
+Tests run on Python 3.10, 3.11, 3.12, and 3.13 (see `.github/workflows/ci.yml`). CI also
+includes an `install-check` job that runs `uv tool install .` and verifies all four CLIs
+start up correctly - the direct guard against the editable-install/worktree failure mode.
+
+> **When working in a git worktree:** test your changes with `uv run pytest` or
+> `uv run python -m cc_session_tools.cli.ccd` - do not run `uv tool install` from inside
+> a worktree. After merging, run `uv tool install ~/repos/claude-code-session-tools`
+> (or `uv tool install cc-session-tools` if installed from PyPI) to update the global
+> install.
 
 ## Limitations and caveats
 
