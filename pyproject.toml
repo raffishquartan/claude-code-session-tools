@@ -5,12 +5,12 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "cc-session-tools"
 version = "0.7.0"
-description = "Claude Code session management and usage analysis CLI tools (ccd, ccr, ccs, claude-code-usage) and shared library"
+description = "Claude Code session management CLI tools (ccd, ccr, ccs, claude-code-usage, ccst) and hook library (cccs_hooks)"
 readme = "README.md"
 license = { file = "LICENSE" }
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 authors = [{ name = "raffishquartan" }]
-keywords = ["claude-code", "cli", "session-management", "usage-analytics"]
+keywords = ["claude-code", "cli", "session-management", "usage-analytics", "hooks"]
 dependencies = [
     "pandas>=2.2",
     "pyarrow>=15.0",
@@ -26,7 +26,6 @@ classifiers = [
     "Operating System :: MacOS",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3 :: Only",
-    "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
@@ -55,3 +54,10 @@ where = ["src"]
 testpaths = ["tests", "skills/move-session/tests"]
 addopts = "-q"
 pythonpath = ["src"]
+
+[dependency-groups]
+dev = [
+    "mypy>=1.10",
+    "pytest>=7",
+    "pytest-mock>=3.12",
+]

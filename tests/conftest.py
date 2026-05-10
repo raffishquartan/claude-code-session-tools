@@ -9,6 +9,14 @@ if str(_SRC) not in sys.path:
     sys.path.insert(0, str(_SRC))
 
 
+@pytest.fixture
+def tmp_hooks_dir(tmp_path: Path) -> Path:
+    """Temp directory standing in for ~/.claude/hooks/."""
+    d = tmp_path / "hooks"
+    d.mkdir(mode=0o700)
+    return d
+
+
 @pytest.fixture(autouse=True)
 def _clean_session_root_env(monkeypatch):
     """Make sure no inherited env vars from the developer's shell leak into
