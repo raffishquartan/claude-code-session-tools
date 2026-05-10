@@ -8,6 +8,11 @@ from .levenshtein import distance
 from .roots import strict_root_path
 
 TYPO_DISTANCE_LIMIT = 2
+# Stricter guard for sibling projects: only suppress the missing-prefix prompt
+# when first_term is an obvious single-char near-miss of another project name.
+# Distance 2 is too permissive for short tags (e.g. "get" vs "pbt" = 2 but
+# shares no visual similarity), causing coincidental suppression.
+OTHER_PROJECT_DISTANCE_LIMIT = 1
 
 
 def _first_term(tag: str) -> str:
@@ -62,7 +67,7 @@ def maybe_correct_tag(
         p.name for p in sr.iterdir()
         if p.is_dir() and p.name != project_name
     ]
-    if all(distance(first_term, p) > TYPO_DISTANCE_LIMIT for p in other_projects):
+    if all(distance(first_term, p) > OTHER_PROJECT_DISTANCE_LIMIT for p in other_projects):
         suggested = f"{project_name}-{tag}"
         print(
             f"ccd: '{first_term}' is not a recognised project under the strict "
