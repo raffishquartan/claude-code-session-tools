@@ -3,16 +3,27 @@
 Entry point: ccst <noun> <verb> [options]
 
 Current subcommands:
-  hooks install   Merge hook entries from a source settings.json into a target.
+  hooks install         Merge hook entries from a source settings.json into a target.
+  hooks run <name>      Run a Claude Code hook by name, reading the event payload from stdin.
 """
 from __future__ import annotations
 
 import argparse
+import importlib
 import sys
 from pathlib import Path
 
 from cc_session_tools import __version__
 from cc_session_tools.hooks_install import load_json, merge_hook_settings, write_json_atomic
+
+
+HOOK_VERBS: dict[str, str] = {
+    "bash-security-review": "cccs_hooks.bash_security_review",
+    "confirm-8digit": "cccs_hooks.confirm_8digit",
+    "prompt-guard": "cccs_hooks.prompt_guard",
+    "edit-write-audit": "cccs_hooks.edit_write_audit",
+    "session-end": "cccs_hooks.session_end",
+}
 
 
 def _cmd_hooks_install(args: argparse.Namespace) -> int:
@@ -80,7 +91,24 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Write changes (default: dry run)",
     )
 
+    run_parser = hooks_sub.add_parser(
+        "run",
+        help="Run a Claude Code hook by name (reads event payload from stdin)",
+    )
+    run_parser.add_argument(
+        "hook",
+        choices=sorted(HOOK_VERBS),
+        metavar="<name>",
+        help="Hook to run: " + ", ".join(sorted(HOOK_VERBS)),
+    )
+
     return parser
+
+
+def _cmd_hooks_run(args: argparse.Namespace) -> int:
+    module = importlib.import_module(HOOK_VERBS[args.hook])
+    rc = module.main()
+    return int(rc) if rc is not None else 0
 
 
 def main() -> None:
@@ -93,6 +121,9 @@ def main() -> None:
 
     if args.noun == "hooks" and args.verb == "install":
         sys.exit(_cmd_hooks_install(args))
+
+    if args.noun == "hooks" and args.verb == "run":
+        sys.exit(_cmd_hooks_run(args))
 
 
 if __name__ == "__main__":
