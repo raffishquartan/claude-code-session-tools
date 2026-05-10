@@ -263,8 +263,11 @@ The symlinks are maintained externally: CCCS (`claude-code-config-sync`) tracks 
 in `externally-managed-skills.yaml`. The CCCS drift hook skips these entries during
 its normal sync check, so changes are never overwritten by a drift-sync operation.
 
-The Python package itself (`cc_session_tools`) is installed as an editable install
-(`pip install -e .`) so CLI changes take effect without reinstallation.
+The Python package is installed non-editably for production use (`uv tool install`),
+meaning the source is copied into the tool venv at install time - no fragile `.pth`
+pointer that breaks when a git worktree is deleted. For local development, `uv sync
+--extra dev` installs editably into a project venv so source changes take effect
+immediately without reinstalling.
 
 ---
 

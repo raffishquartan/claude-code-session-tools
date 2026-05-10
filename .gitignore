@@ -11,7 +11,8 @@ dist/
 venv/
 .tox/
 
-.claude/
+.claude/*
+!.claude/CLAUDE.md
 cc-out*/
 cc-working*/
 cc-sessions/
