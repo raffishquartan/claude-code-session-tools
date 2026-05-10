@@ -32,6 +32,12 @@ def test_no_args_prints_usage() -> None:
     assert "usage" in result.stderr.lower() or "usage" in result.stdout.lower()
 
 
+def test_version_flag() -> None:
+    result = _run("--version")
+    assert result.returncode == 0
+    assert "ccst" in result.stdout
+
+
 def test_hooks_no_subcommand_prints_usage() -> None:
     result = _run("hooks")
     assert result.returncode != 0
