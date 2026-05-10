@@ -10,9 +10,6 @@ import pytest
 from cccs_hooks.session_end import check_uncommitted, check_worklog_stale
 
 
-_WORKTREE = Path(__file__).parent.parent
-
-
 # ---------- check_uncommitted ----------
 
 def test_no_git_repo_returns_none(tmp_path: Path) -> None:
