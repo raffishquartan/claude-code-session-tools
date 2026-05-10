@@ -350,6 +350,42 @@ class TestContentsSearchProgress:
         assert "\r" not in err
 
 
+def test_exclude_hooks_hides_hook_sessions(fake_repos, monkeypatch, capsys):
+    proj = fake_repos / "myproj"
+    _make_session(fake_repos, "myproj", "20260504-hook-security-check")
+    _make_session(fake_repos, "myproj", "20260504-normal-work")
+    monkeypatch.chdir(proj)
+
+    rc = ccs.main(["2026", "--exclude-hooks"])
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "normal-work" in out
+    assert "hook-security-check" not in out
+
+
+def test_exclude_hooks_reports_count_on_stderr(fake_repos, monkeypatch, capsys):
+    proj = fake_repos / "myproj"
+    _make_session(fake_repos, "myproj", "20260504-hook-security-check")
+    _make_session(fake_repos, "myproj", "20260504-normal-work")
+    monkeypatch.chdir(proj)
+
+    ccs.main(["2026", "--exclude-hooks"])
+    err = capsys.readouterr().err
+    assert "1 hook" in err
+    # Note: no "--include-hooks" hint in message (flag not implemented)
+
+
+def test_without_exclude_hooks_includes_hook_sessions_by_default(fake_repos, monkeypatch, capsys):
+    proj = fake_repos / "myproj"
+    _make_session(fake_repos, "myproj", "20260504-hook-security-check")
+    monkeypatch.chdir(proj)
+
+    rc = ccs.main(["hook"])
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "hook-security-check" in out
+
+
 class TestMaxFileSize:
     def test_oversized_files_skipped_and_reported_grep_path(
         self, fake_repos, monkeypatch, capsys, force_grep_path
