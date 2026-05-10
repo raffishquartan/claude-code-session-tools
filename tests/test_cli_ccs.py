@@ -575,3 +575,22 @@ def test_no_suggestion_when_completely_unrelated(fake_repos, monkeypatch, capsys
     assert rc == 1
     err = capsys.readouterr().err
     assert "did you mean" not in err.lower()
+
+
+def test_osc8_link_wraps_path_in_escape_sequence():
+    from cc_session_tools.cli.ccs import _osc8_link
+    path = Path("/tmp/my-session")
+    result = _osc8_link("my-session", path)
+    assert "\033]8;;" in result
+    assert "my-session" in result
+    assert result.endswith("\033]8;;\033\\")
+
+
+def test_name_search_no_osc8_in_non_tty(fake_repos, monkeypatch, capsys):
+    # capsys stdout is not a TTY, so no OSC 8 should appear
+    proj = fake_repos / "myproj"
+    _make_session(fake_repos, "myproj", "20260504-foo")
+    monkeypatch.chdir(proj)
+    rc = ccs.main(["foo"])
+    out = capsys.readouterr().out
+    assert "\033]8" not in out

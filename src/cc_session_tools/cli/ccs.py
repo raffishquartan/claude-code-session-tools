@@ -132,6 +132,21 @@ def _display_path(p: Path) -> str:
     return f"~/{rel}"
 
 
+def _osc8_link(text: str, path: Path) -> str:
+    uri = path.as_uri()
+    return f"\033]8;;{uri}\033\\{text}\033]8;;\033\\"
+
+
+def _maybe_link(text: str, path: Path) -> str:
+    if (
+        sys.stdout.isatty()
+        and not os.environ.get("NO_COLOR")
+        and os.environ.get("TERM") != "dumb"
+    ):
+        return _osc8_link(text, path)
+    return text
+
+
 def _format_size(n: int) -> str:
     if n < 1024:
         return f"{n} B"
@@ -228,10 +243,11 @@ def _name_search(
             print(f"ccs: did you mean: {', '.join(suggestions)}?", file=sys.stderr)
         return 1
     for r in results:
+        display_name = _maybe_link(r.basename, r.project_dir / "cc-sessions" / r.basename)
         if do_global:
-            print(f"{r.basename} ({_display_path(r.project_dir)})")
+            print(f"{display_name} ({_display_path(r.project_dir)})")
         else:
-            print(r.basename)
+            print(display_name)
     return 0
 
 
@@ -240,10 +256,11 @@ def _print_results(results: list[_Result], do_global: bool) -> None:
     for i, r in enumerate(results):
         if i > 0:
             print()
+        display_name = _maybe_link(r.basename, r.project_dir / "cc-sessions" / r.basename)
         if do_global:
-            print(f"{r.basename} ({_display_path(r.project_dir)})")
+            print(f"{display_name} ({_display_path(r.project_dir)})")
         else:
-            print(r.basename)
+            print(display_name)
         for line in r.context_lines:
             print(f"  {line}")
 
