@@ -138,6 +138,58 @@ def test_old_manifest_version_triggers_full_rebuild(tmp_path: Path, monkeypatch)
     assert calls == [src / "a.jsonl"]  # forced full reparse
 
 
+def test_loaded_df_has_is_sidechain_column(tmp_path: Path) -> None:
+    src = tmp_path / "projects"
+    src.mkdir()
+    _write_session(src, "a.jsonl", [_good_record("u-1")])
+    cache = cache_mod.Cache(tmp_path / "cache")
+    df = cache.load_or_parse(src)
+    assert "is_sidechain" in df.columns
+    assert df["is_sidechain"].dtype == "bool"
+
+
+def test_loaded_df_has_initiation_type_column(tmp_path: Path) -> None:
+    src = tmp_path / "projects"
+    src.mkdir()
+    _write_session(src, "a.jsonl", [_good_record("u-1")])
+    cache = cache_mod.Cache(tmp_path / "cache")
+    df = cache.load_or_parse(src)
+    assert "initiation_type" in df.columns
+
+
+def test_regular_session_gets_interactive_initiation_type(tmp_path: Path) -> None:
+    src = tmp_path / "projects"
+    src.mkdir()
+    user_record = {"type": "user", "message": {"role": "user", "content": "Hello!"}}
+    _write_session(src, "a.jsonl", [user_record, _good_record("u-1")])
+    cache = cache_mod.Cache(tmp_path / "cache")
+    df = cache.load_or_parse(src)
+    assert df["initiation_type"].iloc[0] == "interactive"
+
+
+def test_hook_session_gets_hook_security_review_initiation_type(tmp_path: Path) -> None:
+    src = tmp_path / "projects"
+    src.mkdir()
+    hook_user = {
+        "type": "user",
+        "message": {"role": "user", "content": "Review this shell command for security risks: ls"},
+    }
+    _write_session(src, "hook.jsonl", [hook_user, _good_record("h-1")])
+    cache = cache_mod.Cache(tmp_path / "cache")
+    df = cache.load_or_parse(src)
+    assert df["initiation_type"].iloc[0] == "hook-security-review"
+
+
+def test_sidechain_record_sets_is_sidechain_true(tmp_path: Path) -> None:
+    src = tmp_path / "projects"
+    src.mkdir()
+    sidechain_rec = _good_record("u-1") | {"isSidechain": True}
+    _write_session(src, "a.jsonl", [sidechain_rec])
+    cache = cache_mod.Cache(tmp_path / "cache")
+    df = cache.load_or_parse(src)
+    assert df["is_sidechain"].iloc[0] == True  # noqa: E712 - numpy bool needs ==
+
+
 def test_deleted_source_file_drops_shard(tmp_path: Path) -> None:
     src = tmp_path / "projects"
     src.mkdir()
