@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "cc-session-tools"
-version = "0.6.0"
+version = "0.7.0"
 description = "Claude Code session management and usage analysis CLI tools (ccd, ccr, ccs, claude-code-usage) and shared library"
 readme = "README.md"
 license = { file = "LICENSE" }

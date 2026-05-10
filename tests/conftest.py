@@ -15,3 +15,4 @@ def _clean_session_root_env(monkeypatch):
     tests. Tests that need roots set must do so explicitly."""
     monkeypatch.delenv("CLAUDE_SESSION_TOOLS_REPO_ROOT", raising=False)
     monkeypatch.delenv("CLAUDE_SESSION_TOOLS_PROJ_ROOT", raising=False)
+    monkeypatch.delenv("CCX_DEBUG", raising=False)

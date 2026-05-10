@@ -25,6 +25,8 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     p.add_argument("--force", action="store_true",
                    help="Skip root, project-name, and tag-prefix checks.")
+    p.add_argument("--debug", action="store_true",
+                   help="Enable debug output (also: CCX_DEBUG=1).")
     p.add_argument("tag", help="Name tag (no spaces; use dashes).")
     p.add_argument("extra", nargs=argparse.REMAINDER,
                    help="Additional args passed through to claude.")
@@ -33,6 +35,11 @@ def _build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     args = _build_parser().parse_args(argv)
+
+    if args.debug:
+        os.environ["CCX_DEBUG"] = "1"
+    from cc_session_tools.lib.debug import debug
+
     real_pwd = Path.cwd().resolve()
 
     # Run the Levenshtein typo / missing-prefix prompts FIRST so that a tag
@@ -58,6 +65,8 @@ def main(argv: list[str] | None = None) -> int:
     date_str = datetime.now().strftime("%Y%m%d")
     session_name = f"{date_str}-{tag}"
     session_dir = real_pwd / "cc-sessions" / session_name
+    debug(f"tag: {tag!r}")
+    debug(f"session_dir: {session_dir}")
 
     if session_dir.exists():
         print(
@@ -94,6 +103,7 @@ def main(argv: list[str] | None = None) -> int:
     # Chdir to the resolved project path so Claude Code records its
     # ~/.claude/projects/<encoded-cwd>/ key against the canonical, symlink-
     # resolved path. Matches the original bash ccd's `cd "$real_pwd"` step.
+    debug(f"launching: {cmd}")
     os.chdir(real_pwd)
     launch_claude(cmd, env)
     return 0

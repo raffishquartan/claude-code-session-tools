@@ -95,3 +95,112 @@ def test_ccr_changes_to_project_dir_before_launch(fake_repos, captured_launch):
     rc = ccr.main(["foo"])
     assert rc == 0
     assert captured_launch["cwd"] == project_dir
+
+
+# ---------------------------------------------------------------------------
+# Task 13: exact-match fast-path
+# ---------------------------------------------------------------------------
+
+def test_ccr_exact_basename_skips_substring_ambiguity(fake_repos, captured_launch):
+    # "20260504-foo" is an exact basename but also a substring of "20260504-foo-bar"
+    _make_session(fake_repos, "proj1", "20260504-foo")
+    _make_session(fake_repos, "proj2", "20260504-foo-bar")
+
+    rc = ccr.main(["20260504-foo"])
+    assert rc == 0
+    assert "20260504-foo" in captured_launch["cmd"]
+    assert "20260504-foo-bar" not in captured_launch["cmd"]
+
+
+def test_ccr_falls_back_to_substring_when_no_exact_match(fake_repos, captured_launch):
+    _make_session(fake_repos, "proj1", "20260504-improve-ccx")
+
+    rc = ccr.main(["improve"])
+    assert rc == 0
+    assert "20260504-improve-ccx" in captured_launch["cmd"]
+
+
+# ---------------------------------------------------------------------------
+# Task 14: PATH check for claude binary
+# ---------------------------------------------------------------------------
+
+def test_ccr_fails_clearly_when_claude_not_on_path(fake_repos, monkeypatch, capsys):
+    _make_session(fake_repos, "proj1", "20260504-foo")
+    import shutil as _shutil
+    monkeypatch.setattr(_shutil, "which", lambda name: None)
+
+    rc = ccr.main(["foo"])
+    assert rc == 1
+    err = capsys.readouterr().err
+    assert "claude" in err.lower()
+    assert ("not found" in err.lower() or "path" in err.lower())
+
+
+# ---------------------------------------------------------------------------
+# Task 15: claude flag pass-through
+# ---------------------------------------------------------------------------
+
+def test_ccr_passes_through_valid_claude_flags(fake_repos, captured_launch, monkeypatch):
+    _make_session(fake_repos, "proj1", "20260504-foo")
+    monkeypatch.setattr(ccr, "get_claude_flags", lambda: {"--model", "--debug", "--append-system-prompt"})
+    import shutil as _shutil
+    monkeypatch.setattr(_shutil, "which", lambda name: "/usr/bin/claude")
+
+    rc = ccr.main(["foo", "--model", "sonnet"])
+    assert rc == 0
+    assert "--model" in captured_launch["cmd"]
+    assert "sonnet" in captured_launch["cmd"]
+
+
+def test_ccr_rejects_unknown_claude_flags(fake_repos, monkeypatch, capsys):
+    _make_session(fake_repos, "proj1", "20260504-foo")
+    import cc_session_tools.lib.claude_flags as cf
+    monkeypatch.setattr(cf, "get_claude_flags", lambda: {"--model", "--debug"})
+
+    rc = ccr.main(["foo", "--not-a-real-flag"])
+    assert rc == 1
+    err = capsys.readouterr().err
+    assert "--not-a-real-flag" in err
+
+
+# ---------------------------------------------------------------------------
+# Task 17: ccr picker integration
+# ---------------------------------------------------------------------------
+
+def test_ccr_picker_shown_for_2_to_10_matches(fake_repos, captured_launch, monkeypatch):
+    _make_session(fake_repos, "proj1", "20260504-foo-one")
+    _make_session(fake_repos, "proj2", "20260503-foo-two")
+    import shutil as _shutil
+    monkeypatch.setattr(_shutil, "which", lambda name: "/usr/bin/claude")
+    monkeypatch.setattr("sys.stdin.isatty", lambda: True)
+
+    from cc_session_tools.lib import picker
+    monkeypatch.setattr(picker, "pick_from_list", lambda _: 0)  # pick first
+
+    rc = ccr.main(["foo"])
+    assert rc == 0
+    assert "20260504-foo-one" in captured_launch["cmd"]
+
+
+def test_ccr_keeps_rerrun_message_for_more_than_10(fake_repos, monkeypatch, capsys):
+    for i in range(11):
+        _make_session(fake_repos, f"proj{i}", f"20260501-foo-{i:02d}")
+    monkeypatch.setattr("sys.stdin.isatty", lambda: True)
+
+    rc = ccr.main(["foo"])
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "Multiple sessions" in out
+
+
+# ---------------------------------------------------------------------------
+# Task 18: --debug flag and CCX_DEBUG env var
+# ---------------------------------------------------------------------------
+
+def test_ccr_debug_flag_produces_output(fake_repos, captured_launch, monkeypatch, capsys):
+    _make_session(fake_repos, "proj1", "20260504-foo")
+    monkeypatch.delenv("CCX_DEBUG", raising=False)
+
+    ccr.main(["foo", "--debug"])
+    err = capsys.readouterr().err
+    assert "[CCX_DEBUG]" in err

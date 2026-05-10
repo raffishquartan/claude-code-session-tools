@@ -2,12 +2,14 @@ from __future__ import annotations
 
 import argparse
 import os
+import shutil
 import sys
 from pathlib import Path
 
 from cc_session_tools import __version__
+from cc_session_tools.lib.claude_flags import get_claude_flags
 from cc_session_tools.lib.roots import load_session_roots
-from cc_session_tools.lib.sessions import find_matching_sessions, session_tag
+from cc_session_tools.lib.sessions import SESSION_FULL_RE, SessionMatch, find_matching_sessions, session_tag
 from cc_session_tools.lib.tasklist import id_for_project
 
 
@@ -26,35 +28,103 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     p.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     p.add_argument("fragment", help="Substring to match against session basenames.")
+    p.add_argument("--debug", action="store_true",
+                   help="Enable debug output (also: CCX_DEBUG=1).")
     return p
 
 
 def main(argv: list[str] | None = None) -> int:
-    args = _build_parser().parse_args(argv)
+    args, remainder = _build_parser().parse_known_args(argv)
+
+    if args.debug:
+        os.environ["CCX_DEBUG"] = "1"
+    from cc_session_tools.lib.debug import debug
 
     roots = load_session_roots()
-    matches = find_matching_sessions(args.fragment, roots)
+
+    # Exact-match fast-path: if fragment looks like a full basename, try a
+    # direct directory lookup before falling back to substring search.  This
+    # prevents "20260504-foo" from being treated as ambiguous when
+    # "20260504-foo-bar" also exists.
+    exact_match: SessionMatch | None = None
+    if SESSION_FULL_RE.fullmatch(args.fragment):
+        for root in roots:
+            if not root.is_dir():
+                continue
+            for proj in root.iterdir():
+                if not proj.is_dir():
+                    continue
+                candidate = proj / "cc-sessions" / args.fragment
+                if candidate.is_dir():
+                    exact_match = SessionMatch(
+                        basename=args.fragment,
+                        project_dir=proj,
+                        session_dir=candidate,
+                    )
+                    break
+            if exact_match:
+                break
+
+    matches = [exact_match] if exact_match else find_matching_sessions(args.fragment, roots)
+    debug(f"fragment: {args.fragment!r}")
+    debug(f"matches: {[m.basename for m in matches]}")
 
     if not matches:
         print(f"ccr: no sessions match '{args.fragment}'", file=sys.stderr)
         return 1
 
     if len(matches) > 1:
-        print("Multiple sessions match that name tag fragment:")
-        for m in matches:
-            print(f"  {m.basename} ({m.project_dir})")
-        print(
-            "Please re-run ccr with an unambiguous fragment of the name tag "
-            "of the session you want to resume."
-        )
-        return 0
+        if len(matches) <= 10 and sys.stdin.isatty():
+            from cc_session_tools.lib.picker import pick_from_list
+            from cc_session_tools.lib.sessions import session_start_date
+            matches.sort(key=lambda x: session_start_date(x.basename) or "", reverse=True)
+            labels = [f"{m.basename} ({m.project_dir})" for m in matches]
+            idx = pick_from_list(labels)
+            if idx is None:
+                return 0
+            m = matches[idx]
+            # Fall through to single-match resume logic below
+        else:
+            print("Multiple sessions match that name tag fragment:")
+            for m in matches:
+                print(f"  {m.basename} ({m.project_dir})")
+            print(
+                "Please re-run ccr with an unambiguous fragment of the name tag "
+                "of the session you want to resume."
+            )
+            return 0
+    else:
+        m = matches[0]
 
-    m = matches[0]
+    # single match (or picker selection) - variable m is set above
     tag = session_tag(m.basename)
     if tag is None:
         # Should not happen because find_matching_sessions only returns
         # basenames that match SESSION_BASENAME_RE, but fall back gracefully.
         tag = m.basename
+
+    # Fail fast with a clear message when claude is not on PATH.
+    if not shutil.which("claude"):
+        print(
+            "ccr: 'claude' not found on PATH - is Claude Code installed?",
+            file=sys.stderr,
+        )
+        return 1
+
+    # Validate and pass through any extra flags from remainder.
+    # Long flags (--foo) are checked against claude's known flags.
+    # Short flags (-f) pass through without validation.
+    if remainder:
+        valid_flags = get_claude_flags()
+        for arg in remainder:
+            if arg.startswith("--"):
+                flag_name = arg.split("=")[0]
+                if flag_name not in valid_flags:
+                    print(
+                        f"ccr: unknown flag '{arg}'; not a recognised claude option",
+                        file=sys.stderr,
+                    )
+                    return 1
 
     env = os.environ.copy()
     env.pop("CLAUDE_CODE_TASK_LIST_ID", None)
@@ -70,6 +140,9 @@ def main(argv: list[str] | None = None) -> int:
         "--resume", m.basename,
         "--remote-control", m.basename,
     ]
+    if remainder:
+        cmd.extend(remainder)
+    debug(f"resuming: {m.basename} in {m.project_dir}")
     launch_claude_resume(cmd, env, cwd=m.project_dir)
     return 0
 
