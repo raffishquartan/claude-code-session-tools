@@ -4,14 +4,10 @@ from __future__ import annotations
 import json
 import subprocess
 import sys
-from pathlib import Path
 
 import pytest
 
 from cccs_hooks.prompt_guard import scan_prompt, GuardFindings
-
-
-_WORKTREE = Path(__file__).parent.parent
 
 
 # ---------- credential pattern detection ----------
@@ -72,7 +68,6 @@ def _run_guard(prompt: str) -> subprocess.CompletedProcess[str]:
         input=hook_input,
         capture_output=True,
         text=True,
-        cwd=str(_WORKTREE),
     )
 
 

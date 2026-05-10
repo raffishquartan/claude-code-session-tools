@@ -100,17 +100,12 @@ def _make_hook_input(tool: str, path: str) -> str:
     })
 
 
-_WORKTREE = Path(__file__).parent.parent
-
-
 def _run_module(hook_input: str) -> subprocess.CompletedProcess[str]:
-    """Run the edit_write_audit module from the worktree root to avoid CWD collisions."""
     return subprocess.run(
         [sys.executable, "-m", "cccs_hooks.edit_write_audit"],
         input=hook_input,
         capture_output=True,
         text=True,
-        cwd=str(_WORKTREE),
     )
 
 
