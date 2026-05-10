@@ -14,7 +14,7 @@ The repo ships five CLIs and three bundled skills:
 | **`ccr <fragment>`** | Resume an existing session by typing any substring of its name. |
 | **`ccs <query>`** | Search across your sessions by name (default), or by file contents (`--contents`), in the current project (default) or across every configured root (`--global`). |
 | **`claude-code-usage`** | Multi-dimensional usage analytics CLI: query/group/filter by project, session, model, MCP server, plugin, tool, day/week/month/year. Reconciles dollar totals against `ccusage`. |
-| **`ccst <noun> <verb>`** | Umbrella CLI for hook management. Currently: `ccst hooks install` merges hook entries from a source `settings.json` into a target. |
+| **`ccst <noun> <verb>`** | Umbrella CLI for hook management. `ccst hooks install` merges hook entries from a source `settings.json` into a target; `ccst hooks run <name>` runs a Claude Code hook by name (used by the CCCS bash shims). |
 | Skill: **`find-claude-code-session`** | Wraps `ccs`. Lets a Claude Code session locate one of your prior sessions by name or content and offer a `ccr` command to resume it. |
 | Skill: **`move-session`** | Move, rename, or move+rename a session while keeping its `~/.claude/projects/<encoded-cwd>/<uuid>.jsonl` transcript resumable. |
 | Skill: **`claude-usage`** | Wraps `claude-code-usage`. Lets a Claude Code session answer "how much have I spent on Opus this month?" without you typing the CLI yourself. |
@@ -250,9 +250,35 @@ makes the hook library available on the Python path used by CCCS bash shims.
 | `cccs_hooks.prompt_guard` | `prompt-guard.sh` | UserPromptSubmit credential/injection pattern guard. |
 | `cccs_hooks.session_end` | `session-end-reminder.sh` | Stop-event WORKLOG/uncommitted-changes nudge. |
 
-### Using the modules directly
+### Running hooks via `ccst hooks run <name>`
 
-Each module is runnable as a CLI for debugging:
+The CCCS bash shims invoke hooks through the `ccst` CLI rather than calling
+`python3 -m cccs_hooks.*` directly. This means CCST only needs to be installed
+via `uv tool install` - the hook modules do not need to be importable by the
+system Python. The shim contract is:
+
+```sh
+exec ccst hooks run <name> <<< "$INPUT"
+```
+
+Where `<name>` is one of:
+
+| Verb | Hook script (CCCS) | Module |
+|---|---|---|
+| `bash-security-review` | `bash-security-review.sh` | `cccs_hooks.bash_security_review` |
+| `confirm-8digit` | `enforce-8digit-confirmation.sh` | `cccs_hooks.confirm_8digit` |
+| `prompt-guard` | `prompt-guard.sh` | `cccs_hooks.prompt_guard` |
+| `edit-write-audit` | `enforce-edit-write-audit.sh` | `cccs_hooks.edit_write_audit` |
+| `session-end` | `session-end-reminder.sh` | `cccs_hooks.session_end` |
+
+The dispatcher reads the event payload from stdin, calls the matching module's
+`main()`, and propagates its exit code.
+
+### Running modules directly (debugging only)
+
+Each module is also runnable as a Python CLI if you want to bypass the dispatcher
+and have `cccs_hooks` importable on `sys.path` (typically inside an activated
+project venv):
 
 ```sh
 python3 -m cccs_hooks.telemetry log --help
@@ -262,7 +288,7 @@ python3 -m cccs_hooks.prompt_guard          # reads JSON from stdin
 
 ## Hook management CLI (`ccst`)
 
-The `ccst` umbrella CLI provides hook management operations.
+The `ccst` umbrella CLI provides hook management and execution.
 
 ### `ccst hooks install`
 
@@ -284,6 +310,10 @@ ccst hooks install \
 
 Matching is by event type + matcher + command string. Already-present hooks are never
 duplicated. The target file is written atomically (`.tmp` swap).
+
+### `ccst hooks run <name>`
+
+Run a Claude Code hook by name. See the table above for the supported names.
 
 ## How it interacts with Claude Code's task lists
 
