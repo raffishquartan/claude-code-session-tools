@@ -160,3 +160,20 @@ class TestGrepFiles:
         a = tmp_path / "a.md"
         a.write_text("nothing here\n")
         assert sessions.grep_files([a], "FLAMBE", context=1, cwd=tmp_path) == []
+
+
+def test_transcript_dir_encoding_simple():
+    # /home/alice/repos/my-project -> -home-chris-repos-my-project
+    result = sessions.transcript_dir_for_project(Path("/home/alice/repos/my-project"))
+    assert result == Path.home() / ".claude" / "projects" / "-home-chris-repos-my-project"
+
+
+def test_transcript_dir_encoding_with_dots():
+    # Dots are also replaced with dashes
+    result = sessions.transcript_dir_for_project(Path("/home/alice/.local/share"))
+    assert result == Path.home() / ".claude" / "projects" / "-home-chris--local-share"
+
+
+def test_transcript_dir_returns_path_object():
+    result = sessions.transcript_dir_for_project(Path("/tmp/foo"))
+    assert isinstance(result, Path)
