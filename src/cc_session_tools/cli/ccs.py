@@ -19,6 +19,7 @@ from cc_session_tools.lib.sessions import (
     grep_files,
     iter_sessions,
     session_start_date,
+    transcript_dir_for_project,
 )
 
 
@@ -336,6 +337,9 @@ def _contents_search_with_rg(
     sess_by_dir: dict[str, tuple[Path, Path]] = {}
     for sess, proj in sessions:
         sess_by_dir[str(sess.resolve())] = (sess, proj)
+        t_dir = transcript_dir_for_project(proj)
+        if t_dir.is_dir():
+            sess_by_dir[str(t_dir.resolve())] = (sess, proj)
     cmd = _rg_cmd(query, max_bytes, list(sess_by_dir.keys()))
 
     start = time.monotonic()
@@ -462,6 +466,12 @@ def _contents_search_with_grep(
     progress = _Progress(show_progress)
     for i, (sess, proj) in enumerate(sessions, start=1):
         files, bytes_, skipped = enumerate_session_files(sess, max_bytes=max_bytes)
+        t_dir = transcript_dir_for_project(proj)
+        if t_dir.is_dir():
+            t_files, t_bytes, t_skipped = enumerate_session_files(t_dir, max_bytes=max_bytes)
+            files = files + t_files
+            bytes_ = bytes_ + t_bytes
+            skipped = skipped + t_skipped
         indexed.append((sess, proj, files, bytes_))
         total_files += len(files)
         total_bytes += bytes_
