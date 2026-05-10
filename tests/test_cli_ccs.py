@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json as json_mod
 from pathlib import Path
 
 import pytest
@@ -481,3 +482,43 @@ class TestMaxFileSize:
         ccs.main(["needle", "--contents"])
         err = capsys.readouterr().err
         assert "skipped" not in err
+
+
+def test_json_output_name_search(fake_repos, monkeypatch, capsys):
+    _make_session(fake_repos, "myproj", "20260504-foo-bar")
+    _make_session(fake_repos, "myproj", "20260503-foo-baz")
+    proj = fake_repos / "myproj"
+    monkeypatch.chdir(proj)
+
+    rc = ccs.main(["foo", "--json"])
+    assert rc == 0
+    out = capsys.readouterr().out
+    data = json_mod.loads(out)
+    assert isinstance(data, list)
+    assert len(data) == 2
+    basenames = {d["basename"] for d in data}
+    assert "20260504-foo-bar" in basenames
+    assert all("project_dir" in d for d in data)
+
+
+def test_null_output_name_search(fake_repos, monkeypatch, capsys):
+    _make_session(fake_repos, "myproj", "20260504-foo-bar")
+    proj = fake_repos / "myproj"
+    monkeypatch.chdir(proj)
+
+    rc = ccs.main(["foo", "--null"])
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "20260504-foo-bar\x00" in out
+
+
+def test_json_no_results_returns_empty_array(fake_repos, monkeypatch, capsys):
+    proj = fake_repos / "myproj"
+    proj.mkdir(parents=True, exist_ok=True)
+    _make_session(fake_repos, "myproj", "20260504-unrelated")
+    monkeypatch.chdir(proj)
+
+    rc = ccs.main(["zzznomatch", "--json"])
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert json_mod.loads(out) == []

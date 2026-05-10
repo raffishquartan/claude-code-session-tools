@@ -87,6 +87,11 @@ def _build_parser() -> argparse.ArgumentParser:
                    help="Include only sessions started before this date (YYYYMMDD).")
     p.add_argument("--days", type=int, metavar="N",
                    help="Include only sessions started within the last N days.")
+    fmt = p.add_mutually_exclusive_group()
+    fmt.add_argument("--json", action="store_true",
+                     help="Output results as a JSON array.")
+    fmt.add_argument("--null", action="store_true",
+                     help="Output null-delimited basenames (for xargs -0).")
     return p
 
 
@@ -146,6 +151,23 @@ def _format_duration(seconds: float) -> str:
     return f"{h}h{m:02d}m"
 
 
+def _output_machine_readable(results: list[_Result], do_null: bool) -> None:
+    import json as _json
+    if do_null:
+        for r in results:
+            sys.stdout.write(r.basename + "\x00")
+    else:
+        data = [
+            {
+                "basename": r.basename,
+                "project_dir": str(r.project_dir),
+                "context_lines": r.context_lines,
+            }
+            for r in results
+        ]
+        print(_json.dumps(data))
+
+
 def _truncate_line(line: str, term_width: int | None = None) -> str:
     if term_width is None:
         term_width = shutil.get_terminal_size((80, 20)).columns
@@ -181,7 +203,8 @@ class _Progress:
 
 
 def _name_search(
-    sessions: list[tuple[Path, Path]], query: str, do_global: bool
+    sessions: list[tuple[Path, Path]], query: str, do_global: bool,
+    *, do_json: bool = False, do_null: bool = False,
 ) -> int:
     results: list[_Result] = []
     for sess, proj in sessions:
@@ -189,10 +212,13 @@ def _name_search(
             date_key = session_start_date(sess.name)
             assert date_key is not None
             results.append(_Result(date_key, sess.name, proj, []))
+    results.sort(key=lambda r: r.date_key, reverse=True)
+    if do_json or do_null:
+        _output_machine_readable(results, do_null)
+        return 0
     if not results:
         print(f"ccs: no sessions match '{query}'", file=sys.stderr)
         return 1
-    results.sort(key=lambda r: r.date_key, reverse=True)
     for r in results:
         if do_global:
             print(f"{r.basename} ({_display_path(r.project_dir)})")
@@ -248,6 +274,9 @@ def _contents_search_with_rg(
     query: str,
     do_global: bool,
     max_file_size_mb: float,
+    *,
+    do_json: bool = False,
+    do_null: bool = False,
 ) -> int:
     n = len(sessions)
     noun = "session" if n == 1 else "sessions"
@@ -268,6 +297,7 @@ def _contents_search_with_rg(
         print("ccs: rg failed on the first session; falling back to grep", file=sys.stderr)
         return _contents_search_with_grep(
             sessions, query, do_global, max_file_size_mb, workers=0,
+            do_json=do_json, do_null=do_null,
         )
     rough_est = sample_time * n
     print(
@@ -296,6 +326,7 @@ def _contents_search_with_rg(
     except OSError:
         return _contents_search_with_grep(
             sessions, query, do_global, max_file_size_mb, workers=0,
+            do_json=do_json, do_null=do_null,
         )
 
     progress = _Progress(show_progress)
@@ -328,6 +359,7 @@ def _contents_search_with_rg(
         print("ccs: rg failed; falling back to per-session grep", file=sys.stderr)
         return _contents_search_with_grep(
             sessions, query, do_global, max_file_size_mb, workers=0,
+            do_json=do_json, do_null=do_null,
         )
 
     print(
@@ -354,6 +386,9 @@ def _contents_search_with_rg(
         grouped.setdefault(match_key, []).append(rel)
 
     if not grouped:
+        if do_json or do_null:
+            _output_machine_readable([], do_null)
+            return 0
         print(f"ccs: no sessions match '{query}'", file=sys.stderr)
         return 1
 
@@ -363,6 +398,10 @@ def _contents_search_with_rg(
         date_key = session_start_date(sess.name)
         assert date_key is not None
         results.append(_Result(date_key, sess.name, proj, lines))
+    if do_json or do_null:
+        results.sort(key=lambda r: r.date_key, reverse=True)
+        _output_machine_readable(results, do_null)
+        return 0
     _print_results(results, do_global)
     return 0
 
@@ -373,6 +412,9 @@ def _contents_search_with_grep(
     do_global: bool,
     max_file_size_mb: float,
     workers: int,
+    *,
+    do_json: bool = False,
+    do_null: bool = False,
 ) -> int:
     """Fallback path used when rg is unavailable. Plain grep has no
     --max-filesize equivalent, so we keep an indexing pre-pass to enforce
@@ -470,8 +512,14 @@ def _contents_search_with_grep(
     )
 
     if not results:
+        if do_json or do_null:
+            _output_machine_readable([], do_null)
+            return 0
         print(f"ccs: no sessions match '{query}'", file=sys.stderr)
         return 1
+    if do_json or do_null:
+        _output_machine_readable(results, do_null)
+        return 0
     _print_results(results, do_global)
     return 0
 
@@ -482,11 +530,18 @@ def _contents_search(
     do_global: bool,
     max_file_size_mb: float,
     workers: int,
+    *,
+    do_json: bool = False,
+    do_null: bool = False,
 ) -> int:
     if shutil.which("rg"):
-        return _contents_search_with_rg(sessions, query, do_global, max_file_size_mb)
+        return _contents_search_with_rg(
+            sessions, query, do_global, max_file_size_mb,
+            do_json=do_json, do_null=do_null,
+        )
     return _contents_search_with_grep(
         sessions, query, do_global, max_file_size_mb, workers,
+        do_json=do_json, do_null=do_null,
     )
 
 
@@ -538,8 +593,12 @@ def main(argv: list[str] | None = None) -> int:
         return _contents_search(
             sessions, args.query, args.do_global,
             args.max_file_size, args.workers,
+            do_json=args.json, do_null=args.null,
         )
-    return _name_search(sessions, args.query, args.do_global)
+    return _name_search(
+        sessions, args.query, args.do_global,
+        do_json=args.json, do_null=args.null,
+    )
 
 
 if __name__ == "__main__":
