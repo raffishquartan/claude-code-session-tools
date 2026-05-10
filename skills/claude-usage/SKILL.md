@@ -1,6 +1,6 @@
 ---
 name: claude-usage
-description: Analyse Chris's Claude Code usage across projects, sessions, MCP servers, plugins, tools, time and models, in tokens AND dollars. Use whenever Chris asks about his Claude Code usage in any way - "how much have I spent", "tokens used last week", "which project costs the most", "how much did Opus cost in April", "MCP usage by project", "compare Sonnet and Opus", "show my sessions in oneshot last month", "how often am I using the github plugin", "give me a usage report for the quarter", "what tools do I lean on", "any spike in usage recently". Backed by the claude-code-usage-cli repo at ~/repos/claude-code-usage-cli (also on GitHub at raffishquartan/claude-code-usage-cli). Reconciles token totals against ccusage so we know the numbers are right.
+description: Analyse Chris's Claude Code usage across projects, sessions, MCP servers, plugins, tools, time and models, in tokens AND dollars. Use whenever Chris asks about his Claude Code usage in any way - "how much have I spent", "tokens used last week", "which project costs the most", "how much did Opus cost in April", "MCP usage by project", "compare Sonnet and Opus", "show my sessions in oneshot last month", "how often am I using the github plugin", "give me a usage report for the quarter", "what tools do I lean on", "any spike in usage recently". Backed by the cc-session-tools repo at ~/repos/claude-code-session-tools (also on GitHub at raffishquartan/claude-code-session-tools). Reconciles token totals against ccusage so we know the numbers are right.
 ---
 
 # claude-usage
@@ -42,10 +42,17 @@ claude-code-usage query
   [--format markdown|csv|json] [--top N] [--sort COL]
   [--session-format name|uuid|both]
   [--include-children]
+  [--exclude-hooks]
 
 claude-code-usage children <PARENT_SESSION>
   [--format markdown|csv|json] [--top N] [--sort COL]
 ```
+
+`--exclude-hooks`: strip `bash-security-review.sh` hook sessions
+(classified as `initiation_type="hook-security-review"`) from all results
+before grouping. Useful whenever you want per-session cost breakdowns without
+the tiny ~$1.60 hook sessions distorting the totals. Use `--include-hooks`
+(alias for the default) to make it explicit that hooks are included.
 
 `--group-by` dimensions: `project, session, model, mcp, plugin, tool,
 day, week, month, year`. Combine freely.
@@ -80,6 +87,7 @@ Recipes:
 | "Are my numbers right?" / "Reconcile against ccusage" | `claude-code-usage reconcile --since 2026-04-01 --until 2026-05-01`                       |
 | "Show session cost including hook sessions"           | `claude-code-usage query --group-by session --include-children`                           |
 | "What hook sessions did this session spawn?"          | `claude-code-usage children <session-name-or-uuid>`                                       |
+| "Session cost breakdown excluding hook fires"         | `claude-code-usage query --group-by session --exclude-hooks`                              |
 
 After running, summarise the headline figure(s) in chat in plain English.
 For complex breakdowns, save the full table to the session's `out/`
@@ -104,6 +112,15 @@ session-name prefix in the prompt - this only happens when exactly one
 tokens/cost into the parent row; use `children <session>` to list a
 parent's children individually.
 
+**Session metadata columns (v0.5.0):** Two new session-level columns:
+- `initiation_type`: `hook-security-review` | `prompt-file` | `interactive` |
+  `unknown`. Classified from the first real user text block. Use
+  `--exclude-hooks` to filter out hook sessions in any query.
+- `is_sidechain`: `True` if any record in the session has `isSidechain=True`.
+
+TODO: `--group-by initiation_type` is not yet implemented as a grouping
+dimension but would allow breaking usage down by session initiation type.
+
 `ccusage` is the canonical source of dollar figures. Our `cost_usd` is
 a self-consistent estimate that may differ - the `reconcile` sub-command
 shows both side by side. **Token counts are guaranteed to reconcile with
@@ -112,8 +129,12 @@ ccusage within 0.5%**.
 Session display names are sourced from `~/.claude/sessions/*.json`
 (live registry, set by `claude -n`/`ccd`) and merged into a persistent
 on-disk cache at `<cache_dir>/session_names.json` so any name we ever
-saw is preserved after the live record is pruned. UUID-only fallback
-(`sess-<uuid8>`) covers sessions launched without `-n`.
+saw is preserved after the live record is pruned. **As of v0.5.0,
+`warm-cache` also scans JSONL files for `custom-title` records** (written
+when the user runs `/rename` in a session), so sessions whose PID file was
+pruned before `warm-cache` ran will now be resolved correctly. UUID-only
+fallback (`sess-<uuid8>`) covers sessions launched without `-n` that were
+never renamed.
 
 ## Setup on a new machine
 
@@ -129,9 +150,9 @@ reinstalling.
 
 ```bash
 # 1. Clone the repo
-git clone https://github.com/raffishquartan/claude-code-usage-cli.git \
-    ~/repos/claude-code-usage-cli
-cd ~/repos/claude-code-usage-cli
+git clone https://github.com/raffishquartan/claude-code-session-tools.git \
+    ~/repos/claude-code-session-tools
+cd ~/repos/claude-code-session-tools
 
 # 2. Install the CLI globally (puts `claude-code-usage` on PATH)
 #    Install uv first if needed: https://docs.astral.sh/uv/getting-started/
@@ -142,19 +163,18 @@ claude-code-usage --version    # should print the version
 
 # 3. (Optional) project-local dev venv with test deps, for hacking on
 #    the CLI. Not required for normal skill use.
-uv sync --extra dev
-uv run pytest    # all 47+ tests should pass
+uv sync
+uv run pytest    # all 350+ tests should pass
 
 # 4. Install ccusage globally so reconciliation works
 #    Install bun first if needed: https://bun.com/docs/installation
 bun add -g ccusage
 ccusage --version
 
-# 5. Symlink the repo as a Claude Code skill
-#    The skill name in ~/.claude/skills must match the frontmatter `name`
-#    above (claude-usage), so use that as the link name regardless of
-#    the repo directory name.
-ln -s ~/repos/claude-code-usage-cli ~/.claude/skills/claude-usage
+# 5. The skill lives inside the cc-session-tools repo at skills/claude-usage/.
+#    Symlink it to ~/.claude/skills/ so it is discoverable:
+ln -s ~/repos/claude-code-session-tools/skills/claude-usage \
+    ~/.claude/skills/claude-usage
 
 # 6. Warm the cache (first run is the slow one)
 claude-code-usage warm-cache
@@ -180,7 +200,7 @@ Cache location: `~/.cache/claude-code-usage/parquet/` by default
 
 ## Repo
 
-- Local: `~/repos/claude-code-usage-cli`
-- GitHub: <https://github.com/raffishquartan/claude-code-usage-cli> (public, MIT)
-- Run `pytest` after any change. The schema sanity check is the early
-  warning if Anthropic ever changes the JSONL format.
+- Local: `~/repos/claude-code-session-tools`
+- GitHub: <https://github.com/raffishquartan/claude-code-session-tools> (public, MIT)
+- Run `uv run pytest` after any change. The schema sanity check is the
+  early warning if Anthropic ever changes the JSONL format.
