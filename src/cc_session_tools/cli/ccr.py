@@ -7,6 +7,7 @@ import sys
 from pathlib import Path
 
 from cc_session_tools import __version__
+from cc_session_tools.lib.claude_flags import get_claude_flags
 from cc_session_tools.lib.roots import load_session_roots
 from cc_session_tools.lib.sessions import SESSION_FULL_RE, SessionMatch, find_matching_sessions, session_tag
 from cc_session_tools.lib.tasklist import id_for_project
@@ -31,7 +32,7 @@ def _build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
-    args = _build_parser().parse_args(argv)
+    args, remainder = _build_parser().parse_known_args(argv)
 
     roots = load_session_roots()
 
@@ -89,6 +90,21 @@ def main(argv: list[str] | None = None) -> int:
         )
         return 1
 
+    # Validate and pass through any extra flags from remainder.
+    # Long flags (--foo) are checked against claude's known flags.
+    # Short flags (-f) pass through without validation.
+    if remainder:
+        valid_flags = get_claude_flags()
+        for arg in remainder:
+            if arg.startswith("--"):
+                flag_name = arg.split("=")[0]
+                if flag_name not in valid_flags:
+                    print(
+                        f"ccr: unknown flag '{arg}'; not a recognised claude option",
+                        file=sys.stderr,
+                    )
+                    return 1
+
     env = os.environ.copy()
     env.pop("CLAUDE_CODE_TASK_LIST_ID", None)
     env["CLD_SESSION_TAG"] = tag
@@ -103,6 +119,8 @@ def main(argv: list[str] | None = None) -> int:
         "--resume", m.basename,
         "--remote-control", m.basename,
     ]
+    if remainder:
+        cmd.extend(remainder)
     launch_claude_resume(cmd, env, cwd=m.project_dir)
     return 0
 
