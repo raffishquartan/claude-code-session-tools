@@ -22,7 +22,84 @@ from typing import Any, Iterator
 from . import attribution, parent_inference, schema
 
 
+_HARNESS_PREFIXES = ("<local-command-", "<command-name>", "<local-command-stdout>")
+_HOOK_PREFIX = "Review this shell command for security risks"
+_PROMPT_FILE_PREFIXES = ("Here is your prompt", "Your prompt: ")
+_METADATA_SCAN_LINES = 500
+
+
 log = logging.getLogger(__name__)
+
+
+def parse_session_metadata(path: str | Path) -> dict[str, Any]:
+    """Scan a JSONL file for session-level metadata (non-billable records).
+
+    Returns a dict with keys:
+      custom_title:    str | None  — from the first type=="custom-title" record
+      is_sidechain:    bool        — True if any record has isSidechain==True
+      initiation_type: str         — "hook-security-review" | "prompt-file" |
+                                     "interactive" | "unknown"
+      first_prompt:    str | None  — first 80 chars of first real user text
+    """
+    result: dict[str, Any] = {
+        "custom_title": None,
+        "session_id": None,
+        "is_sidechain": False,
+        "initiation_type": "unknown",
+        "first_prompt": None,
+    }
+    try:
+        with Path(path).open("r", encoding="utf-8") as fh:
+            for i, line in enumerate(fh):
+                if i >= _METADATA_SCAN_LINES:
+                    break
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    record = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                rtype = record.get("type")
+                if rtype == "custom-title" and result["custom_title"] is None:
+                    title = record.get("customTitle")
+                    if title:
+                        result["custom_title"] = title
+                        result["session_id"] = record.get("sessionId")
+                if record.get("isSidechain") is True:
+                    result["is_sidechain"] = True
+                if rtype == "user" and result["initiation_type"] == "unknown":
+                    text = _extract_user_text(record)
+                    if text is not None:
+                        result["first_prompt"] = text[:80]
+                        if text.startswith(_HOOK_PREFIX):
+                            result["initiation_type"] = "hook-security-review"
+                        elif text.startswith(_PROMPT_FILE_PREFIXES):
+                            result["initiation_type"] = "prompt-file"
+                        else:
+                            result["initiation_type"] = "interactive"
+    except OSError:
+        pass
+    return result
+
+
+def _extract_user_text(record: dict[str, Any]) -> str | None:
+    """Return the first real user text from a user record, or None if harness-injected."""
+    content = record.get("message", {}).get("content")
+    if isinstance(content, str):
+        text = content
+    elif isinstance(content, list):
+        text = next(
+            (block.get("text", "") for block in content if block.get("type") == "text"),
+            None,
+        )
+        if text is None:
+            return None
+    else:
+        return None
+    if not text or text.startswith(_HARNESS_PREFIXES):
+        return None
+    return text
 
 
 def parse_record(record: dict[str, Any]) -> dict[str, Any] | None:

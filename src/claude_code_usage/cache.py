@@ -47,6 +47,8 @@ _SCHEMA = pa.schema(
         ("source_file", pa.string()),
         ("session_type", pa.string()),
         ("hook_parent_name", pa.string()),
+        ("is_sidechain", pa.bool_()),
+        ("initiation_type", pa.string()),
     ]
 )
 SCHEMA_COLUMNS: list[str] = [f.name for f in _SCHEMA]
@@ -54,7 +56,7 @@ SCHEMA_COLUMNS: list[str] = [f.name for f in _SCHEMA]
 
 log = logging.getLogger(__name__)
 
-MANIFEST_VERSION = 2
+MANIFEST_VERSION = 3
 
 
 @dataclass
@@ -131,6 +133,10 @@ class Cache:
             any_change = True
             rows = list(parser.parse_file(source))
             if rows:
+                meta = parser.parse_session_metadata(source)
+                for row in rows:
+                    row["is_sidechain"] = meta["is_sidechain"]
+                    row["initiation_type"] = meta["initiation_type"]
                 table = _rows_to_table(rows)
                 import pyarrow.parquet as pq
                 pq.write_table(table, shard_path)
