@@ -266,6 +266,27 @@ def _print_results(results: list[_Result], do_global: bool) -> None:
             print(f"  {line}")
 
 
+def _compute_eta(elapsed: float, completed: int, total: int) -> float:
+    """Total estimated time: X + (X/Y)*(Z-Y). Returns inf if completed is 0."""
+    if completed <= 0:
+        return float("inf")
+    return elapsed + (elapsed / completed) * (total - completed)
+
+
+def _batch_sizes(total: int) -> list[int]:
+    """Return batch sizes for the three-phase rg strategy.
+
+    <= 10: one batch; <= 110: two batches (10 + rest); > 110: three batches (10 + 100 + rest).
+    """
+    if total <= 0:
+        return []
+    if total <= 10:
+        return [total]
+    if total <= 110:
+        return [10, total - 10]
+    return [10, 100, total - 110]
+
+
 def _rg_cmd(query: str, max_bytes: int, targets: list[str]) -> list[str]:
     return [
         "rg", "--no-heading", "-n", "-H", "-F",
@@ -273,26 +294,6 @@ def _rg_cmd(query: str, max_bytes: int, targets: list[str]) -> list[str]:
         f"--max-filesize={max_bytes}",
         "--", query, *targets,
     ]
-
-
-def _time_first_session_with_rg(
-    sessions: list[tuple[Path, Path]], query: str, max_bytes: int
-) -> float | None:
-    """Run rg on a single session as a rough timing sample. Returns the
-    wall-clock duration in seconds, or None if rg failed."""
-    sess, _ = sessions[0]
-    cmd = _rg_cmd(query, max_bytes, [str(sess.resolve())])
-    start = time.monotonic()
-    try:
-        res = subprocess.run(
-            cmd, stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-        )
-    except OSError:
-        return None
-    if res.returncode > 1:
-        return None
-    return time.monotonic() - start
 
 
 def _contents_search_with_rg(
@@ -307,93 +308,91 @@ def _contents_search_with_rg(
     n = len(sessions)
     noun = "session" if n == 1 else "sessions"
     max_bytes = int(max_file_size_mb * 1024 * 1024)
-    show_progress = sys.stderr.isatty()
 
-    # Print the count immediately so the user sees something within ms.
     print(
         f"ccs: searching {n} {noun} for '{query}' "
         f"(skipping files > {max_file_size_mb:g} MB)...",
         file=sys.stderr,
     )
 
-    # Crude up-front estimate: time ONE session, multiply by n. Cheap (typically
-    # <1s) and gives the user a worst-case ETA before the big run starts.
-    sample_time = _time_first_session_with_rg(sessions, query, max_bytes)
-    if sample_time is None:
-        print("ccs: rg failed on the first session; falling back to grep", file=sys.stderr)
-        return _contents_search_with_grep(
-            sessions, query, do_global, max_file_size_mb, workers=0,
-            do_json=do_json, do_null=do_null,
-        )
-    rough_est = sample_time * n
-    print(
-        f"ccs: first session scanned in {_format_duration(sample_time)}; "
-        f"rough sequential estimate ~{_format_duration(rough_est)} for {n} {noun} "
-        f"(actual usually faster - rg parallelises internally).",
-        file=sys.stderr,
-    )
-
-    # Big run: one streaming rg invocation across all session dirs.
+    # Build sess_by_dir (includes transcript dirs for JSONL search).
     sess_by_dir: dict[str, tuple[Path, Path]] = {}
     for sess, proj in sessions:
-        sess_by_dir[str(sess.resolve())] = (sess, proj)
+        key = str(sess.resolve())
+        sess_by_dir[key] = (sess, proj)
         t_dir = transcript_dir_for_project(proj)
         if t_dir.is_dir():
             sess_by_dir[str(t_dir.resolve())] = (sess, proj)
-    cmd = _rg_cmd(query, max_bytes, list(sess_by_dir.keys()))
 
-    start = time.monotonic()
-    try:
-        proc = subprocess.Popen(
-            cmd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL,
-            text=True,
-            errors="replace",
-            bufsize=1,
-        )
-    except OSError:
-        return _contents_search_with_grep(
-            sessions, query, do_global, max_file_size_mb, workers=0,
-            do_json=do_json, do_null=do_null,
-        )
+    batches = _batch_sizes(n)
+    if not batches:
+        print(f"ccs: no sessions match '{query}'", file=sys.stderr)
+        return 1
 
-    progress = _Progress(show_progress)
-    output_lines: list[str] = []
-    last_update = start
-    assert proc.stdout is not None
-    try:
-        for line in proc.stdout:
-            output_lines.append(line.rstrip("\n"))
-            now = time.monotonic()
-            if show_progress and now - last_update >= 0.3:
-                last_update = now
-                elapsed = now - start
-                pct_est = min(99, int(100 * elapsed / max(rough_est, 0.001)))
-                progress.update(
-                    f"searching with rg... [{_format_duration(elapsed)} / "
-                    f"~{_format_duration(rough_est)} est, ~{pct_est}%]  "
-                    f"{len(output_lines)} match lines so far"
-                )
-        proc.wait()
-    except BaseException:
-        proc.kill()
-        proc.wait()
-        raise
+    all_output_lines: list[str] = []
+    total_start = time.monotonic()
+    completed = 0
 
-    progress.clear()
-    elapsed = time.monotonic() - start
+    for batch_idx, batch_size in enumerate(batches):
+        batch_sessions = sessions[completed : completed + batch_size]
 
-    if proc.returncode > 1:
-        print("ccs: rg failed; falling back to per-session grep", file=sys.stderr)
-        return _contents_search_with_grep(
-            sessions, query, do_global, max_file_size_mb, workers=0,
-            do_json=do_json, do_null=do_null,
-        )
+        # Build target list for this batch (sessions + their transcript dirs).
+        batch_targets: list[str] = []
+        for sess, proj in batch_sessions:
+            batch_targets.append(str(sess.resolve()))
+            t_dir = transcript_dir_for_project(proj)
+            if t_dir.is_dir():
+                batch_targets.append(str(t_dir.resolve()))
 
+        cmd = _rg_cmd(query, max_bytes, batch_targets)
+        try:
+            proc = subprocess.Popen(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL,
+                text=True,
+                errors="replace",
+                bufsize=1,
+            )
+        except OSError:
+            return _contents_search_with_grep(
+                sessions, query, do_global, max_file_size_mb, workers=0,
+                do_json=do_json, do_null=do_null,
+            )
+
+        assert proc.stdout is not None
+        try:
+            for line in proc.stdout:
+                all_output_lines.append(line.rstrip("\n"))
+            proc.wait()
+        except BaseException:
+            proc.kill()
+            proc.wait()
+            raise
+
+        if proc.returncode > 1:
+            print("ccs: rg failed; falling back to per-session grep", file=sys.stderr)
+            return _contents_search_with_grep(
+                sessions, query, do_global, max_file_size_mb, workers=0,
+                do_json=do_json, do_null=do_null,
+            )
+
+        completed += batch_size
+        total_elapsed = time.monotonic() - total_start
+
+        if batch_idx < len(batches) - 1:  # not the last batch
+            eta = _compute_eta(total_elapsed, completed, n)
+            eta_str = f"~{_format_duration(eta)}" if eta != float("inf") else "unknown"
+            print(
+                f"ccs: batch {batch_idx + 1}/{len(batches)} done "
+                f"({completed}/{n} sessions, {_format_duration(total_elapsed)} elapsed). "
+                f"Est total: {eta_str}",
+                file=sys.stderr,
+            )
+
+    total_elapsed = time.monotonic() - total_start
     print(
-        f"ccs: searched {n} {noun} in {_format_duration(elapsed)} "
-        f"(estimate was {_format_duration(rough_est)})",
+        f"ccs: searched {n} {noun} in {_format_duration(total_elapsed)}",
         file=sys.stderr,
     )
 
@@ -401,7 +400,7 @@ def _contents_search_with_rg(
     # session dirs don't grab matches that belong to a deeper sibling).
     sorted_keys = sorted(sess_by_dir.keys(), key=len, reverse=True)
     grouped: dict[str, list[str]] = {}
-    for line in output_lines:
+    for line in all_output_lines:
         if line == "--":
             continue
         match_key = None
@@ -415,10 +414,10 @@ def _contents_search_with_rg(
         grouped.setdefault(match_key, []).append(rel)
 
     if not grouped:
+        print(f"ccs: no sessions match '{query}'", file=sys.stderr)
         if do_json or do_null:
             _output_machine_readable([], do_null)
             return 0
-        print(f"ccs: no sessions match '{query}'", file=sys.stderr)
         return 1
 
     results: list[_Result] = []
@@ -427,8 +426,19 @@ def _contents_search_with_rg(
         date_key = session_start_date(sess.name)
         assert date_key is not None
         results.append(_Result(date_key, sess.name, proj, lines))
+
+    # Deduplicate: a session's sess dir and transcript dir both map to the same
+    # (sess, proj), so a match in either yields the same _Result. Without
+    # dedup, the same session could appear twice.
+    seen: set[str] = set()
+    deduped: list[_Result] = []
+    for r in results:
+        if r.basename not in seen:
+            seen.add(r.basename)
+            deduped.append(r)
+    results = deduped
+
     if do_json or do_null:
-        results.sort(key=lambda r: r.date_key, reverse=True)
         _output_machine_readable(results, do_null)
         return 0
     _print_results(results, do_global)
@@ -528,14 +538,15 @@ def _contents_search_with_grep(
             completed_files += len(files)
             completed_bytes += bytes_
             elapsed = time.monotonic() - start
-            eta = (elapsed / completed) * (n - completed) if completed else 0
+            total_est = _compute_eta(elapsed, completed, n)
+            total_est_str = f"~{_format_duration(total_est)}" if total_est != float("inf") else "?"
             pct = int(100 * completed / n)
             progress.update(
                 f"searching [{completed}/{n}] ({pct}%)  "
                 f"{completed_files}/{total_files} files, "
                 f"{_format_size(completed_bytes)}  "
                 f"elapsed {_format_duration(elapsed)}  "
-                f"ETA {_format_duration(eta)}"
+                f"est total {total_est_str}"
             )
     progress.clear()
     elapsed = time.monotonic() - start
