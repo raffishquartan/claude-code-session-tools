@@ -159,3 +159,150 @@ def test_parse_directory_walks_all_jsonl_files(tmp_path: Path) -> None:
     (proj_a / "ignore.txt").write_text("not jsonl")
     rows = list(parser.parse_directory(tmp_path))
     assert len(rows) == 3
+
+
+# --- parse_session_metadata tests ---
+
+def _make_jsonl(records: list[dict], path: Path) -> Path:
+    path.write_text("\n".join(json.dumps(r) for r in records) + "\n")
+    return path
+
+
+def _custom_title_record(session_id: str, title: str) -> dict:
+    return {"type": "custom-title", "customTitle": title, "sessionId": session_id}
+
+
+def _user_record(text: str) -> dict:
+    return {"type": "user", "message": {"role": "user", "content": text}}
+
+
+def _user_record_list_content(text: str) -> dict:
+    return {"type": "user", "message": {"role": "user", "content": [{"type": "text", "text": text}]}}
+
+
+def test_parse_session_metadata_extracts_custom_title(tmp_path: Path) -> None:
+    p = _make_jsonl(
+        [_custom_title_record("uuid-abc", "20260509-my-session"), _good_record()],
+        tmp_path / "s.jsonl",
+    )
+    meta = parser.parse_session_metadata(p)
+    assert meta["custom_title"] == "20260509-my-session"
+
+
+def test_parse_session_metadata_no_custom_title_returns_none(tmp_path: Path) -> None:
+    p = _make_jsonl([_good_record()], tmp_path / "s.jsonl")
+    meta = parser.parse_session_metadata(p)
+    assert meta["custom_title"] is None
+
+
+def test_parse_session_metadata_is_sidechain_true(tmp_path: Path) -> None:
+    sidechain_record = _good_record() | {"isSidechain": True}
+    p = _make_jsonl([sidechain_record], tmp_path / "s.jsonl")
+    meta = parser.parse_session_metadata(p)
+    assert meta["is_sidechain"] is True
+
+
+def test_parse_session_metadata_is_sidechain_false_by_default(tmp_path: Path) -> None:
+    p = _make_jsonl([_good_record()], tmp_path / "s.jsonl")
+    meta = parser.parse_session_metadata(p)
+    assert meta["is_sidechain"] is False
+
+
+def test_parse_session_metadata_hook_initiation_type(tmp_path: Path) -> None:
+    p = _make_jsonl(
+        [_user_record("Review this shell command for security risks: rm -rf /"), _good_record()],
+        tmp_path / "s.jsonl",
+    )
+    meta = parser.parse_session_metadata(p)
+    assert meta["initiation_type"] == "hook-security-review"
+
+
+def test_parse_session_metadata_prompt_file_here_is_your_prompt(tmp_path: Path) -> None:
+    p = _make_jsonl(
+        [_user_record("Here is your prompt for this session: do stuff"), _good_record()],
+        tmp_path / "s.jsonl",
+    )
+    meta = parser.parse_session_metadata(p)
+    assert meta["initiation_type"] == "prompt-file"
+
+
+def test_parse_session_metadata_prompt_file_your_prompt_colon(tmp_path: Path) -> None:
+    p = _make_jsonl(
+        [_user_record("Your prompt: do something"), _good_record()],
+        tmp_path / "s.jsonl",
+    )
+    meta = parser.parse_session_metadata(p)
+    assert meta["initiation_type"] == "prompt-file"
+
+
+def test_parse_session_metadata_interactive_initiation(tmp_path: Path) -> None:
+    p = _make_jsonl(
+        [_user_record("Can you help me with this task?"), _good_record()],
+        tmp_path / "s.jsonl",
+    )
+    meta = parser.parse_session_metadata(p)
+    assert meta["initiation_type"] == "interactive"
+
+
+def test_parse_session_metadata_unknown_when_no_user_messages(tmp_path: Path) -> None:
+    p = _make_jsonl([_good_record()], tmp_path / "s.jsonl")
+    meta = parser.parse_session_metadata(p)
+    assert meta["initiation_type"] == "unknown"
+
+
+def test_parse_session_metadata_skips_harness_local_command_prefix(tmp_path: Path) -> None:
+    p = _make_jsonl(
+        [
+            _user_record("<local-command-stdout>some output</local-command-stdout>"),
+            _user_record("Can you help me?"),
+            _good_record(),
+        ],
+        tmp_path / "s.jsonl",
+    )
+    meta = parser.parse_session_metadata(p)
+    assert meta["initiation_type"] == "interactive"
+
+
+def test_parse_session_metadata_skips_command_name_prefix(tmp_path: Path) -> None:
+    p = _make_jsonl(
+        [
+            _user_record("<command-name>bash</command-name>"),
+            _user_record("Review this shell command for security risks: ls"),
+            _good_record(),
+        ],
+        tmp_path / "s.jsonl",
+    )
+    meta = parser.parse_session_metadata(p)
+    assert meta["initiation_type"] == "hook-security-review"
+
+
+def test_parse_session_metadata_handles_list_content_text_block(tmp_path: Path) -> None:
+    p = _make_jsonl(
+        [_user_record_list_content("Here is your prompt: do something"), _good_record()],
+        tmp_path / "s.jsonl",
+    )
+    meta = parser.parse_session_metadata(p)
+    assert meta["initiation_type"] == "prompt-file"
+
+
+def test_parse_session_metadata_returns_unknown_on_malformed_file(tmp_path: Path) -> None:
+    p = tmp_path / "s.jsonl"
+    p.write_text("{{{ not json at all\n")
+    meta = parser.parse_session_metadata(p)
+    assert meta["initiation_type"] == "unknown"
+    assert meta["custom_title"] is None
+    assert meta["is_sidechain"] is False
+
+
+def test_parse_session_metadata_first_prompt_is_80_chars(tmp_path: Path) -> None:
+    long_text = "Can you help me with this very long task that goes on and on for many characters?"
+    p = _make_jsonl([_user_record(long_text), _good_record()], tmp_path / "s.jsonl")
+    meta = parser.parse_session_metadata(p)
+    assert len(meta["first_prompt"]) <= 80
+    assert meta["first_prompt"] == long_text[:80]
+
+
+def test_parse_session_metadata_first_prompt_none_when_no_user(tmp_path: Path) -> None:
+    p = _make_jsonl([_good_record()], tmp_path / "s.jsonl")
+    meta = parser.parse_session_metadata(p)
+    assert meta["first_prompt"] is None
