@@ -118,3 +118,19 @@ def test_ccr_falls_back_to_substring_when_no_exact_match(fake_repos, captured_la
     rc = ccr.main(["improve"])
     assert rc == 0
     assert "20260504-improve-ccx" in captured_launch["cmd"]
+
+
+# ---------------------------------------------------------------------------
+# Task 14: PATH check for claude binary
+# ---------------------------------------------------------------------------
+
+def test_ccr_fails_clearly_when_claude_not_on_path(fake_repos, monkeypatch, capsys):
+    _make_session(fake_repos, "proj1", "20260504-foo")
+    import shutil as _shutil
+    monkeypatch.setattr(_shutil, "which", lambda name: None)
+
+    rc = ccr.main(["foo"])
+    assert rc == 1
+    err = capsys.readouterr().err
+    assert "claude" in err.lower()
+    assert ("not found" in err.lower() or "path" in err.lower())
