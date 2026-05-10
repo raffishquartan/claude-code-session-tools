@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import shutil
 import sys
 from pathlib import Path
 
@@ -79,6 +80,14 @@ def main(argv: list[str] | None = None) -> int:
         # Should not happen because find_matching_sessions only returns
         # basenames that match SESSION_BASENAME_RE, but fall back gracefully.
         tag = m.basename
+
+    # Fail fast with a clear message when claude is not on PATH.
+    if not shutil.which("claude"):
+        print(
+            "ccr: 'claude' not found on PATH - is Claude Code installed?",
+            file=sys.stderr,
+        )
+        return 1
 
     env = os.environ.copy()
     env.pop("CLAUDE_CODE_TASK_LIST_ID", None)
