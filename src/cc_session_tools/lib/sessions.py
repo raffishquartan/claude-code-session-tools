@@ -230,3 +230,13 @@ def _grep_files_python(files: list[Path], query: str, context: int) -> list[str]
             first_group = False
             out.extend(lines[lo:hi])
     return out
+
+
+def transcript_dir_for_project(project_dir: Path) -> Path:
+    """Return the ~/.claude/projects/<encoded> directory for a project.
+
+    Encoding: each '/' and '.' in the absolute project path is replaced with '-'.
+    Does not check whether the directory exists.
+    """
+    encoded = str(project_dir.resolve()).replace("/", "-").replace(".", "-")
+    return Path.home() / ".claude" / "projects" / encoded
