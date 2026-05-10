@@ -95,3 +95,26 @@ def test_ccr_changes_to_project_dir_before_launch(fake_repos, captured_launch):
     rc = ccr.main(["foo"])
     assert rc == 0
     assert captured_launch["cwd"] == project_dir
+
+
+# ---------------------------------------------------------------------------
+# Task 13: exact-match fast-path
+# ---------------------------------------------------------------------------
+
+def test_ccr_exact_basename_skips_substring_ambiguity(fake_repos, captured_launch):
+    # "20260504-foo" is an exact basename but also a substring of "20260504-foo-bar"
+    _make_session(fake_repos, "proj1", "20260504-foo")
+    _make_session(fake_repos, "proj2", "20260504-foo-bar")
+
+    rc = ccr.main(["20260504-foo"])
+    assert rc == 0
+    assert "20260504-foo" in captured_launch["cmd"]
+    assert "20260504-foo-bar" not in captured_launch["cmd"]
+
+
+def test_ccr_falls_back_to_substring_when_no_exact_match(fake_repos, captured_launch):
+    _make_session(fake_repos, "proj1", "20260504-improve-ccx")
+
+    rc = ccr.main(["improve"])
+    assert rc == 0
+    assert "20260504-improve-ccx" in captured_launch["cmd"]

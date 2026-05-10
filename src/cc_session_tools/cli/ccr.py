@@ -7,7 +7,7 @@ from pathlib import Path
 
 from cc_session_tools import __version__
 from cc_session_tools.lib.roots import load_session_roots
-from cc_session_tools.lib.sessions import find_matching_sessions, session_tag
+from cc_session_tools.lib.sessions import SESSION_FULL_RE, SessionMatch, find_matching_sessions, session_tag
 from cc_session_tools.lib.tasklist import id_for_project
 
 
@@ -33,7 +33,31 @@ def main(argv: list[str] | None = None) -> int:
     args = _build_parser().parse_args(argv)
 
     roots = load_session_roots()
-    matches = find_matching_sessions(args.fragment, roots)
+
+    # Exact-match fast-path: if fragment looks like a full basename, try a
+    # direct directory lookup before falling back to substring search.  This
+    # prevents "20260504-foo" from being treated as ambiguous when
+    # "20260504-foo-bar" also exists.
+    exact_match: SessionMatch | None = None
+    if SESSION_FULL_RE.fullmatch(args.fragment):
+        for root in roots:
+            if not root.is_dir():
+                continue
+            for proj in root.iterdir():
+                if not proj.is_dir():
+                    continue
+                candidate = proj / "cc-sessions" / args.fragment
+                if candidate.is_dir():
+                    exact_match = SessionMatch(
+                        basename=args.fragment,
+                        project_dir=proj,
+                        session_dir=candidate,
+                    )
+                    break
+            if exact_match:
+                break
+
+    matches = [exact_match] if exact_match else find_matching_sessions(args.fragment, roots)
 
     if not matches:
         print(f"ccr: no sessions match '{args.fragment}'", file=sys.stderr)
