@@ -195,7 +195,7 @@ class TestContentsSearchHeaderRgPath:
         assert "2 sessions" in err
         assert "'needle'" in err
 
-    def test_estimate_line_includes_first_session_time_and_total_estimate(
+    def test_final_summary_reports_session_count_and_elapsed(
         self, fake_repos, monkeypatch, capsys, force_rg_path
     ):
         proj = fake_repos / "myproj"
@@ -204,10 +204,10 @@ class TestContentsSearchHeaderRgPath:
         monkeypatch.chdir(proj)
         ccs.main(["needle", "--contents"])
         err = capsys.readouterr().err
-        assert "first session scanned" in err
-        assert "rough sequential estimate" in err
+        # New batched flow: single batch for <=10 sessions, final summary only
+        assert "searched 2 sessions in" in err
 
-    def test_final_summary_reports_elapsed_against_estimate(
+    def test_final_summary_uses_elapsed_not_estimate(
         self, fake_repos, monkeypatch, capsys, force_rg_path
     ):
         proj = fake_repos / "myproj"
@@ -215,7 +215,8 @@ class TestContentsSearchHeaderRgPath:
         monkeypatch.chdir(proj)
         ccs.main(["needle", "--contents"])
         err = capsys.readouterr().err
-        assert "estimate was" in err
+        # New batched flow: final summary is elapsed only (no "estimate was")
+        assert "searched 1 session in" in err
 
     def test_singular_session_phrasing(
         self, fake_repos, monkeypatch, capsys, force_rg_path
