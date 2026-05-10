@@ -28,11 +28,17 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     p.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     p.add_argument("fragment", help="Substring to match against session basenames.")
+    p.add_argument("--debug", action="store_true",
+                   help="Enable debug output (also: CCX_DEBUG=1).")
     return p
 
 
 def main(argv: list[str] | None = None) -> int:
     args, remainder = _build_parser().parse_known_args(argv)
+
+    if args.debug:
+        os.environ["CCX_DEBUG"] = "1"
+    from cc_session_tools.lib.debug import debug
 
     roots = load_session_roots()
 
@@ -60,6 +66,8 @@ def main(argv: list[str] | None = None) -> int:
                 break
 
     matches = [exact_match] if exact_match else find_matching_sessions(args.fragment, roots)
+    debug(f"fragment: {args.fragment!r}")
+    debug(f"matches: {[m.basename for m in matches]}")
 
     if not matches:
         print(f"ccr: no sessions match '{args.fragment}'", file=sys.stderr)
@@ -134,6 +142,7 @@ def main(argv: list[str] | None = None) -> int:
     ]
     if remainder:
         cmd.extend(remainder)
+    debug(f"resuming: {m.basename} in {m.project_dir}")
     launch_claude_resume(cmd, env, cwd=m.project_dir)
     return 0
 

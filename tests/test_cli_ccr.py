@@ -188,3 +188,16 @@ def test_ccr_keeps_rerrun_message_for_more_than_10(fake_repos, monkeypatch, caps
     assert rc == 0
     out = capsys.readouterr().out
     assert "Multiple sessions" in out
+
+
+# ---------------------------------------------------------------------------
+# Task 18: --debug flag and CCX_DEBUG env var
+# ---------------------------------------------------------------------------
+
+def test_ccr_debug_flag_produces_output(fake_repos, captured_launch, monkeypatch, capsys):
+    _make_session(fake_repos, "proj1", "20260504-foo")
+    monkeypatch.delenv("CCX_DEBUG", raising=False)
+
+    ccr.main(["foo", "--debug"])
+    err = capsys.readouterr().err
+    assert "[CCX_DEBUG]" in err

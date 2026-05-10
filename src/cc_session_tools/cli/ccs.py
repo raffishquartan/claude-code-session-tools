@@ -97,6 +97,8 @@ def _build_parser() -> argparse.ArgumentParser:
                      help="Output results as a JSON array.")
     fmt.add_argument("--null", action="store_true",
                      help="Output null-delimited basenames (for xargs -0).")
+    p.add_argument("--debug", action="store_true",
+                   help="Enable debug output (also: CCX_DEBUG=1).")
     return p
 
 
@@ -625,6 +627,10 @@ def _contents_search(
 def main(argv: list[str] | None = None) -> int:
     args = _build_parser().parse_args(argv)
 
+    if args.debug:
+        os.environ["CCX_DEBUG"] = "1"
+    from cc_session_tools.lib.debug import debug
+
     # Validate date filter args eagerly so bad values are caught before any I/O.
     date_filter: tuple[str | None, str | None] | None = None
     if args.since or args.before or args.days:
@@ -637,6 +643,7 @@ def main(argv: list[str] | None = None) -> int:
         and not args.local
     )
 
+    debug(f"scope: {'global' if effective_global else f'cwd={Path.cwd()}'}")
     pairs = _collect_pairs(effective_global)
     if not pairs:
         if effective_global:
@@ -651,6 +658,7 @@ def main(argv: list[str] | None = None) -> int:
             if session_start_date(sess.name) is None:
                 continue
             sessions.append((sess, proj))
+    debug(f"sessions found: {len(sessions)}")
 
     if args.exclude_hooks:
         before = len(sessions)

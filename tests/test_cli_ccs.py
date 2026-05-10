@@ -667,3 +667,29 @@ def test_ccs_no_picker_for_more_than_10(fake_repos, monkeypatch, capsys):
     rc = ccs.main(["foo"])
     assert rc == 0
     assert len(pick_called) == 0  # picker not invoked
+
+
+# ---------------------------------------------------------------------------
+# Task 18: --debug flag and CCX_DEBUG env var
+# ---------------------------------------------------------------------------
+
+def test_ccs_debug_flag_sets_env(fake_repos, monkeypatch, capsys):
+    proj = fake_repos / "myproj"
+    _make_session(fake_repos, "myproj", "20260504-foo")
+    monkeypatch.chdir(proj)
+    monkeypatch.delenv("CCX_DEBUG", raising=False)
+
+    ccs.main(["foo", "--debug"])
+    err = capsys.readouterr().err
+    assert "[CCX_DEBUG]" in err
+
+
+def test_ccs_debug_env_var_also_works(fake_repos, monkeypatch, capsys):
+    proj = fake_repos / "myproj"
+    _make_session(fake_repos, "myproj", "20260504-foo")
+    monkeypatch.chdir(proj)
+    monkeypatch.setenv("CCX_DEBUG", "1")
+
+    ccs.main(["foo"])
+    err = capsys.readouterr().err
+    assert "[CCX_DEBUG]" in err
