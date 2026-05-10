@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import datetime
+import difflib
 import os
 import shutil
 import subprocess
@@ -221,6 +222,10 @@ def _name_search(
         return 0
     if not results:
         print(f"ccs: no sessions match '{query}'", file=sys.stderr)
+        all_basenames = [s.name for s, _ in sessions]
+        suggestions = difflib.get_close_matches(query, all_basenames, n=3, cutoff=0.4)
+        if suggestions:
+            print(f"ccs: did you mean: {', '.join(suggestions)}?", file=sys.stderr)
         return 1
     for r in results:
         if do_global:
