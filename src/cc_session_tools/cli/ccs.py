@@ -20,6 +20,12 @@ from cc_session_tools.lib.sessions import (
 )
 
 
+def _is_hook_session(basename: str) -> bool:
+    from cc_session_tools.lib.sessions import session_tag
+    tag = session_tag(basename)
+    return tag is not None and "hook" in tag.lower()
+
+
 @dataclass
 class _Result:
     date_key: str
@@ -45,6 +51,11 @@ def _build_parser() -> argparse.ArgumentParser:
                    help="Parallel grep workers for the per-session fallback path "
                         "(default: number of CPU cores). Ignored when rg is available "
                         "since rg parallelises internally.")
+    p.add_argument(
+        "--exclude-hooks",
+        action="store_true",
+        help="Exclude sessions whose tag contains 'hook' (e.g. hook-security-check sessions).",
+    )
     return p
 
 
@@ -465,6 +476,17 @@ def main(argv: list[str] | None = None) -> int:
             if session_start_date(sess.name) is None:
                 continue
             sessions.append((sess, proj))
+
+    if args.exclude_hooks:
+        before = len(sessions)
+        sessions = [(s, p) for s, p in sessions if not _is_hook_session(s.name)]
+        excluded = before - len(sessions)
+        if excluded:
+            noun = "session" if excluded == 1 else "sessions"
+            print(
+                f"ccs: excluded {excluded} hook {noun}",
+                file=sys.stderr,
+            )
 
     if args.contents:
         return _contents_search(
