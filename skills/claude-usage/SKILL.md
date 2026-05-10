@@ -143,27 +143,33 @@ so that it travels with the skill when it's deployed elsewhere.
 
 The recipes above call `claude-code-usage` directly (not `uv run
 claude-code-usage`). For that to work, the CLI must be on `PATH`. The
-canonical install is via `uv tool install --editable .`, which drops a
-shim into `uv tool dir --bin` (typically `~/.local/bin`). Editable mode
-means a later `git pull` in the repo updates the installed CLI without
-reinstalling.
+canonical install is via `uv tool install ~/repos/claude-code-session-tools`,
+which builds a wheel from the local clone and drops shims into `uv tool dir
+--bin` (typically `~/.local/bin`). Non-editable install means the source is
+copied at install time - no fragile `.pth` pointer that breaks when a git
+worktree is deleted.
+
+> **WARNING:** Never run `uv tool install` from inside a git worktree. If you
+> develop on a feature branch in a worktree and need to test the CLI, use
+> `uv run` within the worktree instead. After merging a PR, run
+> `uv tool install ~/repos/claude-code-session-tools` from any directory to
+> update the global install.
 
 ```bash
 # 1. Clone the repo
 git clone https://github.com/raffishquartan/claude-code-session-tools.git \
     ~/repos/claude-code-session-tools
-cd ~/repos/claude-code-session-tools
 
-# 2. Install the CLI globally (puts `claude-code-usage` on PATH)
+# 2. Install the CLI globally (puts ccd, ccr, ccs, claude-code-usage on PATH)
 #    Install uv first if needed: https://docs.astral.sh/uv/getting-started/
-uv tool install --editable .
+uv tool install ~/repos/claude-code-session-tools
 claude-code-usage --version    # should print the version
-#    If `claude-code-usage` is not found, ensure `uv tool dir --bin`
-#    is on your PATH (run `uv tool update-shell` or add it to your rc).
+#    If tools are not found, ensure `uv tool dir --bin` is on your PATH
+#    (run `uv tool update-shell` or add it to your shell rc file).
 
 # 3. (Optional) project-local dev venv with test deps, for hacking on
 #    the CLI. Not required for normal skill use.
-uv sync
+uv sync --extra dev
 uv run pytest    # all 350+ tests should pass
 
 # 4. Install ccusage globally so reconciliation works
