@@ -27,6 +27,8 @@ import logging
 from pathlib import Path
 from typing import Iterable
 
+from . import parser as _parser
+
 log = logging.getLogger(__name__)
 
 DEFAULT_LIVE_DIR = Path.home() / ".claude" / "sessions"
@@ -68,21 +70,50 @@ def _write_cache(cache_path: Path, data: dict[str, str]) -> None:
     tmp.replace(cache_path)
 
 
+def load_jsonl_titles(projects_dir: Path | str) -> dict[str, str]:
+    """Return {session_uuid: custom_title} from JSONL files under `projects_dir`.
+
+    Iterates every *.jsonl under the directory and extracts the first
+    custom-title record from each via parse_session_metadata(). Files without
+    a custom-title are skipped.
+    """
+    base = Path(projects_dir)
+    if not base.is_dir():
+        return {}
+    out: dict[str, str] = {}
+    for path in base.rglob("*.jsonl"):
+        meta = _parser.parse_session_metadata(path)
+        title = meta.get("custom_title")
+        sid = meta.get("session_id")
+        if title and sid:
+            out[sid] = title
+    return out
+
+
 def update_persistent_cache(
     cache_path: Path | str,
     sessions_dir: Path | str | None = None,
+    projects_dir: Path | str | None = None,
 ) -> dict[str, str]:
-    """Merge live names into the on-disk cache and return the merged map.
+    """Merge live names and JSONL custom-titles into the on-disk cache.
 
-    Live names take precedence over cached names (so renames flow
-    through), but cached names are kept for any UUID no longer in the
-    live registry.
+    Priority (highest first):
+      1. Live PID-file names (set by `claude -n`, pruned on process exit)
+      2. JSONL custom-title records (written when user runs /rename)
+      3. Existing cached name
+      4. Falls back to sess-<uuid8> at display time (not stored here)
+
+    `projects_dir` is `~/.claude/projects` (None = skip JSONL scan).
     """
     cache_path = Path(cache_path)
     merged = _read_cache(cache_path)
+    if projects_dir is not None:
+        jsonl_titles = load_jsonl_titles(projects_dir)
+        merged.update(jsonl_titles)  # JSONL beats cached stale names
     live = load_live_names(sessions_dir)
     if live:
-        merged.update(live)
+        merged.update(live)  # live PID file always wins
+    if live or (projects_dir is not None):
         _write_cache(cache_path, merged)
     return merged
 
