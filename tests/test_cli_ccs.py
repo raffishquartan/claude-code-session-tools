@@ -552,3 +552,26 @@ def test_local_flag_overrides_default_global(fake_repos, monkeypatch, capsys):
     out = capsys.readouterr().out
     assert "proj1-session" in out
     assert "proj2-session" not in out
+
+
+def test_did_you_mean_suggests_close_match(fake_repos, monkeypatch, capsys):
+    proj = fake_repos / "myproj"
+    _make_session(fake_repos, "myproj", "20260504-config-cleanup")
+    monkeypatch.chdir(proj)
+
+    rc = ccs.main(["confg-cleanup"])  # typo
+    assert rc == 1
+    err = capsys.readouterr().err
+    assert "did you mean" in err.lower()
+    assert "config-cleanup" in err
+
+
+def test_no_suggestion_when_completely_unrelated(fake_repos, monkeypatch, capsys):
+    proj = fake_repos / "myproj"
+    _make_session(fake_repos, "myproj", "20260504-config-cleanup")
+    monkeypatch.chdir(proj)
+
+    rc = ccs.main(["zzzzzzz"])
+    assert rc == 1
+    err = capsys.readouterr().err
+    assert "did you mean" not in err.lower()
