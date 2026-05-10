@@ -386,6 +386,58 @@ def test_without_exclude_hooks_includes_hook_sessions_by_default(fake_repos, mon
     assert "hook-security-check" in out
 
 
+def test_since_filter_excludes_old_sessions(fake_repos, monkeypatch, capsys):
+    proj = fake_repos / "myproj"
+    _make_session(fake_repos, "myproj", "20260101-old-work")
+    _make_session(fake_repos, "myproj", "20260504-new-work")
+    monkeypatch.chdir(proj)
+
+    rc = ccs.main(["work", "--since", "20260301"])
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "new-work" in out
+    assert "old-work" not in out
+
+
+def test_before_filter_excludes_new_sessions(fake_repos, monkeypatch, capsys):
+    proj = fake_repos / "myproj"
+    _make_session(fake_repos, "myproj", "20260101-old-work")
+    _make_session(fake_repos, "myproj", "20260504-new-work")
+    monkeypatch.chdir(proj)
+
+    rc = ccs.main(["work", "--before", "20260301"])
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "old-work" in out
+    assert "new-work" not in out
+
+
+def test_days_filter_keeps_recent_sessions(fake_repos, monkeypatch, capsys):
+    import datetime
+    proj = fake_repos / "myproj"
+    today = datetime.date.today()
+    yesterday = (today - datetime.timedelta(days=1)).strftime("%Y%m%d")
+    old = "20200101"
+    _make_session(fake_repos, "myproj", f"{yesterday}-recent-work")
+    _make_session(fake_repos, "myproj", f"{old}-ancient-work")
+    monkeypatch.chdir(proj)
+
+    rc = ccs.main(["work", "--days", "7"])
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "recent-work" in out
+    assert "ancient-work" not in out
+
+
+def test_invalid_since_date_exits_with_error(fake_repos, monkeypatch, capsys):
+    proj = fake_repos / "myproj"
+    proj.mkdir(parents=True, exist_ok=True)
+    monkeypatch.chdir(proj)
+    rc = ccs.main(["work", "--since", "not-a-date"])
+    assert rc == 1
+    assert "invalid date" in capsys.readouterr().err.lower()
+
+
 class TestMaxFileSize:
     def test_oversized_files_skipped_and_reported_grep_path(
         self, fake_repos, monkeypatch, capsys, force_grep_path

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import datetime
 import os
 import shutil
 import subprocess
@@ -24,6 +25,30 @@ def _is_hook_session(basename: str) -> bool:
     from cc_session_tools.lib.sessions import session_tag
     tag = session_tag(basename)
     return tag is not None and "hook" in tag.lower()
+
+
+def _parse_date_filter(args) -> tuple[str | None, str | None] | None:
+    """Return (since_key, before_key) in YYYYMMDD format, or None on parse error."""
+    since: str | None = None
+    before: str | None = None
+    if args.days is not None:
+        cutoff = datetime.date.today() - datetime.timedelta(days=args.days)
+        since = cutoff.strftime("%Y%m%d")
+    if args.since is not None:
+        try:
+            datetime.datetime.strptime(args.since, "%Y%m%d")
+        except ValueError:
+            print(f"ccs: invalid date '{args.since}' (expected YYYYMMDD)", file=sys.stderr)
+            return None
+        since = args.since
+    if args.before is not None:
+        try:
+            datetime.datetime.strptime(args.before, "%Y%m%d")
+        except ValueError:
+            print(f"ccs: invalid date '{args.before}' (expected YYYYMMDD)", file=sys.stderr)
+            return None
+        before = args.before
+    return since, before
 
 
 @dataclass
@@ -56,6 +81,12 @@ def _build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Exclude sessions whose tag contains 'hook' (e.g. hook-security-check sessions).",
     )
+    p.add_argument("--since", metavar="YYYYMMDD",
+                   help="Include only sessions started on or after this date (YYYYMMDD).")
+    p.add_argument("--before", metavar="YYYYMMDD",
+                   help="Include only sessions started before this date (YYYYMMDD).")
+    p.add_argument("--days", type=int, metavar="N",
+                   help="Include only sessions started within the last N days.")
     return p
 
 
@@ -462,6 +493,13 @@ def _contents_search(
 def main(argv: list[str] | None = None) -> int:
     args = _build_parser().parse_args(argv)
 
+    # Validate date filter args eagerly so bad values are caught before any I/O.
+    date_filter: tuple[str | None, str | None] | None = None
+    if args.since or args.before or args.days:
+        date_filter = _parse_date_filter(args)
+        if date_filter is None:
+            return 1
+
     pairs = _collect_pairs(args.do_global)
     if not pairs:
         if args.do_global:
@@ -487,6 +525,14 @@ def main(argv: list[str] | None = None) -> int:
                 f"ccs: excluded {excluded} hook {noun}",
                 file=sys.stderr,
             )
+
+    if date_filter is not None:
+        since_key, before_key = date_filter
+        sessions = [
+            (s, p) for s, p in sessions
+            if (since_key is None or session_start_date(s.name) >= since_key)
+            and (before_key is None or session_start_date(s.name) < before_key)
+        ]
 
     if args.contents:
         return _contents_search(
