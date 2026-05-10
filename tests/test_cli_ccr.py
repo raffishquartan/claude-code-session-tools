@@ -160,3 +160,31 @@ def test_ccr_rejects_unknown_claude_flags(fake_repos, monkeypatch, capsys):
     assert rc == 1
     err = capsys.readouterr().err
     assert "--not-a-real-flag" in err
+
+
+# ---------------------------------------------------------------------------
+# Task 17: ccr picker integration
+# ---------------------------------------------------------------------------
+
+def test_ccr_picker_shown_for_2_to_10_matches(fake_repos, captured_launch, monkeypatch):
+    _make_session(fake_repos, "proj1", "20260504-foo-one")
+    _make_session(fake_repos, "proj2", "20260503-foo-two")
+    monkeypatch.setattr("sys.stdin.isatty", lambda: True)
+
+    from cc_session_tools.lib import picker
+    monkeypatch.setattr(picker, "pick_from_list", lambda _: 0)  # pick first
+
+    rc = ccr.main(["foo"])
+    assert rc == 0
+    assert "20260504-foo-one" in captured_launch["cmd"]
+
+
+def test_ccr_keeps_rerrun_message_for_more_than_10(fake_repos, monkeypatch, capsys):
+    for i in range(11):
+        _make_session(fake_repos, f"proj{i}", f"20260501-foo-{i:02d}")
+    monkeypatch.setattr("sys.stdin.isatty", lambda: True)
+
+    rc = ccr.main(["foo"])
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "Multiple sessions" in out

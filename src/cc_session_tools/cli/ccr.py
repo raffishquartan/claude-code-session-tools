@@ -66,16 +66,29 @@ def main(argv: list[str] | None = None) -> int:
         return 1
 
     if len(matches) > 1:
-        print("Multiple sessions match that name tag fragment:")
-        for m in matches:
-            print(f"  {m.basename} ({m.project_dir})")
-        print(
-            "Please re-run ccr with an unambiguous fragment of the name tag "
-            "of the session you want to resume."
-        )
-        return 0
+        if len(matches) <= 10 and sys.stdin.isatty():
+            from cc_session_tools.lib.picker import pick_from_list
+            from cc_session_tools.lib.sessions import session_start_date
+            matches.sort(key=lambda x: session_start_date(x.basename) or "", reverse=True)
+            labels = [f"{m.basename} ({m.project_dir})" for m in matches]
+            idx = pick_from_list(labels)
+            if idx is None:
+                return 0
+            m = matches[idx]
+            # Fall through to single-match resume logic below
+        else:
+            print("Multiple sessions match that name tag fragment:")
+            for m in matches:
+                print(f"  {m.basename} ({m.project_dir})")
+            print(
+                "Please re-run ccr with an unambiguous fragment of the name tag "
+                "of the session you want to resume."
+            )
+            return 0
+    else:
+        m = matches[0]
 
-    m = matches[0]
+    # single match (or picker selection) - variable m is set above
     tag = session_tag(m.basename)
     if tag is None:
         # Should not happen because find_matching_sessions only returns
