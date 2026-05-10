@@ -8,6 +8,15 @@ import pytest
 from cc_session_tools.cli import ccr
 
 
+@pytest.fixture(autouse=True)
+def _claude_on_path(monkeypatch):
+    """Pretend `claude` is on PATH by default so tests don't fail in CI
+    where Claude Code isn't installed. Tests that exercise the missing-PATH
+    branch override this with their own monkeypatch.setattr after the fact."""
+    import shutil as _shutil
+    monkeypatch.setattr(_shutil, "which", lambda name: "/usr/bin/claude")
+
+
 @pytest.fixture
 def captured_launch(monkeypatch):
     captured: dict = {}
