@@ -522,3 +522,33 @@ def test_json_no_results_returns_empty_array(fake_repos, monkeypatch, capsys):
     assert rc == 0
     out = capsys.readouterr().out
     assert json_mod.loads(out) == []
+
+
+def test_default_global_env_var_enables_global_scope(fake_repos, monkeypatch, capsys):
+    # Two projects, search from proj1 without --global.
+    # _make_session uses mkdir(parents=True) so proj2 is created automatically.
+    _make_session(fake_repos, "proj1", "20260504-proj1-session")
+    _make_session(fake_repos, "proj2", "20260504-proj2-session")
+    proj1 = fake_repos / "proj1"
+    monkeypatch.chdir(proj1)
+    monkeypatch.setenv("CCS_DEFAULT_GLOBAL", "1")
+
+    rc = ccs.main(["session"])
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "proj1-session" in out
+    assert "proj2-session" in out
+
+
+def test_local_flag_overrides_default_global(fake_repos, monkeypatch, capsys):
+    _make_session(fake_repos, "proj1", "20260504-proj1-session")
+    _make_session(fake_repos, "proj2", "20260504-proj2-session")
+    proj1 = fake_repos / "proj1"
+    monkeypatch.chdir(proj1)
+    monkeypatch.setenv("CCS_DEFAULT_GLOBAL", "1")
+
+    rc = ccs.main(["session", "--local"])
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "proj1-session" in out
+    assert "proj2-session" not in out

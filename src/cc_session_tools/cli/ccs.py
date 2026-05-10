@@ -76,6 +76,9 @@ def _build_parser() -> argparse.ArgumentParser:
                    help="Parallel grep workers for the per-session fallback path "
                         "(default: number of CPU cores). Ignored when rg is available "
                         "since rg parallelises internally.")
+    p.add_argument("--local", action="store_true",
+                   help="Search only current directory's sessions "
+                        "(overrides CCS_DEFAULT_GLOBAL=1).")
     p.add_argument(
         "--exclude-hooks",
         action="store_true",
@@ -555,9 +558,14 @@ def main(argv: list[str] | None = None) -> int:
         if date_filter is None:
             return 1
 
-    pairs = _collect_pairs(args.do_global)
+    effective_global = args.do_global or (
+        os.environ.get("CCS_DEFAULT_GLOBAL", "").strip() not in ("", "0")
+        and not args.local
+    )
+
+    pairs = _collect_pairs(effective_global)
     if not pairs:
-        if args.do_global:
+        if effective_global:
             print("ccs: no sessions found in any configured root", file=sys.stderr)
         else:
             print("ccs: no cc-sessions/ in current directory", file=sys.stderr)
@@ -591,12 +599,12 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.contents:
         return _contents_search(
-            sessions, args.query, args.do_global,
+            sessions, args.query, effective_global,
             args.max_file_size, args.workers,
             do_json=args.json, do_null=args.null,
         )
     return _name_search(
-        sessions, args.query, args.do_global,
+        sessions, args.query, effective_global,
         do_json=args.json, do_null=args.null,
     )
 
