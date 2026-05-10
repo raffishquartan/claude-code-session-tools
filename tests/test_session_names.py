@@ -111,3 +111,118 @@ def test_resolve_filter_unknown_uuid_passes_through() -> None:
     m = {}
     needle = "00000000-0000-0000-0000-000000000000"
     assert list(sn.resolve_filter(needle, m)) == [needle]
+
+
+# --- load_jsonl_titles tests ---
+
+def _make_jsonl(dir_: Path, name: str, records: list[dict]) -> Path:
+    p = dir_ / name
+    p.write_text("\n".join(json.dumps(r) for r in records) + "\n")
+    return p
+
+
+def test_load_jsonl_titles_returns_uuid_to_title(tmp_path: Path) -> None:
+    _make_jsonl(tmp_path, "abc.jsonl", [
+        {"type": "custom-title", "customTitle": "20260509-my-session", "sessionId": "uuid-abc"},
+    ])
+    result = sn.load_jsonl_titles(tmp_path)
+    assert result == {"uuid-abc": "20260509-my-session"}
+
+
+def test_load_jsonl_titles_skips_files_without_custom_title(tmp_path: Path) -> None:
+    _make_jsonl(tmp_path, "no-title.jsonl", [
+        {"type": "assistant", "sessionId": "uuid-xyz"},
+    ])
+    result = sn.load_jsonl_titles(tmp_path)
+    assert result == {}
+
+
+def test_load_jsonl_titles_uses_first_custom_title_per_file(tmp_path: Path) -> None:
+    _make_jsonl(tmp_path, "abc.jsonl", [
+        {"type": "custom-title", "customTitle": "first-title", "sessionId": "uuid-abc"},
+        {"type": "custom-title", "customTitle": "second-title", "sessionId": "uuid-abc"},
+    ])
+    result = sn.load_jsonl_titles(tmp_path)
+    assert result["uuid-abc"] == "first-title"
+
+
+def test_load_jsonl_titles_searches_subdirectories(tmp_path: Path) -> None:
+    sub = tmp_path / "proj-a"
+    sub.mkdir()
+    _make_jsonl(sub, "sess.jsonl", [
+        {"type": "custom-title", "customTitle": "deep-session", "sessionId": "uuid-deep"},
+    ])
+    result = sn.load_jsonl_titles(tmp_path)
+    assert result == {"uuid-deep": "deep-session"}
+
+
+def test_load_jsonl_titles_missing_directory_returns_empty(tmp_path: Path) -> None:
+    assert sn.load_jsonl_titles(tmp_path / "does-not-exist") == {}
+
+
+# --- update_persistent_cache priority tests ---
+
+def test_update_persistent_cache_jsonl_title_fills_unnamed_sessions(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """JSONL custom-title resolves sessions whose PID file has been pruned."""
+    projects = tmp_path / "projects"
+    projects.mkdir()
+    _make_jsonl(projects, "sess.jsonl", [
+        {"type": "custom-title", "customTitle": "20260509-recovered-name", "sessionId": "uuid-pruned"},
+    ])
+    cache_path = tmp_path / "names.json"
+    live_dir = tmp_path / "sessions"
+    live_dir.mkdir()  # empty - PID file gone
+
+    merged = sn.update_persistent_cache(cache_path, live_dir, projects_dir=projects)
+    assert merged.get("uuid-pruned") == "20260509-recovered-name"
+
+
+def test_update_persistent_cache_pid_file_beats_jsonl_title(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """PID-file name takes priority over JSONL custom-title."""
+    projects = tmp_path / "projects"
+    projects.mkdir()
+    _make_jsonl(projects, "sess.jsonl", [
+        {"type": "custom-title", "customTitle": "jsonl-name", "sessionId": "uuid-1"},
+    ])
+    live = tmp_path / "sessions"
+    live.mkdir()
+    _write_live(live, "1001", "uuid-1", "pid-name")
+    cache_path = tmp_path / "names.json"
+
+    merged = sn.update_persistent_cache(cache_path, live, projects_dir=projects)
+    assert merged["uuid-1"] == "pid-name"
+
+
+def test_update_persistent_cache_jsonl_title_beats_old_cached_name(
+    tmp_path: Path,
+) -> None:
+    """JSONL custom-title overwrites a stale cached name when PID file is gone."""
+    projects = tmp_path / "projects"
+    projects.mkdir()
+    _make_jsonl(projects, "sess.jsonl", [
+        {"type": "custom-title", "customTitle": "new-jsonl-name", "sessionId": "uuid-2"},
+    ])
+    cache_path = tmp_path / "names.json"
+    cache_path.write_text(json.dumps({"uuid-2": "old-cached-name"}))
+    live = tmp_path / "sessions"
+    live.mkdir()  # empty
+
+    merged = sn.update_persistent_cache(cache_path, live, projects_dir=projects)
+    assert merged["uuid-2"] == "new-jsonl-name"
+
+
+def test_update_persistent_cache_no_projects_dir_unchanged_behaviour(
+    tmp_path: Path,
+) -> None:
+    """Omitting projects_dir falls back to old behaviour (no JSONL scan)."""
+    cache_path = tmp_path / "names.json"
+    live = tmp_path / "sessions"
+    live.mkdir()
+    _write_live(live, "1001", "uuid-ok", "live-name")
+
+    merged = sn.update_persistent_cache(cache_path, live)
+    assert merged == {"uuid-ok": "live-name"}

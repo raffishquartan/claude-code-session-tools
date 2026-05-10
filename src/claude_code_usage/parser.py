@@ -43,6 +43,7 @@ def parse_session_metadata(path: str | Path) -> dict[str, Any]:
     """
     result: dict[str, Any] = {
         "custom_title": None,
+        "session_id": None,
         "is_sidechain": False,
         "initiation_type": "unknown",
         "first_prompt": None,
@@ -64,6 +65,7 @@ def parse_session_metadata(path: str | Path) -> dict[str, Any]:
                     title = record.get("customTitle")
                     if title:
                         result["custom_title"] = title
+                        result["session_id"] = record.get("sessionId")
                 if record.get("isSidechain") is True:
                     result["is_sidechain"] = True
                 if rtype == "user" and result["initiation_type"] == "unknown":

@@ -264,6 +264,10 @@ def _cmd_report(args) -> int:
 def _cmd_warm_cache(args) -> int:
     c = cache.Cache(args.cache_dir)
     df = c.load_or_parse(args.projects_dir)
+    _session_names.update_persistent_cache(
+        Path(args.cache_dir) / "session_names.json",
+        projects_dir=args.projects_dir,
+    )
     sys.stdout.write(f"Cache warmed: {len(df):,} rows\n")
     return 0
 
