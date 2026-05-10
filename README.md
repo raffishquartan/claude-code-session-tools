@@ -1,11 +1,12 @@
 # claude-code-session-tools
 
-Two concerns, one repo, for life on the [Claude Code](https://docs.anthropic.com/en/docs/claude-code) CLI:
+Three concerns, one repo, for life on the [Claude Code](https://docs.anthropic.com/en/docs/claude-code) CLI:
 
 1. **Session management** - start, resume, find, and relocate Claude Code sessions from the shell, with tagged dated session directories that don't pollute your repo root.
 2. **Usage analytics** - parse `~/.claude/projects/**/*.jsonl` into tokens-and-dollars breakdowns by project, session, model, MCP server, plugin, and tool.
+3. **Hook library** - Python package (`cccs_hooks`) backing the Claude Code PreToolUse / PostToolUse / UserPromptSubmit / Stop hook scripts in [claude-code-config-sync](https://github.com/raffishquartan/claude-code-config-sync).
 
-The repo ships four CLIs and three bundled skills:
+The repo ships five CLIs and three bundled skills:
 
 | | What it does |
 |---|---|
@@ -13,6 +14,7 @@ The repo ships four CLIs and three bundled skills:
 | **`ccr <fragment>`** | Resume an existing session by typing any substring of its name. |
 | **`ccs <query>`** | Search across your sessions by name (default), or by file contents (`--contents`), in the current project (default) or across every configured root (`--global`). |
 | **`claude-code-usage`** | Multi-dimensional usage analytics CLI: query/group/filter by project, session, model, MCP server, plugin, tool, day/week/month/year. Reconciles dollar totals against `ccusage`. |
+| **`ccst <noun> <verb>`** | Umbrella CLI for hook management. Currently: `ccst hooks install` merges hook entries from a source `settings.json` into a target. |
 | Skill: **`find-claude-code-session`** | Wraps `ccs`. Lets a Claude Code session locate one of your prior sessions by name or content and offer a `ccr` command to resume it. |
 | Skill: **`move-session`** | Move, rename, or move+rename a session while keeping its `~/.claude/projects/<encoded-cwd>/<uuid>.jsonl` transcript resumable. |
 | Skill: **`claude-usage`** | Wraps `claude-code-usage`. Lets a Claude Code session answer "how much have I spent on Opus this month?" without you typing the CLI yourself. |
@@ -35,7 +37,7 @@ These tools add:
 
 ### Prerequisites
 
-- **Python 3.10+**
+- **Python 3.11+** (3.11 minimum due to `cccs_hooks`; 3.12+ recommended)
 - **The `claude` CLI on your `$PATH`.** Install it first via [the official Claude Code instructions](https://docs.anthropic.com/en/docs/claude-code/setup) and verify with `claude --version`.
 - **`ccusage` (optional)** - if on `$PATH`, `claude-code-usage reconcile` cross-checks dollar totals against it. Skipped gracefully if missing.
 - **`ripgrep` (optional)** - `ccs --contents` prefers `rg`; falls back to threaded Python `grep` if missing.
@@ -55,12 +57,13 @@ If you use [`uv`](https://docs.astral.sh/uv/):
 uv tool install cc-session-tools
 ```
 
-Either way, `ccd`, `ccr`, `ccs`, and `claude-code-usage` will be available on your
-`$PATH`. Verify:
+Either way, `ccd`, `ccr`, `ccs`, `claude-code-usage`, and `ccst` will be available on
+your `$PATH`. Verify:
 
 ```sh
 ccd --version
 claude-code-usage --version
+ccst --help
 ```
 
 > **Installing from source (pre-release or offline):**
@@ -227,6 +230,61 @@ Wraps `claude-code-usage`. Triggers on usage questions: "how much have I spent o
 
 See `docs/design.md` for the full design and CLI contract.
 
+## Hook library (`cccs_hooks`)
+
+The `cccs_hooks` Python package backs the Claude Code hook scripts in
+[claude-code-config-sync](https://github.com/raffishquartan/claude-code-config-sync).
+It is distributed via this package so a single `uv tool install cc-session-tools`
+makes the hook library available on the Python path used by CCCS bash shims.
+
+### Modules
+
+| Module | Hook script | What it does |
+|---|---|---|
+| `cccs_hooks.telemetry` | — | Writes structured JSONL to `~/.claude/hooks/fires.jsonl`; used by other modules. |
+| `cccs_hooks.transcript` | — | Walks parent session transcript JSONL; shared by `confirm_8digit`. |
+| `cccs_hooks.confirm_8digit` | `enforce-8digit-confirmation.sh` | 8-digit confirmation guard for gated tools. |
+| `cccs_hooks.cache` | — | SHA-256 command cache (CSV); used by `bash_security_review`. |
+| `cccs_hooks.bash_security_review` | `bash-security-review.sh` | Tiered Bash security review with cache. |
+| `cccs_hooks.edit_write_audit` | `enforce-edit-write-audit.sh` | PostToolUse sensitive-path + WORKLOG audit. |
+| `cccs_hooks.prompt_guard` | `prompt-guard.sh` | UserPromptSubmit credential/injection pattern guard. |
+| `cccs_hooks.session_end` | `session-end-reminder.sh` | Stop-event WORKLOG/uncommitted-changes nudge. |
+
+### Using the modules directly
+
+Each module is runnable as a CLI for debugging:
+
+```sh
+python3 -m cccs_hooks.telemetry log --help
+python3 -m cccs_hooks.bash_security_review  # reads JSON from stdin
+python3 -m cccs_hooks.prompt_guard          # reads JSON from stdin
+```
+
+## Hook management CLI (`ccst`)
+
+The `ccst` umbrella CLI provides hook management operations.
+
+### `ccst hooks install`
+
+Merges hook entries from a source `settings.json` into a target `settings.json`.
+Useful for wiring CCCS hooks into a fresh `~/.claude/settings.json`.
+
+```sh
+# Dry run (default) - shows what would be added
+ccst hooks install \
+  --source ~/repos/claude-code-config-sync/config/settings.json \
+  --target ~/.claude/settings.json
+
+# Write the changes
+ccst hooks install \
+  --source ~/repos/claude-code-config-sync/config/settings.json \
+  --target ~/.claude/settings.json \
+  --apply
+```
+
+Matching is by event type + matcher + command string. Already-present hooks are never
+duplicated. The target file is written atomically (`.tmp` swap).
+
 ## How it interacts with Claude Code's task lists
 
 Claude Code lets multiple sessions share a single task list if they all set the same `CLAUDE_CODE_TASK_LIST_ID` environment variable. `ccd` and `ccr` derive this from the project layout:
@@ -270,8 +328,8 @@ uv sync --extra dev
 uv run pytest
 ```
 
-Tests run on Python 3.10, 3.11, 3.12, and 3.13 (see `.github/workflows/ci.yml`). CI also
-includes an `install-check` job that runs `uv tool install .` and verifies all four CLIs
+Tests run on Python 3.11, 3.12, and 3.13 (see `.github/workflows/ci.yml`). CI also
+includes an `install-check` job that runs `uv tool install .` and verifies all five CLIs
 start up correctly - the direct guard against the editable-install/worktree failure mode.
 
 > **When working in a git worktree:** test your changes with `uv run pytest` or
