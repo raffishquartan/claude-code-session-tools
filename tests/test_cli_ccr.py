@@ -142,8 +142,9 @@ def test_ccr_fails_clearly_when_claude_not_on_path(fake_repos, monkeypatch, caps
 
 def test_ccr_passes_through_valid_claude_flags(fake_repos, captured_launch, monkeypatch):
     _make_session(fake_repos, "proj1", "20260504-foo")
-    import cc_session_tools.lib.claude_flags as cf
-    monkeypatch.setattr(cf, "get_claude_flags", lambda: {"--model", "--debug", "--append-system-prompt"})
+    monkeypatch.setattr(ccr, "get_claude_flags", lambda: {"--model", "--debug", "--append-system-prompt"})
+    import shutil as _shutil
+    monkeypatch.setattr(_shutil, "which", lambda name: "/usr/bin/claude")
 
     rc = ccr.main(["foo", "--model", "sonnet"])
     assert rc == 0
@@ -169,6 +170,8 @@ def test_ccr_rejects_unknown_claude_flags(fake_repos, monkeypatch, capsys):
 def test_ccr_picker_shown_for_2_to_10_matches(fake_repos, captured_launch, monkeypatch):
     _make_session(fake_repos, "proj1", "20260504-foo-one")
     _make_session(fake_repos, "proj2", "20260503-foo-two")
+    import shutil as _shutil
+    monkeypatch.setattr(_shutil, "which", lambda name: "/usr/bin/claude")
     monkeypatch.setattr("sys.stdin.isatty", lambda: True)
 
     from cc_session_tools.lib import picker

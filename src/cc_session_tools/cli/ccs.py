@@ -457,17 +457,18 @@ def _contents_search_with_rg(
     # Deduplicate: a session's sess dir and transcript dir both map to the same
     # (sess, proj), so a match in either yields the same _Result. Without
     # dedup, the same session could appear twice.
-    seen: set[str] = set()
-    deduped: list[_Result] = []
+    seen: dict[str, _Result] = {}
     for r in results:
         if r.basename not in seen:
-            seen.add(r.basename)
-            deduped.append(r)
-    results = deduped
+            seen[r.basename] = r
+        else:
+            seen[r.basename].context_lines.extend(r.context_lines)
+    results = list(seen.values())
 
     if do_json or do_null:
         _output_machine_readable(results, do_null)
         return 0
+    results.sort(key=lambda r: r.date_key, reverse=True)
     pick_rc = _maybe_pick_and_resume(results, do_global)
     if pick_rc is not None:
         return pick_rc
@@ -596,6 +597,7 @@ def _contents_search_with_grep(
     if do_json or do_null:
         _output_machine_readable(results, do_null)
         return 0
+    results.sort(key=lambda r: r.date_key, reverse=True)
     pick_rc = _maybe_pick_and_resume(results, do_global)
     if pick_rc is not None:
         return pick_rc
