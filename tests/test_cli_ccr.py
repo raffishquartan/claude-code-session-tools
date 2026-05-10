@@ -134,3 +134,29 @@ def test_ccr_fails_clearly_when_claude_not_on_path(fake_repos, monkeypatch, caps
     err = capsys.readouterr().err
     assert "claude" in err.lower()
     assert ("not found" in err.lower() or "path" in err.lower())
+
+
+# ---------------------------------------------------------------------------
+# Task 15: claude flag pass-through
+# ---------------------------------------------------------------------------
+
+def test_ccr_passes_through_valid_claude_flags(fake_repos, captured_launch, monkeypatch):
+    _make_session(fake_repos, "proj1", "20260504-foo")
+    import cc_session_tools.lib.claude_flags as cf
+    monkeypatch.setattr(cf, "get_claude_flags", lambda: {"--model", "--debug", "--append-system-prompt"})
+
+    rc = ccr.main(["foo", "--model", "sonnet"])
+    assert rc == 0
+    assert "--model" in captured_launch["cmd"]
+    assert "sonnet" in captured_launch["cmd"]
+
+
+def test_ccr_rejects_unknown_claude_flags(fake_repos, monkeypatch, capsys):
+    _make_session(fake_repos, "proj1", "20260504-foo")
+    import cc_session_tools.lib.claude_flags as cf
+    monkeypatch.setattr(cf, "get_claude_flags", lambda: {"--model", "--debug"})
+
+    rc = ccr.main(["foo", "--not-a-real-flag"])
+    assert rc == 1
+    err = capsys.readouterr().err
+    assert "--not-a-real-flag" in err
