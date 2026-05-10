@@ -612,3 +612,58 @@ def test_contents_search_includes_transcript_dir(fake_repos, fake_home, monkeypa
     assert rc == 0
     out = capsys.readouterr().out
     assert "20260504-foo" in out
+
+
+# ---------------------------------------------------------------------------
+# Task 16: ccs picker integration
+# ---------------------------------------------------------------------------
+
+def test_ccs_picker_shown_for_small_result_set(fake_repos, monkeypatch, capsys):
+    proj = fake_repos / "myproj"
+    for i in range(3):
+        _make_session(fake_repos, "myproj", f"2026050{i+1}-foo-{i}")
+    monkeypatch.chdir(proj)
+    monkeypatch.setattr("sys.stdin.isatty", lambda: True)
+
+    from cc_session_tools.lib import picker
+    monkeypatch.setattr(picker, "pick_from_list", lambda _: None)
+
+    rc = ccs.main(["foo"])
+    assert rc == 0
+
+
+def test_ccs_picker_execvp_on_selection(fake_repos, monkeypatch, capsys):
+    proj = fake_repos / "myproj"
+    _make_session(fake_repos, "myproj", "20260504-foo-one")
+    _make_session(fake_repos, "myproj", "20260503-foo-two")
+    monkeypatch.chdir(proj)
+    monkeypatch.setattr("sys.stdin.isatty", lambda: True)
+
+    captured_exec = {}
+    def fake_execvp(name, args):
+        captured_exec["name"] = name
+        captured_exec["args"] = args
+
+    from cc_session_tools.lib import picker
+    monkeypatch.setattr(picker, "pick_from_list", lambda _: 0)  # pick first (most recent)
+    monkeypatch.setattr("os.execvp", fake_execvp)
+
+    ccs.main(["foo"])
+    assert captured_exec.get("name") == "ccr"
+    assert "20260504-foo-one" in captured_exec.get("args", [])
+
+
+def test_ccs_no_picker_for_more_than_10(fake_repos, monkeypatch, capsys):
+    proj = fake_repos / "myproj"
+    for i in range(11):
+        _make_session(fake_repos, "myproj", f"202605{i+1:02d}-foo-{i:02d}")
+    monkeypatch.chdir(proj)
+    monkeypatch.setattr("sys.stdin.isatty", lambda: True)
+
+    pick_called = []
+    from cc_session_tools.lib import picker
+    monkeypatch.setattr(picker, "pick_from_list", lambda _: pick_called.append(1) or None)
+
+    rc = ccs.main(["foo"])
+    assert rc == 0
+    assert len(pick_called) == 0  # picker not invoked

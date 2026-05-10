@@ -222,6 +222,28 @@ class _Progress:
         self._width = 0
 
 
+_PICKER_MAX = 10
+
+
+def _maybe_pick_and_resume(results: list[_Result], do_global: bool) -> int | None:
+    """If <=10 results and stdin is a TTY, show picker and exec into ccr.
+
+    Returns exit code, or None if picker was not shown (>10 results or not a TTY).
+    """
+    if len(results) > _PICKER_MAX or not sys.stdin.isatty():
+        return None
+    from cc_session_tools.lib.picker import pick_from_list
+    labels = [
+        f"{r.basename} ({_display_path(r.project_dir)})" if do_global else r.basename
+        for r in results
+    ]
+    idx = pick_from_list(labels)
+    if idx is None:
+        return 0
+    os.execvp("ccr", ["ccr", results[idx].basename])
+    return 0  # unreachable; satisfies type checker
+
+
 def _name_search(
     sessions: list[tuple[Path, Path]], query: str, do_global: bool,
     *, do_json: bool = False, do_null: bool = False,
@@ -243,6 +265,9 @@ def _name_search(
         if suggestions:
             print(f"ccs: did you mean: {', '.join(suggestions)}?", file=sys.stderr)
         return 1
+    pick_rc = _maybe_pick_and_resume(results, do_global)
+    if pick_rc is not None:
+        return pick_rc
     for r in results:
         display_name = _maybe_link(r.basename, r.project_dir / "cc-sessions" / r.basename)
         if do_global:
@@ -441,6 +466,9 @@ def _contents_search_with_rg(
     if do_json or do_null:
         _output_machine_readable(results, do_null)
         return 0
+    pick_rc = _maybe_pick_and_resume(results, do_global)
+    if pick_rc is not None:
+        return pick_rc
     _print_results(results, do_global)
     return 0
 
@@ -566,6 +594,9 @@ def _contents_search_with_grep(
     if do_json or do_null:
         _output_machine_readable(results, do_null)
         return 0
+    pick_rc = _maybe_pick_and_resume(results, do_global)
+    if pick_rc is not None:
+        return pick_rc
     _print_results(results, do_global)
     return 0
 
