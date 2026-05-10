@@ -296,3 +296,91 @@ def test_cli_warm_cache(tmp_path, capsys) -> None:
     assert rc == 0
     out = capsys.readouterr().out
     assert "Cache warmed" in out
+
+
+def _populate_with_hook_and_regular(tmp_path: Path) -> tuple[Path, Path]:
+    """Two sessions: one regular, one hook-security-review."""
+    projects = tmp_path / "projects"
+    projects.mkdir()
+    # Regular session
+    (projects / "regular.jsonl").write_text(
+        json.dumps({"type": "user", "message": {"role": "user", "content": "Hello"}}) + "\n"
+        + json.dumps(_good_record("u1", session_id="sid-regular")) + "\n"
+    )
+    # Hook session
+    hook_user = {
+        "type": "user",
+        "message": {"role": "user", "content": "Review this shell command for security risks: ls"},
+    }
+    (projects / "hook.jsonl").write_text(
+        json.dumps(hook_user) + "\n"
+        + json.dumps(_good_record("h1", session_id="sid-hook")) + "\n"
+    )
+    cache_dir = tmp_path / "cache"
+    return projects, cache_dir
+
+
+def test_cli_query_exclude_hooks_removes_hook_rows(tmp_path, capsys, monkeypatch) -> None:
+    monkeypatch.setattr(
+        "claude_code_usage.session_names.DEFAULT_LIVE_DIR", tmp_path / "no-live"
+    )
+    projects, cache_dir = _populate_with_hook_and_regular(tmp_path)
+    rc = cli.main(
+        [
+            "query",
+            "--projects-dir", str(projects),
+            "--cache-dir", str(cache_dir),
+            "--group-by", "session",
+            "--exclude-hooks",
+            "--format", "csv",
+        ]
+    )
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "sid-regular" not in out  # UUID hidden by default name format
+    assert "sid-hook" not in out
+    # Regular session should appear, hook session should not
+    import csv, io
+    data_rows = list(csv.DictReader(io.StringIO(out)))
+    assert len(data_rows) == 1
+
+
+def test_cli_query_exclude_hooks_affects_total_cost(tmp_path, capsys, monkeypatch) -> None:
+    """With hooks excluded, total cost is half of the full total."""
+    monkeypatch.setattr(
+        "claude_code_usage.session_names.DEFAULT_LIVE_DIR", tmp_path / "no-live"
+    )
+    projects, cache_dir = _populate_with_hook_and_regular(tmp_path)
+    # Run without filter
+    cli.main(["query", "--projects-dir", str(projects), "--cache-dir", str(cache_dir), "--format", "csv"])
+    full_out = capsys.readouterr().out
+    # Run with filter
+    cli.main(["query", "--projects-dir", str(projects), "--cache-dir", str(cache_dir), "--exclude-hooks", "--format", "csv"])
+    filtered_out = capsys.readouterr().out
+    # Each session has equal token counts, so filtered total cost < full
+    import csv, io
+    full_cost = sum(float(r["cost_usd"]) for r in csv.DictReader(io.StringIO(full_out)) if "cost_usd" in r)
+    filtered_cost = sum(float(r["cost_usd"]) for r in csv.DictReader(io.StringIO(filtered_out)) if "cost_usd" in r)
+    assert filtered_cost < full_cost
+
+
+def test_cli_query_include_hooks_default_includes_hooks(tmp_path, capsys, monkeypatch) -> None:
+    """Default (no flag) includes hook sessions."""
+    monkeypatch.setattr(
+        "claude_code_usage.session_names.DEFAULT_LIVE_DIR", tmp_path / "no-live"
+    )
+    projects, cache_dir = _populate_with_hook_and_regular(tmp_path)
+    rc = cli.main(
+        [
+            "query",
+            "--projects-dir", str(projects),
+            "--cache-dir", str(cache_dir),
+            "--group-by", "session",
+            "--format", "csv",
+        ]
+    )
+    assert rc == 0
+    out = capsys.readouterr().out
+    import csv, io
+    data_rows = list(csv.DictReader(io.StringIO(out)))
+    assert len(data_rows) == 2

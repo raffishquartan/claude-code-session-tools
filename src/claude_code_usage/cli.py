@@ -98,6 +98,23 @@ def _make_parser() -> argparse.ArgumentParser:
             "columns. Child session rows are removed from the output."
         ),
     )
+    excl = q.add_mutually_exclusive_group()
+    excl.add_argument(
+        "--exclude-hooks",
+        action="store_true",
+        default=False,
+        help=(
+            "Exclude hook-security-review sessions (bash-security-review.sh fires) "
+            "from all results. Useful for per-session cost breakdowns without the "
+            "~$1.60 hook sessions distorting the totals."
+        ),
+    )
+    excl.add_argument(
+        "--include-hooks",
+        action="store_true",
+        default=False,
+        help="Include hook sessions (default behaviour; alias for not passing --exclude-hooks).",
+    )
     q.add_argument(
         "--session-format",
         choices=["name", "uuid", "both"],
@@ -175,6 +192,8 @@ def _load_df_with_parents(args) -> "tuple[pd.DataFrame, dict[str, str]]":
 
 def _cmd_query(args) -> int:
     df, name_map = _load_df_with_parents(args)
+    if getattr(args, "exclude_hooks", False) and "initiation_type" in df.columns:
+        df = df[df["initiation_type"] != "hook-security-review"]
     group_by = [s.strip() for s in args.group_by.split(",") if s.strip()]
     result = query.run_query(
         df,
