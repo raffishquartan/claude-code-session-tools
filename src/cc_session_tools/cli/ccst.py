@@ -11,6 +11,7 @@ import argparse
 import sys
 from pathlib import Path
 
+from cc_session_tools import __version__
 from cc_session_tools.hooks_install import load_json, merge_hook_settings, write_json_atomic
 
 
@@ -49,8 +50,8 @@ def _build_parser() -> argparse.ArgumentParser:
         prog="ccst",
         description="Claude Code Session Tools umbrella CLI",
     )
+    parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     sub = parser.add_subparsers(dest="noun", metavar="<noun>")
-    sub.required = True
 
     # hooks
     hooks_parser = sub.add_parser("hooks", help="Hook management commands")
@@ -86,11 +87,12 @@ def main() -> None:
     parser = _build_parser()
     args = parser.parse_args()
 
+    if args.noun is None:
+        parser.print_help(sys.stderr)
+        sys.exit(1)
+
     if args.noun == "hooks" and args.verb == "install":
         sys.exit(_cmd_hooks_install(args))
-    else:
-        parser.print_help()
-        sys.exit(1)
 
 
 if __name__ == "__main__":
