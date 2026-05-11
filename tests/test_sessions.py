@@ -163,17 +163,17 @@ class TestGrepFiles:
 
 
 def test_transcript_dir_encoding_simple():
-    # /home/alice/repos/my-project -> -home-chris-repos-my-project
-    result = sessions.transcript_dir_for_project(Path("/home/alice/repos/my-project"))
-    assert result == Path.home() / ".claude" / "projects" / "-home-chris-repos-my-project"
+    # slashes become dashes, producing the encoded project dir name
+    result = sessions.transcript_dir_for_project(Path("/example/repos/my-project"))
+    assert result == Path.home() / ".claude" / "projects" / "-example-repos-my-project"
 
 
 def test_transcript_dir_encoding_with_dots():
-    # Dots are also replaced with dashes
-    result = sessions.transcript_dir_for_project(Path("/home/alice/.local/share"))
-    assert result == Path.home() / ".claude" / "projects" / "-home-chris--local-share"
+    # dots are also replaced with dashes
+    result = sessions.transcript_dir_for_project(Path("/example/.local/share"))
+    assert result == Path.home() / ".claude" / "projects" / "-example--local-share"
 
 
 def test_transcript_dir_returns_path_object():
-    result = sessions.transcript_dir_for_project(Path("/tmp/foo"))
+    result = sessions.transcript_dir_for_project(Path("/example/foo"))
     assert isinstance(result, Path)

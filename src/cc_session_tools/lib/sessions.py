@@ -238,5 +238,5 @@ def transcript_dir_for_project(project_dir: Path) -> Path:
     Encoding: each '/' and '.' in the absolute project path is replaced with '-'.
     Does not check whether the directory exists.
     """
-    encoded = str(project_dir.resolve()).replace("/", "-").replace(".", "-")
+    encoded = str(project_dir).replace("/", "-").replace(".", "-")
     return Path.home() / ".claude" / "projects" / encoded
