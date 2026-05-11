@@ -116,3 +116,41 @@ def test_dry_run_report_includes_launch_command(
     assert "claude" in out
     assert "-n" in out
     assert "--remote-control" in out
+
+
+# ---------------------------------------------------------------------------
+# Test 4: report shows task_list_id derived via id_for_project
+# ---------------------------------------------------------------------------
+
+
+def test_dry_run_report_shows_task_list_id(
+    fake_home, tmp_path, monkeypatch, captured_launch, capsys
+):
+    proj = _make_valid_project(tmp_path, monkeypatch)
+    monkeypatch.chdir(proj)
+
+    rc = ccd.main(["--dry-run", "foo"])
+    assert rc == 0
+
+    out = capsys.readouterr().out
+    # The project is named "myproj" and its parent is the repo root,
+    # so id_for_project returns "myproj".
+    assert "task_list_id: myproj" in out
+
+
+def test_dry_run_report_shows_none_task_list_id_when_outside_roots(
+    fake_home, tmp_path, monkeypatch, captured_launch, capsys
+):
+    # Project is NOT under any configured root
+    repos = tmp_path / "repos"
+    repos.mkdir()
+    _set_repo_root(monkeypatch, repos)
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    monkeypatch.chdir(elsewhere)
+
+    rc = ccd.main(["--dry-run", "--force", "foo"])
+    assert rc == 0
+
+    out = capsys.readouterr().out
+    assert "task_list_id: (none)" in out
