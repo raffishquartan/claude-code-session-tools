@@ -9,7 +9,7 @@ from pathlib import Path
 from cc_session_tools import __version__
 from cc_session_tools.lib.claude_flags import get_claude_flags
 from cc_session_tools.lib.roots import load_session_roots
-from cc_session_tools.lib.sessions import SESSION_FULL_RE, SessionMatch, find_matching_sessions, session_tag
+from cc_session_tools.lib.sessions import SESSION_FULL_RE, SessionMatch, find_matching_sessions, find_orphan_transcripts, session_tag
 from cc_session_tools.lib.tasklist import id_for_project
 
 
@@ -30,6 +30,14 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument("fragment", help="Substring to match against session basenames.")
     p.add_argument("--debug", action="store_true",
                    help="Enable debug output (also: CCX_DEBUG=1).")
+    p.add_argument(
+        "--include-orphans",
+        action="store_true",
+        help=(
+            "Also search for orphan transcripts: sessions whose JSONL transcript "
+            "exists in ~/.claude/projects/ but have no cc-sessions/ directory on disk."
+        ),
+    )
     return p
 
 
@@ -66,6 +74,11 @@ def main(argv: list[str] | None = None) -> int:
                 break
 
     matches = [exact_match] if exact_match else find_matching_sessions(args.fragment, roots)
+    if not exact_match and args.include_orphans:
+        orphans = find_orphan_transcripts(args.fragment, roots)
+        # De-duplicate: skip orphans whose basename already appears in on-disk matches.
+        on_disk_basenames = {m.basename for m in matches}
+        matches.extend(o for o in orphans if o.basename not in on_disk_basenames)
     debug(f"fragment: {args.fragment!r}")
     debug(f"matches: {[m.basename for m in matches]}")
 
@@ -97,6 +110,13 @@ def main(argv: list[str] | None = None) -> int:
         m = matches[0]
 
     # single match (or picker selection) - variable m is set above
+    if m.is_orphan:
+        print(
+            f"ccr: warning: no on-disk session directory for '{m.basename}' "
+            f"(orphan transcript only)",
+            file=sys.stderr,
+        )
+
     tag = session_tag(m.basename)
     if tag is None:
         # Should not happen because find_matching_sessions only returns
