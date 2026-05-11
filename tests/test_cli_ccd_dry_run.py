@@ -214,3 +214,31 @@ def test_dry_run_shows_validation_errors_and_exits_0(
     assert "validation: ok" not in out
     # The specific error for cwd-not-under-root is expected
     assert "not a direct subdirectory" in out or "cwd not" in out
+
+
+# ---------------------------------------------------------------------------
+# Test 7: extra passthrough args appear in launch_command in order
+# ---------------------------------------------------------------------------
+
+
+def test_dry_run_extra_args_in_launch_command(
+    fake_home, tmp_path, monkeypatch, captured_launch, capsys
+):
+    proj = _make_valid_project(tmp_path, monkeypatch)
+    monkeypatch.chdir(proj)
+
+    rc = ccd.main(["--dry-run", "foo", "--model", "claude-opus-4-5", "--verbose"])
+    assert rc == 0
+
+    out = capsys.readouterr().out
+    # Extra args must appear in the launch_command line and in the right order
+    assert "--model" in out
+    assert "claude-opus-4-5" in out
+    assert "--verbose" in out
+    # The launch_command line should have all args together in a shell-joinable form
+    launch_line = next(
+        line for line in out.splitlines() if "launch_command:" in line
+    )
+    assert "--model" in launch_line
+    assert "claude-opus-4-5" in launch_line
+    assert "--verbose" in launch_line
