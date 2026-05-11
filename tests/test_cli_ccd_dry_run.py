@@ -93,3 +93,26 @@ def test_dry_run_does_not_create_session_dir(
     date_str = datetime.now().strftime("%Y%m%d")
     expected_dir = proj / "cc-sessions" / f"{date_str}-foo"
     assert not expected_dir.exists()
+
+
+# ---------------------------------------------------------------------------
+# Test 3: report includes launch_command in shell-quoted form
+# ---------------------------------------------------------------------------
+
+
+def test_dry_run_report_includes_launch_command(
+    fake_home, tmp_path, monkeypatch, captured_launch, capsys
+):
+    proj = _make_valid_project(tmp_path, monkeypatch)
+    monkeypatch.chdir(proj)
+
+    rc = ccd.main(["--dry-run", "foo"])
+    assert rc == 0
+
+    out = capsys.readouterr().out
+    # The report must include a launch_command line
+    assert "launch_command:" in out
+    # It should include the core claude invocation
+    assert "claude" in out
+    assert "-n" in out
+    assert "--remote-control" in out
