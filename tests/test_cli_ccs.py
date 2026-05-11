@@ -597,8 +597,9 @@ def test_name_search_no_osc8_in_non_tty(fake_repos, monkeypatch, capsys):
     assert "\033]8" not in out
 
 
-def test_contents_search_includes_transcript_dir(fake_repos, fake_home, monkeypatch, capsys, force_grep_path):
-    # Create session and a matching transcript in ~/.claude/projects/
+def test_messages_search_includes_transcript_dir(fake_repos, fake_home, monkeypatch, capsys, force_grep_path):
+    # --messages searches ~/.claude/projects/<encoded>/*.jsonl (transcript dir).
+    # --contents only searches cc-sessions/<basename>/working/ and out/.
     proj = fake_repos / "myproj"
     _make_session(fake_repos, "myproj", "20260504-foo", contents="normal content")
     # Simulate a transcript dir using transcript_dir_for_project
@@ -608,10 +609,15 @@ def test_contents_search_includes_transcript_dir(fake_repos, fake_home, monkeypa
     (t_dir / "abc123.jsonl").write_text('{"text": "unique-transcript-string"}')
     monkeypatch.chdir(proj)
 
-    rc = ccs.main(["unique-transcript-string", "--contents"])
+    # --messages finds it
+    rc = ccs.main(["unique-transcript-string", "--messages"])
     assert rc == 0
     out = capsys.readouterr().out
     assert "20260504-foo" in out
+
+    # --contents does NOT find it (transcript not included in --contents scope)
+    rc2 = ccs.main(["unique-transcript-string", "--contents"])
+    assert rc2 == 1
 
 
 # ---------------------------------------------------------------------------
