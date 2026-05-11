@@ -185,3 +185,32 @@ def test_dry_run_report_shows_force_false_by_default(
 
     out = capsys.readouterr().out
     assert "force: false" in out
+
+
+# ---------------------------------------------------------------------------
+# Test 6: validation errors appear in report and exit code is STILL 0
+# ---------------------------------------------------------------------------
+
+
+def test_dry_run_shows_validation_errors_and_exits_0(
+    fake_home, tmp_path, monkeypatch, captured_launch, capsys
+):
+    # cwd is outside any configured root => validation will fail
+    repos = tmp_path / "repos"
+    repos.mkdir()
+    _set_repo_root(monkeypatch, repos)
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    monkeypatch.chdir(elsewhere)
+
+    # Without --force, validation fails because cwd is not under a root
+    rc = ccd.main(["--dry-run", "foo"])
+    # Exit code must be 0 even when validation fails in dry-run
+    assert rc == 0
+
+    out = capsys.readouterr().out
+    # validation section must contain error text (not "ok")
+    assert "validation:" in out
+    assert "validation: ok" not in out
+    # The specific error for cwd-not-under-root is expected
+    assert "not a direct subdirectory" in out or "cwd not" in out
