@@ -9,7 +9,12 @@ from pathlib import Path
 
 from cc_session_tools import __version__
 from cc_session_tools.lib import prompts, rules
-from cc_session_tools.lib.roots import is_strict_root, load_session_roots, matched_session_root
+from cc_session_tools.lib.roots import (
+    RootsConfigError,
+    is_strict_root,
+    load_session_roots,
+    matched_session_root,
+)
 from cc_session_tools.lib.tasklist import id_for_project
 
 
@@ -38,10 +43,14 @@ def _build_parser() -> argparse.ArgumentParser:
 
 
 def _describe_root(real_pwd: Path) -> str:
-    """Return a human-readable description of which root the cwd matched."""
+    """Return a human-readable description of which root the cwd matched.
+
+    Returns a plain string so callers never need to handle errors - this is
+    only used for the informational dry-run report.
+    """
     try:
         roots = load_session_roots()
-    except Exception:
+    except RootsConfigError:
         return "none (roots not configured)"
     root = matched_session_root(real_pwd, roots)
     if root is None:
@@ -124,9 +133,10 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.dry_run:
         # Derive task_list_id without modifying env (dry-run is read-only).
+        # id_for_project returns None (not raises) when cwd is outside all roots.
         try:
             task_list_id: str | None = id_for_project(real_pwd)
-        except Exception:
+        except RootsConfigError:
             task_list_id = None
         _print_dry_run_report(
             real_pwd=real_pwd,
