@@ -3,12 +3,14 @@ from __future__ import annotations
 import re
 import shutil
 import subprocess
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Iterator
 
 SESSION_BASENAME_RE = re.compile(r"^(\d{8})(?:-to-\d{8})?-")
 SESSION_FULL_RE = re.compile(r"^(\d{8})(?:-to-\d{8})?-(.+)$")
+
+_ORPHAN_SENTINEL = "<orphan: no on-disk session dir>"
 
 
 @dataclass(frozen=True)
@@ -16,6 +18,7 @@ class SessionMatch:
     basename: str
     project_dir: Path
     session_dir: Path
+    is_orphan: bool = False
 
     @property
     def start_date(self) -> str:
@@ -66,6 +69,59 @@ def find_matching_sessions(fragment: str, roots: list[Path]) -> list[SessionMatc
                         project_dir=proj,
                         session_dir=sess,
                     ))
+    return out
+
+
+def find_orphan_transcripts(fragment: str, roots: list[Path]) -> list[SessionMatch]:
+    """Find transcripts that exist under ~/.claude/projects/<encoded-cwd>/ but
+    have no corresponding cc-sessions/<basename>/ directory on disk.
+
+    These are sessions that were started outside of ccd (or whose session
+    directory was deleted) but whose transcript is still resumable via
+    ``claude --resume <basename>``.
+
+    Steps per project under each root:
+      1. Compute the encoded-cwd transcript dir for the project.
+      2. List *.jsonl files there.
+      3. Look up the display name from the JSONL custom-title record.
+      4. If the display name matches ``fragment`` AND the cc-sessions/<name>/
+         directory does NOT exist, yield it as an orphan SessionMatch.
+      5. Skip transcripts whose display name is unresolvable.
+    """
+    from claude_code_usage.session_names import load_jsonl_titles
+
+    out: list[SessionMatch] = []
+    for root in roots:
+        if not root.is_dir():
+            continue
+        for proj in root.iterdir():
+            if not proj.is_dir():
+                continue
+            transcript_dir = transcript_dir_for_project(proj)
+            if not transcript_dir.is_dir():
+                continue
+            # Build name map from JSONL records in this project's transcript dir.
+            name_map = load_jsonl_titles(transcript_dir)
+            for jsonl in transcript_dir.glob("*.jsonl"):
+                uuid = jsonl.stem
+                display_name = name_map.get(uuid)
+                if not display_name:
+                    continue  # unresolvable - skip silently
+                if not is_session_basename(display_name):
+                    continue  # not a session-format name - skip
+                if fragment not in display_name:
+                    continue  # doesn't match the requested fragment
+                # Check whether an on-disk session dir exists - if it does,
+                # find_matching_sessions will already return it, so skip here.
+                session_dir = proj / "cc-sessions" / display_name
+                if session_dir.is_dir():
+                    continue
+                out.append(SessionMatch(
+                    basename=display_name,
+                    project_dir=proj,
+                    session_dir=Path(_ORPHAN_SENTINEL),
+                    is_orphan=True,
+                ))
     return out
 
 
