@@ -9,7 +9,7 @@ import subprocess
 import sys
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from cc_session_tools import __version__
@@ -22,11 +22,40 @@ from cc_session_tools.lib.sessions import (
     transcript_dir_for_project,
 )
 
+# Sentinel used to distinguish "flag present with no value" from "no flag given".
+_NO_VALUE: str = "\x00_NO_VALUE_\x00"
+
 
 def _is_hook_session(basename: str) -> bool:
     from cc_session_tools.lib.sessions import session_tag
     tag = session_tag(basename)
     return tag is not None and "hook" in tag.lower()
+
+
+def _parse_since_to_yyyymmdd(raw: str) -> str | None:
+    """Parse --since value to YYYYMMDD string.
+
+    Accepted formats (in order of attempt):
+      - YYYYMMDD        (legacy, kept for backward compat)
+      - YYYY-MM-DD      (ISO date)
+      - YYYY-MM-DDTHH:MM
+      - YYYY-MM-DDTHH:MM:SS
+
+    The hour/minute/second are ignored: only the date portion is used for
+    comparison against session start dates (which are stored as YYYYMMDD
+    derived from the session basename, so any time on --since is treated
+    as 'session start date >= the date portion of --since').
+
+    Returns the YYYYMMDD string on success, None on failure.
+    """
+    _FORMATS = ["%Y%m%d", "%Y-%m-%d", "%Y-%m-%dT%H:%M", "%Y-%m-%dT%H:%M:%S"]
+    for fmt in _FORMATS:
+        try:
+            dt = datetime.datetime.strptime(raw, fmt)
+            return dt.strftime("%Y%m%d")
+        except ValueError:
+            continue
+    return None
 
 
 def _parse_date_filter(args) -> tuple[str | None, str | None] | None:
@@ -37,12 +66,15 @@ def _parse_date_filter(args) -> tuple[str | None, str | None] | None:
         cutoff = datetime.date.today() - datetime.timedelta(days=args.days)
         since = cutoff.strftime("%Y%m%d")
     if args.since is not None:
-        try:
-            datetime.datetime.strptime(args.since, "%Y%m%d")
-        except ValueError:
-            print(f"ccs: invalid date '{args.since}' (expected YYYYMMDD)", file=sys.stderr)
+        result = _parse_since_to_yyyymmdd(args.since)
+        if result is None:
+            print(
+                f"ccs: invalid date '{args.since}' "
+                "(expected YYYYMMDD, YYYY-MM-DD, or YYYY-MM-DDTHH:MM[:SS])",
+                file=sys.stderr,
+            )
             return None
-        since = args.since
+        since = result
     if args.before is not None:
         try:
             datetime.datetime.strptime(args.before, "%Y%m%d")
@@ -59,6 +91,7 @@ class _Result:
     basename: str
     project_dir: Path
     context_lines: list[str]
+    scope: str = "name"  # one of: "name", "contents", "messages"
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -67,9 +100,57 @@ def _build_parser() -> argparse.ArgumentParser:
         description="Search Claude Code sessions by name/date or file contents.",
     )
     p.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
-    p.add_argument("query", help="Substring to match against session names (default) or contents.")
-    p.add_argument("--contents", action="store_true",
-                   help="Search session file contents (1 line of context).")
+
+    # Positional query is now optional; scope flags may supply their own queries.
+    p.add_argument(
+        "query",
+        nargs="?",
+        default=None,
+        help=(
+            "Substring to match against session names (default) or contents. "
+            "Optional when a scope flag (--name, --contents, --messages) is given "
+            "with its own value."
+        ),
+    )
+
+    # Scope flags: each takes an optional value (nargs="?").
+    # When the flag is present without a value, const=_NO_VALUE signals "use positional".
+    p.add_argument(
+        "--name",
+        nargs="?",
+        const=_NO_VALUE,
+        default=None,
+        metavar="QUERY",
+        help=(
+            "Search session basenames. If QUERY is omitted, uses the positional query. "
+            "This is the default scope when no scope flag is given."
+        ),
+    )
+    p.add_argument(
+        "--contents",
+        nargs="?",
+        const=_NO_VALUE,
+        default=None,
+        metavar="QUERY",
+        help=(
+            "Search files under cc-sessions/<session>/working/ and out/ only. "
+            "If QUERY is omitted, uses the positional query. "
+            "(Legacy --contents with no value keeps the same behaviour.)"
+        ),
+    )
+    p.add_argument(
+        "--messages",
+        nargs="?",
+        const=_NO_VALUE,
+        default=None,
+        metavar="QUERY",
+        help=(
+            "Search JSONL transcript file(s) under "
+            "~/.claude/projects/<encoded-cwd>/*.jsonl. "
+            "If QUERY is omitted, uses the positional query."
+        ),
+    )
+
     p.add_argument("--global", dest="do_global", action="store_true",
                    help="Search all sessions on this machine, not just the current directory.")
     p.add_argument("--max-file-size", type=float, default=10.0, metavar="MB",
@@ -86,8 +167,15 @@ def _build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Exclude sessions whose tag contains 'hook' (e.g. hook-security-check sessions).",
     )
-    p.add_argument("--since", metavar="YYYYMMDD",
-                   help="Include only sessions started on or after this date (YYYYMMDD).")
+    p.add_argument(
+        "--since",
+        metavar="DATE",
+        help=(
+            "Include only sessions started on or after this date. "
+            "Accepted: YYYYMMDD (legacy), YYYY-MM-DD, YYYY-MM-DDTHH:MM, YYYY-MM-DDTHH:MM:SS. "
+            "Time portion is ignored (only the date part is compared against session start dates)."
+        ),
+    )
     p.add_argument("--before", metavar="YYYYMMDD",
                    help="Include only sessions started before this date (YYYYMMDD).")
     p.add_argument("--days", type=int, metavar="N",
@@ -97,9 +185,78 @@ def _build_parser() -> argparse.ArgumentParser:
                      help="Output results as a JSON array.")
     fmt.add_argument("--null", action="store_true",
                      help="Output null-delimited basenames (for xargs -0).")
+    p.add_argument(
+        "--sort",
+        choices=["datetime", "alpha"],
+        default="datetime",
+        help=(
+            "Sort order for results. "
+            "'datetime' (default) = newest first by session start date. "
+            "'alpha' = ascending alphabetical by session basename."
+        ),
+    )
     p.add_argument("--debug", action="store_true",
                    help="Enable debug output (also: CCX_DEBUG=1).")
     return p
+
+
+def _resolve_scope_queries(args) -> dict[str, str] | None:
+    """Resolve scope flags to a dict mapping scope name -> query string.
+
+    Returns None if resolution fails (missing query for a scope). Prints a
+    clear error message before returning None in that case.
+
+    Possible scopes: "name", "contents", "messages".
+
+    Logic:
+      - If no scope flag is given → {"name": positional_query} (unchanged legacy).
+      - If scope flags are given:
+        - Flag with explicit value: use that value for this scope.
+        - Flag with no value (const=_NO_VALUE): use positional query.
+        - If positional is also None and any scope needs it → error.
+    """
+    flag_map = {
+        "name": args.name,
+        "contents": args.contents,
+        "messages": args.messages,
+    }
+    active_scopes = {k: v for k, v in flag_map.items() if v is not None}
+
+    if not active_scopes:
+        # Legacy behaviour: no scope flags → name search using positional.
+        if args.query is None:
+            # Argparse should have caught this already, but be defensive.
+            print("ccs: error: a query is required", file=sys.stderr)
+            return None
+        return {"name": args.query}
+
+    # One or more scope flags given. Resolve each.
+    resolved: dict[str, str] = {}
+    for scope, val in active_scopes.items():
+        if val == _NO_VALUE:
+            # Flag given without its own value → use positional.
+            if args.query is None:
+                print(
+                    f"ccs: error: --{scope} was given without a query value "
+                    "and no positional query was provided.\n"
+                    "Usage: ccs <query> --{scope}  OR  ccs --{scope} <query-value>",
+                    file=sys.stderr,
+                )
+                return None
+            resolved[scope] = args.query
+        else:
+            resolved[scope] = val
+
+    return resolved
+
+
+def _sort_results(results: list[_Result], sort: str) -> list[_Result]:
+    """Sort results in place and return list. 'datetime' = newest first; 'alpha' = ascending."""
+    if sort == "alpha":
+        results.sort(key=lambda r: r.basename)
+    else:
+        results.sort(key=lambda r: r.date_key, reverse=True)
+    return results
 
 
 def _collect_pairs(do_global: bool) -> list[tuple[Path, Path]]:
@@ -184,6 +341,7 @@ def _output_machine_readable(results: list[_Result], do_null: bool) -> None:
                 "basename": r.basename,
                 "project_dir": str(r.project_dir),
                 "context_lines": r.context_lines,
+                "scope": r.scope,
             }
             for r in results
         ]
@@ -246,51 +404,41 @@ def _maybe_pick_and_resume(results: list[_Result], do_global: bool) -> int | Non
     return 0  # unreachable; satisfies type checker
 
 
-def _name_search(
-    sessions: list[tuple[Path, Path]], query: str, do_global: bool,
-    *, do_json: bool = False, do_null: bool = False,
-) -> int:
-    results: list[_Result] = []
-    for sess, proj in sessions:
-        if query in sess.name:
-            date_key = session_start_date(sess.name)
-            assert date_key is not None
-            results.append(_Result(date_key, sess.name, proj, []))
-    results.sort(key=lambda r: r.date_key, reverse=True)
-    if do_json or do_null:
-        _output_machine_readable(results, do_null)
-        return 0
-    if not results:
-        print(f"ccs: no sessions match '{query}'", file=sys.stderr)
-        all_basenames = [s.name for s, _ in sessions]
-        suggestions = difflib.get_close_matches(query, all_basenames, n=3, cutoff=0.4)
-        if suggestions:
-            print(f"ccs: did you mean: {', '.join(suggestions)}?", file=sys.stderr)
-        return 1
-    pick_rc = _maybe_pick_and_resume(results, do_global)
-    if pick_rc is not None:
-        return pick_rc
-    for r in results:
-        display_name = _maybe_link(r.basename, r.project_dir / "cc-sessions" / r.basename)
-        if do_global:
-            print(f"{display_name} ({_display_path(r.project_dir)})")
-        else:
-            print(display_name)
-    return 0
+def _print_results(
+    results: list[_Result],
+    do_global: bool,
+    *,
+    multi_scope: bool = False,
+) -> None:
+    """Print results to stdout.
 
+    When multi_scope is True, each context line is prefixed with the scope
+    tag (e.g. "[name]", "[contents]", "[messages]") so the user can tell
+    which scope produced each hit.
 
-def _print_results(results: list[_Result], do_global: bool) -> None:
-    results.sort(key=lambda r: r.date_key, reverse=True)
+    A blank line is printed between successive results only when at least one
+    of them carries context lines, so pure name-search results (no context)
+    remain compact (one line per result).
+    """
+    prev_had_context = False
     for i, r in enumerate(results):
-        if i > 0:
+        has_context = bool(r.context_lines)
+        if i > 0 and (prev_had_context or has_context):
             print()
+        prev_had_context = has_context
         display_name = _maybe_link(r.basename, r.project_dir / "cc-sessions" / r.basename)
+        # In multi-scope mode, tag the header line with the scope so name matches
+        # are distinguishable from content/message matches.
+        scope_prefix = f"[{r.scope}] " if multi_scope else ""
         if do_global:
-            print(f"{display_name} ({_display_path(r.project_dir)})")
+            print(f"{scope_prefix}{display_name} ({_display_path(r.project_dir)})")
         else:
-            print(display_name)
+            print(f"{scope_prefix}{display_name}")
         for line in r.context_lines:
-            print(f"  {line}")
+            if multi_scope:
+                print(f"  [{r.scope}] {line}")
+            else:
+                print(f"  {line}")
 
 
 def _compute_eta(elapsed: float, completed: int, total: int) -> float:
@@ -323,15 +471,70 @@ def _rg_cmd(query: str, max_bytes: int, targets: list[str]) -> list[str]:
     ]
 
 
+def _name_search(
+    sessions: list[tuple[Path, Path]], query: str, do_global: bool,
+    sort: str = "datetime",
+    *,
+    do_json: bool = False,
+    do_null: bool = False,
+    scope_tag: str = "name",
+    multi_scope: bool = False,
+) -> list[_Result]:
+    """Search session basenames. Returns list of matching _Result objects."""
+    results: list[_Result] = []
+    for sess, proj in sessions:
+        if query in sess.name:
+            date_key = session_start_date(sess.name)
+            assert date_key is not None
+            results.append(_Result(date_key, sess.name, proj, [], scope=scope_tag))
+    return results
+
+
+def _build_contents_targets(
+    sessions: list[tuple[Path, Path]],
+    *,
+    include_working: bool,
+    include_transcripts: bool,
+) -> tuple[dict[str, tuple[Path, Path]], list[str]]:
+    """Build (sess_by_dir, target_paths) for rg/grep invocation.
+
+    include_working: include cc-sessions/<basename>/ dirs
+    include_transcripts: include ~/.claude/projects/<encoded>/ dirs
+    """
+    sess_by_dir: dict[str, tuple[Path, Path]] = {}
+    target_dirs: list[str] = []
+
+    for sess, proj in sessions:
+        if include_working:
+            key = str(sess.resolve())
+            if key not in sess_by_dir:
+                sess_by_dir[key] = (sess, proj)
+                target_dirs.append(key)
+
+        if include_transcripts:
+            t_dir = transcript_dir_for_project(proj)
+            if t_dir.is_dir():
+                key = str(t_dir.resolve())
+                if key not in sess_by_dir:
+                    sess_by_dir[key] = (sess, proj)
+                    target_dirs.append(key)
+
+    return sess_by_dir, target_dirs
+
+
 def _contents_search_with_rg(
     sessions: list[tuple[Path, Path]],
     query: str,
     do_global: bool,
     max_file_size_mb: float,
     *,
+    include_working: bool = True,
+    include_transcripts: bool = False,
     do_json: bool = False,
     do_null: bool = False,
-) -> int:
+    scope_tag: str = "contents",
+) -> list[_Result]:
+    """rg-based search. Returns list of matching _Result objects."""
     n = len(sessions)
     noun = "session" if n == 1 else "sessions"
     max_bytes = int(max_file_size_mb * 1024 * 1024)
@@ -342,19 +545,16 @@ def _contents_search_with_rg(
         file=sys.stderr,
     )
 
-    # Build sess_by_dir (includes transcript dirs for JSONL search).
-    sess_by_dir: dict[str, tuple[Path, Path]] = {}
-    for sess, proj in sessions:
-        key = str(sess.resolve())
-        sess_by_dir[key] = (sess, proj)
-        t_dir = transcript_dir_for_project(proj)
-        if t_dir.is_dir():
-            sess_by_dir[str(t_dir.resolve())] = (sess, proj)
+    sess_by_dir, _ = _build_contents_targets(
+        sessions,
+        include_working=include_working,
+        include_transcripts=include_transcripts,
+    )
 
     batches = _batch_sizes(n)
     if not batches:
         print(f"ccs: no sessions match '{query}'", file=sys.stderr)
-        return 1
+        return []
 
     all_output_lines: list[str] = []
     total_start = time.monotonic()
@@ -363,13 +563,18 @@ def _contents_search_with_rg(
     for batch_idx, batch_size in enumerate(batches):
         batch_sessions = sessions[completed : completed + batch_size]
 
-        # Build target list for this batch (sessions + their transcript dirs).
         batch_targets: list[str] = []
         for sess, proj in batch_sessions:
-            batch_targets.append(str(sess.resolve()))
-            t_dir = transcript_dir_for_project(proj)
-            if t_dir.is_dir():
-                batch_targets.append(str(t_dir.resolve()))
+            if include_working:
+                batch_targets.append(str(sess.resolve()))
+            if include_transcripts:
+                t_dir = transcript_dir_for_project(proj)
+                if t_dir.is_dir():
+                    batch_targets.append(str(t_dir.resolve()))
+
+        if not batch_targets:
+            completed += batch_size
+            continue
 
         cmd = _rg_cmd(query, max_bytes, batch_targets)
         try:
@@ -384,7 +589,10 @@ def _contents_search_with_rg(
         except OSError:
             return _contents_search_with_grep(
                 sessions, query, do_global, max_file_size_mb, workers=0,
+                include_working=include_working,
+                include_transcripts=include_transcripts,
                 do_json=do_json, do_null=do_null,
+                scope_tag=scope_tag,
             )
 
         assert proc.stdout is not None
@@ -401,7 +609,10 @@ def _contents_search_with_rg(
             print("ccs: rg failed; falling back to per-session grep", file=sys.stderr)
             return _contents_search_with_grep(
                 sessions, query, do_global, max_file_size_mb, workers=0,
+                include_working=include_working,
+                include_transcripts=include_transcripts,
                 do_json=do_json, do_null=do_null,
+                scope_tag=scope_tag,
             )
 
         completed += batch_size
@@ -423,8 +634,14 @@ def _contents_search_with_rg(
         file=sys.stderr,
     )
 
-    # Group output lines by session-dir prefix (longest-prefix wins so nested
-    # session dirs don't grab matches that belong to a deeper sibling).
+    # Rebuild sess_by_dir with all sessions (not just batched targets) for grouping.
+    sess_by_dir, _ = _build_contents_targets(
+        sessions,
+        include_working=include_working,
+        include_transcripts=include_transcripts,
+    )
+
+    # Group output lines by session-dir prefix (longest-prefix wins).
     sorted_keys = sorted(sess_by_dir.keys(), key=len, reverse=True)
     grouped: dict[str, list[str]] = {}
     for line in all_output_lines:
@@ -441,39 +658,23 @@ def _contents_search_with_rg(
         grouped.setdefault(match_key, []).append(rel)
 
     if not grouped:
-        print(f"ccs: no sessions match '{query}'", file=sys.stderr)
-        if do_json or do_null:
-            _output_machine_readable([], do_null)
-            return 0
-        return 1
+        return []
 
     results: list[_Result] = []
     for k, lines in grouped.items():
         sess, proj = sess_by_dir[k]
         date_key = session_start_date(sess.name)
         assert date_key is not None
-        results.append(_Result(date_key, sess.name, proj, lines))
+        results.append(_Result(date_key, sess.name, proj, lines, scope=scope_tag))
 
-    # Deduplicate: a session's sess dir and transcript dir both map to the same
-    # (sess, proj), so a match in either yields the same _Result. Without
-    # dedup, the same session could appear twice.
+    # Deduplicate: merge context lines for the same session basename.
     seen: dict[str, _Result] = {}
     for r in results:
         if r.basename not in seen:
             seen[r.basename] = r
         else:
             seen[r.basename].context_lines.extend(r.context_lines)
-    results = list(seen.values())
-
-    if do_json or do_null:
-        _output_machine_readable(results, do_null)
-        return 0
-    results.sort(key=lambda r: r.date_key, reverse=True)
-    pick_rc = _maybe_pick_and_resume(results, do_global)
-    if pick_rc is not None:
-        return pick_rc
-    _print_results(results, do_global)
-    return 0
+    return list(seen.values())
 
 
 def _contents_search_with_grep(
@@ -483,12 +684,13 @@ def _contents_search_with_grep(
     max_file_size_mb: float,
     workers: int,
     *,
+    include_working: bool = True,
+    include_transcripts: bool = False,
     do_json: bool = False,
     do_null: bool = False,
-) -> int:
-    """Fallback path used when rg is unavailable. Plain grep has no
-    --max-filesize equivalent, so we keep an indexing pre-pass to enforce
-    the size cap at the Python layer."""
+    scope_tag: str = "contents",
+) -> list[_Result]:
+    """Fallback grep path. Returns list of matching _Result objects."""
     n = len(sessions)
     noun = "session" if n == 1 else "sessions"
     max_bytes = int(max_file_size_mb * 1024 * 1024)
@@ -506,13 +708,24 @@ def _contents_search_with_grep(
     total_skipped = 0
     progress = _Progress(show_progress)
     for i, (sess, proj) in enumerate(sessions, start=1):
-        files, bytes_, skipped = enumerate_session_files(sess, max_bytes=max_bytes)
-        t_dir = transcript_dir_for_project(proj)
-        if t_dir.is_dir():
-            t_files, t_bytes, t_skipped = enumerate_session_files(t_dir, max_bytes=max_bytes)
-            files = files + t_files
-            bytes_ = bytes_ + t_bytes
-            skipped = skipped + t_skipped
+        files: list[Path] = []
+        bytes_: int = 0
+        skipped: int = 0
+
+        if include_working:
+            w_files, w_bytes, w_skipped = enumerate_session_files(sess, max_bytes=max_bytes)
+            files = files + w_files
+            bytes_ = bytes_ + w_bytes
+            skipped = skipped + w_skipped
+
+        if include_transcripts:
+            t_dir = transcript_dir_for_project(proj)
+            if t_dir.is_dir():
+                t_files, t_bytes, t_skipped = enumerate_session_files(t_dir, max_bytes=max_bytes)
+                files = files + t_files
+                bytes_ = bytes_ + t_bytes
+                skipped = skipped + t_skipped
+
         indexed.append((sess, proj, files, bytes_))
         total_files += len(files)
         total_bytes += bytes_
@@ -532,8 +745,7 @@ def _contents_search_with_grep(
         file=sys.stderr,
     )
     if total_files == 0:
-        print(f"ccs: no sessions match '{query}'", file=sys.stderr)
-        return 1
+        return []
 
     if workers <= 0:
         workers = os.cpu_count() or 4
@@ -564,7 +776,7 @@ def _contents_search_with_grep(
             if ctx:
                 date_key = session_start_date(sess.name)
                 assert date_key is not None
-                results.append(_Result(date_key, sess.name, proj, ctx))
+                results.append(_Result(date_key, sess.name, proj, ctx, scope=scope_tag))
             completed += 1
             completed_files += len(files)
             completed_bytes += bytes_
@@ -588,42 +800,50 @@ def _contents_search_with_grep(
         file=sys.stderr,
     )
 
-    if not results:
-        if do_json or do_null:
-            _output_machine_readable([], do_null)
-            return 0
-        print(f"ccs: no sessions match '{query}'", file=sys.stderr)
-        return 1
-    if do_json or do_null:
-        _output_machine_readable(results, do_null)
-        return 0
-    results.sort(key=lambda r: r.date_key, reverse=True)
-    pick_rc = _maybe_pick_and_resume(results, do_global)
-    if pick_rc is not None:
-        return pick_rc
-    _print_results(results, do_global)
-    return 0
+    return results
 
 
-def _contents_search(
+def _do_contents_search(
     sessions: list[tuple[Path, Path]],
     query: str,
     do_global: bool,
     max_file_size_mb: float,
     workers: int,
     *,
+    include_working: bool = True,
+    include_transcripts: bool = False,
     do_json: bool = False,
     do_null: bool = False,
-) -> int:
+    scope_tag: str = "contents",
+) -> list[_Result]:
+    """Dispatcher: use rg if available, else fall back to grep."""
     if shutil.which("rg"):
         return _contents_search_with_rg(
             sessions, query, do_global, max_file_size_mb,
+            include_working=include_working,
+            include_transcripts=include_transcripts,
             do_json=do_json, do_null=do_null,
+            scope_tag=scope_tag,
         )
     return _contents_search_with_grep(
         sessions, query, do_global, max_file_size_mb, workers,
+        include_working=include_working,
+        include_transcripts=include_transcripts,
         do_json=do_json, do_null=do_null,
+        scope_tag=scope_tag,
     )
+
+
+def _merge_results(results_by_scope: list[list[_Result]]) -> list[_Result]:
+    """Merge results from multiple scopes by session basename.
+
+    Sessions that appear in multiple scopes get multiple _Result entries
+    (one per scope) so the scope tag and context lines remain distinct.
+    """
+    merged: list[_Result] = []
+    for scope_results in results_by_scope:
+        merged.extend(scope_results)
+    return merged
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -632,6 +852,13 @@ def main(argv: list[str] | None = None) -> int:
     if args.debug:
         os.environ["CCX_DEBUG"] = "1"
     from cc_session_tools.lib.debug import debug
+
+    # Resolve scope flags and queries.
+    scope_queries = _resolve_scope_queries(args)
+    if scope_queries is None:
+        return 1
+
+    multi_scope = len(scope_queries) > 1
 
     # Validate date filter args eagerly so bad values are caught before any I/O.
     date_filter: tuple[str | None, str | None] | None = None
@@ -681,16 +908,66 @@ def main(argv: list[str] | None = None) -> int:
             and (before_key is None or session_start_date(s.name) < before_key)
         ]
 
-    if args.contents:
-        return _contents_search(
-            sessions, args.query, effective_global,
-            args.max_file_size, args.workers,
-            do_json=args.json, do_null=args.null,
-        )
-    return _name_search(
-        sessions, args.query, effective_global,
-        do_json=args.json, do_null=args.null,
-    )
+    # Execute each active scope search and collect results.
+    all_results: list[_Result] = []
+
+    for scope, query in scope_queries.items():
+        if scope == "name":
+            scope_results = _name_search(
+                sessions, query, effective_global,
+                sort=args.sort,
+                do_json=args.json, do_null=args.null,
+                scope_tag="name",
+                multi_scope=multi_scope,
+            )
+            all_results.extend(scope_results)
+
+        elif scope == "contents":
+            scope_results = _do_contents_search(
+                sessions, query, effective_global,
+                args.max_file_size, args.workers,
+                include_working=True,
+                include_transcripts=False,
+                do_json=args.json, do_null=args.null,
+                scope_tag="contents",
+            )
+            all_results.extend(scope_results)
+
+        elif scope == "messages":
+            scope_results = _do_contents_search(
+                sessions, query, effective_global,
+                args.max_file_size, args.workers,
+                include_working=False,
+                include_transcripts=True,
+                do_json=args.json, do_null=args.null,
+                scope_tag="messages",
+            )
+            all_results.extend(scope_results)
+
+    # Sort the combined results.
+    all_results = _sort_results(all_results, args.sort)
+
+    if args.json or args.null:
+        _output_machine_readable(all_results, args.null)
+        return 0
+
+    if not all_results:
+        print(f"ccs: no sessions match", file=sys.stderr)
+        # Only show did-you-mean for pure name searches.
+        if not multi_scope and "name" in scope_queries:
+            query = scope_queries["name"]
+            all_basenames = [s.name for s, _ in sessions]
+            suggestions = difflib.get_close_matches(query, all_basenames, n=3, cutoff=0.4)
+            if suggestions:
+                print(f"ccs: did you mean: {', '.join(suggestions)}?", file=sys.stderr)
+        return 1
+
+    pick_rc = _maybe_pick_and_resume(all_results, effective_global)
+    if pick_rc is not None:
+        return pick_rc
+
+    _print_results(all_results, effective_global, multi_scope=multi_scope)
+    return 0
 
 
 if __name__ == "__main__":
