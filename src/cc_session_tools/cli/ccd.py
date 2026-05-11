@@ -2,12 +2,19 @@ from __future__ import annotations
 
 import argparse
 import os
+import shlex
 import sys
 from datetime import datetime
 from pathlib import Path
 
 from cc_session_tools import __version__
 from cc_session_tools.lib import prompts, rules
+from cc_session_tools.lib.roots import (
+    RootsConfigError,
+    is_strict_root,
+    load_session_roots,
+    matched_session_root,
+)
 from cc_session_tools.lib.tasklist import id_for_project
 
 
@@ -23,6 +30,8 @@ def _build_parser() -> argparse.ArgumentParser:
         description="Start a new Claude Code session with a pre-created cc-sessions/ dir.",
     )
     p.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
+    p.add_argument("--dry-run", action="store_true",
+                   help="Print what ccd would do without creating dirs or launching claude.")
     p.add_argument("--force", action="store_true",
                    help="Skip root, project-name, and tag-prefix checks.")
     p.add_argument("--debug", action="store_true",
@@ -31,6 +40,65 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument("extra", nargs=argparse.REMAINDER,
                    help="Additional args passed through to claude.")
     return p
+
+
+def _describe_root(real_pwd: Path) -> str:
+    """Return a human-readable description of which root the cwd matched.
+
+    Returns a plain string so callers never need to handle errors - this is
+    only used for the informational dry-run report.
+    """
+    try:
+        roots = load_session_roots()
+    except RootsConfigError:
+        return "none (roots not configured)"
+    root = matched_session_root(real_pwd, roots)
+    if root is None:
+        return "none"
+    if is_strict_root(root):
+        return f"PROJ_ROOT ({root})"
+    return f"REPO_ROOT ({root})"
+
+
+def _print_dry_run_report(
+    real_pwd: Path,
+    tag: str,
+    raw_tag: str,
+    session_name: str,
+    session_dir: Path,
+    task_list_id: str | None,
+    force: bool,
+    validation_ok: bool,
+    validation_errors: list[str],
+    cmd: list[str],
+) -> None:
+    """Print the YAML-ish dry-run report to stdout."""
+    root_desc = _describe_root(real_pwd)
+
+    if not validation_ok:
+        validation_str = "\n".join(f"  - {e}" for e in validation_errors)
+    else:
+        validation_str = "ok"
+
+    levenshtein_note = ""
+    if tag != raw_tag:
+        levenshtein_note = f" (Levenshtein correction would have prompted: raw={raw_tag!r})"
+
+    print("ccd dry-run:")
+    print(f"  cwd: {real_pwd}")
+    print(f"  tree_root / proj_root: {root_desc}")
+    print(f"  tag: {tag}{levenshtein_note}")
+    print(f"  session_name: {session_name}")
+    print(f"  session_dir: {session_dir}")
+    print(f"  task_list_id: {task_list_id if task_list_id is not None else '(none)'}")
+    print(f"  force: {str(force).lower()}")
+    if validation_ok:
+        print("  validation: ok")
+    else:
+        print("  validation:")
+        for e in validation_errors:
+            print(f"    - {e}")
+    print(f"  launch_command: {shlex.join(cmd)}")
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -42,16 +110,48 @@ def main(argv: list[str] | None = None) -> int:
 
     real_pwd = Path.cwd().resolve()
 
-    # Run the Levenshtein typo / missing-prefix prompts FIRST so that a tag
-    # like "test-foo" under the strict root can be corrected to "oneshot-test-foo"
-    # interactively, before the rules validator would reject it outright.
-    # The prompt is a no-op outside the strict (PROJ) root.
-    tag = args.tag
-    if not args.force:
+    # In dry-run mode, skip the interactive Levenshtein/missing-prefix prompts.
+    # We note whether a prompt WOULD have fired, but we do not ask the user.
+    raw_tag = args.tag
+    tag = raw_tag
+    if not args.dry_run and not args.force:
         tag = prompts.maybe_correct_tag(real_pwd, tag)
 
     # Validate tag/cwd via shared rules (on the possibly-corrected tag).
     ok, errors = rules.check_session_init(real_pwd, tag, force=args.force)
+
+    date_str = datetime.now().strftime("%Y%m%d")
+    session_name = f"{date_str}-{tag}"
+    session_dir = real_pwd / "cc-sessions" / session_name
+
+    cmd = [
+        "claude",
+        "-n", session_name,
+        "--remote-control", session_name,
+        *(args.extra or []),
+    ]
+
+    if args.dry_run:
+        # Derive task_list_id without modifying env (dry-run is read-only).
+        # id_for_project returns None (not raises) when cwd is outside all roots.
+        try:
+            task_list_id: str | None = id_for_project(real_pwd)
+        except RootsConfigError:
+            task_list_id = None
+        _print_dry_run_report(
+            real_pwd=real_pwd,
+            tag=tag,
+            raw_tag=raw_tag,
+            session_name=session_name,
+            session_dir=session_dir,
+            task_list_id=task_list_id,
+            force=args.force,
+            validation_ok=ok,
+            validation_errors=errors,
+            cmd=cmd,
+        )
+        return 0
+
     if not ok:
         print("ccd: validation failed:", file=sys.stderr)
         for e in errors:
@@ -62,9 +162,6 @@ def main(argv: list[str] | None = None) -> int:
                   file=sys.stderr)
         return 1
 
-    date_str = datetime.now().strftime("%Y%m%d")
-    session_name = f"{date_str}-{tag}"
-    session_dir = real_pwd / "cc-sessions" / session_name
     debug(f"tag: {tag!r}")
     debug(f"session_dir: {session_dir}")
 
@@ -94,12 +191,6 @@ def main(argv: list[str] | None = None) -> int:
     if task_list_id is not None:
         env["CLAUDE_CODE_TASK_LIST_ID"] = task_list_id
 
-    cmd = [
-        "claude",
-        "-n", session_name,
-        "--remote-control", session_name,
-        *(args.extra or []),
-    ]
     # Chdir to the resolved project path so Claude Code records its
     # ~/.claude/projects/<encoded-cwd>/ key against the canonical, symlink-
     # resolved path. Matches the original bash ccd's `cd "$real_pwd"` step.
