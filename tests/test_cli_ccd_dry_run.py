@@ -154,3 +154,34 @@ def test_dry_run_report_shows_none_task_list_id_when_outside_roots(
 
     out = capsys.readouterr().out
     assert "task_list_id: (none)" in out
+
+
+# ---------------------------------------------------------------------------
+# Test 5: report shows force: true when --force is also passed
+# ---------------------------------------------------------------------------
+
+
+def test_dry_run_report_shows_force_true(
+    fake_home, tmp_path, monkeypatch, captured_launch, capsys
+):
+    proj = _make_valid_project(tmp_path, monkeypatch)
+    monkeypatch.chdir(proj)
+
+    rc = ccd.main(["--dry-run", "--force", "foo"])
+    assert rc == 0
+
+    out = capsys.readouterr().out
+    assert "force: true" in out
+
+
+def test_dry_run_report_shows_force_false_by_default(
+    fake_home, tmp_path, monkeypatch, captured_launch, capsys
+):
+    proj = _make_valid_project(tmp_path, monkeypatch)
+    monkeypatch.chdir(proj)
+
+    rc = ccd.main(["--dry-run", "foo"])
+    assert rc == 0
+
+    out = capsys.readouterr().out
+    assert "force: false" in out
