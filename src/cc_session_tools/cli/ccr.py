@@ -91,7 +91,10 @@ def main(argv: list[str] | None = None) -> int:
             from cc_session_tools.lib.picker import pick_from_list
             from cc_session_tools.lib.sessions import session_start_date
             matches.sort(key=lambda x: session_start_date(x.basename) or "", reverse=True)
-            labels = [f"{m.basename} ({m.project_dir})" for m in matches]
+            labels = [
+                f"{'[orphan] ' if m.is_orphan else ''}{m.basename} ({m.project_dir})"
+                for m in matches
+            ]
             idx = pick_from_list(labels)
             if idx is None:
                 return 0
@@ -100,7 +103,8 @@ def main(argv: list[str] | None = None) -> int:
         else:
             print("Multiple sessions match that name tag fragment:")
             for m in matches:
-                print(f"  {m.basename} ({m.project_dir})")
+                prefix = "[orphan] " if m.is_orphan else ""
+                print(f"  {prefix}{m.basename} ({m.project_dir})")
             print(
                 "Please re-run ccr with an unambiguous fragment of the name tag "
                 "of the session you want to resume."
