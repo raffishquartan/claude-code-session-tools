@@ -72,3 +72,24 @@ def test_dry_run_prints_report_exits_0_no_launch(
     assert "tag:" in out
     assert "session_name:" in out
     assert "session_dir:" in out
+
+
+# ---------------------------------------------------------------------------
+# Test 2: session directory is NOT created on disk
+# ---------------------------------------------------------------------------
+
+
+def test_dry_run_does_not_create_session_dir(
+    fake_home, tmp_path, monkeypatch, captured_launch, capsys
+):
+    proj = _make_valid_project(tmp_path, monkeypatch)
+    monkeypatch.chdir(proj)
+
+    rc = ccd.main(["--dry-run", "foo"])
+    assert rc == 0
+
+    # No cc-sessions directory should exist at all
+    from datetime import datetime
+    date_str = datetime.now().strftime("%Y%m%d")
+    expected_dir = proj / "cc-sessions" / f"{date_str}-foo"
+    assert not expected_dir.exists()
