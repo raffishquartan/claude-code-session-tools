@@ -1,14 +1,14 @@
 ---
 name: claude-usage
-description: Analyse Chris's Claude Code usage across projects, sessions, MCP servers, plugins, tools, time and models, in tokens AND dollars. Use whenever Chris asks about his Claude Code usage in any way - "how much have I spent", "tokens used last week", "which project costs the most", "how much did Opus cost in April", "MCP usage by project", "compare Sonnet and Opus", "show my sessions in oneshot last month", "how often am I using the github plugin", "give me a usage report for the quarter", "what tools do I lean on", "any spike in usage recently". Backed by the cc-session-tools repo at ~/repos/claude-code-session-tools (also on GitHub at raffishquartan/claude-code-session-tools). Reconciles token totals against ccusage so we know the numbers are right.
+description: Analyse the user's Claude Code usage across projects, sessions, MCP servers, plugins, tools, time and models, in tokens AND dollars. Use whenever the user asks about their Claude Code usage in any way - "how much have I spent", "tokens used last week", "which project costs the most", "how much did Opus cost in April", "MCP usage by project", "compare Sonnet and Opus", "show my sessions in oneshot last month", "how often am I using the github plugin", "give me a usage report for the quarter", "what tools do I lean on", "any spike in usage recently". Backed by the cc-session-tools repo at ~/repos/claude-code-session-tools (also on GitHub at raffishquartan/claude-code-session-tools). Reconciles token totals against ccusage so we know the numbers are right.
 ---
 
 # claude-usage
 
-Use this skill whenever Chris asks anything about his Claude Code usage.
+Use this skill whenever the user asks anything about their Claude Code usage.
 The CLI behind this skill (`claude-code-usage`) is the canonical source.
 Run it behind the scenes and summarise the result in the chat - don't
-make Chris look at raw markdown tables unless he asks for them.
+make the user look at raw markdown tables unless they ask for them.
 
 ## When to use
 
@@ -26,7 +26,7 @@ Trigger phrases (non-exhaustive):
 - "do I have any expensive sessions"
 - "what tools am I leaning on"
 
-If Chris's question maps to one of those, invoke the CLI rather than
+If the user's question maps to one of those, invoke the CLI rather than
 guessing or trying to read the JSONLs yourself.
 
 ## How to translate questions into CLI invocations
@@ -71,7 +71,7 @@ names don't need to look up UUIDs.
 
 Recipes:
 
-| Chris asks                                            | Run                                                                                       |
+| User asks                                             | Run                                                                                       |
 |-------------------------------------------------------|-------------------------------------------------------------------------------------------|
 | "How much have I spent in the last week?"             | `claude-code-usage query --since "$(date -d '7 days ago' +%F)"`                           |
 | "Tokens by project last week"                         | `claude-code-usage query --since "$(date -d '7 days ago' +%F)" --group-by project`        |
