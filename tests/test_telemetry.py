@@ -162,7 +162,7 @@ def test_telemetry_cli_log_subcommand(tmp_hooks_dir: Path) -> None:
 
     hook_input = json.dumps({
         "session_id": "sess-1",
-        "cwd": "/home/chris/repos/foo",
+        "cwd": "/example/repos/foo",
         "tool_name": "Bash",
         "tool_input": {"command": "ls"},
     })
