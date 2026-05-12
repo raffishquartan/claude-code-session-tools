@@ -56,5 +56,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6.0.2
-      - name: Fail if /home/chris appears in tracked files
-        run: "! git grep -rn '/home/chris'"
+      - name: Fail if personal paths appear in tracked files
+        run: |
+          pat='/home/''chris'
+          ! git grep -rn "$pat"
