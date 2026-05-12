@@ -2,7 +2,7 @@
 
 The transcript lives at ``~/.claude/projects/<encoded-cwd>/<session_id>.jsonl``
 where the encoded cwd replaces every ``/`` in the absolute cwd with ``-``
-(so ``/home/alice/repos/foo`` becomes ``-home-chris-repos-foo``).
+(so ``/home/user/repos/foo`` becomes ``-home-user-repos-foo``).
 
 Each JSONL line is one event. Relevant types:
 

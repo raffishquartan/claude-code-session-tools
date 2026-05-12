@@ -269,15 +269,15 @@ from cc_session_tools.lib.sessions import transcript_dir_for_project
 
 
 def test_transcript_dir_encoding_simple():
-    # /home/alice/repos/my-project -> -home-chris-repos-my-project
-    result = transcript_dir_for_project(Path("/home/alice/repos/my-project"))
-    assert result == Path.home() / ".claude" / "projects" / "-home-chris-repos-my-project"
+    # /example/repos/my-project -> -example-repos-my-project
+    result = transcript_dir_for_project(Path("/example/repos/my-project"))
+    assert result == Path.home() / ".claude" / "projects" / "-example-repos-my-project"
 
 
 def test_transcript_dir_encoding_with_dots():
     # Dots are also replaced with dashes
-    result = transcript_dir_for_project(Path("/home/alice/.local/share"))
-    assert result == Path.home() / ".claude" / "projects" / "-home-chris--local-share"
+    result = transcript_dir_for_project(Path("/example/.local/share"))
+    assert result == Path.home() / ".claude" / "projects" / "-example--local-share"
 
 
 def test_transcript_dir_returns_path_object():

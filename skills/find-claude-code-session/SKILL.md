@@ -4,7 +4,7 @@ description: Use when locating a previous Claude Code session - "find my session
 ---
 
 <!--
-Copyright (c) 2026 Chris Fogelberg. All rights reserved.
+Copyright (c) 2026 raffishquartan. All rights reserved.
 Licensed for personal use only.
 -->
 
@@ -12,7 +12,7 @@ Licensed for personal use only.
 
 Locate a prior `cc-sessions/<YYYYMMDD>-<tag>/` directory by name or content, then offer the user a `ccr <fragment>` command to resume it.
 
-This skill wraps the `ccs` CLI (`/home/alice/.local/bin/ccs`, on PATH). The CLI is the source of truth - this skill just teaches you when and how to call it.
+This skill wraps the `ccs` CLI (on PATH after installing `cc-session-tools`). The CLI is the source of truth - this skill just teaches you when and how to call it.
 
 ## When to use
 

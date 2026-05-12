@@ -12,26 +12,14 @@ The repo ships five CLIs and three bundled skills:
 |---|---|
 | **`ccd <tag>`** | Start a new session with a pre-created `cc-sessions/<date>-<tag>/` directory and a tagged display name. |
 | **`ccr <fragment>`** | Resume an existing session by typing any substring of its name. |
-| **`ccs <query>`** | Search across your sessions by name (default), or by file contents (`--contents`), in the current project (default) or across every configured root (`--global`). |
+| **`ccs <query>`** | Search across your sessions by name, file contents, or transcript messages, in the current project or across every configured root. |
 | **`claude-code-usage`** | Multi-dimensional usage analytics CLI: query/group/filter by project, session, model, MCP server, plugin, tool, day/week/month/year. Reconciles dollar totals against `ccusage`. |
-| **`ccst <noun> <verb>`** | Umbrella CLI for hook management. `ccst hooks install` merges hook entries from a source `settings.json` into a target; `ccst hooks run <name>` runs a Claude Code hook by name (used by the CCCS bash shims). |
+| **`ccst <noun> <verb>`** | Umbrella CLI for hook and skill management. `ccst hooks install` merges hook entries; `ccst hooks run <name>` runs a hook by name; `ccst skills install` symlinks bundled skills into `~/.claude/skills/`. |
 | Skill: **`find-claude-code-session`** | Wraps `ccs`. Lets a Claude Code session locate one of your prior sessions by name or content and offer a `ccr` command to resume it. |
 | Skill: **`move-session`** | Move, rename, or move+rename a session while keeping its `~/.claude/projects/<encoded-cwd>/<uuid>.jsonl` transcript resumable. |
 | Skill: **`claude-usage`** | Wraps `claude-code-usage`. Lets a Claude Code session answer "how much have I spent on Opus this month?" without you typing the CLI yourself. |
 
 If you've ever tried to remember which `1f4a8b3c-...` UUID is the session where you were debugging that flaky test last Tuesday, or wondered which project burned through last week's Opus budget, this is for you.
-
-## Why bother?
-
-Claude Code stores each session as a `~/.claude/projects/<encoded-cwd>/<uuid>.jsonl` transcript and exposes them through `claude --resume`. That works, but the picker shows untagged sessions in opaque order, the working files for a session sprawl into your repo root, and there's no built-in way to grep across past conversations or see where your tokens went.
-
-These tools add:
-
-1. **A tagged, dated session directory** under `<project>/cc-sessions/<YYYYMMDD>-<tag>/` with `working/` and `out/` subdirs - the convention Claude Code's [session memory](https://docs.anthropic.com/en/docs/claude-code/memory) hooks expect when you want scratch space and deliverables that don't pollute your repo.
-2. **Resume-by-fragment** so you can type `ccr flaky` instead of scrolling through the picker.
-3. **Cross-session search** so `ccs --contents --global "GraphQL retry"` finds every conversation that mentioned it.
-4. **Usage analytics** so `claude-code-usage query --since 2026-04-01 --group-by project,model` answers where the spend went.
-5. **Skill wrappers** so the Claude Code agent can do all of the above on your behalf when you ask in natural language.
 
 ## Installation
 
@@ -73,9 +61,40 @@ ccst --help
 > uv tool install .
 > ```
 
-### Install the skills (optional)
+### Upgrade
 
-Each skill is a self-contained directory under `skills/`. To make them visible to Claude Code, symlink them into `~/.claude/skills/`:
+```sh
+# pipx
+pipx upgrade cc-session-tools
+
+# uv
+uv tool upgrade cc-session-tools
+```
+
+> **Installing from a local clone:** if you keep a local clone for development or
+> to stay on the latest commit, refresh the global install with:
+> ```sh
+> uv tool install ~/repos/claude-code-session-tools
+> ```
+> **Do NOT run `uv tool install` from inside a git worktree.** That overwrites the
+> global install's source pointer with the worktree path, which breaks all five CLIs
+> when the worktree is deleted. Use `uv run pytest` to test inside a worktree, and run
+> `uv tool install ~/repos/claude-code-session-tools` from outside the worktree after
+> merging.
+
+### Install the skills
+
+Run `ccst skills install` to symlink all bundled skills into `~/.claude/skills/`:
+
+```sh
+# Dry run (shows what would be created)
+ccst skills install
+
+# Write the symlinks
+ccst skills install --apply
+```
+
+Manual symlinks still work if you prefer:
 
 ```sh
 ln -s "$PWD/skills/find-claude-code-session" ~/.claude/skills/find-claude-code-session
@@ -84,6 +103,18 @@ ln -s "$PWD/skills/claude-usage"             ~/.claude/skills/claude-usage
 ```
 
 The skills shell out to the installed CLIs - they don't import the Python library directly, so the only requirement is that `ccs` / `claude-code-usage` are on `$PATH`.
+
+## Why bother?
+
+Claude Code stores each session as a `~/.claude/projects/<encoded-cwd>/<uuid>.jsonl` transcript and exposes them through `claude --resume`. That works, but the picker shows untagged sessions in opaque order, the working files for a session sprawl into your repo root, and there's no built-in way to grep across past conversations or see where your tokens went.
+
+These tools add:
+
+1. **A tagged, dated session directory** under `<project>/cc-sessions/<YYYYMMDD>-<tag>/` with `working/` and `out/` subdirs - the convention Claude Code's [session memory](https://docs.anthropic.com/en/docs/claude-code/memory) hooks expect when you want scratch space and deliverables that don't pollute your repo.
+2. **Resume-by-fragment** so you can type `ccr flaky` instead of scrolling through the picker.
+3. **Cross-session search** so `ccs --contents --global "GraphQL retry"` finds every conversation that mentioned it.
+4. **Usage analytics** so `claude-code-usage query --since 2026-04-01 --group-by project,model` answers where the spend went.
+5. **Skill wrappers** so the Claude Code agent can do all of the above on your behalf when you ask in natural language.
 
 ## Configuration: where do your sessions live?
 
@@ -145,8 +176,14 @@ ccd bugfix-flaky-test
 ```
 
 Useful flags:
-- `--force` - skip the root check and any naming-convention checks (escape hatch for one-off invocations outside your roots).
-- Anything after the tag is forwarded to `claude` verbatim, so `ccd my-tag --model opus` works.
+
+| Flag | What it does |
+|---|---|
+| `--dry-run` | Print what would happen (session dir, launch command) without creating anything or launching `claude`. |
+| `--force` | Skip the root check and any naming-convention checks (escape hatch for one-off invocations outside your roots). |
+| `--debug` | Enable verbose debug output (`CCX_DEBUG=1`). |
+
+Anything after the tag is forwarded to `claude` verbatim, so `ccd my-tag --model opus` works.
 
 ### `ccr` - resume by fragment
 
@@ -155,18 +192,46 @@ ccr flaky        # resumes whichever session has "flaky" in its name
 ccr 20260509     # resumes whichever session was started on that date
 ```
 
-If multiple sessions match, `ccr` prints them and exits cleanly so you can rerun with a more specific fragment. If exactly one matches, it execs `claude --resume <basename>` with the right working directory.
+If multiple sessions match, `ccr` shows a numbered picker (1-9/0) if stdin is a TTY and there are 10 or fewer candidates; otherwise it prints them and exits. If exactly one matches, it execs `claude --resume <basename>` with the right working directory.
+
+Useful flags:
+
+| Flag | What it does |
+|---|---|
+| `--include-orphans` | Also consider sessions whose `cc-sessions/` directory is missing or has been cleaned up (resume by transcript UUID only). |
+| `--debug` | Enable verbose debug output (`CCX_DEBUG=1`). |
 
 ### `ccs` - search
 
 ```sh
-ccs flaky                       # name search in current project
-ccs flaky --global              # name search across all configured roots
-ccs "GraphQL retry" --contents  # full-text search of files in current project's sessions
-ccs "GraphQL retry" --contents --global   # ... across all projects
+ccs flaky                              # name search in current project
+ccs flaky --global                     # name search across all configured roots
+ccs "GraphQL retry" --contents        # full-text search of working/out files
+ccs "GraphQL retry" --messages        # full-text search of JSONL transcripts
+ccs "GraphQL retry" --contents --messages --global  # combined, all projects
+ccs flaky --since 2026-04-01          # only sessions from April 2026 onwards
+ccs flaky --sort newest               # explicit sort (default)
+ccs flaky --sort oldest
 ```
 
-Results are ordered newest-first by session start date. `--contents` shows one line of context around each match.
+Results are ordered newest-first by session start date by default. `--contents` shows one line of context around each match; `--messages` searches the Claude transcript JSONL files and surfaces matching turns.
+
+Useful flags:
+
+| Flag | What it does |
+|---|---|
+| `--name` | Search session basenames (the default; explicit opt-in). |
+| `--contents` | Search text files inside each session's `working/` and `out/` directories. |
+| `--messages` | Search Claude transcript JSONL files in `~/.claude/projects/`. |
+| `--global` | Search across all configured roots, not just the current project. |
+| `--since DATE` | Only sessions started on or after DATE. Accepts `YYYYMMDD`, `YYYY-MM-DD`, `7d` (days ago), `2w` (weeks ago), `1m` (months ago). |
+| `--before YYYYMMDD` | Only sessions started before DATE. |
+| `--days N` | Only sessions started within the last N days. |
+| `--sort {newest,oldest}` | Sort order (default: newest). |
+| `--exclude-hooks` | Hide hook-security-check sessions from results. |
+| `--json` | Output results as a JSON array. |
+| `--null` | Output null-delimited basenames (for `xargs -0`). |
+| `--debug` | Enable verbose debug output (`CCX_DEBUG=1`). |
 
 ## Usage analytics CLI
 
@@ -215,6 +280,8 @@ Run `claude-code-usage <subcommand> --help` for the full grammar. A few flags wo
 ## Bundled skills
 
 The repo ships three Claude Code skills, designed to be symlinked into `~/.claude/skills/`. They're thin wrappers around the CLIs so a Claude Code session can invoke them on your behalf in response to natural-language prompts.
+
+Install all three at once with `ccst skills install --apply` (see [Install the skills](#install-the-skills) above).
 
 ### `find-claude-code-session`
 
@@ -288,7 +355,7 @@ python3 -m cccs_hooks.prompt_guard          # reads JSON from stdin
 
 ## Hook management CLI (`ccst`)
 
-The `ccst` umbrella CLI provides hook management and execution.
+The `ccst` umbrella CLI provides hook and skill management.
 
 ### `ccst hooks install`
 
@@ -314,6 +381,21 @@ duplicated. The target file is written atomically (`.tmp` swap).
 ### `ccst hooks run <name>`
 
 Run a Claude Code hook by name. See the table above for the supported names.
+
+### `ccst skills install`
+
+Symlink all bundled skills into `~/.claude/skills/`.
+
+```sh
+# Dry run (default) - shows what would be created or skipped
+ccst skills install
+
+# Write the symlinks
+ccst skills install --apply
+
+# Replace wrong-target or conflicting symlinks
+ccst skills install --apply --force
+```
 
 ## How it interacts with Claude Code's task lists
 
