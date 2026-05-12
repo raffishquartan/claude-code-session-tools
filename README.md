@@ -4,7 +4,7 @@ Three concerns, one repo, for life on the [Claude Code](https://docs.anthropic.c
 
 1. **Session management** - start, resume, find, and relocate Claude Code sessions from the shell, with tagged dated session directories that don't pollute your repo root.
 2. **Usage analytics** - parse `~/.claude/projects/**/*.jsonl` into tokens-and-dollars breakdowns by project, session, model, MCP server, plugin, and tool.
-3. **Hook library** - Python package (`cccs_hooks`) backing the Claude Code PreToolUse / PostToolUse / UserPromptSubmit / Stop hook scripts in [claude-code-config-sync](https://github.com/raffishquartan/claude-code-config-sync).
+3. **Hook library** - Python package (`cccs_hooks`) providing Claude Code PreToolUse / PostToolUse / UserPromptSubmit / Stop hook implementations, invokable via `ccst hooks run <name>`.
 
 The repo ships five CLIs and three bundled skills:
 
@@ -25,7 +25,7 @@ If you've ever tried to remember which `1f4a8b3c-...` UUID is the session where 
 
 ### Prerequisites
 
-- **Python 3.11+** (3.11 minimum due to `cccs_hooks`; 3.12+ recommended)
+- **Python 3.11+** (3.12+ recommended)
 - **The `claude` CLI on your `$PATH`.** Install it first via [the official Claude Code instructions](https://docs.anthropic.com/en/docs/claude-code/setup) and verify with `claude --version`.
 - **`ccusage` (optional)** - if on `$PATH`, `claude-code-usage reconcile` cross-checks dollar totals against it. Skipped gracefully if missing.
 - **`ripgrep` (optional)** - `ccs --contents` prefers `rg`; falls back to threaded Python `grep` if missing.
@@ -299,10 +299,9 @@ See `docs/design.md` for the full design and CLI contract.
 
 ## Hook library (`cccs_hooks`)
 
-The `cccs_hooks` Python package backs the Claude Code hook scripts in
-[claude-code-config-sync](https://github.com/raffishquartan/claude-code-config-sync).
-It is distributed via this package so a single `uv tool install cc-session-tools`
-makes the hook library available on the Python path used by CCCS bash shims.
+The `cccs_hooks` Python package provides Claude Code hook implementations.
+Install via `uv tool install cc-session-tools` or `pipx install cc-session-tools`
+to make the hook library available. Hooks are invoked through `ccst hooks run <name>`.
 
 ### Modules
 
@@ -319,10 +318,10 @@ makes the hook library available on the Python path used by CCCS bash shims.
 
 ### Running hooks via `ccst hooks run <name>`
 
-The CCCS bash shims invoke hooks through the `ccst` CLI rather than calling
+Hook scripts invoke the dispatcher via `ccst` rather than calling
 `python3 -m cccs_hooks.*` directly. This means CCST only needs to be installed
-via `uv tool install` - the hook modules do not need to be importable by the
-system Python. The shim contract is:
+via `uv tool install` or `pipx install` - the hook modules do not need to be
+importable by the system Python. The shim contract is:
 
 ```sh
 exec ccst hooks run <name> <<< "$INPUT"
@@ -330,13 +329,13 @@ exec ccst hooks run <name> <<< "$INPUT"
 
 Where `<name>` is one of:
 
-| Verb | Hook script (CCCS) | Module |
-|---|---|---|
-| `bash-security-review` | `bash-security-review.sh` | `cccs_hooks.bash_security_review` |
-| `confirm-8digit` | `enforce-8digit-confirmation.sh` | `cccs_hooks.confirm_8digit` |
-| `prompt-guard` | `prompt-guard.sh` | `cccs_hooks.prompt_guard` |
-| `edit-write-audit` | `enforce-edit-write-audit.sh` | `cccs_hooks.edit_write_audit` |
-| `session-end` | `session-end-reminder.sh` | `cccs_hooks.session_end` |
+| Verb | Module |
+|---|---|
+| `bash-security-review` | `cccs_hooks.bash_security_review` |
+| `confirm-8digit` | `cccs_hooks.confirm_8digit` |
+| `prompt-guard` | `cccs_hooks.prompt_guard` |
+| `edit-write-audit` | `cccs_hooks.edit_write_audit` |
+| `session-end` | `cccs_hooks.session_end` |
 
 The dispatcher reads the event payload from stdin, calls the matching module's
 `main()`, and propagates its exit code.
@@ -344,8 +343,8 @@ The dispatcher reads the event payload from stdin, calls the matching module's
 ### Running modules directly (debugging only)
 
 Each module is also runnable as a Python CLI if you want to bypass the dispatcher
-and have `cccs_hooks` importable on `sys.path` (typically inside an activated
-project venv):
+and have `cccs_hooks` importable on `sys.path` (e.g. inside an activated venv,
+or when installed via `uv tool install cc-session-tools`):
 
 ```sh
 python3 -m cccs_hooks.telemetry log --help
@@ -359,24 +358,24 @@ The `ccst` umbrella CLI provides hook and skill management.
 
 ### `ccst hooks install`
 
-Merges hook entries from a source `settings.json` into a target `settings.json`.
-Useful for wiring CCCS hooks into a fresh `~/.claude/settings.json`.
+Merges hook entries from a source `settings.json` into `~/.claude/settings.json`.
+Matching is by event type + matcher + command string; already-present hooks are
+never duplicated.
 
 ```sh
 # Dry run (default) - shows what would be added
 ccst hooks install \
-  --source ~/repos/claude-code-config-sync/config/settings.json \
+  --source /path/to/source-settings.json \
   --target ~/.claude/settings.json
 
 # Write the changes
 ccst hooks install \
-  --source ~/repos/claude-code-config-sync/config/settings.json \
+  --source /path/to/source-settings.json \
   --target ~/.claude/settings.json \
   --apply
 ```
 
-Matching is by event type + matcher + command string. Already-present hooks are never
-duplicated. The target file is written atomically (`.tmp` swap).
+The target file is written atomically (`.tmp` swap).
 
 ### `ccst hooks run <name>`
 

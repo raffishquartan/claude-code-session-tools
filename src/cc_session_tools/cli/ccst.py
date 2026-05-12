@@ -213,9 +213,9 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     install_parser.add_argument(
         "--source",
-        default=str(Path.home() / "repos/claude-code-config-sync/config/settings.json"),
+        required=True,
         metavar="PATH",
-        help="Source settings.json to read hooks from",
+        help="Source settings.json to read hook entries from",
     )
     install_parser.add_argument(
         "--target",
