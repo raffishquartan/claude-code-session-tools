@@ -5,6 +5,8 @@ Entry point: ccst <noun> <verb> [options]
 Current subcommands:
   hooks install         Merge hook entries from a source settings.json into a target.
   hooks run <name>      Run a Claude Code hook by name, reading the event payload from stdin.
+                        Available hooks: bash-security-review, confirm-8digit, edit-write-audit,
+                        prompt-guard, session-end, session-tag.
   skills install        Symlink bundled skills into ~/.claude/skills/ (dry run by default).
 """
 from __future__ import annotations
@@ -26,6 +28,7 @@ HOOK_VERBS: dict[str, str] = {
     "prompt-guard": "cccs_hooks.prompt_guard",
     "edit-write-audit": "cccs_hooks.edit_write_audit",
     "session-end": "cccs_hooks.session_end",
+    "session-tag": "cccs_hooks.session_tag",
 }
 
 
