@@ -14,17 +14,17 @@ from cccs_hooks import session_tag
 # ---------------------------------------------------------------------------
 
 def test_encode_path_replaces_slashes_with_dashes():
-    assert session_tag.encode_path("/home/alice") == "-home-chris"
+    assert session_tag.encode_path("/home/alice") == "-home-alice"
 
 
 def test_encode_path_replaces_dots_with_dashes():
-    # /home/alice/.claude -> -home-chris--claude (each non-alnum char → -)
-    assert session_tag.encode_path("/home/alice/.claude") == "-home-chris--claude"
+    # /home/alice/.claude -> -home-alice--claude (each non-alnum char → -)
+    assert session_tag.encode_path("/home/alice/.claude") == "-home-alice--claude"
 
 
-def test_encode_path_known_oneshot_path():
-    encoded = session_tag.encode_path("/mnt/c/Users/alice/OneDrive/claude/oneshot")
-    assert encoded == "-mnt-c-Users-cfoge-OneDrive-claude-oneshot"
+def test_encode_path_known_mnt_path():
+    encoded = session_tag.encode_path("/mnt/c/Users/alice/repos/myproject")
+    assert encoded == "-mnt-c-Users-alice-repos-myproject"
 
 
 def test_encode_path_preserves_alphanumeric():
