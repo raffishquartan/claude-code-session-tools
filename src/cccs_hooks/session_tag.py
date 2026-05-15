@@ -30,10 +30,10 @@ def encode_path(path: str) -> str:
 
     Claude Code replaces every character that is not alphanumeric with '-'.
     Examples:
-        /home/chris          -> -home-chris
-        /home/chris/.claude  -> -home-chris--claude   (the '.' also becomes '-')
-        /mnt/c/Users/cfoge/OneDrive/claude/oneshot
-                             -> -mnt-c-Users-cfoge-OneDrive-claude-oneshot
+        /home/alice          -> -home-alice
+        /home/alice/.claude  -> -home-alice--claude   (the '.' also becomes '-')
+        /mnt/c/Users/alice/repos/myproject
+                             -> -mnt-c-Users-alice-repos-myproject
     """
     return re.sub(r"[^a-zA-Z0-9]", "-", path)
 
