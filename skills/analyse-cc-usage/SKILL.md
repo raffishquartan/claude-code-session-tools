@@ -1,9 +1,9 @@
 ---
-name: claude-usage
+name: analyse-cc-usage
 description: Analyse the user's Claude Code usage across projects, sessions, MCP servers, plugins, tools, time and models, in tokens AND dollars. Use whenever the user asks about their Claude Code usage in any way - "how much have I spent", "tokens used last week", "which project costs the most", "how much did Opus cost in April", "MCP usage by project", "compare Sonnet and Opus", "show my sessions in oneshot last month", "how often am I using the github plugin", "give me a usage report for the quarter", "what tools do I lean on", "any spike in usage recently". Backed by the cc-session-tools repo at ~/repos/claude-code-session-tools (also on GitHub at raffishquartan/claude-code-session-tools). Reconciles token totals against ccusage so we know the numbers are right.
 ---
 
-# claude-usage
+# analyse-cc-usage
 
 Use this skill whenever the user asks anything about their Claude Code usage.
 The CLI behind this skill (`claude-code-usage`) is the canonical source.
@@ -177,10 +177,10 @@ uv run pytest    # all 350+ tests should pass
 bun add -g ccusage
 ccusage --version
 
-# 5. The skill lives inside the cc-session-tools repo at skills/claude-usage/.
+# 5. The skill lives inside the cc-session-tools repo at skills/analyse-cc-usage/.
 #    Symlink it to ~/.claude/skills/ so it is discoverable:
-ln -s ~/repos/claude-code-session-tools/skills/claude-usage \
-    ~/.claude/skills/claude-usage
+ln -s ~/repos/claude-code-session-tools/skills/analyse-cc-usage \
+    ~/.claude/skills/analyse-cc-usage
 
 # 6. Warm the cache (first run is the slow one)
 claude-code-usage warm-cache

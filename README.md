@@ -17,7 +17,7 @@ The repo ships five CLIs and three bundled skills:
 | **`ccst <noun> <verb>`** | Umbrella CLI for hook and skill management. `ccst hooks install` merges hook entries; `ccst hooks run <name>` runs a hook by name; `ccst skills install` symlinks bundled skills into `~/.claude/skills/`. |
 | Skill: **`find-claude-code-session`** | Wraps `ccs`. Lets a Claude Code session locate one of your prior sessions by name or content and offer a `ccr` command to resume it. |
 | Skill: **`move-session`** | Move, rename, or move+rename a session while keeping its `~/.claude/projects/<encoded-cwd>/<uuid>.jsonl` transcript resumable. |
-| Skill: **`claude-usage`** | Wraps `claude-code-usage`. Lets a Claude Code session answer "how much have I spent on Opus this month?" without you typing the CLI yourself. |
+| Skill: **`analyse-cc-usage`** | Wraps `claude-code-usage`. Lets a Claude Code session answer "how much have I spent on Opus this month?" without you typing the CLI yourself. |
 
 If you've ever tried to remember which `1f4a8b3c-...` UUID is the session where you were debugging that flaky test last Tuesday, or wondered which project burned through last week's Opus budget, this is for you.
 
@@ -99,7 +99,7 @@ Manual symlinks still work if you prefer:
 ```sh
 ln -s "$PWD/skills/find-claude-code-session" ~/.claude/skills/find-claude-code-session
 ln -s "$PWD/skills/move-session"             ~/.claude/skills/move-session
-ln -s "$PWD/skills/claude-usage"             ~/.claude/skills/claude-usage
+ln -s "$PWD/skills/analyse-cc-usage"             ~/.claude/skills/analyse-cc-usage
 ```
 
 The skills shell out to the installed CLIs - they don't import the Python library directly, so the only requirement is that `ccs` / `claude-code-usage` are on `$PATH`.
@@ -291,7 +291,7 @@ Wraps `ccs`. Triggers on prompts like "find my session about X", "did I work on 
 
 Moves, renames, or move+renames a session directory while keeping the JSONL transcript resumable. Triggers on "move session to", "rename my session", "this session belongs in a different folder". Dry-run by default - you must pass `--execute` for any filesystem change. Validates source and destination against the same rules as `ccd`, copies the session directory tree, rewrites JSONL `cwd` fields to the destination path, and appends a tombstone record to the source JSONL so `claude --resume` on the old session explains where it went.
 
-### `claude-usage`
+### `analyse-cc-usage`
 
 Wraps `claude-code-usage`. Triggers on usage questions: "how much have I spent on Claude Code", "tokens used this week", "which project costs the most", "Opus vs Sonnet", "any spike in usage recently". Picks the right subcommand and flags, runs it, and summarises the result in plain English.
 
