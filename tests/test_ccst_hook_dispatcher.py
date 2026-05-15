@@ -48,5 +48,6 @@ def test_hook_verbs_covers_every_shim_module() -> None:
         "prompt-guard",
         "edit-write-audit",
         "session-end",
+        "session-tag",
     }
     assert set(HOOK_VERBS) == expected

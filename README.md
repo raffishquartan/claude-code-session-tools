@@ -4,7 +4,7 @@ Three concerns, one repo, for life on the [Claude Code](https://docs.anthropic.c
 
 1. **Session management** - start, resume, find, and relocate Claude Code sessions from the shell, with tagged dated session directories that don't pollute your repo root.
 2. **Usage analytics** - parse `~/.claude/projects/**/*.jsonl` into tokens-and-dollars breakdowns by project, session, model, MCP server, plugin, and tool.
-3. **Hook library** - Python package (`cccs_hooks`) providing Claude Code PreToolUse / PostToolUse / UserPromptSubmit / Stop hook implementations, invokable via `ccst hooks run <name>`.
+3. **Hook library** - Python package (`cccs_hooks`) providing Claude Code SessionStart / PreToolUse / PostToolUse / UserPromptSubmit / Stop hook implementations, invokable via `ccst hooks run <name>`.
 
 The repo ships five CLIs and three bundled skills:
 
@@ -305,16 +305,17 @@ to make the hook library available. Hooks are invoked through `ccst hooks run <n
 
 ### Modules
 
-| Module | Hook script | What it does |
+| Module | Hook event | What it does |
 |---|---|---|
 | `cccs_hooks.telemetry` | — | Writes structured JSONL to `~/.claude/hooks/fires.jsonl`; used by other modules. |
 | `cccs_hooks.transcript` | — | Walks parent session transcript JSONL; shared by `confirm_8digit`. |
-| `cccs_hooks.confirm_8digit` | `enforce-8digit-confirmation.sh` | 8-digit confirmation guard for gated tools. |
+| `cccs_hooks.confirm_8digit` | PreToolUse | 8-digit confirmation guard for gated tools. |
 | `cccs_hooks.cache` | — | SHA-256 command cache (CSV); used by `bash_security_review`. |
-| `cccs_hooks.bash_security_review` | `bash-security-review.sh` | Tiered Bash security review with cache. |
-| `cccs_hooks.edit_write_audit` | `enforce-edit-write-audit.sh` | PostToolUse sensitive-path + WORKLOG audit. |
-| `cccs_hooks.prompt_guard` | `prompt-guard.sh` | UserPromptSubmit credential/injection pattern guard. |
-| `cccs_hooks.session_end` | `session-end-reminder.sh` | Stop-event WORKLOG/uncommitted-changes nudge. |
+| `cccs_hooks.bash_security_review` | PreToolUse | Tiered Bash security review with cache. |
+| `cccs_hooks.edit_write_audit` | PostToolUse | Sensitive-path + WORKLOG audit. |
+| `cccs_hooks.prompt_guard` | UserPromptSubmit | Credential/injection pattern guard. |
+| `cccs_hooks.session_end` | Stop | WORKLOG/uncommitted-changes nudge. |
+| `cccs_hooks.session_tag` | **SessionStart** | Writes `<uuid>.tag` so `claude-code-usage` can map session UUIDs to `ccd` name tags (see [Session tag hook](#session-tag-hook)). |
 
 ### Running hooks via `ccst hooks run <name>`
 
@@ -336,9 +337,82 @@ Where `<name>` is one of:
 | `prompt-guard` | `cccs_hooks.prompt_guard` |
 | `edit-write-audit` | `cccs_hooks.edit_write_audit` |
 | `session-end` | `cccs_hooks.session_end` |
+| `session-tag` | `cccs_hooks.session_tag` |
 
 The dispatcher reads the event payload from stdin, calls the matching module's
 `main()`, and propagates its exit code.
+
+### Session tag hook
+
+`cccs_hooks.session_tag` is a **SessionStart** hook that writes a small tag file when a session is created via `ccd <tag>`:
+
+- File written: `~/.claude/projects/<encoded-cwd>/<session_id>.tag`
+- File content: the `ccd` name tag (e.g. `oneshot-add-uuid-for-better-usage-mapping`)
+- If `CLD_SESSION_TAG` is not set (i.e. the session was not started by `ccd`), the hook exits silently.
+
+Claude Code stores each session as `~/.claude/projects/<encoded-cwd>/<uuid>.jsonl`. The display name (set by `ccd` via `claude -n`) survives only in ephemeral PID files that disappear when the process exits. The `.tag` file gives `claude-code-usage` and other tools a persistent, stable mapping from UUID to human name - so `--session-format name` shows `oneshot-add-uuid-for-better-usage-mapping` instead of `sess-8f3a2c1d`.
+
+#### Installing the session-tag hook (without CCCS)
+
+**Option A — local clone** (simplest): use the bundled config file with `ccst hooks install`:
+
+```sh
+ccst hooks install \
+  --source ~/repos/claude-code-session-tools/config/session-tag-hook.json \
+  --apply
+```
+
+**Option B — PyPI/pipx install** (no local clone): save the snippet below to a temporary file and merge it in, or add it directly to `~/.claude/settings.json` by hand.
+
+```json
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "ccst hooks run session-tag",
+            "timeout": 5,
+            "statusMessage": "Writing session tag file..."
+          }
+        ]
+      }
+    ]
+  }
+}
+```
+
+```sh
+# Save to a temp file and merge atomically:
+cat > /tmp/session-tag-hook.json << 'EOF'
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "ccst hooks run session-tag",
+            "timeout": 5,
+            "statusMessage": "Writing session tag file..."
+          }
+        ]
+      }
+    ]
+  }
+}
+EOF
+ccst hooks install --source /tmp/session-tag-hook.json --apply
+```
+
+Either way, a single `SessionStart` entry is added to `~/.claude/settings.json`. Verify with `cat ~/.claude/settings.json | python3 -m json.tool | grep -A5 SessionStart`.
+
+Once installed, every session started via `ccd` will automatically write a `.tag` file on startup.
+
+#### CCCS users
+
+If you use [claude-code-config-sync](https://github.com/raffishquartan/claude-code-config-sync), the hook is wired in automatically when you update `cc-wrapper-session-tag.sh` to pipe stdin to `ccst hooks run session-tag`. No additional `ccst hooks install` step is needed.
 
 ### Running modules directly (debugging only)
 
