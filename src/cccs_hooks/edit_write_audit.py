@@ -29,7 +29,6 @@ _WORKLOG_PATTERN = re.compile(r'cc-sessions/[^/]+/working/WORKLOG\.md$')
 
 _DEFAULT_REPO_ROOTS = [
     Path.home() / "repos",
-    Path("/mnt/c/Users/alice/OneDrive"),
 ]
 
 
