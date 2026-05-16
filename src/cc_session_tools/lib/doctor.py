@@ -130,7 +130,19 @@ def check_hook_registered(
 
 
 def check_skill_symlink(skill_name: str, skill_src: Path, skills_dir: Path) -> CheckResult:
-    """Check that skills_dir/<skill_name> is a symlink pointing at skill_src."""
+    """Check that skills_dir/<skill_name> is a valid CCST skill symlink.
+
+    A symlink is OK if:
+      - it resolves to ``skill_src`` exactly (the currently invoked ccst's
+        bundled source), OR
+      - it resolves to *any* directory named ``<skill_name>`` that contains a
+        SKILL.md file — i.e. a different but otherwise valid CCST install
+        (canonical clone vs worktree, multiple clones, pipx vs uv tool dir).
+
+    The second case is reported as OK with a parenthetical NOTE so the user
+    can spot the divergence but doctor does not FAIL on what is a legitimate
+    multi-install setup.
+    """
     name = f"skill:{skill_name}"
     dest = skills_dir / skill_name
     if not dest.exists() and not dest.is_symlink():
@@ -145,13 +157,24 @@ def check_skill_symlink(skill_name: str, skill_src: Path, skills_dir: Path) -> C
             status=Status.FAIL,
             reason=f"{dest} exists but is not a symlink",
         )
-    if dest.resolve() != skill_src.resolve():
+    actual = dest.resolve()
+    expected = skill_src.resolve()
+    if actual == expected:
+        return CheckResult(name=name, status=Status.OK, reason=f"-> {actual}")
+    if actual.is_dir() and actual.name == skill_name and (actual / "SKILL.md").is_file():
         return CheckResult(
             name=name,
-            status=Status.FAIL,
-            reason=f"symlink points to {dest.resolve()}, expected {skill_src.resolve()}",
+            status=Status.OK,
+            reason=f"-> {actual} (NOTE: different CCST install than this one at {expected})",
         )
-    return CheckResult(name=name, status=Status.OK, reason=f"-> {dest.resolve()}")
+    return CheckResult(
+        name=name,
+        status=Status.FAIL,
+        reason=(
+            f"symlink points to {actual}, which is not a valid {skill_name!r} "
+            f"skill directory (expected {expected} or another CCST install)"
+        ),
+    )
 
 
 def check_pypi_version(installed_version: str, timeout: float = 3.0) -> CheckResult:

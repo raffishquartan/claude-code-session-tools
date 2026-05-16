@@ -180,6 +180,47 @@ def test_check_skill_symlink_non_symlink(tmp_path: Path) -> None:
     assert "not a symlink" in r.reason
 
 
+def test_check_skill_symlink_compatible_different_install(tmp_path: Path) -> None:
+    """A symlink pointing at a different but valid CCST install is OK with a NOTE.
+
+    Covers the multi-clone case (canonical clone vs worktree, pipx vs uv,
+    etc.) — the user's symlinks legitimately point at one install while
+    doctor is invoked from another.
+    """
+    src = tmp_path / "skills" / "my-skill"
+    src.mkdir(parents=True)
+    (src / "SKILL.md").write_text("---\nname: my-skill\n---\n")
+
+    other_install = tmp_path / "other-ccst-clone" / "skills" / "my-skill"
+    other_install.mkdir(parents=True)
+    (other_install / "SKILL.md").write_text("---\nname: my-skill\n---\n")
+
+    target_dir = tmp_path / "target"
+    target_dir.mkdir()
+    (target_dir / "my-skill").symlink_to(other_install)
+
+    r = check_skill_symlink("my-skill", src, target_dir)
+    assert r.status == Status.OK
+    assert "NOTE" in r.reason
+    assert str(other_install) in r.reason
+
+
+def test_check_skill_symlink_wrong_target_no_skill_md(tmp_path: Path) -> None:
+    """Symlink to a directory that is not a SKILL.md-bearing CCST skill -> FAIL."""
+    src = tmp_path / "skills" / "my-skill"
+    src.mkdir(parents=True)
+    other = tmp_path / "random-dir" / "my-skill"
+    other.mkdir(parents=True)
+    # No SKILL.md inside `other`
+    target_dir = tmp_path / "target"
+    target_dir.mkdir()
+    (target_dir / "my-skill").symlink_to(other)
+
+    r = check_skill_symlink("my-skill", src, target_dir)
+    assert r.status == Status.FAIL
+    assert "not a valid" in r.reason
+
+
 # ---------- check_pypi_version ----------
 
 def test_check_pypi_version_network_failure_returns_ok() -> None:
