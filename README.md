@@ -105,6 +105,13 @@ ccst shell install --apply
 ccst doctor
 ```
 
+After `ccst shell install --apply`, re-source your shell rc file to pick up any updated `ccl()` function:
+
+```sh
+source ~/.bashrc   # bash
+source ~/.zshrc    # zsh
+```
+
 ## Configure your global CLAUDE.md
 
 After installing, add CCST-aware guidance to your global `~/.claude/CLAUDE.md` so
@@ -514,6 +521,13 @@ ccst shell install
 
 # Write the ccl() function
 ccst shell install --apply
+```
+
+After running `--apply`, re-source your shell rc file to activate the updated `ccl()` function:
+
+```sh
+source ~/.bashrc   # bash
+source ~/.zshrc    # zsh
 ```
 
 ### `ccst shell uninstall`
