@@ -48,6 +48,45 @@ The `YYYYMMDD-` start-date prefix is **immutable** in all cases. Every other par
 - **Refuses to clobber.** Aborts if any destination path already exists.
 - **Refuses in-session moves.** If the source session is the *currently running* CC session, the script refuses with exit code 2 and prints a recipe of commands the user must run after exiting CC. There is no override flag - see "In-session refusal" below for why and the detection signals.
 
+## Design decisions
+
+### Historical references are not rewritten
+
+When a session is moved or renamed, this skill does NOT rewrite references to
+the old basename or old path that appear inside `WORKLOG.md`, the JSONL
+transcript records before the move, or any other file the user wrote during
+the original session.
+
+This is an intentional design decision, not an oversight. Three reasons:
+
+1. **Historical record integrity** — `WORKLOG.md` and earlier messages
+   document what happened at the time. Rewriting them retroactively would
+   falsify the record and lose the breadcrumb trail (e.g. "I called it
+   `foo-bar`, then renamed it to `foo-baz` once I realised what the work
+   actually was").
+2. **Search still works** — `ccs <old-fragment>` continues to find the session
+   via the tombstone in the source JSONL and the unchanged historical
+   references inside the moved files.
+3. **No safe definition of "reference"** — any rewrite would need to
+   distinguish casual mentions ("the old foo-bar session") from path-shaped
+   strings that are still valid (relative paths in shell snippets, URLs, etc.).
+   The skill stays out of that judgement call.
+
+If the user wants old references updated, they can do it manually with
+`sed` / `rg --files-with-matches` — but that is an explicit user action, not
+something the skill takes responsibility for.
+
+### Why the SKILL.md uses `~/.claude/skills/move-session/scripts/...` paths
+
+All script invocations in this SKILL.md use the path under
+`~/.claude/skills/move-session/scripts/`. That is correct:
+`~/.claude/skills/move-session/` is a symlink (created by
+`ccst skills install`) into the installed `cc-session-tools` source tree, so
+the path resolves to the real script. Documenting it via the symlink rather
+than the source-tree path means the same SKILL.md works regardless of where
+the user installed `cc-session-tools` (pipx prefix, uv tool dir, dev clone,
+etc.).
+
 ## In-session refusal
 
 If a user asks the model to move or rename the session they are currently in, **the model must not bypass the refusal**. Run the script as normal; the script will detect the in-session condition and print the recipe. Read the recipe back to the user verbatim.
