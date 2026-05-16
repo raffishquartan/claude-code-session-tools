@@ -5,6 +5,11 @@ All bash hooks call this module via:
 
 Never raises — write failures are logged to stderr and silently suppressed so
 a telemetry error never blocks a hook.
+
+Rotation: when fires.jsonl exceeds _ROTATION_BYTES (default 10 MB), it is
+rotated to fires.jsonl.1; existing .1 shifts to .2, and so on up to
+_ROTATION_KEEP slots. Anything older than slot _ROTATION_KEEP is dropped.
+Explicit pruning: use ``ccst telemetry trim`` (cccs_hooks.telemetry_trim).
 """
 from __future__ import annotations
 
@@ -12,17 +17,16 @@ import argparse
 import dataclasses
 import datetime
 import fcntl
-import gzip
 import json
 import os
 import shutil
 import sys
-import time
 from pathlib import Path
 from typing import Literal
 
 _DEFAULT_HOOKS_DIR = Path.home() / ".claude" / "hooks"
-_ROTATION_BYTES = 512 * 1024  # 512 KB
+_ROTATION_BYTES = 10 * 1024 * 1024  # 10 MB
+_ROTATION_KEEP = 3
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
@@ -60,18 +64,35 @@ class TelemetryEntry:
         )
 
 
-def _rotate_if_needed(fires: Path) -> None:
-    if not fires.exists() or fires.stat().st_size <= _ROTATION_BYTES:
-        return
-    week = time.strftime("%Y-W%W")
-    rotated = fires.parent / f"fires.{week}.jsonl.gz"
-    counter = 0
-    while rotated.exists():
-        counter += 1
-        rotated = fires.parent / f"fires.{week}.{counter}.jsonl.gz"
-    with fires.open("rb") as f_in, gzip.open(rotated, "wb") as f_out:
-        shutil.copyfileobj(f_in, f_out)
+def maybe_rotate(fires: Path, max_size_mb: float = 10.0, keep: int = _ROTATION_KEEP) -> bool:
+    """Rotate fires.jsonl if it exceeds max_size_mb.
+
+    Shifts fires.jsonl → fires.jsonl.1, fires.jsonl.1 → fires.jsonl.2, …
+    Drops anything older than slot ``keep``.
+    Returns True if rotation occurred, False otherwise.
+    """
+    if not fires.exists() or fires.stat().st_size <= max_size_mb * 1024 * 1024:
+        return False
+    # Drop oldest slot
+    oldest = fires.parent / f"{fires.name}.{keep}"
+    if oldest.exists():
+        oldest.unlink()
+    # Shift slots down
+    for i in range(keep - 1, 0, -1):
+        src = fires.parent / f"{fires.name}.{i}"
+        dst = fires.parent / f"{fires.name}.{i + 1}"
+        if src.exists():
+            src.rename(dst)
+    # Rotate current → .1
+    rotated = fires.parent / f"{fires.name}.1"
+    shutil.copy2(str(fires), str(rotated))
     fires.unlink()
+    return True
+
+
+def _rotate_if_needed(fires: Path) -> None:
+    """Thin wrapper used by log_event — delegates to maybe_rotate."""
+    maybe_rotate(fires)
 
 
 def log_event(entry: TelemetryEntry, *, hooks_dir: Path | None = None) -> None:

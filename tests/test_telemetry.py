@@ -128,30 +128,32 @@ def test_log_event_concurrent_writes_no_corruption(tmp_hooks_dir: Path) -> None:
 
 
 # ---------- log_event: rotation ----------
+# Rotation threshold is 10 MB (see telemetry._ROTATION_BYTES).
+# Rotation scheme: fires.jsonl → fires.jsonl.1 (numbered slots, no gzip).
 
 def test_log_event_rotates_when_over_size_limit(tmp_hooks_dir: Path) -> None:
+    from cccs_hooks.telemetry import _ROTATION_BYTES
     fires = tmp_hooks_dir / "fires.jsonl"
-    fires.write_text("x" * (512 * 1024 + 1))
+    fires.write_text("x" * (_ROTATION_BYTES + 1))
     fires.chmod(0o600)
     log_event(_make_entry(), hooks_dir=tmp_hooks_dir)
-    rotated = list(tmp_hooks_dir.glob("fires.*.jsonl.gz"))
-    assert len(rotated) == 1, f"expected 1 rotated file, got {rotated}"
+    rotated = tmp_hooks_dir / "fires.jsonl.1"
+    assert rotated.exists(), f"expected fires.jsonl.1, got {list(tmp_hooks_dir.iterdir())}"
+    # New fires.jsonl should contain just the one appended entry
     new_lines = [line for line in fires.read_text().splitlines() if line]
     assert len(new_lines) == 1
 
 
-def test_rotation_file_is_valid_gzip(tmp_hooks_dir: Path) -> None:
-    import gzip
-
+def test_rotation_slot_contains_original_content(tmp_hooks_dir: Path) -> None:
+    from cccs_hooks.telemetry import _ROTATION_BYTES
     fires = tmp_hooks_dir / "fires.jsonl"
-    fires.write_text("x" * (512 * 1024 + 1))
+    original_content = "x" * (_ROTATION_BYTES + 1)
+    fires.write_text(original_content)
     fires.chmod(0o600)
     log_event(_make_entry(), hooks_dir=tmp_hooks_dir)
-    rotated = list(tmp_hooks_dir.glob("fires.*.jsonl.gz"))
-    assert rotated
-    with gzip.open(rotated[0], "rb") as f:
-        content = f.read()
-    assert len(content) > 0
+    rotated = tmp_hooks_dir / "fires.jsonl.1"
+    assert rotated.exists()
+    assert rotated.read_text() == original_content
 
 
 # ---------- CLI entry point ----------

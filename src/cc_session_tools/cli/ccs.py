@@ -18,6 +18,7 @@ from cc_session_tools.lib.sessions import (
     enumerate_session_files,
     grep_files,
     iter_sessions,
+    session_is_empty_safe,
     session_start_date,
     transcript_dir_for_project,
 )
@@ -94,28 +95,49 @@ class _Result:
     scope: str = "name"  # one of: "name", "contents", "messages"
 
 
+_EPILOG = """\
+Examples:
+  ccs                           # list all sessions in current project
+  ccs --global                  # list all sessions across configured roots
+  ccs flaky                     # name search in current project
+  ccs "GraphQL retry" --contents --global   # full-text search everywhere
+  ccs --emptiness only          # only sessions you never typed in
+"""
+
+
 def _build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="ccs",
         description="Search Claude Code sessions by name/date or file contents.",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=_EPILOG,
     )
     p.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
 
-    # Positional query is now optional; scope flags may supply their own queries.
+    # Positional query is optional; omitting it (with no scope flags) enters list mode.
     p.add_argument(
         "query",
         nargs="?",
         default=None,
         help=(
             "Substring to match against session names (default) or contents. "
-            "Optional when a scope flag (--name, --contents, --messages) is given "
-            "with its own value."
+            "Omit entirely (with no --name/--contents/--messages) to list all sessions."
         ),
     )
 
-    # Scope flags: each takes an optional value (nargs="?").
+    # --- Scope group ---
+    scope_grp = p.add_argument_group("Scope")
+    scope_grp.add_argument("--global", dest="do_global", action="store_true",
+                           help="Search all sessions on this machine, not just the current directory.")
+    scope_grp.add_argument("--local", action="store_true",
+                           help="Search only current directory's sessions "
+                                "(overrides CCS_DEFAULT_GLOBAL=1).")
+
+    # --- Search mode group ---
+    mode_grp = p.add_argument_group("Search mode")
+    # Each takes an optional value (nargs="?").
     # When the flag is present without a value, const=_NO_VALUE signals "use positional".
-    p.add_argument(
+    mode_grp.add_argument(
         "--name",
         nargs="?",
         const=_NO_VALUE,
@@ -126,7 +148,7 @@ def _build_parser() -> argparse.ArgumentParser:
             "This is the default scope when no scope flag is given."
         ),
     )
-    p.add_argument(
+    mode_grp.add_argument(
         "--contents",
         nargs="?",
         const=_NO_VALUE,
@@ -134,11 +156,10 @@ def _build_parser() -> argparse.ArgumentParser:
         metavar="QUERY",
         help=(
             "Search files under cc-sessions/<session>/working/ and out/ only. "
-            "If QUERY is omitted, uses the positional query. "
-            "(Legacy --contents with no value keeps the same behaviour.)"
+            "If QUERY is omitted, uses the positional query."
         ),
     )
-    p.add_argument(
+    mode_grp.add_argument(
         "--messages",
         nargs="?",
         const=_NO_VALUE,
@@ -151,41 +172,47 @@ def _build_parser() -> argparse.ArgumentParser:
         ),
     )
 
-    p.add_argument("--global", dest="do_global", action="store_true",
-                   help="Search all sessions on this machine, not just the current directory.")
-    p.add_argument("--max-file-size", type=float, default=10.0, metavar="MB",
-                   help="Skip files larger than this many MB (default: 10).")
-    p.add_argument("--workers", type=int, default=0, metavar="N",
-                   help="Parallel grep workers for the per-session fallback path "
-                        "(default: number of CPU cores). Ignored when rg is available "
-                        "since rg parallelises internally.")
-    p.add_argument("--local", action="store_true",
-                   help="Search only current directory's sessions "
-                        "(overrides CCS_DEFAULT_GLOBAL=1).")
-    p.add_argument(
-        "--exclude-hooks",
-        action="store_true",
-        help="Exclude sessions whose tag contains 'hook' (e.g. hook-security-check sessions).",
-    )
-    p.add_argument(
+    # --- Filter group ---
+    filter_grp = p.add_argument_group("Filter")
+    filter_grp.add_argument(
         "--since",
         metavar="DATE",
         help=(
             "Include only sessions started on or after this date. "
             "Accepted: YYYYMMDD (legacy), YYYY-MM-DD, YYYY-MM-DDTHH:MM, YYYY-MM-DDTHH:MM:SS. "
-            "Time portion is ignored (only the date part is compared against session start dates)."
+            "Time portion is ignored."
         ),
     )
-    p.add_argument("--before", metavar="YYYYMMDD",
-                   help="Include only sessions started before this date (YYYYMMDD).")
-    p.add_argument("--days", type=int, metavar="N",
-                   help="Include only sessions started within the last N days.")
-    fmt = p.add_mutually_exclusive_group()
+    filter_grp.add_argument("--before", metavar="YYYYMMDD",
+                            help="Include only sessions started before this date (YYYYMMDD).")
+    filter_grp.add_argument("--days", type=int, metavar="N",
+                            help="Include only sessions started within the last N days.")
+    filter_grp.add_argument(
+        "--exclude-hooks",
+        action="store_true",
+        help="Exclude sessions whose tag contains 'hook' (e.g. hook-security-check sessions).",
+    )
+    filter_grp.add_argument(
+        "--emptiness",
+        choices=["only", "exclude", "any"],
+        default="any",
+        metavar="{only,exclude,any}",
+        help=(
+            "Filter by session emptiness (default: any). "
+            "'only' = sessions with no user-typed messages; "
+            "'exclude' = sessions that have at least one user-typed message; "
+            "'any' = no filter."
+        ),
+    )
+
+    # --- Output group ---
+    out_grp = p.add_argument_group("Output")
+    fmt = out_grp.add_mutually_exclusive_group()
     fmt.add_argument("--json", action="store_true",
                      help="Output results as a JSON array.")
     fmt.add_argument("--null", action="store_true",
                      help="Output null-delimited basenames (for xargs -0).")
-    p.add_argument(
+    out_grp.add_argument(
         "--sort",
         choices=["datetime", "alpha"],
         default="datetime",
@@ -195,21 +222,37 @@ def _build_parser() -> argparse.ArgumentParser:
             "'alpha' = ascending alphabetical by session basename."
         ),
     )
-    p.add_argument("--debug", action="store_true",
-                   help="Enable debug output (also: CCX_DEBUG=1).")
+
+    # --- Performance group ---
+    perf_grp = p.add_argument_group("Performance")
+    perf_grp.add_argument("--max-file-size", type=float, default=10.0, metavar="MB",
+                          help="Skip files larger than this many MB (default: 10).")
+    perf_grp.add_argument("--workers", type=int, default=0, metavar="N",
+                          help="Parallel grep workers for the per-session fallback path "
+                               "(default: number of CPU cores). Ignored when rg is available.")
+
+    # --- Debug group ---
+    debug_grp = p.add_argument_group("Debug")
+    debug_grp.add_argument("--debug", action="store_true",
+                           help="Enable debug output (also: CCX_DEBUG=1).")
+
     return p
 
 
-def _resolve_scope_queries(args) -> dict[str, str] | None:
+_LIST_MODE = "__list__"  # Sentinel value for scope_queries when in list mode.
+
+
+def _resolve_scope_queries(args) -> dict[str, str | None] | None:
     """Resolve scope flags to a dict mapping scope name -> query string.
 
     Returns None if resolution fails (missing query for a scope). Prints a
     clear error message before returning None in that case.
 
-    Possible scopes: "name", "contents", "messages".
+    Possible scopes: "name", "contents", "messages", or list mode.
 
     Logic:
-      - If no scope flag is given → {"name": positional_query} (unchanged legacy).
+      - If no scope flag is given AND no positional query → list mode: {_LIST_MODE: None}.
+      - If no scope flag is given AND positional query → {"name": positional_query} (legacy).
       - If scope flags are given:
         - Flag with explicit value: use that value for this scope.
         - Flag with no value (const=_NO_VALUE): use positional query.
@@ -223,15 +266,14 @@ def _resolve_scope_queries(args) -> dict[str, str] | None:
     active_scopes = {k: v for k, v in flag_map.items() if v is not None}
 
     if not active_scopes:
-        # Legacy behaviour: no scope flags → name search using positional.
+        # No scope flags given.
         if args.query is None:
-            # Argparse should have caught this already, but be defensive.
-            print("ccs: error: a query is required", file=sys.stderr)
-            return None
+            # No query either → list mode.
+            return {_LIST_MODE: None}
         return {"name": args.query}
 
     # One or more scope flags given. Resolve each.
-    resolved: dict[str, str] = {}
+    resolved: dict[str, str | None] = {}
     for scope, val in active_scopes.items():
         if val == _NO_VALUE:
             # Flag given without its own value → use positional.
@@ -846,6 +888,36 @@ def _merge_results(results_by_scope: list[list[_Result]]) -> list[_Result]:
     return merged
 
 
+def _print_session_count_footer(
+    sessions: list[tuple[Path, Path]],
+    *,
+    n_empty_before_filter: int,
+    n_hook_before_filter: int,
+    emptiness_filter: str,
+    exclude_hooks: bool,
+    scope_label: str,
+    machine_readable: bool,
+) -> None:
+    """Print the 'ccs: searching N sessions (X empty, Y hook) in <scope>' line.
+
+    Suppressed entirely when machine_readable is True (--json / --null).
+    """
+    if machine_readable:
+        return
+    n = len(sessions)
+    noun = "session" if n == 1 else "sessions"
+    parts = []
+    if emptiness_filter == "any":
+        parts.append(f"{n_empty_before_filter} empty")
+    if not exclude_hooks:
+        parts.append(f"{n_hook_before_filter} hook")
+    inner = ", ".join(parts)
+    if inner:
+        print(f"ccs: searching {n} {noun} ({inner}) in {scope_label}", file=sys.stderr)
+    else:
+        print(f"ccs: searching {n} {noun} in {scope_label}", file=sys.stderr)
+
+
 def main(argv: list[str] | None = None) -> int:
     args = _build_parser().parse_args(argv)
 
@@ -858,7 +930,9 @@ def main(argv: list[str] | None = None) -> int:
     if scope_queries is None:
         return 1
 
-    multi_scope = len(scope_queries) > 1
+    is_list_mode = _LIST_MODE in scope_queries
+    multi_scope = not is_list_mode and len(scope_queries) > 1
+    machine_readable = args.json or args.null
 
     # Validate date filter args eagerly so bad values are caught before any I/O.
     date_filter: tuple[str | None, str | None] | None = None
@@ -871,6 +945,7 @@ def main(argv: list[str] | None = None) -> int:
         os.environ.get("CCS_DEFAULT_GLOBAL", "").strip() not in ("", "0")
         and not args.local
     )
+    scope_label = "global" if effective_global else "cwd"
 
     debug(f"scope: {'global' if effective_global else f'cwd={Path.cwd()}'}")
     pairs = _collect_pairs(effective_global)
@@ -889,11 +964,14 @@ def main(argv: list[str] | None = None) -> int:
             sessions.append((sess, proj))
     debug(f"sessions found: {len(sessions)}")
 
+    # Count hooks and empty sessions BEFORE applying those filters (for the footer).
+    n_hook_before_filter = sum(1 for s, _ in sessions if _is_hook_session(s.name))
+
     if args.exclude_hooks:
         before = len(sessions)
         sessions = [(s, p) for s, p in sessions if not _is_hook_session(s.name)]
         excluded = before - len(sessions)
-        if excluded:
+        if excluded and not machine_readable:
             noun = "session" if excluded == 1 else "sessions"
             print(
                 f"ccs: excluded {excluded} hook {noun}",
@@ -908,6 +986,66 @@ def main(argv: list[str] | None = None) -> int:
             and (before_key is None or session_start_date(s.name) < before_key)
         ]
 
+    # Count empty sessions BEFORE applying the emptiness filter (for the footer).
+    # Use session_is_empty_safe: None (unknown — no JSONL found) is treated as non-empty.
+    n_empty_before_filter = sum(
+        1 for s, p in sessions
+        if session_is_empty_safe(s.name, p) is True
+    )
+
+    # Apply emptiness filter (after date/hooks filters, before search).
+    emptiness = args.emptiness  # "only", "exclude", or "any"
+    if emptiness != "any":
+        filtered: list[tuple[Path, Path]] = []
+        for s, p in sessions:
+            result = session_is_empty_safe(s.name, p)
+            if result is None:
+                # Unknown (no JSONL) → treated as non-empty (conservative).
+                is_empty = False
+            else:
+                is_empty = result
+            if emptiness == "only" and is_empty:
+                filtered.append((s, p))
+            elif emptiness == "exclude" and not is_empty:
+                filtered.append((s, p))
+        sessions = filtered
+
+    # Print the session-count footer, or WARNING if N == 0.
+    if not machine_readable:
+        if not sessions:
+            print(f"ccs: WARNING: no sessions to search ({scope_label})", file=sys.stderr)
+            return 1
+        _print_session_count_footer(
+            sessions,
+            n_empty_before_filter=n_empty_before_filter,
+            n_hook_before_filter=n_hook_before_filter,
+            emptiness_filter=emptiness,
+            exclude_hooks=args.exclude_hooks,
+            scope_label=scope_label,
+            machine_readable=False,
+        )
+
+    # ------ List mode ------
+    if is_list_mode:
+        # Sort sessions and print one per line (newest first by default).
+        def _session_sort_key(pair: tuple[Path, Path]) -> str:
+            s, _ = pair
+            return session_start_date(s.name) or ""
+
+        if args.sort == "alpha":
+            sessions_sorted = sorted(sessions, key=lambda pair: pair[0].name)
+        else:
+            sessions_sorted = sorted(sessions, key=_session_sort_key, reverse=True)
+
+        for s, proj in sessions_sorted:
+            display_name = _maybe_link(s.name, s)
+            if effective_global:
+                print(f"{display_name} ({_display_path(proj)})")
+            else:
+                print(display_name)
+        return 0
+
+    # ------ Search modes ------
     # Execute each active scope search and collect results.
     all_results: list[_Result] = []
 
@@ -947,7 +1085,7 @@ def main(argv: list[str] | None = None) -> int:
     # Sort the combined results.
     all_results = _sort_results(all_results, args.sort)
 
-    if args.json or args.null:
+    if machine_readable:
         _output_machine_readable(all_results, args.null)
         return 0
 

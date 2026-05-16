@@ -1,0 +1,76 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "ccst hooks run session-tag",
+            "timeout": 5,
+            "statusMessage": "Writing session tag file..."
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "ccst hooks run prompt-guard",
+            "timeout": 5,
+            "statusMessage": "Scanning prompt for credential shapes..."
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "ccst hooks run bash-security-review",
+            "timeout": 30,
+            "statusMessage": "Reviewing shell command for security risks..."
+          }
+        ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "ccst hooks run confirm-8digit",
+            "timeout": 10,
+            "statusMessage": "Checking 8-digit confirmation gate..."
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write|NotebookEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "ccst hooks run edit-write-audit",
+            "timeout": 10,
+            "statusMessage": "Auditing written paths..."
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "ccst hooks run session-end",
+            "timeout": 10,
+            "statusMessage": "Running end-of-session checks..."
+          }
+        ]
+      }
+    ]
+  }
+}

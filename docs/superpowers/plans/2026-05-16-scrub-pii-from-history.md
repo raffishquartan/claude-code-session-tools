@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Remove the owner's first name (`chris`) and Windows username (`cfoge`) from all tracked files and git history, drop the now-unnecessary `lint-no-personal-paths` CI job, and add a PII policy to `~/.claude/coding-standards.md`.
+**Goal:** Remove the owner's first name (`alice`) and Windows username (`alice`) from all tracked files and git history, drop the now-unnecessary `lint-no-personal-paths` CI job, and add a PII policy to `~/.claude/coding-standards.md`.
 
 **Architecture:** Fix the working tree first, commit, then rewrite all history with `git filter-repo --replace-text`. Force-push to remote. The `~/.claude/` organisation (move md files to a subdirectory) is independent and can be done before or after the git work.
 
@@ -15,7 +15,7 @@
 **What counts as PII here:**
 - `/home/alice` — the owner's Linux home path
 - `/mnt/c/Users/alice` — the owner's Windows OneDrive path
-- `cfoge` — the Windows username fragment
+- `alice` — the Windows username fragment (placeholder)
 
 **What does NOT need scrubbing:**
 - `raffishquartan` — this is the public GitHub handle for the repo; removing it would break the package metadata and all install instructions.
@@ -24,11 +24,11 @@
 
 | File | PII | Fix |
 |---|---|---|
-| `.github/workflows/ci.yml` | `lint-no-personal-paths` job using `pat='/home/''chris'` | Remove entire job |
+| `.github/workflows/ci.yml` | `lint-no-personal-paths` job using `pat='/home/''<name>'` | Remove entire job |
 | `src/cccs_hooks/edit_write_audit.py:32` | `Path("/mnt/c/Users/alice/OneDrive")` | Remove this entry from `_DEFAULT_REPO_ROOTS` |
-| `tests/test_parser.py:17,51` | `"/mnt/c/Users/alice/OneDrive/claude/oneshot"` | Replace `cfoge` → `alice` |
-| `tests/test_schema.py:14,49` | `"/mnt/c/Users/alice/OneDrive/claude/oneshot"` | Replace `cfoge` → `alice` |
-| `tests/test_session_tag.py:54` | `"/mnt/c/Users/alice/OneDrive/claude/oneshot"` | Replace `cfoge` → `alice` |
+| `tests/test_parser.py:17,51` | `"/mnt/c/Users/alice/OneDrive/claude/oneshot"` | Use `alice` placeholder |
+| `tests/test_schema.py:14,49` | `"/mnt/c/Users/alice/OneDrive/claude/oneshot"` | Use `alice` placeholder |
+| `tests/test_session_tag.py:54` | `"/mnt/c/Users/alice/OneDrive/claude/oneshot"` | Use `alice` placeholder |
 
 **Files only in git history (already clean in working tree, but need history rewrite):**
 `docs/superpowers/plans/2026-05-10-ccx-improvements.md`, `skills/find-claude-code-session/SKILL.md`, `src/cccs_hooks/session_tag.py`, `src/cccs_hooks/transcript.py`, `tests/test_sessions.py`, `tests/test_telemetry.py`
@@ -67,11 +67,11 @@ The job to delete looks like:
       - uses: actions/checkout@v6.0.2
       - name: Fail if personal paths appear in tracked files
         run: |
-          pat='/home/''chris'
+          pat='/home/''<personal-name>'
           ! git grep -rn "$pat"
 ```
 
-- [ ] Verify: `cat .github/workflows/ci.yml | grep -c "chris"` should return `0`.
+- [ ] Verify: `cat .github/workflows/ci.yml | grep -c "<personal-name>"` should return `0`.
 
 ### 1b — Remove personal path from `_DEFAULT_REPO_ROOTS`
 
@@ -92,7 +92,7 @@ _DEFAULT_REPO_ROOTS = [
 ]
 ```
 
-### 1c — Replace `cfoge` with `alice` in test fixture paths
+### 1c — Replace personal username with `alice` in test fixture paths
 
 All three replacements are in test helper strings that serve as example CWD paths. The convention already used elsewhere in the test suite is `/home/alice` and `/mnt/c/Users/alice/...`.
 
@@ -107,7 +107,7 @@ All three replacements are in test helper strings that serve as example CWD path
 
 ### 1d — Verify working tree is clean
 
-- [ ] Run: `git grep -rn "cfoge\|/home/alice"` — should return nothing.
+- [ ] Run: `git grep -rn "personal-username\|/home/personal"` — should return nothing.
 - [ ] Run: `uv run pytest -q` — all tests must pass.
 
 ### 1e — Commit
@@ -160,7 +160,7 @@ Note: `==>` (three characters) is the `git filter-repo` delimiter, not `==`.
 git log --all --format="%H" | \
   xargs -I{} git diff-tree --no-commit-id -r {} 2>/dev/null | \
   awk '{print $4}' | sort -u | \
-  xargs -I{} sh -c 'git cat-file blob {} 2>/dev/null | grep -l "cfoge\|/home/alice" && echo {}' 2>/dev/null | head -20
+  xargs -I{} sh -c 'git cat-file blob {} 2>/dev/null | grep -l "personal-id\|/home/personal" && echo {}' 2>/dev/null | head -20
 ```
 
 This shows which blob SHAs have PII — confirms we're replacing the right things.
@@ -190,7 +190,7 @@ git push origin --force --tags
 
 ### 2f — Verify working tree is still clean after rewrite
 
-- [ ] `git grep -rn "cfoge\|/home/alice"` — must return nothing.
+- [ ] `git grep -rn` for the personal identifiers — must return nothing.
 - [ ] `uv run pytest -q` — all tests must still pass.
 
 ---
@@ -216,7 +216,7 @@ git push --force origin main
 ```
 
 - [ ] Confirm push succeeds.
-- [ ] Open https://github.com/raffishquartan/claude-code-session-tools/commits/main and confirm the commit history looks correct (no cfoge/chris in any file).
+- [ ] Open https://github.com/raffishquartan/claude-code-session-tools/commits/main and confirm the commit history looks correct (no personal identifiers in any file).
 
 ### 3c — Delete or force-push any remaining feature branches
 
@@ -322,10 +322,10 @@ The file is currently empty. Add content that explicitly loads the moved files s
 
 After all tasks:
 
-- [ ] `git grep -rn "cfoge\|/home/alice"` in the repo returns nothing
+- [ ] `git grep -rn` for personal identifiers in the repo returns nothing
 - [ ] `uv run pytest -q` passes
 - [ ] GitHub Actions CI passes (test + install-check on all matrix entries)
 - [ ] No `lint-no-personal-paths` job exists in CI
-- [ ] `git log --all -p | grep -E "cfoge|/home/alice"` returns nothing (confirms history is clean)
+- [ ] `git log --all -p` grep for personal identifiers returns nothing (confirms history is clean)
 - [ ] `~/.claude/claude-md-specifics/coding-standards.md` exists and contains the new PII section
 - [ ] `~/.claude/CLAUDE.md` references the three moved files

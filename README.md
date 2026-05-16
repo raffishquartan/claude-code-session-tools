@@ -2,22 +2,27 @@
 
 Three concerns, one repo, for life on the [Claude Code](https://docs.anthropic.com/en/docs/claude-code) CLI:
 
-1. **Session management** - start, resume, find, and relocate Claude Code sessions from the shell, with tagged dated session directories that don't pollute your repo root.
+1. **Session management** - start, resume, find, relocate, and delete Claude Code sessions from the shell, with tagged dated session directories that don't pollute your repo root.
 2. **Usage analytics** - parse `~/.claude/projects/**/*.jsonl` into tokens-and-dollars breakdowns by project, session, model, MCP server, plugin, and tool.
 3. **Hook library** - Python package (`cccs_hooks`) providing Claude Code SessionStart / PreToolUse / PostToolUse / UserPromptSubmit / Stop hook implementations, invokable via `ccst hooks run <name>`.
 
-The repo ships five CLIs and three bundled skills:
+The repo ships five CLIs, one shell helper, and five bundled skills:
 
 | | What it does |
 |---|---|
 | **`ccd <tag>`** | Start a new session with a pre-created `cc-sessions/<date>-<tag>/` directory and a tagged display name. |
 | **`ccr <fragment>`** | Resume an existing session by typing any substring of its name. |
-| **`ccs <query>`** | Search across your sessions by name, file contents, or transcript messages, in the current project or across every configured root. |
+| **`ccs [query]`** | Search across your sessions by name, file contents, or transcript messages. No query → list all sessions newest-first. |
 | **`claude-code-usage`** | Multi-dimensional usage analytics CLI: query/group/filter by project, session, model, MCP server, plugin, tool, day/week/month/year. Reconciles dollar totals against `ccusage`. |
-| **`ccst <noun> <verb>`** | Umbrella CLI for hook and skill management. `ccst hooks install` merges hook entries; `ccst hooks run <name>` runs a hook by name; `ccst skills install` symlinks bundled skills into `~/.claude/skills/`. |
+| **`ccst <noun> <verb>`** | Umbrella CLI for hook and skill management: install, uninstall, health-check, shell helpers, telemetry trim. |
+| **`ccl` (shell fn)** | Shell function wrapping `ccs` for list-mode usage. Installed by `ccst shell install`. |
 | Skill: **`find-claude-code-session`** | Wraps `ccs`. Lets a Claude Code session locate one of your prior sessions by name or content and offer a `ccr` command to resume it. |
 | Skill: **`move-session`** | Move, rename, or move+rename a session while keeping its `~/.claude/projects/<encoded-cwd>/<uuid>.jsonl` transcript resumable. |
 | Skill: **`analyse-cc-usage`** | Wraps `claude-code-usage`. Lets a Claude Code session answer "how much have I spent on Opus this month?" without you typing the CLI yourself. |
+| Skill: **`list-empty-sessions`** | Wraps `ccs --emptiness only`. Finds sessions you never actually typed in — accumulate from accidental `ccd` invocations or abandoned starts. |
+| Skill: **`delete-sessions`** | Permanently deletes one or more sessions (cc-sessions dir + JSONL transcript + .tag file). Dry-run by default; requires an 8-digit confirmation code to execute. |
+
+See [CHANGELOG.md](CHANGELOG.md) for a full version history. See [TODO.md](TODO.md) for known follow-up work (including the notify-user skill integration).
 
 If you've ever tried to remember which `1f4a8b3c-...` UUID is the session where you were debugging that flaky test last Tuesday, or wondered which project burned through last week's Opus budget, this is for you.
 
@@ -30,29 +35,24 @@ If you've ever tried to remember which `1f4a8b3c-...` UUID is the session where 
 - **`ccusage` (optional)** - if on `$PATH`, `claude-code-usage reconcile` cross-checks dollar totals against it. Skipped gracefully if missing.
 - **`ripgrep` (optional)** - `ccs --contents` prefers `rg`; falls back to threaded Python `grep` if missing.
 
-### Install the tools
-
-The simplest path is [`pipx`](https://pipx.pypa.io/), which installs the commands into
-an isolated venv and puts them on your `$PATH`:
+### Install and set up (recommended path)
 
 ```sh
-pipx install cc-session-tools
+# 1. Install the package (choose one)
+uv tool install cc-session-tools          # recommended
+# pipx install cc-session-tools           # alternative
+
+# 2. Install bundled skills, hooks, and the ccl shell function (each command is
+#    idempotent — safe to re-run after upgrades)
+ccst skills install --apply               # symlinks skills into ~/.claude/skills/
+ccst hooks install --apply                # merges all bundled hooks into ~/.claude/settings.json
+ccst shell install --apply                # adds ccl() to ~/.bashrc and ~/.zshrc
+
+# 3. Verify everything is wired up
+ccst doctor
 ```
 
-If you use [`uv`](https://docs.astral.sh/uv/):
-
-```sh
-uv tool install cc-session-tools
-```
-
-Either way, `ccd`, `ccr`, `ccs`, `claude-code-usage`, and `ccst` will be available on
-your `$PATH`. Verify:
-
-```sh
-ccd --version
-claude-code-usage --version
-ccst --help
-```
+After `ccst shell install --apply`, open a new shell (or `source ~/.bashrc`) to activate `ccl`.
 
 > **Installing from source (pre-release or offline):**
 > ```sh
@@ -60,16 +60,6 @@ ccst --help
 > cd claude-code-session-tools
 > uv tool install .
 > ```
-
-### Upgrade
-
-```sh
-# pipx
-pipx upgrade cc-session-tools
-
-# uv
-uv tool upgrade cc-session-tools
-```
 
 > **Installing from a local clone:** if you keep a local clone for development or
 > to stay on the latest commit, refresh the global install with:
@@ -82,27 +72,50 @@ uv tool upgrade cc-session-tools
 > `uv tool install ~/repos/claude-code-session-tools` from outside the worktree after
 > merging.
 
-### Install the skills
-
-Run `ccst skills install` to symlink all bundled skills into `~/.claude/skills/`:
+### Upgrade
 
 ```sh
-# Dry run (shows what would be created)
-ccst skills install
+# 1. Upgrade the package (choose one)
+uv tool upgrade cc-session-tools          # recommended
+# pipx upgrade cc-session-tools           # alternative
 
-# Write the symlinks
+# 2. Pick up any new bundled skills, hooks, and shell helpers
 ccst skills install --apply
+ccst hooks install --apply
+ccst shell install --apply
+
+# 3. Verify
+ccst doctor
 ```
 
-Manual symlinks still work if you prefer:
+## Configure your global CLAUDE.md
+
+After installing, add CCST-aware guidance to your global `~/.claude/CLAUDE.md` so
+Claude Code sessions know about the session-management tools and which actions require
+an 8-digit confirmation gate.
+
+The easiest way is to run the bundled bootstrap prompt:
 
 ```sh
-ln -s "$PWD/skills/find-claude-code-session" ~/.claude/skills/find-claude-code-session
-ln -s "$PWD/skills/move-session"             ~/.claude/skills/move-session
-ln -s "$PWD/skills/analyse-cc-usage"             ~/.claude/skills/analyse-cc-usage
+cd ~/repos/claude-code-session-tools && \
+  claude -p "Check that you are executing with the claude-code-session-tools repository as your cwd. If you are not then exit. If you are then use this file as your prompt: docs/global-claude-md-bootstrap-prompt.md"
 ```
 
-The skills shell out to the installed CLIs - they don't import the Python library directly, so the only requirement is that `ccs` / `claude-code-usage` are on `$PATH`.
+This prompt will:
+
+1. Detect which CCST CLIs, skills, and hooks are installed.
+2. Propose standard additions to your `~/.claude/CLAUDE.md` — pointers to `ccs`/`ccd`/`ccr`/`ccl`, guidance to invoke the bundled skills (`find-claude-code-session`, `move-session`, `list-empty-sessions`, `delete-sessions`, `analyse-cc-usage`), and a section explaining the 8-digit confirmation hook.
+3. **Interactively ask you** which classes of high-stakes action you want gated (push-to-remote, force-push, PR merges, branch deletion, financial transactions, sending external messages, etc.) and write your choices into a `## 8-digit gated actions` section.
+4. Write the additions idempotently (re-running the prompt replaces the block, not appends).
+
+If you prefer to edit `~/.claude/CLAUDE.md` by hand, the suggested additions are:
+
+- Use `ccs` (or `ccl`) to list sessions, `ccr` to resume, `ccd` to start a new one — do not start new sessions inside the running one.
+- When the user wants to find a prior session, invoke the `find-claude-code-session` skill.
+- When the user wants to relocate or rename a session, invoke the `move-session` skill.
+- When the user wants to clean up never-used sessions, invoke `list-empty-sessions` then `delete-sessions` (8-digit gated).
+- When the user wants usage analytics, invoke the `analyse-cc-usage` skill.
+- Ask before pushing to remote, merging PRs, deleting branches, or taking other high-stakes actions — the 8-digit confirmation hook is the mechanism.
 
 ## Why bother?
 
@@ -112,7 +125,7 @@ These tools add:
 
 1. **A tagged, dated session directory** under `<project>/cc-sessions/<YYYYMMDD>-<tag>/` with `working/` and `out/` subdirs - the convention Claude Code's [session memory](https://docs.anthropic.com/en/docs/claude-code/memory) hooks expect when you want scratch space and deliverables that don't pollute your repo.
 2. **Resume-by-fragment** so you can type `ccr flaky` instead of scrolling through the picker.
-3. **Cross-session search** so `ccs --contents --global "GraphQL retry"` finds every conversation that mentioned it.
+3. **List and search** so `ccs` (no args) shows all local sessions newest-first, `ccl` wraps it for convenience, and `ccs --contents --global "GraphQL retry"` finds every conversation that mentioned it.
 4. **Usage analytics** so `claude-code-usage query --since 2026-04-01 --group-by project,model` answers where the spend went.
 5. **Skill wrappers** so the Claude Code agent can do all of the above on your behalf when you ask in natural language.
 
@@ -201,20 +214,29 @@ Useful flags:
 | `--include-orphans` | Also consider sessions whose `cc-sessions/` directory is missing or has been cleaned up (resume by transcript UUID only). |
 | `--debug` | Enable verbose debug output (`CCX_DEBUG=1`). |
 
-### `ccs` - search
+### `ccs` - search and list
 
 ```sh
-ccs flaky                              # name search in current project
-ccs flaky --global                     # name search across all configured roots
-ccs "GraphQL retry" --contents        # full-text search of working/out files
-ccs "GraphQL retry" --messages        # full-text search of JSONL transcripts
+# List all sessions (no args → list mode)
+ccs                                        # newest-first, current project
+ccs --global                               # all configured roots
+
+# Search
+ccs flaky                                  # name search in current project
+ccs flaky --global                         # name search across all configured roots
+ccs "GraphQL retry" --contents             # full-text search of working/out files
+ccs "GraphQL retry" --messages             # full-text search of JSONL transcripts
 ccs "GraphQL retry" --contents --messages --global  # combined, all projects
-ccs flaky --since 2026-04-01          # only sessions from April 2026 onwards
-ccs flaky --sort newest               # explicit sort (default)
+
+# Filter
+ccs flaky --since 2026-04-01               # only sessions from April 2026 onwards
+ccs --emptiness only                       # only empty sessions (no user messages)
+ccs --emptiness exclude                    # exclude empty sessions
+ccs flaky --sort newest                    # explicit sort (default)
 ccs flaky --sort oldest
 ```
 
-Results are ordered newest-first by session start date by default. `--contents` shows one line of context around each match; `--messages` searches the Claude transcript JSONL files and surfaces matching turns.
+Results are ordered newest-first by session start date by default. `--contents` shows one line of context around each match; `--messages` searches the Claude transcript JSONL files and surfaces matching turns. Every run prints a session-count footer on stderr: `ccs: searching N sessions (M empty, K hook) in <scope>`.
 
 Useful flags:
 
@@ -224,6 +246,7 @@ Useful flags:
 | `--contents` | Search text files inside each session's `working/` and `out/` directories. |
 | `--messages` | Search Claude transcript JSONL files in `~/.claude/projects/`. |
 | `--global` | Search across all configured roots, not just the current project. |
+| `--emptiness {only,exclude,any}` | Filter by whether a session has any user-typed messages. Default: `any`. |
 | `--since DATE` | Only sessions started on or after DATE. Accepts `YYYYMMDD`, `YYYY-MM-DD`, `7d` (days ago), `2w` (weeks ago), `1m` (months ago). |
 | `--before YYYYMMDD` | Only sessions started before DATE. |
 | `--days N` | Only sessions started within the last N days. |
@@ -232,6 +255,18 @@ Useful flags:
 | `--json` | Output results as a JSON array. |
 | `--null` | Output null-delimited basenames (for `xargs -0`). |
 | `--debug` | Enable verbose debug output (`CCX_DEBUG=1`). |
+
+### `ccl` - list sessions (shell function)
+
+`ccl` is a shell function installed by `ccst shell install --apply`. It wraps `ccs` in list mode:
+
+```sh
+ccl              # list all sessions in current project, newest-first
+ccl --global     # list across all configured roots
+ccl --emptiness only  # list only empty sessions
+```
+
+After install, activate it with `source ~/.bashrc` (or open a new shell).
 
 ## Usage analytics CLI
 
@@ -279,9 +314,9 @@ Run `claude-code-usage <subcommand> --help` for the full grammar. A few flags wo
 
 ## Bundled skills
 
-The repo ships three Claude Code skills, designed to be symlinked into `~/.claude/skills/`. They're thin wrappers around the CLIs so a Claude Code session can invoke them on your behalf in response to natural-language prompts.
+The repo ships five Claude Code skills, designed to be symlinked into `~/.claude/skills/`. They're thin wrappers around the CLIs so a Claude Code session can invoke them on your behalf in response to natural-language prompts.
 
-Install all three at once with `ccst skills install --apply` (see [Install the skills](#install-the-skills) above).
+Install all five at once with `ccst skills install --apply` (see [Install and set up](#install-and-set-up-recommended-path) above).
 
 ### `find-claude-code-session`
 
@@ -295,6 +330,16 @@ Moves, renames, or move+renames a session directory while keeping the JSONL tran
 
 Wraps `claude-code-usage`. Triggers on usage questions: "how much have I spent on Claude Code", "tokens used this week", "which project costs the most", "Opus vs Sonnet", "any spike in usage recently". Picks the right subcommand and flags, runs it, and summarises the result in plain English.
 
+### `list-empty-sessions`
+
+Wraps `ccs --emptiness only`. Triggers on prompts like "list empty sessions", "find sessions I never used", "which sessions are empty", "show abandoned sessions". Reformats the output with a count summary and two copy-pasteable follow-up commands: one `ccr <basename>` line to resume, and one `delete-sessions <basenames...>` line for bulk removal.
+
+### `delete-sessions`
+
+Permanently deletes one or more sessions. Triggers on "delete session", "remove empty sessions", "clean up sessions". Inputs must be explicit session basenames — the user or the `list-empty-sessions` skill must supply them. Pre-flight checks confirm each session exists and is not the currently running session. Dry-run by default; requires `--execute` plus an 8-digit confirmation code for actual deletion. Deletes the `cc-sessions/<basename>/` directory, the JSONL transcript, the `.tag` file, and optionally the `~/.claude/tasks/<encoded>/` task directory.
+
+Note: the 8-digit confirmation in `delete-sessions` is an inline prompt (not a reuse of the `cccs_hooks.confirm_8digit` PreToolUse hook). The hook guards tool calls; the script guards its own execution.
+
 See `docs/design.md` for the full design and CLI contract.
 
 ## Hook library (`cccs_hooks`)
@@ -307,7 +352,7 @@ to make the hook library available. Hooks are invoked through `ccst hooks run <n
 
 | Module | Hook event | What it does |
 |---|---|---|
-| `cccs_hooks.telemetry` | — | Writes structured JSONL to `~/.claude/hooks/fires.jsonl`; used by other modules. |
+| `cccs_hooks.telemetry` | — | Writes structured JSONL to `~/.claude/hooks/fires.jsonl`; used by other modules. Rotates at 10 MB (numbered slots: `fires.jsonl.1`, `.2`, `.3`). |
 | `cccs_hooks.transcript` | — | Walks parent session transcript JSONL; shared by `confirm_8digit`. |
 | `cccs_hooks.confirm_8digit` | PreToolUse | 8-digit confirmation guard for gated tools. |
 | `cccs_hooks.cache` | — | SHA-256 command cache (CSV); used by `bash_security_review`. |
@@ -352,68 +397,6 @@ The dispatcher reads the event payload from stdin, calls the matching module's
 
 Claude Code stores each session as `~/.claude/projects/<encoded-cwd>/<uuid>.jsonl`. The display name (set by `ccd` via `claude -n`) survives only in ephemeral PID files that disappear when the process exits. The `.tag` file gives `claude-code-usage` and other tools a persistent, stable mapping from UUID to human name - so `--session-format name` shows `oneshot-add-uuid-for-better-usage-mapping` instead of `sess-8f3a2c1d`.
 
-#### Installing the session-tag hook (without CCCS)
-
-**Option A — local clone** (simplest): use the bundled config file with `ccst hooks install`:
-
-```sh
-ccst hooks install \
-  --source ~/repos/claude-code-session-tools/config/session-tag-hook.json \
-  --apply
-```
-
-**Option B — PyPI/pipx install** (no local clone): save the snippet below to a temporary file and merge it in, or add it directly to `~/.claude/settings.json` by hand.
-
-```json
-{
-  "hooks": {
-    "SessionStart": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "ccst hooks run session-tag",
-            "timeout": 5,
-            "statusMessage": "Writing session tag file..."
-          }
-        ]
-      }
-    ]
-  }
-}
-```
-
-```sh
-# Save to a temp file and merge atomically:
-cat > /tmp/session-tag-hook.json << 'EOF'
-{
-  "hooks": {
-    "SessionStart": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "ccst hooks run session-tag",
-            "timeout": 5,
-            "statusMessage": "Writing session tag file..."
-          }
-        ]
-      }
-    ]
-  }
-}
-EOF
-ccst hooks install --source /tmp/session-tag-hook.json --apply
-```
-
-Either way, a single `SessionStart` entry is added to `~/.claude/settings.json`. Verify with `cat ~/.claude/settings.json | python3 -m json.tool | grep -A5 SessionStart`.
-
-Once installed, every session started via `ccd` will automatically write a `.tag` file on startup.
-
-#### CCCS users
-
-If you use [claude-code-config-sync](https://github.com/raffishquartan/claude-code-config-sync), the hook is wired in automatically when you update `cc-wrapper-session-tag.sh` to pipe stdin to `ccst hooks run session-tag`. No additional `ccst hooks install` step is needed.
-
 ### Running modules directly (debugging only)
 
 Each module is also runnable as a Python CLI if you want to bypass the dispatcher
@@ -428,28 +411,45 @@ python3 -m cccs_hooks.prompt_guard          # reads JSON from stdin
 
 ## Hook management CLI (`ccst`)
 
-The `ccst` umbrella CLI provides hook and skill management.
+The `ccst` umbrella CLI provides hook and skill management, shell helper install, and system health checks.
 
 ### `ccst hooks install`
 
 Merges hook entries from a source `settings.json` into `~/.claude/settings.json`.
-Matching is by event type + matcher + command string; already-present hooks are
-never duplicated.
+With no `--source`, auto-discovers the bundled `config/hooks-bundle.json` and
+installs all six default hooks.
 
 ```sh
 # Dry run (default) - shows what would be added
-ccst hooks install \
-  --source /path/to/source-settings.json \
-  --target ~/.claude/settings.json
+ccst hooks install
 
-# Write the changes
-ccst hooks install \
-  --source /path/to/source-settings.json \
-  --target ~/.claude/settings.json \
-  --apply
+# Write all bundled hooks
+ccst hooks install --apply
+
+# Install one specific hook from the bundle
+ccst hooks install --hook session-tag --apply
+
+# Install from a custom source file
+ccst hooks install --source /path/to/custom-hooks.json --apply
 ```
 
-The target file is written atomically (`.tmp` swap).
+Matching is by event type + matcher + command string; already-present hooks are
+never duplicated. The target file is written atomically (`.tmp` swap).
+
+### `ccst hooks uninstall`
+
+Remove hook entries from `~/.claude/settings.json`. Dry-run by default.
+
+```sh
+# Show what would be removed
+ccst hooks uninstall
+
+# Remove all bundled hooks
+ccst hooks uninstall --apply
+
+# Remove one specific hook
+ccst hooks uninstall --hook session-tag --apply
+```
 
 ### `ccst hooks run <name>`
 
@@ -469,6 +469,68 @@ ccst skills install --apply
 # Replace wrong-target or conflicting symlinks
 ccst skills install --apply --force
 ```
+
+### `ccst skills uninstall`
+
+Remove skill symlinks from `~/.claude/skills/`. Refuses to remove non-symlinks
+unless `--force`. Dry-run by default.
+
+```sh
+# Show what would be removed
+ccst skills uninstall
+
+# Remove all bundled skill symlinks
+ccst skills uninstall --apply
+
+# Remove one specific skill
+ccst skills uninstall --skill move-session --apply
+```
+
+### `ccst shell install`
+
+Append a `ccl()` shell function to `~/.bashrc` and/or `~/.zshrc` between
+sentinel markers. Idempotent — re-running replaces the existing block.
+
+```sh
+# Dry run (default) - shows what would be added
+ccst shell install
+
+# Write the ccl() function
+ccst shell install --apply
+```
+
+### `ccst shell uninstall`
+
+Remove the sentinel-bracketed `ccl()` block from shell rc files.
+
+```sh
+ccst shell uninstall --apply
+```
+
+### `ccst doctor`
+
+Run a full health check: PATH for all five CLIs, env vars (`REPO_ROOT`/`PROJ_ROOT`),
+`~/.claude/settings.json` JSON validity, expected hook registrations present,
+skill symlinks correct and pointing at the installed source, version drift
+between installed `ccst` and the latest release on PyPI.
+
+```sh
+ccst doctor           # checks everything, including PyPI version check
+ccst doctor --no-pypi # skip the network version check (useful in CI)
+```
+
+Exit `0` if all checks are OK. Exit `1` if any check is WARN or FAIL.
+
+### `ccst telemetry trim`
+
+Prune old hook telemetry data from `~/.claude/hooks/fires.jsonl`.
+
+```sh
+# Remove entries older than 30 days, or if the file exceeds 5 MB
+ccst telemetry trim --max-age-days 30 --max-size 5
+```
+
+Telemetry is also rotated automatically at 10 MB (numbered slots `fires.jsonl.1/.2/.3`).
 
 ## How it interacts with Claude Code's task lists
 
