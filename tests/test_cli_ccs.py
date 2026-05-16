@@ -290,12 +290,16 @@ class TestContentsSearchHeaderGrepFallback:
         assert any(unit in err for unit in (" B", " KB", " MB"))
 
     def test_header_not_printed_for_name_search(self, fake_repos, monkeypatch, capsys):
+        """Name search doesn't print the contents/indexing header, but the
+        session-count footer is still emitted for every invocation mode."""
         proj = fake_repos / "myproj"
         _make_session(fake_repos, "myproj", "20260504-foo", contents="x\n")
         monkeypatch.chdir(proj)
         ccs.main(["foo"])
         err = capsys.readouterr().err
-        assert "sessions" not in err
+        # The indexing/searching header from contents search should NOT appear.
+        assert "indexing" not in err.lower()
+        assert "searching" not in err or "ccs: searching" in err  # footer is OK, rg header is not
 
 
 class TestContentsSearchSummary:
