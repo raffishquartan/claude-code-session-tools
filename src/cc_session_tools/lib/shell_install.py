@@ -1,11 +1,14 @@
 """Install and uninstall the ``ccl()`` shell function in ~/.bashrc and ~/.zshrc.
 
-The function block is delimited by sentinel comment lines:
+The function block is delimited by sentinel comment lines::
 
     # >>> ccst shell function (ccl) >>>
-    ccl() { ccs "$@"; }
+    ccl() { ... }       # list-mode wrapper; intercepts --help/-h
     ccl-global() { ccs --global "$@"; }
     # <<< ccst shell function (ccl) <<<
+
+``ccl --help`` prints a short, ccl-specific help message instead of
+delegating to ``ccs --help``.
 
 Operations are idempotent: re-running install replaces the block between the
 sentinels; uninstall removes it.
@@ -23,12 +26,36 @@ _SENTINEL_END = "# <<< ccst shell function (ccl) <<<"
 
 _BLOCK = """\
 # >>> ccst shell function (ccl) >>>
-ccl() { ccs "$@"; }
+ccl() {
+  local _a
+  for _a in "$@"; do
+    case "$_a" in
+      --help|-h)
+        cat <<'CCLHELP'
+Usage: ccl [--global] [--order-by {start,update}]
+
+List Claude Code sessions in the current project (wrapper around ccs).
+
+Options:
+  --global                   List sessions across all configured roots
+                             (default: current directory only).
+  --order-by {start,update}  Sort order:
+                               start  = newest-first by session start date
+                               update = newest-first by last file modification
+                                        (also prints the update timestamp)
+
+ccl is a shell function wrapper around 'ccs' (list mode only).
+For the full ccs interface, run: ccs --help
+CCLHELP
+        return 0
+        ;;
+    esac
+  done
+  ccs "$@"
+}
 ccl-global() { ccs --global "$@"; }
 # <<< ccst shell function (ccl) <<<
 """
-
-# TODO(stream-E): add a note in ccst --help / docs that ccl is a ccs list-mode wrapper
 
 
 class RCAction(str, Enum):
