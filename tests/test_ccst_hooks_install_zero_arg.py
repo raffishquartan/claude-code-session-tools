@@ -214,3 +214,121 @@ def test_bundle_json_confirm_8digit_has_no_matcher() -> None:
             assert "matcher" not in block
             found = True
     assert found, "confirm-8digit not found in PreToolUse"
+
+
+# ---------- table output ----------
+
+ALL_HOOK_NAMES = (
+    "bash-security-review",
+    "confirm-8digit",
+    "edit-write-audit",
+    "prompt-guard",
+    "session-end",
+    "session-tag",
+)
+
+
+def test_hooks_install_table_has_expected_headers(tmp_path: Path) -> None:
+    """The table has Hook/Status/Event/Description column headers."""
+    tgt = tmp_path / "settings.json"
+    _write(tgt, {})
+    result = _run("hooks", "install", "--target", str(tgt))
+    assert result.returncode == 0, result.stderr
+    out = result.stdout
+    for header in ("Hook", "Status", "Event", "Description"):
+        assert header in out, f"missing header {header!r} in:\n{out}"
+
+
+def test_hooks_install_table_lists_all_bundled_hooks(tmp_path: Path) -> None:
+    """The dry-run table includes a row for every bundled hook."""
+    tgt = tmp_path / "settings.json"
+    _write(tgt, {})
+    result = _run("hooks", "install", "--target", str(tgt))
+    assert result.returncode == 0, result.stderr
+    for name in ALL_HOOK_NAMES:
+        assert name in result.stdout, f"missing hook {name!r} in:\n{result.stdout}"
+
+
+def test_hooks_install_table_shows_install_status_when_new(tmp_path: Path) -> None:
+    """An empty target shows status 'install' for every bundled hook."""
+    tgt = tmp_path / "settings.json"
+    _write(tgt, {})
+    result = _run("hooks", "install", "--target", str(tgt))
+    assert result.returncode == 0
+    # Every hook line should have 'install' status (not already-installed)
+    for name in ALL_HOOK_NAMES:
+        # find the row, assert it contains 'install' but not 'already-installed'
+        line = next((ln for ln in result.stdout.splitlines() if ln.startswith(name)), None)
+        assert line is not None, f"no row for {name}"
+        assert "install" in line
+        assert "already-installed" not in line
+
+
+def test_hooks_install_table_shows_already_installed_after_apply(tmp_path: Path) -> None:
+    """After --apply, re-running shows status 'already-installed' for each hook."""
+    tgt = tmp_path / "settings.json"
+    _write(tgt, {})
+    _run("hooks", "install", "--target", str(tgt), "--apply")
+    result = _run("hooks", "install", "--target", str(tgt))
+    assert result.returncode == 0
+    for name in ALL_HOOK_NAMES:
+        line = next((ln for ln in result.stdout.splitlines() if ln.startswith(name)), None)
+        assert line is not None, f"no row for {name}"
+        assert "already-installed" in line
+
+
+def test_hooks_install_table_shows_event_names(tmp_path: Path) -> None:
+    """The table shows the CC event name for each hook (incl. matcher in brackets)."""
+    tgt = tmp_path / "settings.json"
+    _write(tgt, {})
+    result = _run("hooks", "install", "--target", str(tgt))
+    out = result.stdout
+    assert "PreToolUse[Bash]" in out  # bash-security-review's matcher
+    assert "SessionStart" in out
+    assert "UserPromptSubmit" in out
+    assert "PostToolUse[Edit|Write|NotebookEdit]" in out
+    assert "Stop" in out
+
+
+def test_hooks_install_table_shows_descriptions(tmp_path: Path) -> None:
+    """The table shows a non-empty description for every bundled hook."""
+    tgt = tmp_path / "settings.json"
+    _write(tgt, {})
+    result = _run("hooks", "install", "--target", str(tgt))
+    # Spot-check that the description column carries meaningful text per hook
+    assert "shell commands" in result.stdout  # bash-security-review
+    assert "8-digit confirmation" in result.stdout
+    assert "credential" in result.stdout  # prompt-guard
+    assert "WORKLOG" in result.stdout  # session-end
+    assert "session tag" in result.stdout
+    assert "Edit/Write" in result.stdout  # edit-write-audit
+
+
+def test_hooks_install_hook_selector_table_only_named_row(tmp_path: Path) -> None:
+    """--hook X shows a table with only that one hook listed."""
+    tgt = tmp_path / "settings.json"
+    _write(tgt, {})
+    result = _run("hooks", "install", "--hook", "session-tag", "--target", str(tgt))
+    assert result.returncode == 0
+    # session-tag should be on a row; other hooks should not have rows
+    assert "session-tag" in result.stdout
+    for other in [n for n in ALL_HOOK_NAMES if n != "session-tag"]:
+        # An 'other' hook name should not appear at the start of any line in the table
+        rows = [ln for ln in result.stdout.splitlines() if ln.startswith(other)]
+        assert not rows, f"unexpected row for {other!r} in:\n{result.stdout}"
+
+
+def test_hooks_install_table_mixed_status_after_partial_install(tmp_path: Path) -> None:
+    """After installing only session-tag, the full-bundle table shows mixed statuses."""
+    tgt = tmp_path / "settings.json"
+    _write(tgt, {})
+    _run("hooks", "install", "--hook", "session-tag", "--target", str(tgt), "--apply")
+    result = _run("hooks", "install", "--target", str(tgt))
+    assert result.returncode == 0
+    # session-tag is already there
+    line_st = next(ln for ln in result.stdout.splitlines() if ln.startswith("session-tag"))
+    assert "already-installed" in line_st
+    # session-end is still new
+    line_se = next(ln for ln in result.stdout.splitlines() if ln.startswith("session-end"))
+    assert "install" in line_se
+    assert "already-installed" not in line_se

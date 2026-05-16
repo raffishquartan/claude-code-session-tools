@@ -44,6 +44,16 @@ HOOK_VERBS: dict[str, str] = {
 }
 
 
+HOOK_DESCRIPTIONS: dict[str, str] = {
+    "bash-security-review": "Reviews shell commands for security risks (tiered: allowlist, heuristics, LLM)",
+    "confirm-8digit": "Enforces an 8-digit confirmation gate before risky tool calls",
+    "prompt-guard": "Scans user prompts for credential shapes and prompt-injection patterns",
+    "edit-write-audit": "Audits Edit/Write/NotebookEdit paths for sensitive or out-of-root writes",
+    "session-end": "Warns on stale WORKLOG and uncommitted changes when Claude stops",
+    "session-tag": "Writes the session tag file so ccusage can map UUIDs to human-readable names",
+}
+
+
 # ---------- path discovery ----------
 
 
@@ -292,27 +302,28 @@ def _cmd_hooks_install(args: argparse.Namespace) -> int:
 
     # --hook selector: filter the bundle to just the named hook
     if args.hook:
-        source = _filter_bundle_to_hook(source, args.hook)
-        if source is None:
-            known = _list_bundle_hook_names(load_json(source_path))
+        filtered = _filter_bundle_to_hook(source, args.hook)
+        if filtered is None:
+            known = _list_bundle_hook_names(source)
             print(
                 f"error: hook {args.hook!r} not found in bundle. "
                 f"Known hooks: {', '.join(sorted(known))}",
                 file=sys.stderr,
             )
             return 1
+        source = filtered
 
     target = load_json(target_path) if target_path.exists() else {}
 
     merged, additions = merge_hook_settings(source_settings=source, target_settings=target)
 
-    if not additions:
-        print("Already up to date — nothing to add.")
-        return 0
+    inventory = _bundle_inventory(source)
+    added_keys = {(a.event, a.matcher, a.command) for a in additions}
+    _print_hooks_install_table(inventory, added_keys)
 
-    for add in additions:
-        matcher_label = f" [{add.matcher}]" if add.matcher else ""
-        print(f"  + {add.event}{matcher_label}: {add.command}")
+    if not additions:
+        print("\nAlready up to date — nothing to add.")
+        return 0
 
     if args.apply:
         write_json_atomic(target_path, merged)
@@ -321,6 +332,55 @@ def _cmd_hooks_install(args: argparse.Namespace) -> int:
         print(f"\nDry run — re-run with --apply to write {target_path}")
 
     return 0
+
+
+def _bundle_inventory(bundle: dict) -> list[tuple[str, str, str | None, str]]:
+    """Return [(hook_name, event, matcher, command)] for every hook in the bundle.
+
+    For commands matching ``ccst hooks run <name>``, ``hook_name`` is ``<name>``.
+    For other commands (custom --source), ``hook_name`` is the command itself.
+    """
+    prefix = "ccst hooks run "
+    out: list[tuple[str, str, str | None, str]] = []
+    for event, blocks in bundle.get("hooks", {}).items():
+        for block in blocks:
+            matcher = block.get("matcher")
+            for h in block.get("hooks", []):
+                cmd = h.get("command", "")
+                if cmd.startswith(prefix):
+                    name = cmd[len(prefix):].strip() or cmd
+                else:
+                    name = cmd
+                if cmd:
+                    out.append((name, event, matcher, cmd))
+    out.sort(key=lambda r: r[0])
+    return out
+
+
+def _print_hooks_install_table(
+    inventory: list[tuple[str, str, str | None, str]],
+    added_keys: set[tuple[str, str | None, str]],
+) -> None:
+    """Print a Hook | Status | Event | Description table to stdout."""
+    headers = ("Hook", "Status", "Event", "Description")
+    if not inventory:
+        return
+
+    rows: list[tuple[str, str, str, str]] = []
+    for name, event, matcher, cmd in inventory:
+        status = "install" if (event, matcher, cmd) in added_keys else "already-installed"
+        event_label = f"{event}[{matcher}]" if matcher else event
+        description = HOOK_DESCRIPTIONS.get(name, "")
+        rows.append((name, status, event_label, description))
+
+    widths = [
+        max([len(headers[i])] + [len(r[i]) for r in rows]) for i in range(4)
+    ]
+    fmt = f"{{:<{widths[0]}}}  {{:<{widths[1]}}}  {{:<{widths[2]}}}  {{:<{widths[3]}}}"
+    print(fmt.format(*headers))
+    print(fmt.format(*("-" * w for w in widths)))
+    for row in rows:
+        print(fmt.format(*row))
 
 
 def _list_bundle_hook_names(bundle: dict) -> list[str]:
