@@ -11,6 +11,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Literal
 
 from cc_session_tools import __version__
 from cc_session_tools.lib.roots import RootsConfigError, load_session_roots
@@ -93,15 +94,45 @@ class _Result:
     project_dir: Path
     context_lines: list[str]
     scope: str = "name"  # one of: "name", "contents", "messages"
+    update_mtime: float = 0.0  # epoch seconds; 0 = not yet computed
+
+
+def _get_session_update_mtime(session_dir: Path) -> float:
+    """Return the newest file-mtime inside session_dir (recursive), falling
+    back to the directory's own mtime when no files exist."""
+    best = 0.0
+    try:
+        for p in session_dir.rglob("*"):
+            if p.is_file():
+                try:
+                    m = p.stat().st_mtime
+                    if m > best:
+                        best = m
+                except OSError:
+                    pass
+        if best == 0.0:
+            best = session_dir.stat().st_mtime
+    except OSError:
+        pass
+    return best
+
+
+def _format_update_dt(mtime: float) -> str:
+    """Format an epoch-seconds mtime as 'YYYY-MM-DD HH:MM' in local time."""
+    if mtime == 0.0:
+        return "unknown"
+    return datetime.datetime.fromtimestamp(mtime).strftime("%Y-%m-%d %H:%M")
 
 
 _EPILOG = """\
 Examples:
-  ccs                           # list all sessions in current project
-  ccs --global                  # list all sessions across configured roots
-  ccs flaky                     # name search in current project
+  ccs                              # list all sessions in current project
+  ccs --global                     # list all sessions across configured roots
+  ccs --order-by update            # list all, most recently touched first
+  ccs --order-by update --global   # same, across all configured roots
+  ccs flaky                        # name search in current project
   ccs "GraphQL retry" --contents --global   # full-text search everywhere
-  ccs --emptiness only          # only sessions you never typed in
+  ccs --emptiness only             # only sessions you never typed in
 """
 
 
@@ -213,13 +244,28 @@ def _build_parser() -> argparse.ArgumentParser:
     fmt.add_argument("--null", action="store_true",
                      help="Output null-delimited basenames (for xargs -0).")
     out_grp.add_argument(
+        "--order-by",
+        choices=["start", "update"],
+        default=None,
+        metavar="{start,update}",
+        dest="order_by",
+        help=(
+            "Primary sort order. "
+            "'start' = newest-first by session start date (same as --sort datetime). "
+            "'update' = newest-first by last file modification time; also prints "
+            "the update datetime after each session name. "
+            "Overrides --sort when given."
+        ),
+    )
+    out_grp.add_argument(
         "--sort",
         choices=["datetime", "alpha"],
         default="datetime",
         help=(
-            "Sort order for results. "
-            "'datetime' (default) = newest first by session start date. "
-            "'alpha' = ascending alphabetical by session basename."
+            "Sort order for results (default: datetime). "
+            "'datetime' = newest first by session start date. "
+            "'alpha' = ascending alphabetical by session basename. "
+            "Overridden by --order-by when given."
         ),
     )
 
@@ -292,12 +338,24 @@ def _resolve_scope_queries(args) -> dict[str, str | None] | None:
     return resolved
 
 
-def _sort_results(results: list[_Result], sort: str) -> list[_Result]:
-    """Sort results in place and return list. 'datetime' = newest first; 'alpha' = ascending."""
-    if sort == "alpha":
-        results.sort(key=lambda r: r.basename)
-    else:
+def _sort_results(
+    results: list[_Result],
+    sort: str,
+    order_by: str | None = None,
+) -> list[_Result]:
+    """Sort results and return list.
+
+    ``order_by`` overrides ``sort`` when given:
+      - 'update' = newest-first by update_mtime (must be pre-populated).
+      - 'start'  = newest-first by start date (same as sort='datetime').
+    ``sort`` choices: 'datetime' (newest first), 'alpha' (ascending basename).
+    """
+    if order_by == "update":
+        results.sort(key=lambda r: r.update_mtime, reverse=True)
+    elif order_by == "start" or sort == "datetime":
         results.sort(key=lambda r: r.date_key, reverse=True)
+    else:
+        results.sort(key=lambda r: r.basename)
     return results
 
 
@@ -451,12 +509,17 @@ def _print_results(
     do_global: bool,
     *,
     multi_scope: bool = False,
+    order_by: str | None = None,
 ) -> None:
     """Print results to stdout.
 
     When multi_scope is True, each context line is prefixed with the scope
     tag (e.g. "[name]", "[contents]", "[messages]") so the user can tell
     which scope produced each hit.
+
+    When order_by='update', the update datetime is appended to each result
+    header line inside the parenthetical (alongside the project path when
+    --global is active).
 
     A blank line is printed between successive results only when at least one
     of them carries context lines, so pure name-search results (no context)
@@ -469,13 +532,21 @@ def _print_results(
             print()
         prev_had_context = has_context
         display_name = _maybe_link(r.basename, r.project_dir / "cc-sessions" / r.basename)
-        # In multi-scope mode, tag the header line with the scope so name matches
-        # are distinguishable from content/message matches.
         scope_prefix = f"[{r.scope}] " if multi_scope else ""
+
+        # Build the parenthetical annotation.
+        parts: list[str] = []
+        if order_by == "update":
+            parts.append(_format_update_dt(r.update_mtime))
         if do_global:
-            print(f"{scope_prefix}{display_name} ({_display_path(r.project_dir)})")
+            parts.append(_display_path(r.project_dir))
+
+        if parts:
+            annotation = ", ".join(parts)
+            print(f"{scope_prefix}{display_name} ({annotation})")
         else:
             print(f"{scope_prefix}{display_name}")
+
         for line in r.context_lines:
             if multi_scope:
                 print(f"  [{r.scope}] {line}")
@@ -1027,22 +1098,40 @@ def main(argv: list[str] | None = None) -> int:
 
     # ------ List mode ------
     if is_list_mode:
-        # Sort sessions and print one per line (newest first by default).
-        def _session_sort_key(pair: tuple[Path, Path]) -> str:
-            s, _ = pair
-            return session_start_date(s.name) or ""
+        order_by: str | None = args.order_by
 
-        if args.sort == "alpha":
-            sessions_sorted = sorted(sessions, key=lambda pair: pair[0].name)
+        if order_by == "update":
+            # Compute update mtime for each session (rglob walk — done once).
+            sessions_with_mtime = [
+                (s, proj, _get_session_update_mtime(s))
+                for s, proj in sessions
+            ]
+            sessions_sorted_u = sorted(
+                sessions_with_mtime, key=lambda t: t[2], reverse=True
+            )
+            for s, proj, mtime in sessions_sorted_u:
+                display_name = _maybe_link(s.name, s)
+                dt_str = _format_update_dt(mtime)
+                if effective_global:
+                    print(f"{display_name} ({dt_str}, {_display_path(proj)})")
+                else:
+                    print(f"{display_name} ({dt_str})")
         else:
-            sessions_sorted = sorted(sessions, key=_session_sort_key, reverse=True)
+            def _session_sort_key(pair: tuple[Path, Path]) -> str:
+                s, _ = pair
+                return session_start_date(s.name) or ""
 
-        for s, proj in sessions_sorted:
-            display_name = _maybe_link(s.name, s)
-            if effective_global:
-                print(f"{display_name} ({_display_path(proj)})")
+            if order_by == "start" or args.sort != "alpha":
+                sessions_sorted = sorted(sessions, key=_session_sort_key, reverse=True)
             else:
-                print(display_name)
+                sessions_sorted = sorted(sessions, key=lambda pair: pair[0].name)
+
+            for s, proj in sessions_sorted:
+                display_name = _maybe_link(s.name, s)
+                if effective_global:
+                    print(f"{display_name} ({_display_path(proj)})")
+                else:
+                    print(display_name)
         return 0
 
     # ------ Search modes ------
@@ -1082,8 +1171,19 @@ def main(argv: list[str] | None = None) -> int:
             )
             all_results.extend(scope_results)
 
+    # Populate update_mtime when --order-by update was requested.
+    order_by = args.order_by
+    if order_by == "update":
+        sess_mtime_cache: dict[str, float] = {}
+        for r in all_results:
+            key = r.basename
+            if key not in sess_mtime_cache:
+                sess_dir = r.project_dir / "cc-sessions" / r.basename
+                sess_mtime_cache[key] = _get_session_update_mtime(sess_dir)
+            r.update_mtime = sess_mtime_cache[key]
+
     # Sort the combined results.
-    all_results = _sort_results(all_results, args.sort)
+    all_results = _sort_results(all_results, args.sort, order_by=order_by)
 
     if machine_readable:
         _output_machine_readable(all_results, args.null)
@@ -1104,7 +1204,7 @@ def main(argv: list[str] | None = None) -> int:
     if pick_rc is not None:
         return pick_rc
 
-    _print_results(all_results, effective_global, multi_scope=multi_scope)
+    _print_results(all_results, effective_global, multi_scope=multi_scope, order_by=order_by)
     return 0
 
 
