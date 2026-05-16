@@ -31,8 +31,11 @@ the CLIs when the worktree is deleted.
 Reinstall the global tool from the canonical source:
 
 ```sh
-uv tool install ~/repos/claude-code-session-tools
+uv tool install --reinstall ~/repos/claude-code-session-tools
 ```
+
+`--reinstall` is required: without it, uv detects the version number is unchanged
+and silently skips the build, leaving the old binary in place.
 
 This rebuilds the wheel from the current `main` and updates all four shims
 (ccd, ccr, ccs, claude-code-usage).
