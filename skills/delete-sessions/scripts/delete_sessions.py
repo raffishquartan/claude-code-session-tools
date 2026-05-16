@@ -17,7 +17,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import random
+import secrets
 import sys
 import time
 from pathlib import Path
@@ -166,7 +166,7 @@ def _is_active_session(session_dir: Path, project_dir: Path) -> tuple[bool, list
 # ---------------------------------------------------------------------------
 
 def _generate_code() -> str:
-    return f"{random.randint(0, 99_999_999):08d}"
+    return f"{secrets.randbelow(100_000_000):08d}"
 
 
 def _prompt_confirmation(code: str) -> str:

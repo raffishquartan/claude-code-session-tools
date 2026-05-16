@@ -146,7 +146,10 @@ def verify(
     tool_input_raw = hook_input.get("tool_input")
     tool_input = tool_input_raw if isinstance(tool_input_raw, dict) else {}
     session_id = str(hook_input.get("session_id", ""))
-    cwd = str(hook_input.get("cwd", ""))
+    # Prefer CLAUDE_PROJECT_DIR (always the project root) over hook_input["cwd"],
+    # which for Bash tool calls reflects the bash working directory and changes
+    # with `cd` — it is NOT reliable for locating the session transcript.
+    cwd = os.environ.get("CLAUDE_PROJECT_DIR") or str(hook_input.get("cwd", ""))
     enforce = os.environ.get("CCCS_ENFORCE_8DIGIT", "warn").strip().lower()
 
     # 1. Skill-marker exceptions short-circuit before any transcript lookup.
