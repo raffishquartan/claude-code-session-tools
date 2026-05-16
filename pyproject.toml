@@ -52,7 +52,7 @@ ccst = "cc_session_tools.cli.ccst:main"
 where = ["src"]
 
 [tool.pytest.ini_options]
-testpaths = ["tests", "skills/move-session/tests", "skills/list-empty-sessions/tests", "skills/delete-sessions/tests"]
+testpaths = ["tests", "skills/move-session/tests", "skills/list-empty-sessions/tests", "skills/delete-sessions/tests", "skills/generate-8digit-code/tests"]
 addopts = "-q"
 pythonpath = ["src"]
 
