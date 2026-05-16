@@ -304,6 +304,15 @@ def test_hooks_install_table_shows_descriptions(tmp_path: Path) -> None:
     assert "Edit/Write" in result.stdout  # edit-write-audit
 
 
+def test_hooks_install_table_description_before_event(tmp_path: Path) -> None:
+    """Description column appears before the Event column in each row."""
+    tgt = tmp_path / "settings.json"
+    _write(tgt, {})
+    result = _run("hooks", "install", "--target", str(tgt))
+    header = next(ln for ln in result.stdout.splitlines() if "Hook" in ln and "Status" in ln)
+    assert header.index("Description") < header.index("Event")
+
+
 def test_hooks_install_hook_selector_table_only_named_row(tmp_path: Path) -> None:
     """--hook X shows a table with only that one hook listed."""
     tgt = tmp_path / "settings.json"

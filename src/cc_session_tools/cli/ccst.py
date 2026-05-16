@@ -361,8 +361,8 @@ def _print_hooks_install_table(
     inventory: list[tuple[str, str, str | None, str]],
     added_keys: set[tuple[str, str | None, str]],
 ) -> None:
-    """Print a Hook | Status | Event | Description table to stdout."""
-    headers = ("Hook", "Status", "Event", "Description")
+    """Print a Hook | Status | Description | Event table to stdout."""
+    headers = ("Hook", "Status", "Description", "Event")
     if not inventory:
         return
 
@@ -371,7 +371,7 @@ def _print_hooks_install_table(
         status = "install" if (event, matcher, cmd) in added_keys else "already-installed"
         event_label = f"{event}[{matcher}]" if matcher else event
         description = HOOK_DESCRIPTIONS.get(name, "")
-        rows.append((name, status, event_label, description))
+        rows.append((name, status, description, event_label))
 
     widths = [
         max([len(headers[i])] + [len(r[i]) for r in rows]) for i in range(4)
