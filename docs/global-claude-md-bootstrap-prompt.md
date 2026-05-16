@@ -59,6 +59,7 @@ ls -la ~/.claude/skills/move-session 2>/dev/null && echo "skill: move-session OK
 ls -la ~/.claude/skills/analyse-cc-usage 2>/dev/null && echo "skill: analyse-cc-usage OK" || echo "skill: analyse-cc-usage MISSING"
 ls -la ~/.claude/skills/list-empty-sessions 2>/dev/null && echo "skill: list-empty-sessions OK" || echo "skill: list-empty-sessions MISSING"
 ls -la ~/.claude/skills/delete-sessions 2>/dev/null && echo "skill: delete-sessions OK" || echo "skill: delete-sessions MISSING"
+ls -la ~/.claude/skills/generate-8digit-code 2>/dev/null && echo "skill: generate-8digit-code OK" || echo "skill: generate-8digit-code MISSING"
 
 # Hook registrations (check for ccst hooks run entries)
 python3 -c "
@@ -119,6 +120,21 @@ confirmation).
 
 When the user asks about Claude Code usage, token spend, or cost breakdowns,
 invoke the **`analyse-cc-usage`** skill.
+
+### 8-digit confirmation codes
+
+**Always use the `generate-8digit-code` skill when you need a confirmation
+code for a gated action. Never invent or guess a number yourself.**
+
+LLMs are not random number generators. A model-generated number is
+predictable and statistically biased — it defeats the purpose of
+the confirmation gate. The skill runs `scripts/generate_8digit_code.py`
+which uses Python's `secrets` module (cryptographically secure).
+
+When proposing a gated action, run the skill, then say:
+> "Respond with `NNNNNNNN` to confirm."
+
+Only proceed once the user replies with exactly that string.
 
 ### 8-digit gated actions
 

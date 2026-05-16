@@ -35,7 +35,24 @@ If you've ever tried to remember which `1f4a8b3c-...` UUID is the session where 
 - **`ccusage` (optional)** - if on `$PATH`, `claude-code-usage reconcile` cross-checks dollar totals against it. Skipped gracefully if missing.
 - **`ripgrep` (optional)** - `ccs --contents` prefers `rg`; falls back to threaded Python `grep` if missing.
 
-### Install and set up (recommended path)
+### Install and set up
+
+**Easiest path — run the bundled script from a local clone:**
+
+```sh
+git clone https://github.com/raffishquartan/claude-code-session-tools.git
+cd claude-code-session-tools
+bash install-everything.sh
+```
+
+`install-everything.sh` installs the CLIs (via `uv` or `pipx`, whichever is
+present), then symlinks the skills, merges the hooks, and adds the `ccl` shell
+function. It runs `ccst doctor` at the end so you can see the health check immediately. Re-running is safe — every step is idempotent.
+
+> **Options:** `--from-source` reinstalls from the local clone rather than
+> PyPI. `--upgrade` forces an upgrade of an existing install.
+
+**Manual path — step by step:**
 
 ```sh
 # 1. Install the package (choose one)
