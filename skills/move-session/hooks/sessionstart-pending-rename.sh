@@ -30,24 +30,21 @@ if [[ ${#markers[@]} -eq 0 ]]; then
 fi
 
 # Build a single reminder block. The model reads this and acts on it.
-#
-# Two copy-pastable commands per marker:
-#   - `/rename <new-tag>`: the model runs this inside CC if the current
-#     resumed session matches the marker's UUID. Updates the picker label.
-#   - `rm "<marker-path>"`: the USER runs this in a normal shell, OUTSIDE
-#     CC, to clear the marker once the rename has happened. The global
-#     bash-hard-deny hook blocks local-file `rm` from inside CC, so the
-#     model cannot delete the marker itself - that is by design. Surfacing
-#     the exact command keeps cleanup deterministic regardless of how long
-#     elapses between the move and the next resume.
-echo "Pending session-rename markers found (left by the move-session skill)."
+echo "${#markers[@]} pending session-rename marker(s) in this project (left by the move-session skill)."
 echo ""
-echo "If your current resumed session UUID matches one of the markers below,"
-echo "run the /rename command to update the picker display label. The marker"
-echo "file itself must be deleted from a normal shell OUTSIDE Claude Code"
-echo "(bash-hard-deny blocks local-file rm from inside CC) - the rm command"
-echo "is given for the user to copy-paste later. Both commands stay valid"
-echo "until they are run, so it doesn't matter how long it takes."
+echo "TO SILENCE ALL REMINDERS IN THIS PROJECT AT ONCE (quick option):"
+echo "  Run this in a normal shell outside CC — deletes markers without updating picker labels:"
+echo "    find \"$cc_sessions_dir\" -name .pending-rename -delete"
+echo ""
+echo "TO SILENCE ALL REMINDERS ACROSS ALL PROJECTS AT ONCE:"
+echo "    find ~/cc -name .pending-rename -delete"
+echo ""
+echo "TO FIX AN INDIVIDUAL SESSION (updates picker label AND silences reminder):"
+echo "  1. Resume the session:  cd <project-dir> && claude --resume <uuid>"
+echo "  2. Run inside CC:       /rename <tag>  (shown per marker below)"
+echo "  3. Run outside CC:      rm <marker-path>  (shown per marker below)"
+echo ""
+echo "--- Markers in this project ---"
 echo ""
 i=0
 for marker in "${markers[@]}"; do
@@ -57,14 +54,9 @@ for marker in "${markers[@]}"; do
   marker_uuid="$(grep '^uuid:' "$marker" 2>/dev/null | head -1 | awk '{print $2}')"
   marker_tag="$(grep '^tag:' "$marker" 2>/dev/null | head -1 | awk '{print $2}')"
   effective_tag="${marker_tag:-$tag_from_dir}"
-  echo "  Marker $i:"
-  echo "    Session dir: $session_dir"
-  echo "    UUID:        ${marker_uuid:-unknown}"
-  echo "    /rename command (run INSIDE CC if this is your session):"
-  echo "      /rename $effective_tag"
-  echo "    rm command (run in a normal shell OUTSIDE CC to clear this reminder):"
-  echo "      rm \"$marker\""
+  echo "  [$i] UUID: ${marker_uuid:-unknown}"
+  echo "      Dir:  $session_dir"
+  echo "      Inside CC:   /rename $effective_tag"
+  echo "      Outside CC:  rm \"$marker\""
   echo ""
 done
-echo "If you are resuming a different session in this project, you can ignore"
-echo "the markers - they belong to other sessions."
