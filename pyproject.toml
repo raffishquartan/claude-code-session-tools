@@ -51,6 +51,9 @@ ccst = "cc_session_tools.cli.ccst:main"
 [tool.setuptools.packages.find]
 where = ["src"]
 
+[tool.setuptools.package-data]
+claude_code_usage = ["data/*.json"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests", "skills/move-session/tests", "skills/list-empty-sessions/tests", "skills/delete-sessions/tests", "skills/generate-8digit-code/tests"]
 addopts = "-q"

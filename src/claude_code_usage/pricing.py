@@ -18,7 +18,7 @@ from typing import Any
 import pandas as pd
 
 _THIS_DIR = Path(__file__).resolve().parent
-_PRICING_PATH = _THIS_DIR.parent.parent / "data" / "pricing.json"
+_PRICING_PATH = _THIS_DIR / "data" / "pricing.json"
 
 
 def _load() -> dict[str, Any]:
