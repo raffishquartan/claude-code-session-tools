@@ -165,11 +165,16 @@ def _resolve_dimensions(group_by: list[str]) -> list[str]:
 
 def _aggregate(df: pd.DataFrame, group_by: list[str]) -> pd.DataFrame:
     if "tool_call_count" not in df.columns:
-        # Not exploded: a tool_call_count is the length of the tool_calls list.
         df = df.copy()
-        df["tool_call_count"] = df["tool_calls"].apply(
-            lambda xs: len(xs) if xs is not None else 0
-        )
+        if "tool_calls" in df.columns:
+            # Non-exploded path: derive count from the raw list column.
+            df["tool_call_count"] = df["tool_calls"].apply(
+                lambda xs: len(xs) if xs is not None else 0
+            )
+        else:
+            # Exploded path returned a column-less empty frame (e.g. stale
+            # parquet cache missing tool_calls, or empty input after filters).
+            df["tool_call_count"] = 0
 
     agg_spec = {
         "input_tokens": "sum",

@@ -227,6 +227,33 @@ def test_include_children_orphan_sessions_get_zero_child_columns() -> None:
     assert solo["child_token_total"] == 0
 
 
+def test_group_by_session_and_tool_returns_expected_rows() -> None:
+    df = _df(
+        [
+            _row(session_id="s-1", tool_calls=["Bash", "Read"]),
+            _row(session_id="s-1", tool_calls=[]),
+            _row(session_id="s-2", tool_calls=["Edit"]),
+        ]
+    )
+    result = query.run_query(df, group_by=["session", "tool"])
+    assert len(result) > 0
+    tools = set(result["tool"])
+    assert "Bash" in tools
+    assert "Read" in tools
+    assert "Edit" in tools
+
+
+def test_group_by_session_and_tool_no_tool_calls_column_does_not_crash() -> None:
+    """Stale parquet cache rows may lack tool_calls; _aggregate must not KeyError."""
+    rows = [_row(session_id="s-1", tool_calls=["Bash"])]
+    df = pd.DataFrame(rows).drop(columns=["tool_calls"])
+    # needs_tool_explode is True but _explode_by_tools receives a df missing
+    # tool_calls; the resulting exploded frame treats all rows as <no-tool>
+    # and adds tool_call_count.  _aggregate must handle that frame cleanly.
+    result = query.run_query(df, group_by=["session", "tool"])
+    assert len(result) >= 1
+
+
 def test_filter_by_mcp_keeps_only_that_server() -> None:
     df = _df(
         [
