@@ -152,6 +152,12 @@ def verify(
     cwd = os.environ.get("CLAUDE_PROJECT_DIR") or str(hook_input.get("cwd", ""))
     enforce = os.environ.get("CCCS_ENFORCE_8DIGIT", "warn").strip().lower()
 
+    # 0. Only gated tools are subject to confirmation. Any other tool is
+    #    allowed unconditionally - this makes a no-matcher catch-all hook
+    #    registration safe (it would otherwise block every tool call).
+    if tool_name not in gated_tools:
+        return VerificationResult(exit_code=0, message="")
+
     # 1. Skill-marker exceptions short-circuit before any transcript lookup.
     marker_reason = _check_marker_exception(tool_name, tool_input)
     if marker_reason is not None:
