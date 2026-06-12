@@ -185,7 +185,7 @@ def main(argv: list[str] | None = None) -> int:
     env = os.environ.copy()
     env.pop("CLAUDE_CODE_TASK_LIST_ID", None)
     env["CLD_SESSION_TAG"] = tag
-    env["CLD_SESSION_DIR"] = str(session_dir.relative_to(real_pwd))
+    env["CLD_SESSION_DIR"] = str(session_dir)
     env["CLD_SESSION_MODE"] = "new"
     task_list_id = id_for_project(real_pwd)
     if task_list_id is not None:

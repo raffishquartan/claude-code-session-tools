@@ -242,3 +242,35 @@ def test_shell_uninstall_apply(tmp_path: Path) -> None:
 def test_shell_no_subcommand_errors() -> None:
     result = _run("shell")
     assert result.returncode != 0
+
+
+# ---------- new sentinel sort choices in _BLOCK ----------
+
+def test_block_contains_opened_and_active_choices() -> None:
+    """The _BLOCK help text must advertise opened and active as --order-by choices."""
+    assert "opened" in _BLOCK
+    assert "active" in _BLOCK
+
+
+def test_block_contains_ccl_recent() -> None:
+    """ccl-recent shorthand must be present in _BLOCK."""
+    assert "ccl-recent" in _BLOCK
+
+
+def test_block_contains_saw_global_and_saw_order_by_logic() -> None:
+    """ccl function must inject --order-by active when --global given without --order-by."""
+    assert "_saw_global" in _BLOCK
+    assert "_saw_order_by" in _BLOCK
+    assert "--order-by active" in _BLOCK
+
+
+def test_reinstalled_block_contains_opened_and_active(tmp_path: Path) -> None:
+    """After reinstalling the block, the generated content includes opened/active choices."""
+    rc = tmp_path / ".bashrc"
+    rc.write_text("")
+    result = install_rc(rc, apply=True)
+    assert result.action == RCAction.ADDED
+    content = rc.read_text()
+    assert "opened" in content
+    assert "active" in content
+    assert "ccl-recent" in content
