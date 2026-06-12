@@ -1,7 +1,6 @@
 """Tests for ccs sentinel-based sorting (--order-by opened / --order-by active)."""
 from __future__ import annotations
 
-import datetime
 import time
 from pathlib import Path
 

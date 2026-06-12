@@ -1151,10 +1151,10 @@ def main(argv: list[str] | None = None) -> int:
                 (s, proj, _get_sentinel_mtime(s, filename))
                 for s, proj in sessions
             ]
-            sessions_sorted_s = sorted(
+            sessions_sorted_sentinel = sorted(
                 sessions_with_mtime, key=lambda t: t[2], reverse=True
             )
-            for s, proj, mtime in sessions_sorted_s:
+            for s, proj, mtime in sessions_sorted_sentinel:
                 display_name = _maybe_link(s.name, s)
                 dt_str = _format_sentinel_dt(mtime, label)
                 if effective_global:
@@ -1226,16 +1226,22 @@ def main(argv: list[str] | None = None) -> int:
                 sess_dir = r.project_dir / "cc-sessions" / r.basename
                 sess_mtime_cache[key] = _get_session_update_mtime(sess_dir)
             r.update_mtime = sess_mtime_cache[key]
-    elif order_by in ("opened", "active"):
-        filename = ".last-opened" if order_by == "opened" else ".last-active"
-        attr = "opened_mtime" if order_by == "opened" else "active_mtime"
+    elif order_by == "opened":
         sentinel_cache: dict[str, float] = {}
         for r in all_results:
             key = r.basename
             if key not in sentinel_cache:
                 sess_dir = r.project_dir / "cc-sessions" / r.basename
-                sentinel_cache[key] = _get_sentinel_mtime(sess_dir, filename)
-            setattr(r, attr, sentinel_cache[key])
+                sentinel_cache[key] = _get_sentinel_mtime(sess_dir, ".last-opened")
+            r.opened_mtime = sentinel_cache[key]
+    elif order_by == "active":
+        sentinel_cache = {}
+        for r in all_results:
+            key = r.basename
+            if key not in sentinel_cache:
+                sess_dir = r.project_dir / "cc-sessions" / r.basename
+                sentinel_cache[key] = _get_sentinel_mtime(sess_dir, ".last-active")
+            r.active_mtime = sentinel_cache[key]
 
     # Sort the combined results.
     all_results = _sort_results(all_results, args.sort, order_by=order_by)
