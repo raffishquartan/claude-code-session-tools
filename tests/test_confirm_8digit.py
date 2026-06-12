@@ -77,6 +77,28 @@ def _hook_input(
     }
 
 
+# ---------- non-gated tools are never verified ----------
+
+
+def test_non_gated_tool_allowed_without_verification(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A tool not in gated_tools must be allowed unconditionally - no
+    transcript lookup, no 8-digit check - even in block mode. Otherwise a
+    no-matcher catch-all registration would block every tool call."""
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("CCCS_ENFORCE_8DIGIT", "block")
+    # session_id "missing" => no transcript. A gated tool would fail closed
+    # (exit 2); a non-gated tool must short-circuit to allow (exit 0) first.
+    for tool in ("Read", "Write", "Edit", "Bash"):
+        result = verify(
+            _hook_input(tool_name=tool, tool_input={}, session_id="missing"),
+            GATED_TOOLS_DEFAULT,
+        )
+        assert result.exit_code == 0, f"{tool} should be allowed unconditionally"
+        assert result.message == "", f"{tool} should produce no warning"
+
+
 # ---------- transcript missing ----------
 
 
