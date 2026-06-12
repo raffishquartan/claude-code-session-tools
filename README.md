@@ -1,12 +1,18 @@
 # claude-code-session-tools
 
+Claude Code on its own is great. But once you're running parallel sessions across a codebase, orchestrating subagents, or doing sustained work over days and projects, the overhead starts to compound: sessions with UUID names you can't recognise, working files scattered through your repo root, no idea where your token budget went, and nothing stopping a background agent from pushing to main while you're away.
+
+CCST is an opinionated toolkit that addresses this directly. It keeps sessions named and findable, gives Claude a consistent place to write its working files, gates high-stakes actions behind a confirmation step, and tells you exactly what each model and project cost you.
+
 Three concerns, one repo, for life on the [Claude Code](https://docs.anthropic.com/en/docs/claude-code) CLI:
 
-1. **Session management** - start, resume, find, relocate, and delete Claude Code sessions from the shell, with tagged dated session directories that don't pollute your repo root.
-2. **Usage analytics** - parse `~/.claude/projects/**/*.jsonl` into tokens-and-dollars breakdowns by project, session, model, MCP server, plugin, and tool.
-3. **Hook library** - Python package (`cccs_hooks`) providing Claude Code SessionStart / PreToolUse / PostToolUse / UserPromptSubmit / Stop hook implementations, invokable via `ccst hooks run <name>`.
+1. **Session management** — start, resume, find, relocate, and delete Claude Code sessions from the shell, with tagged dated session directories that don't pollute your repo root.
+2. **Usage analytics** — parse `~/.claude/projects/**/*.jsonl` into tokens-and-dollars breakdowns by project, session, model, MCP server, plugin, and tool.
+3. **Hook library** — Python package (`cccs_hooks`) providing Claude Code SessionStart / PreToolUse / PostToolUse / UserPromptSubmit / Stop hook implementations, invokable via `ccst hooks run <name>`.
 
-The repo ships five CLIs, one shell helper, and five bundled skills:
+The repo ships five CLIs, one shell helper, six bundled skills, and six bundled hooks:
+
+**CLIs and shell helper**
 
 | | What it does |
 |---|---|
@@ -16,11 +22,28 @@ The repo ships five CLIs, one shell helper, and five bundled skills:
 | **`claude-code-usage`** | Multi-dimensional usage analytics CLI: query/group/filter by project, session, model, MCP server, plugin, tool, day/week/month/year. Reconciles dollar totals against `ccusage`. |
 | **`ccst <noun> <verb>`** | Umbrella CLI for hook and skill management: install, uninstall, health-check, shell helpers, telemetry trim. |
 | **`ccl` (shell fn)** | Shell function wrapping `ccs` for list-mode usage. Installed by `ccst shell install`. |
-| Skill: **`find-claude-code-session`** | Wraps `ccs`. Lets a Claude Code session locate one of your prior sessions by name or content and offer a `ccr` command to resume it. |
-| Skill: **`move-session`** | Move, rename, or move+rename a session while keeping its `~/.claude/projects/<encoded-cwd>/<uuid>.jsonl` transcript resumable. |
-| Skill: **`analyse-cc-usage`** | Wraps `claude-code-usage`. Lets a Claude Code session answer "how much have I spent on Opus this month?" without you typing the CLI yourself. |
-| Skill: **`list-empty-sessions`** | Wraps `ccs --emptiness only`. Finds sessions you never actually typed in — accumulate from accidental `ccd` invocations or abandoned starts. |
-| Skill: **`delete-sessions`** | Permanently deletes one or more sessions (cc-sessions dir + JSONL transcript + .tag file). Dry-run by default; requires an 8-digit confirmation code to execute. |
+
+**Bundled skills** (installed via `ccst skills install`)
+
+| | What it does |
+|---|---|
+| **`analyse-cc-usage`** | Wraps `claude-code-usage`. Lets a Claude Code session answer "how much have I spent on Opus this month?" without you typing the CLI yourself. |
+| **`delete-sessions`** | Permanently deletes one or more sessions (cc-sessions dir + JSONL transcript + .tag file). Dry-run by default; requires an 8-digit confirmation code to execute. |
+| **`find-claude-code-session`** | Wraps `ccs`. Lets a Claude Code session locate one of your prior sessions by name or content and offer a `ccr` command to resume it. |
+| **`generate-8digit-code`** | Generates a cryptographically secure 8-digit confirmation code via `secrets.randbelow`. LLMs are statistically biased random number generators — this ensures gated-action codes are genuinely unpredictable. |
+| **`list-empty-sessions`** | Wraps `ccs --emptiness only`. Finds sessions you never actually typed in — accumulate from accidental `ccd` invocations or abandoned starts. |
+| **`move-session`** | Move, rename, or move+rename a session while keeping its `~/.claude/projects/<encoded-cwd>/<uuid>.jsonl` transcript resumable. |
+
+**Bundled hooks** (installed via `ccst hooks install`)
+
+| | What it does |
+|---|---|
+| **`session-tag`** (SessionStart) | Writes a `<uuid>.tag` file so `claude-code-usage` can map session UUIDs to human-readable names. |
+| **`prompt-guard`** (UserPromptSubmit) | Scans incoming prompts for credential shapes and injection patterns before they reach the model. |
+| **`bash-security-review`** (PreToolUse) | Tiered Bash command security review with an allowlist cache and LLM fallback. |
+| **`confirm-8digit`** (PreToolUse) | Blocks a configurable set of high-stakes tool calls unless the user repeats back an 8-digit confirmation code. |
+| **`edit-write-audit`** (PostToolUse) | Audits file writes for sensitive paths and checks that WORKLOG.md is being maintained. |
+| **`session-end`** (Stop) | Nudges you to commit uncommitted changes and update WORKLOG.md when a session ends. |
 
 See [CHANGELOG.md](CHANGELOG.md) for a full version history. See [TODO.md](TODO.md) for known follow-up work (including the notify-user skill integration).
 
@@ -52,6 +75,8 @@ function. It runs `ccst doctor` at the end so you can see the health check immed
 > **Options:** `--from-source` reinstalls from the local clone rather than
 > PyPI. `--upgrade` forces an upgrade of an existing install.
 
+> **Note:** `install-everything.sh` handles steps 1–3 of setup. Step 4 — adding CCST guidance to your global `~/.claude/CLAUDE.md` — is interactive and must be run separately afterwards. See [Configure your global CLAUDE.md](#configure-your-global-claudemd) below.
+
 **Manual path — step by step:**
 
 ```sh
@@ -67,6 +92,10 @@ ccst shell install --apply                # adds ccl() to ~/.bashrc and ~/.zshrc
 
 # 3. Verify everything is wired up
 ccst doctor
+
+# 4. Add CCST guidance to ~/.claude/CLAUDE.md (see Configure your global CLAUDE.md below)
+#    This is required: without it, Claude Code sessions won't know to use CCST's
+#    CLIs and skills, and the 8-digit gate won't have an action list to enforce.
 ```
 
 After `ccst shell install --apply`, open a new shell (or `source ~/.bashrc`) to activate `ccl`.
@@ -114,9 +143,9 @@ source ~/.zshrc    # zsh
 
 ## Configure your global CLAUDE.md
 
-After installing, add CCST-aware guidance to your global `~/.claude/CLAUDE.md` so
-Claude Code sessions know about the session-management tools and which actions require
-an 8-digit confirmation gate.
+This is the final required setup step — not included in `install-everything.sh` because it is interactive. Without it, Claude Code sessions have no guidance to use CCST's CLIs or skills, and the 8-digit confirmation gate has no action list to enforce.
+
+Add CCST-aware guidance to your global `~/.claude/CLAUDE.md` so Claude Code sessions know about the session-management tools and which actions require an 8-digit confirmation gate.
 
 The easiest way is to run the bundled bootstrap prompt:
 
@@ -128,7 +157,7 @@ cd ~/repos/claude-code-session-tools && \
 This prompt will:
 
 1. Detect which CCST CLIs, skills, and hooks are installed.
-2. Propose standard additions to your `~/.claude/CLAUDE.md` — pointers to `ccs`/`ccd`/`ccr`/`ccl`, guidance to invoke the bundled skills (`find-claude-code-session`, `move-session`, `list-empty-sessions`, `delete-sessions`, `analyse-cc-usage`), and a section explaining the 8-digit confirmation hook.
+2. Propose standard additions to your `~/.claude/CLAUDE.md` — pointers to `ccs`/`ccd`/`ccr`/`ccl`, guidance to invoke the bundled skills (`find-claude-code-session`, `move-session`, `list-empty-sessions`, `delete-sessions`, `analyse-cc-usage`, `generate-8digit-code`), and a section explaining the 8-digit confirmation hook.
 3. **Interactively ask you** which classes of high-stakes action you want gated (push-to-remote, force-push, PR merges, branch deletion, financial transactions, sending external messages, etc.) and write your choices into a `## 8-digit gated actions` section.
 4. Write the additions idempotently (re-running the prompt replaces the block, not appends).
 
@@ -139,6 +168,7 @@ If you prefer to edit `~/.claude/CLAUDE.md` by hand, the suggested additions are
 - When the user wants to relocate or rename a session, invoke the `move-session` skill.
 - When the user wants to clean up never-used sessions, invoke `list-empty-sessions` then `delete-sessions` (8-digit gated).
 - When the user wants usage analytics, invoke the `analyse-cc-usage` skill.
+- When you need an 8-digit confirmation code for a gated action, invoke `generate-8digit-code` — never invent a number yourself.
 - Ask before pushing to remote, merging PRs, deleting branches, or taking other high-stakes actions — the 8-digit confirmation hook is the mechanism.
 
 ## Why bother?
@@ -338,9 +368,9 @@ Run `claude-code-usage <subcommand> --help` for the full grammar. A few flags wo
 
 ## Bundled skills
 
-The repo ships five Claude Code skills, designed to be symlinked into `~/.claude/skills/`. They're thin wrappers around the CLIs so a Claude Code session can invoke them on your behalf in response to natural-language prompts.
+The repo ships six Claude Code skills, designed to be symlinked into `~/.claude/skills/`. They're thin wrappers around the CLIs so a Claude Code session can invoke them on your behalf in response to natural-language prompts.
 
-Install all five at once with `ccst skills install --apply` (see [Install and set up](#install-and-set-up-recommended-path) above).
+Install all six at once with `ccst skills install --apply` (see [Install and set up](#install-and-set-up-recommended-path) above).
 
 ### `find-claude-code-session`
 
