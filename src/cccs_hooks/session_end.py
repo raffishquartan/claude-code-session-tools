@@ -6,6 +6,7 @@ when work may have been left in an unfinished state. Never blocks.
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 import time
@@ -72,6 +73,13 @@ def main(argv: list[str] | None = None) -> int:
         warning = check_fn(cwd)
         if warning:
             print(warning, file=sys.stderr)
+
+    session_dir_str = os.environ.get("CLD_SESSION_DIR", "")
+    if session_dir_str:
+        try:
+            Path(session_dir_str).joinpath(".last-active").touch()
+        except OSError as exc:
+            print(f"[session-end] Failed to touch .last-active: {exc}", file=sys.stderr)
 
     return 0
 

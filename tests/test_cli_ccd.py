@@ -78,7 +78,7 @@ def test_ccd_sets_env_vars_for_session_start_hook(
     env = captured_launch["env"]
     assert env["CLD_SESSION_TAG"] == "mytag"
     assert env["CLD_SESSION_MODE"] == "new"
-    assert env["CLD_SESSION_DIR"].startswith("cc-sessions/")
+    assert Path(env["CLD_SESSION_DIR"]).is_absolute()
     assert env["CLD_SESSION_DIR"].endswith("-mytag")
     # Project is direct child of repos root => task list id = project name.
     assert env["CLAUDE_CODE_TASK_LIST_ID"] == "myproj"
@@ -204,3 +204,15 @@ def test_ccd_rejects_duplicate_session_with_helpful_message(
     err = capsys.readouterr().err
     assert "already started today" in err
     assert "ccr" in err  # remediation hint
+
+
+def test_cld_session_dir_is_absolute(fake_home, tmp_path, monkeypatch, captured_launch):
+    """CLD_SESSION_DIR must be an absolute path regardless of working directory."""
+    repos = tmp_path / "repos"
+    proj = repos / "myproj"
+    proj.mkdir(parents=True)
+    _set_repo_root(monkeypatch, repos)
+    monkeypatch.chdir(proj)
+    ccd.main(["mytag"])
+    env = captured_launch["env"]
+    assert Path(env["CLD_SESSION_DIR"]).is_absolute()

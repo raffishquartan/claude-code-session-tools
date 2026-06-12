@@ -95,6 +95,8 @@ class _Result:
     context_lines: list[str]
     scope: str = "name"  # one of: "name", "contents", "messages"
     update_mtime: float = 0.0  # epoch seconds; 0 = not yet computed
+    opened_mtime: float = 0.0  # epoch seconds; 0 = .last-opened absent
+    active_mtime: float = 0.0  # epoch seconds; 0 = .last-active absent
 
 
 def _get_session_update_mtime(session_dir: Path) -> float:
@@ -117,11 +119,27 @@ def _get_session_update_mtime(session_dir: Path) -> float:
     return best
 
 
+def _get_sentinel_mtime(session_dir: Path, filename: str) -> float:
+    """Return mtime of session_dir/filename, or 0.0 if absent/unreadable."""
+    try:
+        return (session_dir / filename).stat().st_mtime
+    except OSError:
+        return 0.0
+
+
 def _format_update_dt(mtime: float) -> str:
     """Format an epoch-seconds mtime as 'YYYY-MM-DD HH:MM' in local time."""
     if mtime == 0.0:
         return "unknown"
     return datetime.datetime.fromtimestamp(mtime).strftime("%Y-%m-%d %H:%M")
+
+
+def _format_sentinel_dt(mtime: float, label: str) -> str:
+    """Format sentinel mtime with label; returns '(never)' when mtime is 0.0."""
+    if mtime == 0.0:
+        return f"{label}: (never)"
+    dt = datetime.datetime.fromtimestamp(mtime).strftime("%Y-%m-%d %H:%M")
+    return f"{label}: {dt}"
 
 
 _EPILOG = """\
@@ -245,15 +263,17 @@ def _build_parser() -> argparse.ArgumentParser:
                      help="Output null-delimited basenames (for xargs -0).")
     out_grp.add_argument(
         "--order-by",
-        choices=["start", "update"],
+        choices=["start", "update", "opened", "active"],
         default=None,
-        metavar="{start,update}",
+        metavar="{start,update,opened,active}",
         dest="order_by",
         help=(
             "Primary sort order. "
             "'start' = newest-first by session start date (same as --sort datetime). "
             "'update' = newest-first by last file modification time; also prints "
             "the update datetime after each session name. "
+            "'opened' = newest-first by last ccd/ccr invocation; also prints timestamp. "
+            "'active' = newest-first by last Claude response; also prints timestamp. "
             "Overrides --sort when given."
         ),
     )
@@ -352,6 +372,10 @@ def _sort_results(
     """
     if order_by == "update":
         results.sort(key=lambda r: r.update_mtime, reverse=True)
+    elif order_by == "opened":
+        results.sort(key=lambda r: r.opened_mtime, reverse=True)
+    elif order_by == "active":
+        results.sort(key=lambda r: r.active_mtime, reverse=True)
     elif order_by == "start" or sort == "datetime":
         results.sort(key=lambda r: r.date_key, reverse=True)
     else:
@@ -538,6 +562,10 @@ def _print_results(
         parts: list[str] = []
         if order_by == "update":
             parts.append(_format_update_dt(r.update_mtime))
+        elif order_by == "opened":
+            parts.append(_format_sentinel_dt(r.opened_mtime, "opened"))
+        elif order_by == "active":
+            parts.append(_format_sentinel_dt(r.active_mtime, "active"))
         if do_global:
             parts.append(_display_path(r.project_dir))
 
@@ -1116,6 +1144,23 @@ def main(argv: list[str] | None = None) -> int:
                     print(f"{display_name} ({dt_str}, {_display_path(proj)})")
                 else:
                     print(f"{display_name} ({dt_str})")
+        elif order_by in ("opened", "active"):
+            filename = ".last-opened" if order_by == "opened" else ".last-active"
+            label = order_by  # "opened" or "active"
+            sessions_with_mtime = [
+                (s, proj, _get_sentinel_mtime(s, filename))
+                for s, proj in sessions
+            ]
+            sessions_sorted_sentinel = sorted(
+                sessions_with_mtime, key=lambda t: t[2], reverse=True
+            )
+            for s, proj, mtime in sessions_sorted_sentinel:
+                display_name = _maybe_link(s.name, s)
+                dt_str = _format_sentinel_dt(mtime, label)
+                if effective_global:
+                    print(f"{display_name} ({dt_str}, {_display_path(proj)})")
+                else:
+                    print(f"{display_name} ({dt_str})")
         else:
             def _session_sort_key(pair: tuple[Path, Path]) -> str:
                 s, _ = pair
@@ -1181,6 +1226,22 @@ def main(argv: list[str] | None = None) -> int:
                 sess_dir = r.project_dir / "cc-sessions" / r.basename
                 sess_mtime_cache[key] = _get_session_update_mtime(sess_dir)
             r.update_mtime = sess_mtime_cache[key]
+    elif order_by == "opened":
+        sentinel_cache: dict[str, float] = {}
+        for r in all_results:
+            key = r.basename
+            if key not in sentinel_cache:
+                sess_dir = r.project_dir / "cc-sessions" / r.basename
+                sentinel_cache[key] = _get_sentinel_mtime(sess_dir, ".last-opened")
+            r.opened_mtime = sentinel_cache[key]
+    elif order_by == "active":
+        sentinel_cache = {}
+        for r in all_results:
+            key = r.basename
+            if key not in sentinel_cache:
+                sess_dir = r.project_dir / "cc-sessions" / r.basename
+                sentinel_cache[key] = _get_sentinel_mtime(sess_dir, ".last-active")
+            r.active_mtime = sentinel_cache[key]
 
     # Sort the combined results.
     all_results = _sort_results(all_results, args.sort, order_by=order_by)

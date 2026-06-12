@@ -188,6 +188,93 @@ def test_write_failure_returns_zero_and_logs(tmp_path, monkeypatch, capsys):
 
 
 # ---------------------------------------------------------------------------
+# main() — .last-opened sentinel file
+# ---------------------------------------------------------------------------
+
+def test_last_opened_created_when_cld_session_dir_set(tmp_path, monkeypatch):
+    """CLD_SESSION_DIR set and dir exists: .last-opened is created."""
+    sess_dir = tmp_path / "sess"
+    sess_dir.mkdir()
+    cwd = "/some/project"
+    payload = json.dumps({"session_id": "open-test", "cwd": cwd})
+    monkeypatch.setenv("CLD_SESSION_TAG", "open-tag")
+    monkeypatch.setenv("CLD_SESSION_DIR", str(sess_dir))
+    monkeypatch.setattr("sys.stdin", _stdin(payload))
+    monkeypatch.setattr(session_tag, "DEFAULT_PROJECTS_DIR", tmp_path / "projects")
+    (tmp_path / "projects").mkdir()
+
+    rc = session_tag.main()
+
+    assert rc == 0
+    assert (sess_dir / ".last-opened").exists()
+
+
+def test_last_opened_mtime_updated_when_already_exists(tmp_path, monkeypatch):
+    """CLD_SESSION_DIR set, .last-opened already exists: mtime is updated."""
+    import os, time
+    sess_dir = tmp_path / "sess"
+    sess_dir.mkdir()
+    sentinel = sess_dir / ".last-opened"
+    sentinel.touch()
+    old_time = time.time() - 3600
+    os.utime(sentinel, (old_time, old_time))
+    old_mtime = sentinel.stat().st_mtime
+
+    cwd = "/some/project"
+    payload = json.dumps({"session_id": "open-test2", "cwd": cwd})
+    monkeypatch.setenv("CLD_SESSION_TAG", "open-tag2")
+    monkeypatch.setenv("CLD_SESSION_DIR", str(sess_dir))
+    monkeypatch.setattr("sys.stdin", _stdin(payload))
+    projects_dir = tmp_path / "projects"
+    projects_dir.mkdir()
+    monkeypatch.setattr(session_tag, "DEFAULT_PROJECTS_DIR", projects_dir)
+
+    session_tag.main()
+
+    new_mtime = sentinel.stat().st_mtime
+    assert new_mtime > old_mtime
+
+
+def test_last_opened_not_written_when_no_cld_session_dir(tmp_path, monkeypatch):
+    """CLD_SESSION_DIR not set: no .last-opened written, no exception raised."""
+    cwd = "/some/project"
+    payload = json.dumps({"session_id": "no-dir", "cwd": cwd})
+    monkeypatch.setenv("CLD_SESSION_TAG", "no-dir-tag")
+    monkeypatch.delenv("CLD_SESSION_DIR", raising=False)
+    monkeypatch.setattr("sys.stdin", _stdin(payload))
+    projects_dir = tmp_path / "projects"
+    projects_dir.mkdir()
+    monkeypatch.setattr(session_tag, "DEFAULT_PROJECTS_DIR", projects_dir)
+
+    rc = session_tag.main()
+
+    assert rc == 0
+    # No .last-opened anywhere in tmp_path (other than the projects dir)
+    sentinels = list(tmp_path.rglob(".last-opened"))
+    assert sentinels == []
+
+
+def test_last_opened_oserror_logs_to_stderr_no_exception(tmp_path, monkeypatch, capsys):
+    """.touch() raises OSError: error printed to stderr (contains [session-tag]), no exception propagated."""
+    # Point CLD_SESSION_DIR at a non-existent nested path so .touch() raises
+    missing_dir = tmp_path / "does" / "not" / "exist"
+    cwd = "/some/project"
+    payload = json.dumps({"session_id": "oserr-test", "cwd": cwd})
+    monkeypatch.setenv("CLD_SESSION_TAG", "oserr-tag")
+    monkeypatch.setenv("CLD_SESSION_DIR", str(missing_dir))
+    monkeypatch.setattr("sys.stdin", _stdin(payload))
+    projects_dir = tmp_path / "projects"
+    projects_dir.mkdir()
+    monkeypatch.setattr(session_tag, "DEFAULT_PROJECTS_DIR", projects_dir)
+
+    rc = session_tag.main()
+
+    assert rc == 0
+    err = capsys.readouterr().err
+    assert "[session-tag]" in err
+
+
+# ---------------------------------------------------------------------------
 # helpers
 # ---------------------------------------------------------------------------
 

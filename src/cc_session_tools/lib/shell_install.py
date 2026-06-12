@@ -27,33 +27,48 @@ _SENTINEL_END = "# <<< ccst shell function (ccl) <<<"
 _BLOCK = """\
 # >>> ccst shell function (ccl) >>>
 ccl() {
-  local _a
+  local _saw_global _saw_order_by _a
   for _a in "$@"; do
     case "$_a" in
       --help|-h)
         cat <<'CCLHELP'
-Usage: ccl [--global] [--order-by {start,update}]
+Usage: ccl [--global] [--order-by {start,update,opened,active}]
 
 List Claude Code sessions in the current project (wrapper around ccs).
 
 Options:
-  --global                   List sessions across all configured roots
-                             (default: current directory only).
-  --order-by {start,update}  Sort order:
+  --global                              List sessions across all configured roots
+                                        (default: current directory only).
+  --order-by {start,update,opened,active}
+                             Sort order:
                                start  = newest-first by session start date
                                update = newest-first by last file modification
                                         (also prints the update timestamp)
+                               opened = newest-first by last ccd/ccr invocation
+                                        (also prints the opened timestamp)
+                               active = newest-first by last Claude response
+                                        (also prints the active timestamp)
 
 ccl is a shell function wrapper around 'ccs' (list mode only).
 For the full ccs interface, run: ccs --help
 CCLHELP
         return 0
         ;;
+      --global)
+        _saw_global=1
+        ;;
+      --order-by|--order-by=*)
+        _saw_order_by=1
+        ;;
     esac
   done
+  if [[ -n "$_saw_global" && -z "$_saw_order_by" ]]; then
+    set -- --order-by active "$@"
+  fi
   ccs "$@"
 }
 ccl-global() { ccs --global "$@"; }
+ccl-recent() { ccs --global --order-by active "$@"; }
 # <<< ccst shell function (ccl) <<<
 """
 

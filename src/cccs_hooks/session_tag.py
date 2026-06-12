@@ -73,6 +73,13 @@ def main(argv: list[str] | None = None) -> int:
     except OSError as exc:
         print(f"[session-tag] Failed to write tag file: {exc}", file=sys.stderr)
 
+    session_dir_str = os.environ.get("CLD_SESSION_DIR", "")
+    if session_dir_str:
+        try:
+            Path(session_dir_str).joinpath(".last-opened").touch()
+        except OSError as exc:
+            print(f"[session-tag] Failed to touch .last-opened: {exc}", file=sys.stderr)
+
     return 0
 
 
