@@ -378,3 +378,107 @@ def test_marker_calendar_sync_email_requires_subject_prefix(
         GATED_TOOLS_DEFAULT,
     )
     assert result_bad.exit_code == 2
+
+
+# ---------- self-send exception ----------
+
+
+def _self_send_input(
+    **overrides: object,
+) -> dict[str, object]:
+    """A Gmail send to/from the same self address, with no transcript -
+    so it blocks (exit 2) unless the self-send exemption short-circuits."""
+    tool_input: dict[str, object] = {
+        "to": "me@example.com",
+        "user_google_email": "me@example.com",
+        "subject": "anything",
+        "body": "x",
+    }
+    tool_input.update(overrides)
+    return _hook_input(
+        tool_name="mcp__google-workspace__send_gmail_message",
+        tool_input=tool_input,
+        session_id="missing",
+    )
+
+
+def test_self_send_exempt(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """to == from == NOTIFY_EMAIL with no cc/bcc is exempt even with no
+    transcript and in block mode."""
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("CCCS_ENFORCE_8DIGIT", "block")
+    monkeypatch.setenv("NOTIFY_EMAIL", "me@example.com")
+    result = verify(_self_send_input(), GATED_TOOLS_DEFAULT)
+    assert result.exit_code == 0
+    assert "self-send" in result.message
+
+
+def test_self_send_alias_sender_exempt(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An explicit from_email Send-As alias equal to the self address still
+    counts as a self-send."""
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("CCCS_ENFORCE_8DIGIT", "block")
+    monkeypatch.setenv("NOTIFY_EMAIL", "me@example.com")
+    result = verify(
+        _self_send_input(user_google_email="svc@example.com", from_email="me@example.com"),
+        GATED_TOOLS_DEFAULT,
+    )
+    assert result.exit_code == 0
+
+
+def test_self_send_case_insensitive(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("CCCS_ENFORCE_8DIGIT", "block")
+    monkeypatch.setenv("NOTIFY_EMAIL", "Me@Example.com")
+    result = verify(
+        _self_send_input(to="me@example.com", user_google_email="ME@EXAMPLE.COM"),
+        GATED_TOOLS_DEFAULT,
+    )
+    assert result.exit_code == 0
+
+
+def test_self_send_with_cc_not_exempt(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("CCCS_ENFORCE_8DIGIT", "block")
+    monkeypatch.setenv("NOTIFY_EMAIL", "me@example.com")
+    result = verify(_self_send_input(cc="other@example.com"), GATED_TOOLS_DEFAULT)
+    assert result.exit_code == 2
+
+
+def test_self_send_with_bcc_not_exempt(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("CCCS_ENFORCE_8DIGIT", "block")
+    monkeypatch.setenv("NOTIFY_EMAIL", "me@example.com")
+    result = verify(_self_send_input(bcc="other@example.com"), GATED_TOOLS_DEFAULT)
+    assert result.exit_code == 2
+
+
+def test_send_to_other_recipient_not_exempt(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("CCCS_ENFORCE_8DIGIT", "block")
+    monkeypatch.setenv("NOTIFY_EMAIL", "me@example.com")
+    result = verify(_self_send_input(to="other@example.com"), GATED_TOOLS_DEFAULT)
+    assert result.exit_code == 2
+
+
+def test_self_send_no_notify_email_not_exempt(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """With NOTIFY_EMAIL unset the exemption must not fire (fail closed)."""
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("CCCS_ENFORCE_8DIGIT", "block")
+    monkeypatch.delenv("NOTIFY_EMAIL", raising=False)
+    result = verify(_self_send_input(), GATED_TOOLS_DEFAULT)
+    assert result.exit_code == 2
