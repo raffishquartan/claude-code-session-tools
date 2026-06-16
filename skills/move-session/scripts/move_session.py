@@ -867,6 +867,22 @@ def main() -> int:
         )
         print(f"  wrote pending-rename marker: {marker}")
 
+        # Write/update the .tag file in the destination transcript directory so
+        # that find_jsonl_for_session(dst_tag) resolves immediately. Without
+        # this, ccr <new-name> finds the cc-sessions directory on disk but
+        # claude --resume <new-name> falls back to the picker because the jsonl
+        # custom-title still has the old name (RENAME-only never modifies the
+        # jsonl, and /rename hasn't run yet). The .tag file gives find_jsonl_for_session
+        # an alternative lookup path that works before the title is updated.
+        # For RENAME-only dst_key_dir == src_key_dir; this overwrites any stale
+        # .tag file with the new suffix. For MOVE+RENAME it creates the file in
+        # the new project key dir.
+        dst_tag_m = DATE_PREFIX_RE.match(dst_tag)
+        dst_tag_suffix = dst_tag_m.group(2) if dst_tag_m else dst_tag
+        tag_file = dst_key_dir / f"{session_uuid}.tag"
+        tag_file.write_text(dst_tag_suffix + "\n")
+        print(f"  wrote/updated .tag file: {tag_file}")
+
     # Cleanup script generation: the user can't easily delete the source via
     # `rm -rf` because the bash-hard-deny hook blocks local-file deletion. We
     # write a script they can `bash` themselves AFTER they have verified the

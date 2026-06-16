@@ -9,7 +9,7 @@ from pathlib import Path
 from cc_session_tools import __version__
 from cc_session_tools.lib.claude_flags import get_claude_flags
 from cc_session_tools.lib.roots import load_session_roots
-from cc_session_tools.lib.sessions import SESSION_FULL_RE, SessionMatch, find_matching_sessions, find_orphan_transcripts, session_tag
+from cc_session_tools.lib.sessions import SESSION_FULL_RE, SessionMatch, find_jsonl_for_session, find_matching_sessions, find_orphan_transcripts, session_tag
 from cc_session_tools.lib.tasklist import id_for_project
 
 
@@ -159,9 +159,20 @@ def main(argv: list[str] | None = None) -> int:
     if task_list_id is not None:
         env["CLAUDE_CODE_TASK_LIST_ID"] = task_list_id
 
+    # Prefer UUID-based resume: works even when the jsonl custom-title still
+    # has the old name (e.g. after a rename before /rename updates the title).
+    # --remote-control always uses the directory basename for session-tag context.
+    resume_arg = m.basename
+    if not m.is_orphan:
+        jsonl = find_jsonl_for_session(m.basename, m.project_dir)
+        if jsonl is not None:
+            resume_arg = jsonl.stem  # UUID
+        else:
+            debug(f"could not locate jsonl for {m.basename!r}; falling back to name-based resume")
+
     cmd = [
         "claude",
-        "--resume", m.basename,
+        "--resume", resume_arg,
         "--remote-control", m.basename,
     ]
     if remainder:
