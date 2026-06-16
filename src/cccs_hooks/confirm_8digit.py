@@ -108,6 +108,39 @@ def _check_marker_exception(
     return None
 
 
+# ---------- self-send exception ----------
+
+
+def _check_self_send_exception(
+    tool_name: str, tool_input: dict[str, object]
+) -> str | None:
+    """Return a reason string if this is a Gmail send addressed solely to the
+    user's own address, from their own address, with no cc/bcc. Otherwise None.
+
+    A message whose only recipient is the sender cannot exfiltrate anything, so
+    it is exempt from the 8-digit gate. The self address comes from the
+    ``NOTIFY_EMAIL`` environment variable - never hardcoded, because this module
+    ships in a public repo. If ``NOTIFY_EMAIL`` is unset the exemption never
+    fires and the call falls through to the normal transcript-based gate.
+    """
+    if tool_name != "mcp__google-workspace__send_gmail_message":
+        return None
+    self_email = os.environ.get("NOTIFY_EMAIL", "").strip().lower()
+    if not self_email:
+        return None
+    to = str(tool_input.get("to", "")).strip().lower()
+    # Effective sender: an explicit Send-As alias if given, else the
+    # authenticated account. Either must equal the self address.
+    sender = str(
+        tool_input.get("from_email") or tool_input.get("user_google_email") or ""
+    ).strip().lower()
+    cc = str(tool_input.get("cc") or "").strip()
+    bcc = str(tool_input.get("bcc") or "").strip()
+    if to == self_email and sender == self_email and not cc and not bcc:
+        return f"self-send to {self_email} (no cc/bcc)"
+    return None
+
+
 # ---------- gap check ----------
 
 
@@ -164,6 +197,15 @@ def verify(
         return VerificationResult(
             exit_code=0,
             message=f"[8digit-allow] {tool_name}: {marker_reason}",
+        )
+
+    # 1b. A self-send (to == from == NOTIFY_EMAIL, no cc/bcc) cannot reach
+    #     anyone but the user, so it is exempt regardless of transcript state.
+    self_send_reason = _check_self_send_exception(tool_name, tool_input)
+    if self_send_reason is not None:
+        return VerificationResult(
+            exit_code=0,
+            message=f"[8digit-allow] {tool_name}: {self_send_reason}",
         )
 
     # 2. Locate transcript. Missing transcript ALWAYS blocks - we cannot
