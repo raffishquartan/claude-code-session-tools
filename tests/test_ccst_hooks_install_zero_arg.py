@@ -62,8 +62,8 @@ def test_hooks_install_no_source_apply_writes_bundle(tmp_path: Path) -> None:
     assert "ccst hooks run session-tag" in all_cmds
 
 
-def test_hooks_install_bundle_all_six_hooks(tmp_path: Path) -> None:
-    """The bundle contains all six hooks."""
+def test_hooks_install_bundle_all_hooks(tmp_path: Path) -> None:
+    """The bundle installs the full set of hooks."""
     tgt = tmp_path / "settings.json"
     _write(tgt, {})
     result = _run("hooks", "install", "--target", str(tgt), "--apply")
@@ -81,6 +81,7 @@ def test_hooks_install_bundle_all_six_hooks(tmp_path: Path) -> None:
         "ccst hooks run edit-write-audit",
         "ccst hooks run session-end",
         "ccst hooks run session-tag",
+        "ccst hooks run last-screenshot",
     }
     assert expected == all_cmds, f"Missing: {expected - all_cmds}; extra: {all_cmds - expected}"
 
