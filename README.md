@@ -10,7 +10,7 @@ Three concerns, one repo, for life on the [Claude Code](https://docs.anthropic.c
 2. **Usage analytics** — parse `~/.claude/projects/**/*.jsonl` into tokens-and-dollars breakdowns by project, session, model, MCP server, plugin, and tool.
 3. **Hook library** — Python package (`cccs_hooks`) providing Claude Code SessionStart / PreToolUse / PostToolUse / UserPromptSubmit / Stop hook implementations, invokable via `ccst hooks run <name>`.
 
-The repo ships five CLIs, one shell helper, six bundled skills, and six bundled hooks:
+The repo ships five CLIs, one shell helper, six bundled skills, and seven bundled hooks:
 
 **CLIs and shell helper**
 
@@ -40,6 +40,7 @@ The repo ships five CLIs, one shell helper, six bundled skills, and six bundled 
 |---|---|
 | **`session-tag`** (SessionStart) | Writes a `<uuid>.tag` file so `claude-code-usage` can map session UUIDs to human-readable names. |
 | **`prompt-guard`** (UserPromptSubmit) | Scans incoming prompts for credential shapes and injection patterns before they reach the model. |
+| **`last-screenshot`** (UserPromptSubmit) | Resolves your newest screenshot for the `>lss` token and injects its path. Requires `CCST_SCREENSHOT_DIR`. |
 | **`bash-security-review`** (PreToolUse) | Tiered Bash command security review with an allowlist cache and LLM fallback. |
 | **`confirm-8digit`** (PreToolUse) | Blocks a configurable set of high-stakes tool calls unless the user repeats back an 8-digit confirmation code. |
 | **`edit-write-audit`** (PostToolUse) | Audits file writes for sensitive paths and checks that WORKLOG.md is being maintained. |
@@ -415,6 +416,7 @@ to make the hook library available. Hooks are invoked through `ccst hooks run <n
 | `cccs_hooks.prompt_guard` | UserPromptSubmit | Credential/injection pattern guard. |
 | `cccs_hooks.session_end` | Stop | WORKLOG/uncommitted-changes nudge. |
 | `cccs_hooks.session_tag` | **SessionStart** | Writes `<uuid>.tag` so `claude-code-usage` can map session UUIDs to `ccd` name tags (see [Session tag hook](#session-tag-hook)). |
+| `cccs_hooks.last_screenshot` | UserPromptSubmit | Resolves the newest screenshot for the `>lss` token and injects its path (see [Last screenshot hook](#last-screenshot-hook)). |
 
 ### Running hooks via `ccst hooks run <name>`
 
@@ -437,6 +439,7 @@ Where `<name>` is one of:
 | `edit-write-audit` | `cccs_hooks.edit_write_audit` |
 | `session-end` | `cccs_hooks.session_end` |
 | `session-tag` | `cccs_hooks.session_tag` |
+| `last-screenshot` | `cccs_hooks.last_screenshot` |
 
 The dispatcher reads the event payload from stdin, calls the matching module's
 `main()`, and propagates its exit code.
@@ -450,6 +453,39 @@ The dispatcher reads the event payload from stdin, calls the matching module's
 - If `CLD_SESSION_TAG` is not set (i.e. the session was not started by `ccd`), the hook exits silently.
 
 Claude Code stores each session as `~/.claude/projects/<encoded-cwd>/<uuid>.jsonl`. The display name (set by `ccd` via `claude -n`) survives only in ephemeral PID files that disappear when the process exits. The `.tag` file gives `claude-code-usage` and other tools a persistent, stable mapping from UUID to human name - so `--session-format name` shows `oneshot-add-uuid-for-better-usage-mapping` instead of `sess-8f3a2c1d`.
+
+### Last screenshot hook
+
+`cccs_hooks.last_screenshot` is a **UserPromptSubmit** hook that lets you refer to
+your most recent screenshot with the token `>lss` ("last screenshot") instead of
+finding and typing its path.
+
+When a submitted prompt contains a standalone `>lss` token, the hook finds the
+newest image in your screenshot directory and injects its absolute path as
+additional context, with a note telling Claude how to decide whether you want it
+read. The hook only ever injects **text** - the image enters context only if
+Claude then `Read`s the path. So you can also talk *about* the feature
+(`"what does the >lss hook do?"`) without an image being attached.
+
+- **Token match:** `>lss` matches unless glued to a letter or digit. Matches
+  `>lss`, `>lss?`, `(>lss is handy)`, `loss at >lss.`; does not match `>lssfoo`.
+- **Selection:** newest `*.png` / `*.jpg` / `*.jpeg` by file mtime.
+- **Staleness:** if the newest screenshot is older than 10 minutes, the injected
+  note warns you to confirm it is the one you meant.
+
+**Configuration (required):** set the `CCST_SCREENSHOT_DIR` environment variable
+to the folder where your screenshots are saved - e.g. in the `env` block of
+`~/.claude/settings.json`:
+
+```json
+"env": {
+  "CCST_SCREENSHOT_DIR": "/path/to/your/Screenshots"
+}
+```
+
+If `>lss` is used while `CCST_SCREENSHOT_DIR` is unset (or not a directory), the
+hook prints a visible warning to stderr telling you to set it. The hook never
+blocks and always exits 0.
 
 ### Running modules directly (debugging only)
 
