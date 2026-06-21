@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 
 from cc_session_tools.lib.messaging import service, store
+from cc_session_tools.lib.messaging.addressing import SessionContext
 from cc_session_tools.lib.messaging.message import parse
 
 
@@ -92,3 +93,89 @@ def test_list_messages_skips_malformed_file(tmp_path: Path, monkeypatch: pytest.
     bad.write_text("not a valid message\n", encoding="utf-8")
     rows = service.list_messages()
     assert len(rows) == 1
+
+
+def _ctx(
+    uuid: str = "me-uuid",
+    project: str = "alpha",
+    partition: str = "projects/alpha",
+) -> SessionContext:
+    return SessionContext(uuid=uuid, project=project, partition=partition)
+
+
+def _send_to_session(target_uuid: str) -> str:
+    return service.send(service.SendRequest(
+        from_project="oneshot", from_session="s", from_uuid="sender",
+        to_kind="session", to_value=target_uuid, to_partition="projects/alpha",
+        subject="For you", body="Body.", attachments=[], thread=None,
+    ))
+
+
+def test_deliver_auto_reads_session_message_once(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("CCST_MESSAGES_ROOT", str(tmp_path))
+    mid = _send_to_session("me-uuid")
+    digest1 = service.deliver(_ctx(), mode="full")
+    assert mid in digest1
+    read = service.read_one(mid)
+    assert read is not None
+    assert read.status == "read"
+    # Second sweep: cursor has advanced; the message is not re-surfaced.
+    digest2 = service.deliver(_ctx(), mode="incremental")
+    assert mid not in digest2
+
+
+def test_deliver_does_not_auto_read_other_sessions_message(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("CCST_MESSAGES_ROOT", str(tmp_path))
+    mid = _send_to_session("someone-else")
+    digest = service.deliver(_ctx(), mode="full")
+    assert mid not in digest
+    read = service.read_one(mid)
+    assert read is not None
+    assert read.status == "sent"
+
+
+def test_deliver_surfaces_receipt_once_to_sender(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("CCST_MESSAGES_ROOT", str(tmp_path))
+    mid = _send_to_session("me-uuid")
+    # Recipient reads it.
+    service.deliver(_ctx(uuid="me-uuid"), mode="full")
+    # Sender sweeps and sees a one-time receipt.
+    sender_ctx = _ctx(uuid="sender", project="alpha", partition="projects/alpha")
+    d1 = service.deliver(sender_ctx, mode="full")
+    assert "read" in d1.lower() and mid in d1
+    d2 = service.deliver(sender_ctx, mode="full")
+    assert mid not in d2  # receipt_shown flipped
+
+
+def test_deliver_surfaces_description_as_proposal_without_reading(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("CCST_MESSAGES_ROOT", str(tmp_path))
+    mid = service.send(service.SendRequest(
+        from_project="o", from_session="s", from_uuid="sender",
+        to_kind="description", to_value="whoever works on X",
+        to_partition="_global", subject="task", body="b", attachments=[], thread=None,
+    ))
+    digest = service.deliver(_ctx(), mode="full")
+    assert mid in digest
+    read = service.read_one(mid)
+    assert read is not None
+    assert read.status == "sent"  # candidate, not read
+
+
+def test_deliver_skips_malformed_file_in_swept_partition(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("CCST_MESSAGES_ROOT", str(tmp_path))
+    mid = _send_to_session("me-uuid")
+    # A stale/hand-edited file in a swept partition must not abort the sweep.
+    bad = store.ensure_inbox_dir("projects/alpha") / "20990101T000000Z-bbbb__broken.md"
+    bad.write_text("not a valid message\n", encoding="utf-8")
+    digest = service.deliver(_ctx(), mode="full")
+    assert mid in digest

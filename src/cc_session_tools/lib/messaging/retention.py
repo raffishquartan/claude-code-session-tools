@@ -5,10 +5,13 @@ Archiving is a move (never a delete). Unread messages never expire. Called from
 ``deliver`` with a bounded per-sweep cost."""
 from __future__ import annotations
 
+import logging
 from datetime import datetime, timedelta, timezone
 
 from cc_session_tools.lib.messaging.message import Message, parse, write_atomic
 from cc_session_tools.lib.messaging.store import archive_dir, ensure_inbox_dir
+
+logger = logging.getLogger(__name__)
 
 _RETENTION_DAYS = 14
 _ARCHIVABLE = ("read", "claimed")
@@ -29,7 +32,12 @@ def archive_old(partition: str, now: datetime) -> list[str]:
     cutoff = now - timedelta(days=_RETENTION_DAYS)
     archived: list[str] = []
     for path in sorted(inbox.glob("*.md")):
-        message = parse(path.read_text(encoding="utf-8"))
+        try:
+            message = parse(path.read_text(encoding="utf-8"))
+        except (ValueError, OSError):
+            # A single stale/hand-edited file must never abort the sweep.
+            logger.warning("skipping unreadable message file: %s", path)
+            continue
         if message.status not in _ARCHIVABLE:
             continue
         stamp = _settled_at(message)

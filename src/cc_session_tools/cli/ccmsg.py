@@ -6,11 +6,13 @@ lives here at the boundary; the service trusts its inputs."""
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 from pathlib import Path
 
 from cc_session_tools import __version__
-from cc_session_tools.lib.messaging import service
+from cc_session_tools.lib.messaging import service, store
+from cc_session_tools.lib.messaging.addressing import SessionContext
 from cc_session_tools.lib.messaging.message import ToKind
 
 
@@ -50,6 +52,16 @@ def _build_parser() -> argparse.ArgumentParser:
     list_p.add_argument("--status", default=None)
     list_p.add_argument("--partition", default=None)
     list_p.add_argument("--from-uuid", default=None)
+
+    deliver_p = sub.add_parser("deliver", help="Sweep + digest (hook entry).")
+    deliver_p.add_argument("--mode", choices=("full", "incremental"), default="full")
+    deliver_p.add_argument("--uuid", default=None)
+    deliver_p.add_argument("--project", default=None)
+    deliver_p.add_argument("--partition", default=None)
+    deliver_p.add_argument(
+        "--stdin", action="store_true",
+        help="Read session context from a hook JSON payload on stdin.",
+    )
 
     return p
 
@@ -149,6 +161,24 @@ def _cmd_list(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_deliver(args: argparse.Namespace) -> int:
+    if args.stdin:
+        data = json.loads(sys.stdin.read())
+        uuid = str(data.get("session_id", ""))
+        cwd = Path(str(data.get("cwd", Path.cwd())))
+        partition = store.partition_for_cwd(cwd)
+        project = partition.split("/", 1)[-1]
+    else:
+        uuid = args.uuid or ""
+        partition = args.partition or ""
+        project = args.project or ""
+    ctx = SessionContext(uuid=uuid, project=project, partition=partition)
+    digest = service.deliver(ctx, mode=args.mode)
+    if digest:
+        print(digest)
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = _build_parser()
     args = parser.parse_args(argv)
@@ -158,6 +188,8 @@ def main(argv: list[str] | None = None) -> int:
         return _cmd_read(args)
     if args.command == "list":
         return _cmd_list(args)
+    if args.command == "deliver":
+        return _cmd_deliver(args)
     parser.print_help(sys.stderr)
     return 1
 

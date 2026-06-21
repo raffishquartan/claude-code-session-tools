@@ -1,6 +1,8 @@
 # tests/messaging/test_ccmsg_cli.py  (send portion)
 from __future__ import annotations
 
+import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -114,3 +116,27 @@ def test_read_missing_id_errors(tmp_path: Path) -> None:
 def test_list_empty_store_ok(tmp_path: Path) -> None:
     res = _run(["list"], tmp_path)
     assert res.returncode == 0
+
+
+def test_deliver_stdin_delivers_project_message(tmp_path: Path) -> None:
+    proj_root = tmp_path / "proj"
+    (proj_root / "alpha").mkdir(parents=True)
+    store_dir = tmp_path / "store"
+    proj_env = {"CLAUDE_SESSION_TOOLS_PROJ_ROOT": str(proj_root)}
+    send = _run(
+        ["send", "--to-project", "alpha", "--subject", "Ping", "--body", "hi there",
+         "--from-project", "o", "--from-session", "s", "--from-uuid", "u",
+         "--from-partition", "projects/o", "--to-partition", "projects/alpha"],
+        store_dir, proj_env,
+    )
+    assert send.returncode == 0, send.stderr
+    payload = json.dumps({"session_id": "u1", "cwd": str(proj_root / "alpha")})
+    env = dict(os.environ)
+    env["CCST_MESSAGES_ROOT"] = str(store_dir)
+    env.update(proj_env)
+    res = subprocess.run(
+        [sys.executable, "-m", "cc_session_tools.cli.ccmsg", "deliver", "--stdin", "--mode", "full"],
+        input=payload, capture_output=True, text=True, env=env,
+    )
+    assert res.returncode == 0, res.stderr
+    assert "Ping" in res.stdout
