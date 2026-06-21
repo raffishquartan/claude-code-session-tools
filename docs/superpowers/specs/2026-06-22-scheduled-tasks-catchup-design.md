@@ -80,7 +80,7 @@ All runtime data lives under the user's home, never in the repo:
 ```
 ~/.claude/cc-scheduler/
 ├── jobs.toml          # registry (hand-edited and/or `ccsched add`)
-├── state.json         # per-job last_success / last_attempt / consecutive_failures
+├── state.json         # per-job registered_at / last_success / last_attempt / consecutive_failures
 └── .sweep.lock        # O_EXCL sweep lock (transient)
 ~/.claude/hooks/
 └── fires.jsonl        # shared telemetry ledger (reused, not new)
@@ -141,9 +141,11 @@ The sweep (`ccst hooks run catchup`, also `ccsched sweep`) does, per enabled job
 registry order:
 
 1. **Compute owed.** `owed` = the set of scheduled instants in `(last_success, now]` per the
-   job's cadence. If the job has never run, the baseline is its registration time. Instants
-   older than `now − catchup_window` are dropped and logged as `skip_expired` (visible, never
-   silent).
+   job's cadence. If the job has never run, the baseline is its `registered_at` (stamped into
+   `state.json` by `ccsched add`; a job hand-added to `jobs.toml` with no state entry is
+   stamped `registered_at = now` on the first sweep that sees it, so it does not retroactively
+   back-fill from epoch). Instants older than `now − catchup_window` are dropped and logged as
+   `skip_expired` (visible, never silent).
 2. **Nothing owed →** record nothing, move on.
 3. **`coalesce: one` and owed ≥ 1 →** run the command **once**.
 4. **`coalesce: each` →** run once per owed instant, up to the per-sweep cap (§9.3);
@@ -216,7 +218,7 @@ coalescing, runner, state I/O, digest formatting). The CLI is a thin argparse la
 | Command | Purpose |
 |---------|---------|
 | `ccsched add` | Register a job. Flags: `--id`, `--cadence`, `--coalesce`, `--command …` (argv), `--surface/--no-surface`, `--catchup-window`, `--timeout`. |
-| `ccsched list` | Table: id, cadence, coalesce, enabled, last_success, next_due. |
+| `ccsched list` | Table: id, cadence, coalesce, enabled, last_success, next_due (computed on the fly from cadence + last_success, reusing the due-computation parser — not cached). |
 | `ccsched edit <id>` | Modify fields of an existing job. |
 | `ccsched enable <id>` / `disable <id>` | Toggle without removing. |
 | `ccsched remove <id>` | Delete a job from the registry. |
@@ -299,10 +301,9 @@ Matches the existing pytest + subprocess + `tmp_path` convention; never touches 
 
 1. Exact `additionalContext` digest wording/format and overdue-duration phrasing.
 2. Stale-lock reclamation policy (pid-liveness check vs age threshold).
-3. Whether `next_due` in `ccsched list` is computed or cached.
-4. DST edge-case policy for the wall-clock cadences (skip-once vs run-once on the
+3. DST edge-case policy for the wall-clock cadences (skip-once vs run-once on the
    ambiguous/again hour).
-5. Duration/`catchup_window` parser location (shared helper in `lib/scheduler/`).
+4. Duration/`catchup_window` parser location (shared helper in `lib/scheduler/`).
 
 ## 18. Deferred / spun out
 
@@ -312,4 +313,6 @@ Matches the existing pytest + subprocess + `tmp_path` convention; never touches 
   external host (§3).
 - **Migrating existing always-fire SessionStart job-hooks** (Tesco, calendar) into cadenced
   registry jobs — a documented follow-up the user performs via the skill, not part of this
-  build.
+  build. The skill must warn about the transition double-fire window: a job that still fires
+  as a plain SessionStart hook *and* as a registry entry will run twice until the old hook is
+  removed, so migration is "add registry entry, then remove old hook" in that order.
