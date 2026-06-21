@@ -23,6 +23,7 @@ from cc_session_tools.lib.messaging.message import (
     Status,
     ToKind,
     parse,
+    safe_parse,
     write_atomic,
 )
 from cc_session_tools.lib.messaging.store import (
@@ -172,16 +173,6 @@ def read_one(message_id: str) -> Message | None:
     return parse(path.read_text(encoding="utf-8")) if path is not None else None
 
 
-def _safe_parse(path: Path) -> Message | None:
-    """Parse a store file, returning ``None`` (and logging) for a malformed one so
-    that a single stale/hand-edited file never aborts a whole sweep or listing."""
-    try:
-        return parse(path.read_text(encoding="utf-8"))
-    except (ValueError, OSError):
-        logger.warning("skipping unreadable message file: %s", path)
-        return None
-
-
 @dataclass(frozen=True)
 class MessageRow:
     id: str
@@ -201,7 +192,7 @@ def list_messages(
     """Return compact rows, optionally filtered by status, partition, or sender uuid."""
     rows: list[MessageRow] = []
     for path in _iter_message_files():
-        m = _safe_parse(path)
+        m = safe_parse(path)
         if m is None:
             continue
         if status is not None and m.status != status:
@@ -261,7 +252,7 @@ def deliver(ctx: SessionContext, *, mode: DeliverMode) -> str:
     for partition in _swept_partitions(ctx):
         inbox = ensure_inbox_dir(partition)
         for path in sorted(inbox.glob("*.md")):
-            message = _safe_parse(path)
+            message = safe_parse(path)
             if message is None:
                 continue
             if not cursor_mod.is_new(message, cur):
@@ -284,6 +275,10 @@ def deliver(ctx: SessionContext, *, mode: DeliverMode) -> str:
                 inbound.append(_digest_line(message, now))
                 cur = cursor_mod.advance(cur, message)
             elif kind is MatchKind.CANDIDATE:
+                # A description proposal is surfaced to this session once, then
+                # the cursor advances so it is not re-nudged every prompt. Other
+                # sessions still see it (their own cursors are independent), so
+                # first-claim-wins is unaffected.
                 proposals.append(_digest_line(message, now))
                 cur = cursor_mod.advance(cur, message)
         retention.archive_old(partition, now)
@@ -297,7 +292,7 @@ def deliver(ctx: SessionContext, *, mode: DeliverMode) -> str:
 def _collect_receipts(ctx: SessionContext, now: datetime) -> list[str]:
     lines: list[str] = []
     for path in _iter_message_files():
-        message = _safe_parse(path)
+        message = safe_parse(path)
         if message is None:
             continue
         if message.from_uuid != ctx.uuid:

@@ -5,8 +5,8 @@ uuid routing means no message is ever orphaned by a rename; these helpers keep
 the cosmetic display tag fresh and give the move flow an explicit cursor hook."""
 from __future__ import annotations
 
-from cc_session_tools.lib.messaging.message import write_atomic
-from cc_session_tools.lib.messaging.service import _iter_message_files, _safe_parse
+from cc_session_tools.lib.messaging.message import safe_parse, write_atomic
+from cc_session_tools.lib.messaging.service import _iter_message_files
 from cc_session_tools.lib.messaging import cursor as cursor_mod
 
 
@@ -17,7 +17,7 @@ def refresh_display_tags(*, uuid: str, new_tag: str) -> int:
     for path in _iter_message_files():
         # Skip (and log) a malformed file so one bad message never aborts the
         # refresh mid-sweep and leaves a partial rename.
-        message = _safe_parse(path)
+        message = safe_parse(path)
         if message is None:
             continue
         if message.status == "archived":

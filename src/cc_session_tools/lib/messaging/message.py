@@ -4,11 +4,14 @@ atomic writes. The frontmatter is the single source of truth for routing and
 state; the body is free-form markdown."""
 from __future__ import annotations
 
+import logging
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Literal, get_args
 
 import yaml
+
+logger = logging.getLogger(__name__)
 
 ToKind = Literal["session", "project", "description"]
 Status = Literal["sent", "read", "claimed", "archived"]
@@ -111,3 +114,14 @@ def write_text_atomic(path: Path, text: str) -> None:
 
 def write_atomic(path: Path, message: Message) -> None:
     write_text_atomic(path, serialise(message))
+
+
+def safe_parse(path: Path) -> Message | None:
+    """Parse a store file, returning ``None`` (and logging) for a malformed or
+    unreadable one. The single source of truth for sweep operations so that one
+    stale/hand-edited file never aborts a whole listing, delivery, or rename."""
+    try:
+        return parse(path.read_text(encoding="utf-8"))
+    except (ValueError, OSError):
+        logger.warning("skipping unreadable message file: %s", path)
+        return None
