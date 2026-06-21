@@ -70,3 +70,31 @@ def test_inbox_dir_is_created_lazily(tmp_path: Path, monkeypatch: pytest.MonkeyP
     inbox = store.ensure_inbox_dir("projects/alpha")
     assert inbox == tmp_path / "projects" / "alpha" / "inbox"
     assert inbox.is_dir()
+
+
+def test_partition_for_project_strict_root(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    proj = tmp_path / "proj"
+    (proj / "alpha").mkdir(parents=True)
+    monkeypatch.setenv("CLAUDE_SESSION_TOOLS_PROJ_ROOT", str(proj))
+    monkeypatch.delenv("CLAUDE_SESSION_TOOLS_REPO_ROOT", raising=False)
+    assert store.partition_for_project("alpha") == "projects/alpha"
+
+
+def test_partition_for_project_loose_root(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repos = tmp_path / "repos"
+    (repos / "beta").mkdir(parents=True)
+    monkeypatch.setenv("CLAUDE_SESSION_TOOLS_REPO_ROOT", str(repos))
+    monkeypatch.delenv("CLAUDE_SESSION_TOOLS_PROJ_ROOT", raising=False)
+    assert store.partition_for_project("beta") == "repos/beta"
+
+
+def test_partition_for_project_unknown_is_global(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("CLAUDE_SESSION_TOOLS_PROJ_ROOT", raising=False)
+    monkeypatch.delenv("CLAUDE_SESSION_TOOLS_REPO_ROOT", raising=False)
+    assert store.partition_for_project("ghost") == "_global"

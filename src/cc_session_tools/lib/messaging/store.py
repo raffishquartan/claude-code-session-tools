@@ -27,6 +27,8 @@ from cc_session_tools.lib.roots import (
     is_strict_root,
     load_session_roots,
     matched_session_root,
+    proj_root,
+    repo_root,
 )
 
 STORE_ROOT_ENV = "CCST_MESSAGES_ROOT"
@@ -87,6 +89,25 @@ def partition_for_cwd(cwd: Path) -> str:
         prefix = "projects" if is_strict_root(matched) else "repos"
         return f"{prefix}/{cwd.name}"
     return f"other-paths/{other_paths_slug(cwd)}"
+
+
+def partition_for_project(name: str) -> str:
+    """Partition a project-addressed message routes to.
+
+    A session working in project ``name`` sweeps ``partition_for_cwd`` of its
+    cwd, so a project-addressed message must land in that same partition:
+    ``projects/<name>`` when ``name`` resolves under the strict (PROJ) root,
+    ``repos/<name>`` under the loose (REPO) root. When ``name`` cannot be
+    resolved locally, fall back to ``_global`` — every session sweeps it and
+    ``addressing.targets`` still matches on the project label, so the message is
+    delivered (just less selectively)."""
+    pr = proj_root()
+    if pr is not None and (pr / name).is_dir():
+        return partition_for_cwd(pr / name)
+    rr = repo_root()
+    if rr is not None and (rr / name).is_dir():
+        return partition_for_cwd(rr / name)
+    return GLOBAL_PARTITION
 
 
 def partition_dir(partition: str) -> Path:

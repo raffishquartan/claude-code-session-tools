@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -37,15 +38,18 @@ def _build_parser() -> argparse.ArgumentParser:
     body.add_argument("--body-file", type=Path)
     send_p.add_argument("--attach", action="append", default=[], metavar="PATH")
     send_p.add_argument("--thread", default=None, metavar="ID")
-    # Sender + routing context (supplied by the skill from hook stdin; flags for tests).
-    send_p.add_argument("--from-project", required=True)
-    send_p.add_argument("--from-session", required=True)
-    send_p.add_argument("--from-uuid", required=True)
-    # --from-partition is captured now and reserved for future receipt routing
-    # (where the sender lives); service.send does not consume it yet.
-    send_p.add_argument("--from-partition", required=True)
-    send_p.add_argument("--to-partition", required=True,
-                        help="Store partition the message file lives in.")
+    # Sender + routing context. All optional: by default the sender uuid comes
+    # from $CLAUDE_CODE_SESSION_ID, the display tag from $CLD_SESSION_TAG, and
+    # project/partition are derived from the cwd. The flags are overrides (tests
+    # and non-Claude-Code callers supply them explicitly).
+    send_p.add_argument("--from-project", default=None)
+    send_p.add_argument("--from-session", default=None)
+    send_p.add_argument("--from-uuid", default=None,
+                        help="Sender session uuid (default: $CLAUDE_CODE_SESSION_ID).")
+    send_p.add_argument("--from-partition", default=None)
+    send_p.add_argument("--to-partition", default=None,
+                        help="Override the store partition the message file lives in "
+                             "(default: derived from the recipient).")
 
     read_p = sub.add_parser("read", help="Print one message body and metadata.")
     read_p.add_argument("id")
@@ -112,6 +116,39 @@ def _validate_attachments(attachments: list[str]) -> None:
             raise ValueError(f"attachment path must be absolute: {a}")
 
 
+def _resolve_sender(args: argparse.Namespace) -> tuple[str, str, str, str]:
+    """Return (from_uuid, from_session, from_project, from_partition).
+
+    Unset flags are filled from the Claude Code environment and the cwd: the
+    sender uuid from ``$CLAUDE_CODE_SESSION_ID`` (the same value the statusline/
+    hooks receive as ``session_id``), the display tag from ``$CLD_SESSION_TAG``,
+    and project/partition from ``partition_for_cwd``."""
+    from_uuid = args.from_uuid or os.environ.get("CLAUDE_CODE_SESSION_ID") or ""
+    if not from_uuid:
+        raise ValueError(
+            "cannot determine sender session uuid; pass --from-uuid or run inside "
+            "Claude Code (which sets CLAUDE_CODE_SESSION_ID)"
+        )
+    from_partition = args.from_partition or store.partition_for_cwd(Path.cwd())
+    from_project = args.from_project or from_partition.split("/", 1)[-1]
+    from_session = args.from_session or os.environ.get("CLD_SESSION_TAG") or from_uuid
+    return from_uuid, from_session, from_project, from_partition
+
+
+def _resolve_to_partition(to_kind: ToKind, to_value: str, override: str | None) -> str:
+    """Where the message file is written so the recipient's sweep finds it.
+
+    Project-addressed messages go to that project's partition (sessions there
+    sweep it). Session- and description-addressed messages go to ``_global``:
+    the sender cannot know a target session's partition, but every session
+    sweeps ``_global`` and ``addressing.targets`` matches by uuid / candidate."""
+    if override is not None:
+        return override
+    if to_kind == "project":
+        return store.partition_for_project(to_value)
+    return store.GLOBAL_PARTITION
+
+
 def _cmd_send(args: argparse.Namespace) -> int:
     try:
         if not args.subject.strip():
@@ -119,16 +156,18 @@ def _cmd_send(args: argparse.Namespace) -> int:
         to_kind, to_value = _resolve_recipient(args)
         body = _resolve_body(args)
         _validate_attachments(args.attach)
+        from_uuid, from_session, from_project, from_partition = _resolve_sender(args)
+        to_partition = _resolve_to_partition(to_kind, to_value, args.to_partition)
     except ValueError as exc:
         print(f"ccmsg: {exc}", file=sys.stderr)
         return 2
     message_id = service.send(service.SendRequest(
-        from_project=args.from_project,
-        from_session=args.from_session,
-        from_uuid=args.from_uuid,
+        from_project=from_project,
+        from_session=from_session,
+        from_uuid=from_uuid,
         to_kind=to_kind,
         to_value=to_value,
-        to_partition=args.to_partition,
+        to_partition=to_partition,
         subject=args.subject,
         body=body,
         attachments=list(args.attach),

@@ -13,7 +13,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   auditable messages between Claude Code sessions (to a session, a project, or a
   free-text description), stored as markdown-with-frontmatter under
   `~/.claude/cc-messages/`. Subcommands: `send`, `deliver`, `read`, `list`,
-  `claim`, `archive`.
+  `claim`, `archive`. `ccmsg send` resolves the sender's session uuid from
+  `$CLAUDE_CODE_SESSION_ID`, the display tag from `$CLD_SESSION_TAG`, and the
+  project/partition from the cwd, and routes to the recipient's partition
+  automatically, so a send needs only a recipient, subject, and body.
 - **Automatic delivery hooks.** A `messaging-deliver` hook fires on `SessionStart`
   (full sweep) and `UserPromptSubmit` (incremental sweep), injecting a compact
   digest as additional context. Auto-read, read-receipts, first-claim-wins claims,

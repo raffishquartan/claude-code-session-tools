@@ -150,3 +150,57 @@ def test_deliver_stdin_delivers_project_message(tmp_path: Path) -> None:
     )
     assert res.returncode == 0, res.stderr
     assert "Ping" in res.stdout
+
+
+def _send_env(store_root: Path, **extra: str) -> dict[str, str]:
+    env = dict(os.environ)
+    env["CCST_MESSAGES_ROOT"] = str(store_root)
+    env.pop("CLAUDE_SESSION_TOOLS_PROJ_ROOT", None)
+    env.pop("CLAUDE_SESSION_TOOLS_REPO_ROOT", None)
+    env.update(extra)
+    return env
+
+
+def test_send_derives_uuid_from_env_and_routes_session_to_global(tmp_path: Path) -> None:
+    from cc_session_tools.lib.messaging.message import parse
+
+    env = _send_env(tmp_path, CLAUDE_CODE_SESSION_ID="env-sender-uuid")
+    res = subprocess.run(
+        [sys.executable, "-m", "cc_session_tools.cli.ccmsg", "send",
+         "--to-session", "target-uuid", "--subject", "Hi", "--body", "Body"],
+        capture_output=True, text=True, env=env, cwd=str(tmp_path),
+    )
+    assert res.returncode == 0, res.stderr
+    files = list((tmp_path / "_global" / "inbox").glob("*.md"))
+    assert len(files) == 1
+    m = parse(files[0].read_text(encoding="utf-8"))
+    assert m.from_uuid == "env-sender-uuid"  # taken from $CLAUDE_CODE_SESSION_ID
+    assert m.to_kind == "session" and m.to_value == "target-uuid"
+    assert m.to_location == "_global"
+
+
+def test_send_routes_project_to_project_partition(tmp_path: Path) -> None:
+    proj = tmp_path / "proj"
+    (proj / "alpha").mkdir(parents=True)
+    store_dir = tmp_path / "store"
+    env = _send_env(store_dir, CLAUDE_CODE_SESSION_ID="u",
+                    CLAUDE_SESSION_TOOLS_PROJ_ROOT=str(proj))
+    res = subprocess.run(
+        [sys.executable, "-m", "cc_session_tools.cli.ccmsg", "send",
+         "--to-project", "alpha", "--subject", "Hi", "--body", "B"],
+        capture_output=True, text=True, env=env, cwd=str(tmp_path),
+    )
+    assert res.returncode == 0, res.stderr
+    assert list((store_dir / "projects" / "alpha" / "inbox").glob("*.md"))
+
+
+def test_send_errors_without_session_uuid(tmp_path: Path) -> None:
+    env = _send_env(tmp_path)
+    env.pop("CLAUDE_CODE_SESSION_ID", None)
+    res = subprocess.run(
+        [sys.executable, "-m", "cc_session_tools.cli.ccmsg", "send",
+         "--to-project", "alpha", "--subject", "Hi", "--body", "B"],
+        capture_output=True, text=True, env=env, cwd=str(tmp_path),
+    )
+    assert res.returncode == 2
+    assert "session uuid" in (res.stderr + res.stdout).lower()

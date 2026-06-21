@@ -37,10 +37,19 @@ If you are unsure which the user means, ask before sending.
 
 ## Send
 
-The delivery hook supplies your own session context. When you call `ccmsg send`,
-pass the routing context the skill resolves from the current session (uuid,
-project, partition). Subject and body are required; exactly one recipient kind
-is required.
+You do not supply routing context. `ccmsg send` resolves your own session uuid
+from `$CLAUDE_CODE_SESSION_ID`, your display tag from `$CLD_SESSION_TAG`, and
+your project/partition from the current directory. It also derives where to
+write the message from the recipient (a project's own partition, or `_global`
+for session- and description-addressed). So a normal send is just:
+
+```
+ccmsg send --to-project <name> --subject "<subject>" --body "<body>"
+```
+
+Subject and body are required (`--body` or `--body-file`); exactly one recipient
+kind is required; attachments are absolute paths. The `--from-*`/`--to-partition`
+flags exist only as overrides for tests or non-Claude-Code callers.
 
 ## Receiving a description-addressed proposal
 
