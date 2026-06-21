@@ -10,7 +10,7 @@ Three concerns, one repo, for life on the [Claude Code](https://docs.anthropic.c
 2. **Usage analytics** — parse `~/.claude/projects/**/*.jsonl` into tokens-and-dollars breakdowns by project, session, model, MCP server, plugin, and tool.
 3. **Hook library** — Python package (`cccs_hooks`) providing Claude Code SessionStart / PreToolUse / PostToolUse / UserPromptSubmit / Stop hook implementations, invokable via `ccst hooks run <name>`.
 
-The repo ships five CLIs, one shell helper, six bundled skills, and seven bundled hooks:
+The repo ships six CLIs, one shell helper, seven bundled skills, and eight bundled hooks:
 
 **CLIs and shell helper**
 
@@ -20,7 +20,8 @@ The repo ships five CLIs, one shell helper, six bundled skills, and seven bundle
 | **`ccr <fragment>`** | Resume an existing session by typing any substring of its name. |
 | **`ccs [query]`** | Search across your sessions by name, file contents, or transcript messages. No query → list all sessions newest-first. |
 | **`claude-code-usage`** | Multi-dimensional usage analytics CLI: query/group/filter by project, session, model, MCP server, plugin, tool, day/week/month/year. Reconciles dollar totals against `ccusage`. |
-| **`ccst <noun> <verb>`** | Umbrella CLI for hook and skill management: install, uninstall, health-check, shell helpers, telemetry trim. |
+| **`ccst <noun> <verb>`** | Umbrella CLI for hook and skill management: install, uninstall, health-check, shell helpers, telemetry trim, global CLAUDE.md messaging block. |
+| **`ccmsg <command>`** | Inter-session messaging CLI: send, deliver, read, list, claim, and archive durable messages between Claude Code sessions. |
 | **`ccl` (shell fn)** | Shell function wrapping `ccs` for list-mode usage. Installed by `ccst shell install`. |
 
 **Bundled skills** (installed via `ccst skills install`)
@@ -33,6 +34,7 @@ The repo ships five CLIs, one shell helper, six bundled skills, and seven bundle
 | **`generate-8digit-code`** | Generates a cryptographically secure 8-digit confirmation code via `secrets.randbelow`. LLMs are statistically biased random number generators — this ensures gated-action codes are genuinely unpredictable. |
 | **`list-empty-sessions`** | Wraps `ccs --emptiness only`. Finds sessions you never actually typed in — accumulate from accidental `ccd` invocations or abandoned starts. |
 | **`move-session`** | Move, rename, or move+rename a session while keeping its `~/.claude/projects/<encoded-cwd>/<uuid>.jsonl` transcript resumable. |
+| **`send-session-message`** | Guides recipient choice, message composition, and confirmation when sending an inter-session message via `ccmsg send`. |
 
 **Bundled hooks** (installed via `ccst hooks install`)
 
@@ -45,6 +47,7 @@ The repo ships five CLIs, one shell helper, six bundled skills, and seven bundle
 | **`confirm-8digit`** (PreToolUse) | Blocks a configurable set of high-stakes tool calls unless the user repeats back an 8-digit confirmation code. |
 | **`edit-write-audit`** (PostToolUse) | Audits file writes for sensitive paths and checks that WORKLOG.md is being maintained. |
 | **`session-end`** (Stop) | Nudges you to commit uncommitted changes and update WORKLOG.md when a session ends. |
+| **`messaging-deliver`** (SessionStart + UserPromptSubmit) | Sweeps `~/.claude/cc-messages/` for messages addressed to this session and injects a compact digest as additional context. Handles auto-read, read-receipts, first-claim-wins claims, and 14-day archival without prompting. |
 
 See [CHANGELOG.md](CHANGELOG.md) for a full version history. See [TODO.md](TODO.md) for known follow-up work (including the notify-user skill integration).
 
@@ -70,13 +73,14 @@ bash install-everything.sh
 ```
 
 `install-everything.sh` installs the CLIs (via `uv` or `pipx`, whichever is
-present), then symlinks the skills, merges the hooks, and adds the `ccl` shell
-function. It runs `ccst doctor` at the end so you can see the health check immediately. Re-running is safe — every step is idempotent.
+present), then symlinks the skills, merges the hooks, adds the `ccl` shell
+function, and registers the inter-session-messaging block in `~/.claude/CLAUDE.md`.
+It runs `ccst doctor` at the end so you can see the health check immediately. Re-running is safe — every step is idempotent.
 
 > **Options:** `--from-source` reinstalls from the local clone rather than
 > PyPI. `--upgrade` forces an upgrade of an existing install.
 
-> **Note:** `install-everything.sh` handles steps 1–3 of setup. Step 4 — adding CCST guidance to your global `~/.claude/CLAUDE.md` — is interactive and must be run separately afterwards. See [Configure your global CLAUDE.md](#configure-your-global-claudemd) below.
+> **Note:** `install-everything.sh` handles steps 1–5 of setup. Step 6 — adding broader CCST guidance to your global `~/.claude/CLAUDE.md` (session management, 8-digit gate, etc.) — is interactive and must be run separately afterwards. See [Configure your global CLAUDE.md](#configure-your-global-claudemd) below.
 
 **Manual path — step by step:**
 
@@ -114,7 +118,7 @@ After `ccst shell install --apply`, open a new shell (or `source ~/.bashrc`) to 
 > uv tool install ~/repos/claude-code-session-tools
 > ```
 > **Do NOT run `uv tool install` from inside a git worktree.** That overwrites the
-> global install's source pointer with the worktree path, which breaks all five CLIs
+> global install's source pointer with the worktree path, which breaks all six CLIs
 > when the worktree is deleted. Use `uv run pytest` to test inside a worktree, and run
 > `uv tool install ~/repos/claude-code-session-tools` from outside the worktree after
 > merging.
@@ -369,9 +373,9 @@ Run `claude-code-usage <subcommand> --help` for the full grammar. A few flags wo
 
 ## Bundled skills
 
-The repo ships six Claude Code skills, designed to be symlinked into `~/.claude/skills/`. They're thin wrappers around the CLIs so a Claude Code session can invoke them on your behalf in response to natural-language prompts.
+The repo ships seven Claude Code skills, designed to be symlinked into `~/.claude/skills/`. They're thin wrappers around the CLIs so a Claude Code session can invoke them on your behalf in response to natural-language prompts.
 
-Install all six at once with `ccst skills install --apply` (see [Install and set up](#install-and-set-up-recommended-path) above).
+Install all seven at once with `ccst skills install --apply` (see [Install and set up](#install-and-set-up-recommended-path) above).
 
 ### `find-claude-code-session`
 
@@ -397,6 +401,42 @@ Note: the 8-digit confirmation in `delete-sessions` is an inline prompt (not a r
 
 See `docs/design.md` for the full design and CLI contract.
 
+## Inter-session messaging
+
+`ccmsg` lets Claude Code sessions send durable, addressed messages to one another. Messages are stored as markdown-with-frontmatter files under `~/.claude/cc-messages/` — on-disk, human-readable, and auditable. Each message carries a recipient (session tag, project name, or free-text description), a sender, a timestamp, and an optional list of attachment paths.
+
+### `ccmsg` subcommands
+
+| Subcommand | What it does |
+|---|---|
+| `send` | Compose and route a new message to a session, project, or description. |
+| `deliver` | Sweep the store for messages addressed to this session and emit a compact digest; used by the delivery hooks. |
+| `read` | Print the full body and metadata of one message by ID. |
+| `list` | List messages in compact form (ID, recipient, status, subject). |
+| `claim` | Claim a description-addressed message so no other session picks it up (first-claim-wins). |
+| `archive` | Manually archive a message without reading it. |
+
+### Delivery hooks
+
+Two hooks drive automatic delivery without any extra steps:
+
+- **`messaging-deliver` on `SessionStart`** — runs a full sweep of the message store when a session opens, injecting a digest of all pending messages as additional context.
+- **`messaging-deliver` on `UserPromptSubmit`** — runs an incremental sweep before each prompt, picking up any messages that arrived since the last check.
+
+Both hooks handle auto-read, read-receipts, first-claim-wins claims, and 14-day archival transparently.
+
+Install both hooks with `ccst hooks install --apply` (they are included in the standard bundle).
+
+### `send-session-message` skill
+
+The `send-session-message` skill guides you through choosing a recipient, composing the message body, and confirming before `ccmsg send` is invoked. Useful when you want Claude to act as a dispatcher rather than constructing the `ccmsg send` command manually.
+
+### `ccst claude-md install/uninstall`
+
+`ccst claude-md install --apply` adds a managed proactive-messaging block to your global `~/.claude/CLAUDE.md`, telling every Claude Code session how to recognise and act on incoming message digests. `ccst claude-md uninstall --apply` removes it. Both commands are idempotent.
+
+The `install-everything.sh` script runs `ccst claude-md install --apply` automatically as part of the standard installation sequence.
+
 ## Hook library (`cccs_hooks`)
 
 The `cccs_hooks` Python package provides Claude Code hook implementations.
@@ -417,6 +457,7 @@ to make the hook library available. Hooks are invoked through `ccst hooks run <n
 | `cccs_hooks.session_end` | Stop | WORKLOG/uncommitted-changes nudge. |
 | `cccs_hooks.session_tag` | **SessionStart** | Writes `<uuid>.tag` so `claude-code-usage` can map session UUIDs to `ccd` name tags (see [Session tag hook](#session-tag-hook)). |
 | `cccs_hooks.last_screenshot` | UserPromptSubmit | Resolves the newest screenshot for the `>lss` token and injects its path (see [Last screenshot hook](#last-screenshot-hook)). |
+| `cccs_hooks.messaging_deliver` | SessionStart + UserPromptSubmit | Sweeps `~/.claude/cc-messages/` for messages addressed to this session and injects a compact digest as additional context (see [Inter-session messaging](#inter-session-messaging)). |
 
 ### Running hooks via `ccst hooks run <name>`
 
@@ -440,6 +481,7 @@ Where `<name>` is one of:
 | `session-end` | `cccs_hooks.session_end` |
 | `session-tag` | `cccs_hooks.session_tag` |
 | `last-screenshot` | `cccs_hooks.last_screenshot` |
+| `messaging-deliver` | `cccs_hooks.messaging_deliver` |
 
 The dispatcher reads the event payload from stdin, calls the matching module's
 `main()`, and propagates its exit code.
@@ -507,7 +549,7 @@ The `ccst` umbrella CLI provides hook and skill management, shell helper install
 
 Merges hook entries from a source `settings.json` into `~/.claude/settings.json`.
 With no `--source`, auto-discovers the bundled `config/hooks-bundle.json` and
-installs all six default hooks.
+installs all eight default hooks.
 
 ```sh
 # Dry run (default) - shows what would be added
@@ -604,9 +646,29 @@ Remove the sentinel-bracketed `ccl()` block from shell rc files.
 ccst shell uninstall --apply
 ```
 
+### `ccst claude-md install`
+
+Add or update the inter-session-messaging block in the global `~/.claude/CLAUDE.md`. Idempotent — re-running replaces the existing block rather than appending.
+
+```sh
+# Dry run (default) - shows what would be added or replaced
+ccst claude-md install
+
+# Write the block
+ccst claude-md install --apply
+```
+
+### `ccst claude-md uninstall`
+
+Remove the managed messaging block from `~/.claude/CLAUDE.md`. Dry-run by default.
+
+```sh
+ccst claude-md uninstall --apply
+```
+
 ### `ccst doctor`
 
-Run a full health check: PATH for all five CLIs, env vars (`REPO_ROOT`/`PROJ_ROOT`),
+Run a full health check: PATH for all six CLIs, env vars (`REPO_ROOT`/`PROJ_ROOT`),
 `~/.claude/settings.json` JSON validity, expected hook registrations present,
 skill symlinks correct and pointing at the installed source, version drift
 between installed `ccst` and the latest release on PyPI.
@@ -673,7 +735,7 @@ uv run pytest
 ```
 
 Tests run on Python 3.11, 3.12, and 3.13 (see `.github/workflows/ci.yml`). CI also
-includes an `install-check` job that runs `uv tool install .` and verifies all five CLIs
+includes an `install-check` job that runs `uv tool install .` and verifies all six CLIs
 start up correctly - the direct guard against the editable-install/worktree failure mode.
 
 > **When working in a git worktree:** test your changes with `uv run pytest` or

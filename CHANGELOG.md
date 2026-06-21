@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Inter-session messaging.** A new `ccmsg` CLI sends durable, addressed,
+  auditable messages between Claude Code sessions (to a session, a project, or a
+  free-text description), stored as markdown-with-frontmatter under
+  `~/.claude/cc-messages/`. Subcommands: `send`, `deliver`, `read`, `list`,
+  `claim`, `archive`.
+- **Automatic delivery hooks.** A `messaging-deliver` hook fires on `SessionStart`
+  (full sweep) and `UserPromptSubmit` (incremental sweep), injecting a compact
+  digest as additional context. Auto-read, read-receipts, first-claim-wins claims,
+  and 14-day archival are all handled without prompting.
+- **`send-session-message` skill** guiding recipient choice, confirmation, and
+  composition.
+- **`ccst claude-md install/uninstall`** maintains a managed proactive-messaging
+  block in the global `~/.claude/CLAUDE.md`.
+- **`move-session`** now refreshes message display tags and preserves the
+  uuid-keyed delivery cursor across renames and project moves.
+
 ### Changed
 
 - `ccst hooks install` now prints a `Hook | Status | Event | Description` table listing every bundled hook, its install status (`install` for new, `already-installed` for existing), the Claude Code event (and matcher) it fires on, and a brief note about what it does. Mirrors the existing `ccst skills install` table format. The `--hook <name>` selector filters the table to a single row.
