@@ -260,7 +260,7 @@ def run_all_checks(
     results: list[CheckResult] = []
 
     # CLI presence
-    for cli in ("ccd", "ccr", "ccs", "claude-code-usage", "ccst"):
+    for cli in ("ccd", "ccr", "ccs", "claude-code-usage", "ccst", "ccmsg"):
         results.append(check_cli_on_path(cli))
 
     # Environment variables

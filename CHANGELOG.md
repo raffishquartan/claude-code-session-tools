@@ -5,7 +5,28 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.13.0] - 2026-06-21
+
+### Added
+
+- **Inter-session messaging.** A new `ccmsg` CLI sends durable, addressed,
+  auditable messages between Claude Code sessions (to a session, a project, or a
+  free-text description), stored as markdown-with-frontmatter under
+  `~/.claude/cc-messages/`. Subcommands: `send`, `deliver`, `read`, `list`,
+  `claim`, `archive`. `ccmsg send` resolves the sender's session uuid from
+  `$CLAUDE_CODE_SESSION_ID`, the display tag from `$CLD_SESSION_TAG`, and the
+  project/partition from the cwd, and routes to the recipient's partition
+  automatically, so a send needs only a recipient, subject, and body.
+- **Automatic delivery hooks.** A `messaging-deliver` hook fires on `SessionStart`
+  (full sweep) and `UserPromptSubmit` (incremental sweep), injecting a compact
+  digest as additional context. Auto-read, read-receipts, first-claim-wins claims,
+  and 14-day archival are all handled without prompting.
+- **`send-session-message` skill** guiding recipient choice, confirmation, and
+  composition.
+- **`ccst claude-md install/uninstall`** maintains a managed proactive-messaging
+  block in the global `~/.claude/CLAUDE.md`.
+- **`move-session`** now refreshes message display tags and preserves the
+  uuid-keyed delivery cursor across renames and project moves.
 
 ### Changed
 
@@ -13,6 +34,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 See [TODO.md](TODO.md) for known follow-up work, including the `notify-user` skill
 integration (push notifications when 8-digit confirmation gates fire).
+
+## [0.12.0] - 2026-06-17
+
+### Added
+
+- **`last-screenshot` hook.** A `UserPromptSubmit` hook resolves the newest
+  screenshot for the `>lss` token and injects its path into the prompt context.
+- **`ccs` session activity tracking.** Records last-opened and last-active times
+  per session and extends `ccs --order-by` to sort on them.
+
+### Changed
+
+- Gmail self-sends are now exempt from the 8-digit confirmation gate.
+- `move-session` tags sessions with their session name (skill + README updates).
+
+### Fixed
+
+- `ccr` now resumes the correct session by UUID after a rename, and
+  `move_session` writes the `.tag` file so renamed sessions stay resolvable.
+- The 8-digit confirmation gate short-circuits non-gated tools before any
+  verification work.
+- `claude-code-usage` guards `_aggregate` against a missing `tool_calls` column.
+- `pricing.json` is packaged inside the `claude_code_usage` module so pricing
+  data ships with the wheel.
 
 ## [0.11.0] - 2026-05-16
 

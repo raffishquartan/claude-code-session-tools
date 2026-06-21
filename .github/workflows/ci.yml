@@ -51,4 +51,5 @@ jobs:
           ccs --version
           claude-code-usage --version
           ccst --version
+          ccmsg --version
 

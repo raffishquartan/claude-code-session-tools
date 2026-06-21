@@ -18,6 +18,9 @@ Current subcommands:
                                  ~/.zshrc between sentinel markers.
   shell uninstall                Remove the ccl() block from shell rc files.
   telemetry trim                 Trim ~/.claude/hooks/fires.jsonl by size / age.
+  claude-md install              Add/update the inter-session-messaging block in
+                                 ~/.claude/CLAUDE.md.
+  claude-md uninstall            Remove the messaging block from CLAUDE.md.
 """
 from __future__ import annotations
 
@@ -29,6 +32,7 @@ import os
 import sys
 from enum import Enum
 from pathlib import Path
+from typing import Any
 
 from cc_session_tools import __version__
 from cc_session_tools.hooks_install import load_json, merge_hook_settings, write_json_atomic
@@ -42,6 +46,7 @@ HOOK_VERBS: dict[str, str] = {
     "session-end": "cccs_hooks.session_end",
     "session-tag": "cccs_hooks.session_tag",
     "last-screenshot": "cccs_hooks.last_screenshot",
+    "messaging-deliver": "cccs_hooks.messaging_deliver",
 }
 
 
@@ -53,6 +58,7 @@ HOOK_DESCRIPTIONS: dict[str, str] = {
     "session-end": "Warns on stale WORKLOG and uncommitted changes when Claude stops",
     "session-tag": "Writes the session tag file so ccusage can map UUIDs to human-readable names",
     "last-screenshot": "Resolves the newest screenshot for the >lss token and injects its path",
+    "messaging-deliver": "Delivers inter-session messages (digest + auto-read + receipts) on session start and each prompt",
 }
 
 
@@ -336,7 +342,7 @@ def _cmd_hooks_install(args: argparse.Namespace) -> int:
     return 0
 
 
-def _bundle_inventory(bundle: dict) -> list[tuple[str, str, str | None, str]]:
+def _bundle_inventory(bundle: dict[str, Any]) -> list[tuple[str, str, str | None, str]]:
     """Return [(hook_name, event, matcher, command)] for every hook in the bundle.
 
     For commands matching ``ccst hooks run <name>``, ``hook_name`` is ``<name>``.
@@ -385,7 +391,7 @@ def _print_hooks_install_table(
         print(fmt.format(*row))
 
 
-def _list_bundle_hook_names(bundle: dict) -> list[str]:
+def _list_bundle_hook_names(bundle: dict[str, Any]) -> list[str]:
     """Return the list of hook names (the <name> in ccst hooks run <name>) in the bundle."""
     names: list[str] = []
     prefix = "ccst hooks run "
@@ -400,11 +406,11 @@ def _list_bundle_hook_names(bundle: dict) -> list[str]:
     return names
 
 
-def _filter_bundle_to_hook(bundle: dict, hook_name: str) -> dict | None:
+def _filter_bundle_to_hook(bundle: dict[str, Any], hook_name: str) -> dict[str, Any] | None:
     """Return a single-entry bundle dict containing only the named hook, or None."""
     prefix = "ccst hooks run "
     target_cmd = f"{prefix}{hook_name}"
-    filtered_hooks: dict = {}
+    filtered_hooks: dict[str, Any] = {}
 
     for event, blocks in bundle.get("hooks", {}).items():
         for block in blocks:
@@ -413,7 +419,7 @@ def _filter_bundle_to_hook(bundle: dict, hook_name: str) -> dict | None:
                 if h.get("command") == target_cmd
             ]
             if matching_entries:
-                new_block: dict = {"hooks": matching_entries}
+                new_block: dict[str, Any] = {"hooks": matching_entries}
                 if "matcher" in block:
                     new_block["matcher"] = block["matcher"]
                 filtered_hooks.setdefault(event, []).append(new_block)
@@ -461,10 +467,10 @@ def _cmd_hooks_uninstall(args: argparse.Namespace) -> int:
 
 
 def _remove_hooks(
-    settings: dict,
+    settings: dict[str, Any],
     hook_name: str | None,
     removed: list[tuple[str, str | None, str]],
-) -> dict:
+) -> dict[str, Any]:
     """Return a copy of settings with matching ccst hooks removed.
 
     Appends removed entries to ``removed`` as (event, matcher, command).
@@ -611,6 +617,43 @@ def _resolve_rc_paths(args: argparse.Namespace) -> list[Path] | None:
     if rc_files:
         return [Path(p) for p in rc_files]
     return None
+
+
+# ---------- claude-md install / uninstall ----------
+
+
+def _cmd_claude_md_install(args: argparse.Namespace) -> int:
+    from cc_session_tools.lib.claude_md_install import (
+        MalformedBlockError,
+        install_claude_md,
+    )
+    target = Path(args.target) if args.target else (Path.home() / ".claude" / "CLAUDE.md")
+    try:
+        result = install_claude_md(target, apply=args.apply)
+    except MalformedBlockError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    print(f"  {result.path}: {result.message}")
+    if not args.apply:
+        print("\nDry run — re-run with --apply to write changes")
+    return 0
+
+
+def _cmd_claude_md_uninstall(args: argparse.Namespace) -> int:
+    from cc_session_tools.lib.claude_md_install import (
+        MalformedBlockError,
+        uninstall_claude_md,
+    )
+    target = Path(args.target) if args.target else (Path.home() / ".claude" / "CLAUDE.md")
+    try:
+        result = uninstall_claude_md(target, apply=args.apply)
+    except MalformedBlockError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    print(f"  {result.path}: {result.message}")
+    if not args.apply:
+        print("\nDry run — re-run with --apply to write changes")
+    return 0
 
 
 # ---------- telemetry trim ----------
@@ -876,6 +919,19 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Hooks directory (default: ~/.claude/hooks/)",
     )
 
+    # ---- claude-md ----
+    cmd_parser = sub.add_parser("claude-md", help="Manage the global CLAUDE.md messaging block")
+    cmd_sub = cmd_parser.add_subparsers(dest="verb", metavar="<verb>")
+    cmd_sub.required = True
+    cmd_install = cmd_sub.add_parser("install", help="Add/update the messaging block (dry run by default)")
+    cmd_install.add_argument("--target", default=None, metavar="PATH",
+                             help="CLAUDE.md path (default: ~/.claude/CLAUDE.md)")
+    cmd_install.add_argument("--apply", action="store_true", help="Write changes (default: dry run)")
+    cmd_uninstall = cmd_sub.add_parser("uninstall", help="Remove the messaging block (dry run by default)")
+    cmd_uninstall.add_argument("--target", default=None, metavar="PATH",
+                               help="CLAUDE.md path (default: ~/.claude/CLAUDE.md)")
+    cmd_uninstall.add_argument("--apply", action="store_true", help="Write changes (default: dry run)")
+
     return parser
 
 
@@ -913,6 +969,12 @@ def main() -> None:
     if args.noun == "telemetry":
         if args.verb == "trim":
             sys.exit(_cmd_telemetry_trim(args))
+
+    if args.noun == "claude-md":
+        if args.verb == "install":
+            sys.exit(_cmd_claude_md_install(args))
+        if args.verb == "uninstall":
+            sys.exit(_cmd_claude_md_uninstall(args))
 
 
 if __name__ == "__main__":

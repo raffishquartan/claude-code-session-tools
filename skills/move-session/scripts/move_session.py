@@ -853,6 +853,25 @@ def main() -> int:
     else:
         print(f"  task files: none (no task dir at {src_task_dir} - skipped)")
 
+    # Messaging safety: refresh display tags in any pending messages that
+    # reference the moved session's uuid, and re-anchor the cursor on a
+    # project move. uuid routing is unaffected (messages are never orphaned
+    # by a rename), so this is cosmetic + an explicit cursor call site.
+    try:
+        from cc_session_tools.lib.messaging.move_safety import (
+            refresh_display_tags, relocate_cursor,
+        )
+        if session_uuid:
+            refresh_display_tags(uuid=session_uuid, new_tag=dst_tag)
+            if cwd_changed:
+                relocate_cursor(
+                    uuid=session_uuid,
+                    old_partition="",  # source partition not needed (uuid-keyed)
+                    new_partition="",
+                )
+    except ImportError:
+        pass  # messaging lib not installed; nothing to refresh
+
     # Pending-rename marker: dropped into the destination cc-sessions dir on
     # tag change. The bundled SessionStart hook
     # (~/.claude/skills/move-session/hooks/sessionstart-pending-rename.sh)

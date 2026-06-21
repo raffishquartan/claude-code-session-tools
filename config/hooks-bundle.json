@@ -8,6 +8,12 @@
             "command": "ccst hooks run session-tag",
             "timeout": 5,
             "statusMessage": "Writing session tag file..."
+          },
+          {
+            "type": "command",
+            "command": "ccst hooks run messaging-deliver",
+            "timeout": 10,
+            "statusMessage": "Delivering inter-session messages..."
           }
         ]
       }
@@ -26,6 +32,12 @@
             "command": "ccst hooks run last-screenshot",
             "timeout": 5,
             "statusMessage": "Resolving latest screenshot for >lss..."
+          },
+          {
+            "type": "command",
+            "command": "ccst hooks run messaging-deliver",
+            "timeout": 10,
+            "statusMessage": "Checking for new inter-session messages..."
           }
         ]
       }

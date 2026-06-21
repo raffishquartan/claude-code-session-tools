@@ -39,7 +39,7 @@ REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 step() { echo ""; echo "=== $* ==="; }
 
 # ── Step 1: Install / upgrade CLIs ──────────────────────────────────────────
-step "1/5  CLIs"
+step "1/6  CLIs"
 if command -v uv >/dev/null 2>&1; then
     if [[ $FROM_SOURCE -eq 1 ]]; then
         echo "Installing from source: $REPO_DIR"
@@ -63,19 +63,23 @@ else
 fi
 
 # ── Step 2: Skills ───────────────────────────────────────────────────────────
-step "2/5  Skills"
+step "2/6  Skills"
 ccst skills install --apply
 
 # ── Step 3: Hooks ────────────────────────────────────────────────────────────
-step "3/5  Hooks"
+step "3/6  Hooks"
 ccst hooks install --apply
 
 # ── Step 4: Shell helpers (ccl) ──────────────────────────────────────────────
-step "4/5  Shell helpers"
+step "4/6  Shell helpers"
 ccst shell install --apply
 
-# ── Step 5: Health check ─────────────────────────────────────────────────────
-step "5/5  Health check"
+# ── Step 5: Global CLAUDE.md messaging block ─────────────────────────────────
+step "5/6  Global CLAUDE.md"
+ccst claude-md install --apply
+
+# ── Step 6: Health check ─────────────────────────────────────────────────────
+step "6/6  Health check"
 ccst doctor
 
 echo ""
