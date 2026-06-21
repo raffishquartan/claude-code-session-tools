@@ -42,6 +42,7 @@ HOOK_VERBS: dict[str, str] = {
     "session-end": "cccs_hooks.session_end",
     "session-tag": "cccs_hooks.session_tag",
     "last-screenshot": "cccs_hooks.last_screenshot",
+    "messaging-deliver": "cccs_hooks.messaging_deliver",
 }
 
 
@@ -53,6 +54,7 @@ HOOK_DESCRIPTIONS: dict[str, str] = {
     "session-end": "Warns on stale WORKLOG and uncommitted changes when Claude stops",
     "session-tag": "Writes the session tag file so ccusage can map UUIDs to human-readable names",
     "last-screenshot": "Resolves the newest screenshot for the >lss token and injects its path",
+    "messaging-deliver": "Delivers inter-session messages (digest + auto-read + receipts) on session start and each prompt",
 }
 
 
