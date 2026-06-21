@@ -118,6 +118,16 @@ def test_list_empty_store_ok(tmp_path: Path) -> None:
     assert res.returncode == 0
 
 
+def test_claim_missing_id_errors(tmp_path: Path) -> None:
+    res = _run(["claim", "nope", "--uuid", "u", "--session", "s"], tmp_path)
+    assert res.returncode != 0
+
+
+def test_archive_missing_id_errors(tmp_path: Path) -> None:
+    res = _run(["archive", "nope"], tmp_path)
+    assert res.returncode != 0
+
+
 def test_deliver_stdin_delivers_project_message(tmp_path: Path) -> None:
     proj_root = tmp_path / "proj"
     (proj_root / "alpha").mkdir(parents=True)

@@ -179,3 +179,61 @@ def test_deliver_skips_malformed_file_in_swept_partition(
     bad.write_text("not a valid message\n", encoding="utf-8")
     digest = service.deliver(_ctx(), mode="full")
     assert mid in digest
+
+
+def _send_to_session_in_tmp(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, target_uuid: str
+) -> str:
+    monkeypatch.setenv("CCST_MESSAGES_ROOT", str(tmp_path))
+    return service.send(service.SendRequest(
+        from_project="oneshot", from_session="s", from_uuid="sender",
+        to_kind="session", to_value=target_uuid, to_partition="projects/alpha",
+        subject="For you", body="Body.", attachments=[], thread=None,
+    ))
+
+
+def test_claim_flips_status_and_blocks_second_claimer(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("CCST_MESSAGES_ROOT", str(tmp_path))
+    from cc_session_tools.lib.messaging.lock import AlreadyClaimedError
+    mid = service.send(service.SendRequest(
+        from_project="o", from_session="s", from_uuid="sender",
+        to_kind="description", to_value="X", to_partition="_global",
+        subject="task", body="b", attachments=[], thread=None,
+    ))
+    claimer = service.Claimer(uuid="me", session="alpha")
+    msg = service.claim(mid, claimer)
+    assert msg.status == "claimed"
+    assert msg.read_by_uuid == "me"
+    with pytest.raises(AlreadyClaimedError):
+        service.claim(mid, service.Claimer(uuid="other", session="beta"))
+
+
+def test_archive_moves_message(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from datetime import datetime, timezone
+    mid = _send_to_session_in_tmp(monkeypatch, tmp_path, "me-uuid")
+    service.archive(mid, datetime(2026, 6, 20, tzinfo=timezone.utc))
+    result = service.read_one(mid)
+    assert result is not None
+    assert result.status == "archived"
+    assert list((tmp_path / "projects" / "alpha" / "archive").rglob("*.md"))
+
+
+def test_archive_blocked_while_claim_lock_held(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from datetime import datetime, timezone
+
+    from cc_session_tools.lib.messaging.lock import AlreadyClaimedError, claim_lock
+
+    monkeypatch.setenv("CCST_MESSAGES_ROOT", str(tmp_path))
+    mid = service.send(service.SendRequest(
+        from_project="o", from_session="s", from_uuid="sender",
+        to_kind="description", to_value="X", to_partition="_global",
+        subject="task", body="b", attachments=[], thread=None,
+    ))
+    # A manual archive must not race a claim in flight for the same id.
+    with claim_lock(mid):
+        with pytest.raises(AlreadyClaimedError):
+            service.archive(mid, datetime(2026, 6, 20, tzinfo=timezone.utc))

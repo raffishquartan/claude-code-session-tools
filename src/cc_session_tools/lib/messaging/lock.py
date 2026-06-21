@@ -40,5 +40,8 @@ def claim_lock(message_id: str) -> Iterator[None]:
     try:
         yield
     finally:
-        os.close(fd)
-        lock_path.unlink(missing_ok=True)
+        # Unlink even if close() fails, so a failed close never orphans the lock.
+        try:
+            os.close(fd)
+        finally:
+            lock_path.unlink(missing_ok=True)

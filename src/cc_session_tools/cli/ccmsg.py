@@ -8,11 +8,13 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
 from cc_session_tools import __version__
 from cc_session_tools.lib.messaging import service, store
 from cc_session_tools.lib.messaging.addressing import SessionContext
+from cc_session_tools.lib.messaging.lock import AlreadyClaimedError
 from cc_session_tools.lib.messaging.message import ToKind
 
 
@@ -62,6 +64,14 @@ def _build_parser() -> argparse.ArgumentParser:
         "--stdin", action="store_true",
         help="Read session context from a hook JSON payload on stdin.",
     )
+
+    claim_p = sub.add_parser("claim", help="Claim a description-addressed message.")
+    claim_p.add_argument("id")
+    claim_p.add_argument("--uuid", required=True)
+    claim_p.add_argument("--session", required=True)
+
+    archive_p = sub.add_parser("archive", help="Manually archive a message.")
+    archive_p.add_argument("id")
 
     return p
 
@@ -179,6 +189,34 @@ def _cmd_deliver(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_claim(args: argparse.Namespace) -> int:
+    try:
+        message = service.claim(
+            args.id, service.Claimer(uuid=args.uuid, session=args.session)
+        )
+    except service.MessageNotFoundError:
+        print(f"ccmsg: message not found: {args.id}", file=sys.stderr)
+        return 1
+    except AlreadyClaimedError:
+        print(f"ccmsg: already claimed: {args.id}", file=sys.stderr)
+        return 3
+    print(f"claimed {message.id}")
+    return 0
+
+
+def _cmd_archive(args: argparse.Namespace) -> int:
+    try:
+        service.archive(args.id, datetime.now(timezone.utc))
+    except service.MessageNotFoundError:
+        print(f"ccmsg: message not found: {args.id}", file=sys.stderr)
+        return 1
+    except AlreadyClaimedError:
+        print(f"ccmsg: message is being claimed, try again: {args.id}", file=sys.stderr)
+        return 3
+    print(f"archived {args.id}")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = _build_parser()
     args = parser.parse_args(argv)
@@ -190,6 +228,10 @@ def main(argv: list[str] | None = None) -> int:
         return _cmd_list(args)
     if args.command == "deliver":
         return _cmd_deliver(args)
+    if args.command == "claim":
+        return _cmd_claim(args)
+    if args.command == "archive":
+        return _cmd_archive(args)
     parser.print_help(sys.stderr)
     return 1
 

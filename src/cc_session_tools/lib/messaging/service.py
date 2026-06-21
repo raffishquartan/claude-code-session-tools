@@ -10,8 +10,6 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Literal
 
-DeliverMode = Literal["full", "incremental"]
-
 from cc_session_tools.lib.messaging import cursor as cursor_mod
 from cc_session_tools.lib.messaging import retention
 from cc_session_tools.lib.messaging.addressing import (
@@ -19,6 +17,7 @@ from cc_session_tools.lib.messaging.addressing import (
     SessionContext,
     targets,
 )
+from cc_session_tools.lib.messaging.lock import AlreadyClaimedError, claim_lock
 from cc_session_tools.lib.messaging.message import (
     Message,
     Status,
@@ -28,6 +27,7 @@ from cc_session_tools.lib.messaging.message import (
 )
 from cc_session_tools.lib.messaging.store import (
     GLOBAL_PARTITION,
+    archive_dir,
     ensure_inbox_dir,
     generate_id,
     message_filename,
@@ -35,6 +35,8 @@ from cc_session_tools.lib.messaging.store import (
 )
 
 logger = logging.getLogger(__name__)
+
+DeliverMode = Literal["full", "incremental"]
 
 
 def _now_iso() -> str:
@@ -85,6 +87,16 @@ def send(request: SendRequest) -> str:
     return message_id
 
 
+@dataclass(frozen=True)
+class Claimer:
+    uuid: str
+    session: str
+
+
+class MessageNotFoundError(Exception):
+    """Raised when a message id resolves to no file."""
+
+
 def _iter_message_files() -> list[Path]:
     root = store_root()
     if not root.is_dir():
@@ -98,6 +110,57 @@ def find_by_id(message_id: str) -> Path | None:
         if path.name.startswith(f"{message_id}__"):
             return path
     return None
+
+
+def claim(message_id: str, claimer: Claimer) -> Message:
+    """First-claim-wins: atomically flip the message to status=claimed.
+
+    Raises ``MessageNotFoundError`` if the id is unknown, or
+    ``AlreadyClaimedError`` if the lock is already held (concurrent claim)
+    or the message is already in a claimed/read state."""
+    path = find_by_id(message_id)
+    if path is None:
+        raise MessageNotFoundError(message_id)
+    now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    with claim_lock(message_id):
+        try:
+            message = parse(path.read_text(encoding="utf-8"))
+        except FileNotFoundError as exc:
+            # The file was archived/removed between find_by_id and the lock.
+            raise MessageNotFoundError(message_id) from exc
+        if message.status in ("claimed", "read", "archived"):
+            raise AlreadyClaimedError(message_id)
+        message.status = "claimed"
+        message.claimed_at = now
+        message.read_at = message.read_at or now
+        message.read_by_uuid = claimer.uuid
+        message.read_by_session = claimer.session
+        write_atomic(path, message)
+        return message
+
+
+def archive(message_id: str, now: datetime) -> Message:
+    """Move a message file into the archive/YYYY-MM/ sub-directory and flip
+    its status to archived.
+
+    Acquires the per-message claim lock so a manual archive cannot race a
+    concurrent ``claim`` and silently drop its metadata. Raises
+    ``MessageNotFoundError`` if the id is unknown, or ``AlreadyClaimedError``
+    if a claim is in flight for the same id."""
+    path = find_by_id(message_id)
+    if path is None:
+        raise MessageNotFoundError(message_id)
+    with claim_lock(message_id):
+        try:
+            message = parse(path.read_text(encoding="utf-8"))
+        except FileNotFoundError as exc:
+            raise MessageNotFoundError(message_id) from exc
+        message.status = "archived"
+        dest = archive_dir(message.to_location, now) / path.name
+        write_atomic(dest, message)
+        if dest != path:
+            path.unlink()
+        return message
 
 
 def read_one(message_id: str) -> Message | None:
