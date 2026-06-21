@@ -29,6 +29,7 @@ import os
 import sys
 from enum import Enum
 from pathlib import Path
+from typing import Any
 
 from cc_session_tools import __version__
 from cc_session_tools.hooks_install import load_json, merge_hook_settings, write_json_atomic
@@ -338,7 +339,7 @@ def _cmd_hooks_install(args: argparse.Namespace) -> int:
     return 0
 
 
-def _bundle_inventory(bundle: dict) -> list[tuple[str, str, str | None, str]]:
+def _bundle_inventory(bundle: dict[str, Any]) -> list[tuple[str, str, str | None, str]]:
     """Return [(hook_name, event, matcher, command)] for every hook in the bundle.
 
     For commands matching ``ccst hooks run <name>``, ``hook_name`` is ``<name>``.
@@ -387,7 +388,7 @@ def _print_hooks_install_table(
         print(fmt.format(*row))
 
 
-def _list_bundle_hook_names(bundle: dict) -> list[str]:
+def _list_bundle_hook_names(bundle: dict[str, Any]) -> list[str]:
     """Return the list of hook names (the <name> in ccst hooks run <name>) in the bundle."""
     names: list[str] = []
     prefix = "ccst hooks run "
@@ -402,11 +403,11 @@ def _list_bundle_hook_names(bundle: dict) -> list[str]:
     return names
 
 
-def _filter_bundle_to_hook(bundle: dict, hook_name: str) -> dict | None:
+def _filter_bundle_to_hook(bundle: dict[str, Any], hook_name: str) -> dict[str, Any] | None:
     """Return a single-entry bundle dict containing only the named hook, or None."""
     prefix = "ccst hooks run "
     target_cmd = f"{prefix}{hook_name}"
-    filtered_hooks: dict = {}
+    filtered_hooks: dict[str, Any] = {}
 
     for event, blocks in bundle.get("hooks", {}).items():
         for block in blocks:
@@ -415,7 +416,7 @@ def _filter_bundle_to_hook(bundle: dict, hook_name: str) -> dict | None:
                 if h.get("command") == target_cmd
             ]
             if matching_entries:
-                new_block: dict = {"hooks": matching_entries}
+                new_block: dict[str, Any] = {"hooks": matching_entries}
                 if "matcher" in block:
                     new_block["matcher"] = block["matcher"]
                 filtered_hooks.setdefault(event, []).append(new_block)
@@ -463,10 +464,10 @@ def _cmd_hooks_uninstall(args: argparse.Namespace) -> int:
 
 
 def _remove_hooks(
-    settings: dict,
+    settings: dict[str, Any],
     hook_name: str | None,
     removed: list[tuple[str, str | None, str]],
-) -> dict:
+) -> dict[str, Any]:
     """Return a copy of settings with matching ccst hooks removed.
 
     Appends removed entries to ``removed`` as (event, matcher, command).
