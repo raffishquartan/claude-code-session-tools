@@ -48,6 +48,7 @@ ccr = "cc_session_tools.cli.ccr:main"
 ccs = "cc_session_tools.cli.ccs:main"
 claude-code-usage = "claude_code_usage.cli:main"
 ccst = "cc_session_tools.cli.ccst:main"
+ccmsg = "cc_session_tools.cli.ccmsg:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
