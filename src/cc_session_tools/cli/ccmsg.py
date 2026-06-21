@@ -42,6 +42,15 @@ def _build_parser() -> argparse.ArgumentParser:
     send_p.add_argument("--from-partition", required=True)
     send_p.add_argument("--to-partition", required=True,
                         help="Store partition the message file lives in.")
+
+    read_p = sub.add_parser("read", help="Print one message body and metadata.")
+    read_p.add_argument("id")
+
+    list_p = sub.add_parser("list", help="List messages (compact).")
+    list_p.add_argument("--status", default=None)
+    list_p.add_argument("--partition", default=None)
+    list_p.add_argument("--from-uuid", default=None)
+
     return p
 
 
@@ -107,11 +116,48 @@ def _cmd_send(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_read(args: argparse.Namespace) -> int:
+    try:
+        message = service.read_one(args.id)
+    except (ValueError, OSError) as exc:
+        print(f"ccmsg: message {args.id} is unreadable: {exc}", file=sys.stderr)
+        return 1
+    if message is None:
+        print(f"ccmsg: message not found: {args.id}", file=sys.stderr)
+        return 1
+    print(f"id:       {message.id}")
+    print(f"from:     {message.from_session} ({message.from_project})")
+    print(f"to:       {message.to_kind}={message.to_value}")
+    print(f"subject:  {message.subject}")
+    print(f"status:   {message.status}")
+    print(f"sent_at:  {message.sent_at}")
+    if message.attachments:
+        print("attach:   " + ", ".join(message.attachments))
+    print()
+    print(message.body.rstrip())
+    return 0
+
+
+def _cmd_list(args: argparse.Namespace) -> int:
+    rows = service.list_messages(
+        status=args.status,
+        partition=args.partition,
+        from_uuid=args.from_uuid,
+    )
+    for r in rows:
+        print(f"[{r.id}] {r.status:8} {r.to_kind}={r.to_value} · {r.subject}")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = _build_parser()
     args = parser.parse_args(argv)
     if args.command == "send":
         return _cmd_send(args)
+    if args.command == "read":
+        return _cmd_read(args)
+    if args.command == "list":
+        return _cmd_list(args)
     parser.print_help(sys.stderr)
     return 1
 

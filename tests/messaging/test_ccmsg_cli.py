@@ -88,3 +88,29 @@ def test_send_rejects_unreadable_body_file(tmp_path: Path) -> None:
                tmp_path)
     assert res.returncode == 2
     assert "body file" in (res.stderr + res.stdout).lower()
+
+
+def test_read_happy_path(tmp_path: Path) -> None:
+    send = _run(
+        ["send", "--to-project", "alpha", "--subject", "Greetings", "--body", "Hello body",
+         "--from-project", "o", "--from-session", "s", "--from-uuid", "u",
+         "--from-partition", "projects/o", "--to-partition", "projects/alpha"],
+        tmp_path,
+    )
+    assert send.returncode == 0, send.stderr
+    mid = send.stdout.strip()
+    res = _run(["read", mid], tmp_path)
+    assert res.returncode == 0, res.stderr
+    assert "Greetings" in res.stdout
+    assert "Hello body" in res.stdout
+
+
+def test_read_missing_id_errors(tmp_path: Path) -> None:
+    res = _run(["read", "does-not-exist"], tmp_path)
+    assert res.returncode != 0
+    assert "not found" in (res.stderr + res.stdout).lower()
+
+
+def test_list_empty_store_ok(tmp_path: Path) -> None:
+    res = _run(["list"], tmp_path)
+    assert res.returncode == 0
