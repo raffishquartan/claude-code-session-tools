@@ -149,6 +149,10 @@ in **local wall-clock**; all stored timestamps are UTC. `<dur>` is an integer + 
 | `monthly:<dom>@HH:MM` | once per month on day-of-month `dom` |
 | `monthly:<dow>#<n>@HH:MM` | **nth weekday of month**; `n` ∈ 1..5 or `last`. `monthly:thu#3@09:00` = 3rd Thursday; `monthly:fri#last@18:00` = last Friday |
 
+Two edge rules: (a) `@from=` is valid with **any** `<dur>` unit, including sub-day
+(`every:6h@from=…`); (b) for `monthly:<dom>` where `dom` exceeds the days in a given month
+(e.g. `31` in February/April), the instant **clamps to the last day of that month**.
+
 A raw `cron:"<expr>"` escape hatch remains **deferred** — it would add a cron-parsing
 dependency *and* still could not express the two forms above, so it buys nothing here. The
 grammar can be extended later without changing stored data.
@@ -171,8 +175,11 @@ which receives session context (uuid, cwd) on stdin:
 
 Per enabled job, in registry order:
 
-1. **Skip if in-flight.** If `state.in_flight` is set and its worker is alive, the job is
-   already running — record nothing, move on (prevents overlapping runs).
+1. **Skip if in-flight (fast-path optimisation only).** If `state.in_flight` is set and its
+   worker is alive, the job is already running — move on. This is a cheap early-out, *not* the
+   correctness guarantee: two sessions can both pass this check in the window before a
+   just-launched worker stamps `in_flight`. Overlapping runs are prevented solely by the
+   per-job O_EXCL lock the worker acquires (§9.2 step 1, §10).
 2. **Compute owed.** `owed` = scheduled instants in `(last_success, now]` per cadence. If the
    job has never run, the baseline is `registered_at` (stamped by `ccsched add`; a job
    hand-added to `jobs.toml` with no state entry is stamped `registered_at = now` on first
@@ -180,8 +187,11 @@ Per enabled job, in registry order:
    `now − catchup_window` are dropped and logged `skip_expired` (visible, never silent).
 3. **Nothing owed →** move on.
 4. **Launch detached.** Spawn `ccsched _run-job <id> --instants <k>` as a detached background
-   process (`k` = 1 for `coalesce: one`; `min(owed, cap)` for `each`). Record the spawn
-   intent (the worker stamps `in_flight` itself, §9.4). Do **not** wait for it.
+   process (`k` = 1 for `coalesce: one`; `min(owed, cap)` for `each`) and append a `launch`
+   ledger event. Do **not** wait for it; the worker stamps `in_flight` and records its own
+   outcome (§9.2). If two sessions launch concurrently, both workers start but only the lock
+   winner proceeds (§9.2 step 1); the loser exits immediately, so a duplicate launch is
+   harmless.
 
 This phase touches only small files and spawns processes — it is trivially within any
 session-hook budget no matter how many/slow the jobs. A soft cap on *launches per sweep*
@@ -193,8 +203,9 @@ session-hook budget no matter how many/slow the jobs. A soft cap on *launches pe
    exists and its holder is alive, exit immediately (another worker won the race). Stale lock
    (holder dead) is reclaimed.
 2. Stamp `state.in_flight = {pid, started_at, instants: k}` (atomic write).
-3. Run `command` with the job's `timeout` (kills the subprocess on overrun). For
-   `coalesce: each`, run up to `k` times sequentially.
+3. Run `command` with the job's `timeout` (kills the subprocess on overrun). `timeout` is
+   **per-instant** — for `coalesce: each`, run up to `k` times sequentially, each run getting
+   the full timeout (it is not a batch budget).
 4. **On success:** advance `last_success` (to `now` for `one`; per satisfied instant for
    `each`), reset `consecutive_failures`, append `run`/`backfill` ledger events (capturing
    stdout for the digest if `surface`).
@@ -210,6 +221,10 @@ The hook also emits a digest of ledger entries newer than this session's cursor
 UserPromptSubmit, so a job launched at session start whose worker finishes a few seconds later
 is surfaced at the user's next prompt — same session. The per-`each` launch cap (default 5)
 bounds back-fill volume after a long outage; overflow drains over later sweeps and is logged.
+
+**Surfacing is per-session by design:** cursors are keyed on session uuid, so each active
+session surfaces each completed run exactly once, and the same run may legitimately appear in
+two concurrent sessions (each is a separate viewport). Cross-session dedup is a non-goal.
 
 ## 10. Concurrency and idempotency
 
@@ -227,7 +242,8 @@ bounds back-fill volume after a long outage; overflow drains over later sweeps a
 The "thick" model: a durable ledger plus a no-prompt surface.
 
 - **Digest** — the hook emits a compact `hookSpecificOutput.additionalContext` block, one
-  line per *completed* run newer than the session cursor:
+  line per ledger entry newer than the session cursor (completed runs, failures, deferrals,
+  and optionally just-launched jobs):
   - `✓ ran tesco-shop-check (1d overdue)`
   - `✗ calendar-sync failed (2nd consecutive) — see fires.jsonl`
   - `⏳ job foo: 7 backfills deferred`
@@ -313,7 +329,8 @@ Matches the existing pytest + subprocess + `tmp_path` convention; `CC_SCHEDULER_
 - **lib unit (pure, injected `now`):** cadence parse — every form incl. `every:Nw@from=`
   anchored intervals and `monthly:<dow>#n`/`#last` nth-weekday, plus invalids; due-computation
   (misses across day/week/month boundaries, anchored-interval drift-freeness, nth-weekday
-  resolution incl. months with only 4 of a weekday for `#5`, `catchup_window` expiry, DST);
+  resolution incl. months with only 4 of a weekday for `#5`, `monthly:<dom>` clamping for
+  `dom` > days-in-month, `catchup_window` expiry, DST);
   coalesce `one` vs `each`; state round-trip; per-job in-flight lock race (two workers → one
   proceeds); launch cap.
 - **CLI:** each subcommand happy path + each validation branch (dup id, bad cadence incl.
