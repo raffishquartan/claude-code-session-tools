@@ -18,6 +18,9 @@ Current subcommands:
                                  ~/.zshrc between sentinel markers.
   shell uninstall                Remove the ccl() block from shell rc files.
   telemetry trim                 Trim ~/.claude/hooks/fires.jsonl by size / age.
+  claude-md install              Add/update the inter-session-messaging block in
+                                 ~/.claude/CLAUDE.md.
+  claude-md uninstall            Remove the messaging block from CLAUDE.md.
 """
 from __future__ import annotations
 
@@ -616,6 +619,43 @@ def _resolve_rc_paths(args: argparse.Namespace) -> list[Path] | None:
     return None
 
 
+# ---------- claude-md install / uninstall ----------
+
+
+def _cmd_claude_md_install(args: argparse.Namespace) -> int:
+    from cc_session_tools.lib.claude_md_install import (
+        MalformedBlockError,
+        install_claude_md,
+    )
+    target = Path(args.target) if args.target else (Path.home() / ".claude" / "CLAUDE.md")
+    try:
+        result = install_claude_md(target, apply=args.apply)
+    except MalformedBlockError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    print(f"  {result.path}: {result.message}")
+    if not args.apply:
+        print("\nDry run — re-run with --apply to write changes")
+    return 0
+
+
+def _cmd_claude_md_uninstall(args: argparse.Namespace) -> int:
+    from cc_session_tools.lib.claude_md_install import (
+        MalformedBlockError,
+        uninstall_claude_md,
+    )
+    target = Path(args.target) if args.target else (Path.home() / ".claude" / "CLAUDE.md")
+    try:
+        result = uninstall_claude_md(target, apply=args.apply)
+    except MalformedBlockError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    print(f"  {result.path}: {result.message}")
+    if not args.apply:
+        print("\nDry run — re-run with --apply to write changes")
+    return 0
+
+
 # ---------- telemetry trim ----------
 
 
@@ -879,6 +919,19 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Hooks directory (default: ~/.claude/hooks/)",
     )
 
+    # ---- claude-md ----
+    cmd_parser = sub.add_parser("claude-md", help="Manage the global CLAUDE.md messaging block")
+    cmd_sub = cmd_parser.add_subparsers(dest="verb", metavar="<verb>")
+    cmd_sub.required = True
+    cmd_install = cmd_sub.add_parser("install", help="Add/update the messaging block (dry run by default)")
+    cmd_install.add_argument("--target", default=None, metavar="PATH",
+                             help="CLAUDE.md path (default: ~/.claude/CLAUDE.md)")
+    cmd_install.add_argument("--apply", action="store_true", help="Write changes (default: dry run)")
+    cmd_uninstall = cmd_sub.add_parser("uninstall", help="Remove the messaging block (dry run by default)")
+    cmd_uninstall.add_argument("--target", default=None, metavar="PATH",
+                               help="CLAUDE.md path (default: ~/.claude/CLAUDE.md)")
+    cmd_uninstall.add_argument("--apply", action="store_true", help="Write changes (default: dry run)")
+
     return parser
 
 
@@ -916,6 +969,12 @@ def main() -> None:
     if args.noun == "telemetry":
         if args.verb == "trim":
             sys.exit(_cmd_telemetry_trim(args))
+
+    if args.noun == "claude-md":
+        if args.verb == "install":
+            sys.exit(_cmd_claude_md_install(args))
+        if args.verb == "uninstall":
+            sys.exit(_cmd_claude_md_uninstall(args))
 
 
 if __name__ == "__main__":
