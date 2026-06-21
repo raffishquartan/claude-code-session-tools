@@ -35,6 +35,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 See [TODO.md](TODO.md) for known follow-up work, including the `notify-user` skill
 integration (push notifications when 8-digit confirmation gates fire).
 
+## [0.12.0] - 2026-06-17
+
+### Added
+
+- **`last-screenshot` hook.** A `UserPromptSubmit` hook resolves the newest
+  screenshot for the `>lss` token and injects its path into the prompt context.
+- **`ccs` session activity tracking.** Records last-opened and last-active times
+  per session and extends `ccs --order-by` to sort on them.
+
+### Changed
+
+- Gmail self-sends are now exempt from the 8-digit confirmation gate.
+- `move-session` tags sessions with their session name (skill + README updates).
+
+### Fixed
+
+- `ccr` now resumes the correct session by UUID after a rename, and
+  `move_session` writes the `.tag` file so renamed sessions stay resolvable.
+- The 8-digit confirmation gate short-circuits non-gated tools before any
+  verification work.
+- `claude-code-usage` guards `_aggregate` against a missing `tool_calls` column.
+- `pricing.json` is packaged inside the `claude_code_usage` module so pricing
+  data ships with the wheel.
+
 ## [0.11.0] - 2026-05-16
 
 ### Added
