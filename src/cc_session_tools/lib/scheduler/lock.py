@@ -26,7 +26,7 @@ def _lock_path(job_id: str) -> Path:
     return scheduler_dir() / f".run.{job_id}.lock"
 
 
-def _pid_alive(pid: int) -> bool:
+def pid_alive(pid: int) -> bool:
     try:
         os.kill(pid, 0)
     except ProcessLookupError:
@@ -53,7 +53,7 @@ def in_flight_lock(job_id: str) -> Iterator[None]:
         fd = _try_create(path)
     except FileExistsError:
         holder = _read_holder(path)
-        if holder is not None and _pid_alive(holder):
+        if holder is not None and pid_alive(holder):
             raise InFlightLockHeld(f"in-flight lock for {job_id!r} held by live pid {holder}")
         path.unlink(missing_ok=True)  # stale → reclaim
         fd = _try_create(path)
