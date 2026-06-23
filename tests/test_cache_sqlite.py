@@ -145,10 +145,11 @@ def test_invocations_record_basic(db: Path) -> None:
     invocations_record(0, "allow", exact_hash="abc123")
     conn = _sqlite3.connect(str(db))
     row = conn.execute(
-        "SELECT exit_tier, verdict, heuristic_fired, exact_hash FROM hook_invocations"
+        "SELECT exit_tier, verdict, heuristic_fired, exact_hash, ms_elapsed "
+        "FROM hook_invocations"
     ).fetchone()
     conn.close()
-    assert row == (0, "allow", 0, "abc123")
+    assert row == (0, "allow", 0, "abc123", None)
 
 
 def test_invocations_record_heuristic_names(db: Path) -> None:
@@ -179,12 +180,17 @@ def test_invocations_prune_removes_old(db: Path) -> None:
     )
     conn.commit()
     conn.close()
+    # Verify row exists before pruning
+    conn_check = _sqlite3.connect(str(db))
+    before_count = conn_check.execute("SELECT COUNT(*) FROM hook_invocations").fetchone()[0]
+    conn_check.close()
+    assert before_count == 1
     # Trigger a write — prune fires inside cache_record()
     cache_record(sha256_command("git status"), "safe", "none", "git status")
     conn2 = _sqlite3.connect(str(db))
-    count = conn2.execute("SELECT COUNT(*) FROM hook_invocations").fetchone()[0]
+    after_count = conn2.execute("SELECT COUNT(*) FROM hook_invocations").fetchone()[0]
     conn2.close()
-    assert count == 0  # old row pruned; no invocations_record() call here
+    assert after_count == 0
 
 
 def test_cache_efficiency_view(db: Path) -> None:
@@ -195,14 +201,15 @@ def test_cache_efficiency_view(db: Path) -> None:
     invocations_record(3, "safe", ms_elapsed=500)
     conn = _sqlite3.connect(str(db))
     rows = conn.execute(
-        "SELECT total, trivial, cached, claude_calls, cache_hit_pct "
+        "SELECT total, trivial, cached, claude_calls, cache_hit_pct, avg_claude_ms "
         "FROM cache_efficiency"
     ).fetchall()
     conn.close()
     assert len(rows) == 1
-    total, trivial, cached, claude, pct = rows[0]
+    total, trivial, cached, claude, pct, avg_ms = rows[0]
     assert total == 4
     assert trivial == 2
     assert cached == 1
     assert claude == 1
     assert pct == 25.0
+    assert avg_ms == 500.0

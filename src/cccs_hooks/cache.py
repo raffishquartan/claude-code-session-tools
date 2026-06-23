@@ -24,6 +24,7 @@ from __future__ import annotations
 import dataclasses
 import datetime
 import hashlib
+import json
 import os
 import sqlite3
 from pathlib import Path
@@ -97,6 +98,11 @@ def _connect() -> sqlite3.Connection:
     path = _db_path()
     path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     conn = sqlite3.connect(str(path), timeout=5.0, check_same_thread=False)
+    if sqlite3.sqlite_version_info < (3, 35, 0):
+        raise RuntimeError(
+            f"SQLite >= 3.35.0 required (got {sqlite3.sqlite_version}); "
+            "'CREATE VIEW IF NOT EXISTS' is not supported on older versions."
+        )
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA foreign_keys=ON")
     conn.executescript(_DDL)
@@ -200,8 +206,7 @@ def invocations_record(
     ms_elapsed: int | None = None,
 ) -> None:
     """Record one hook invocation for analytics. Never raises."""
-    import json as _json
-    names_json = _json.dumps(heuristic_names) if heuristic_names else None
+    names_json = json.dumps(heuristic_names) if heuristic_names else None
     now = _now()
     try:
         with _connect() as conn:
@@ -220,22 +225,22 @@ def invocations_record(
 
 
 def _prune_stale(conn: sqlite3.Connection) -> None:
-    """Delete entries older than _STALE_DAYS.
+    """Delete entries older than _STALE_DAYS from both cache tables.
 
     Uses strftime() to produce a cutoff string in %Y-%m-%dT%H:%M:%SZ format,
-    matching the stored validated_at format. bare datetime('now', '-90 days')
+    matching the stored ts/validated_at format. bare datetime('now', '-90 days')
     returns 'YYYY-MM-DD HH:MM:SS' (no T, no Z) and would never match stored
     rows in a text comparison.
     """
+    cutoff_expr = "strftime('%Y-%m-%dT%H:%M:%SZ', datetime('now', ?))"
+    cutoff_param = (f"-{int(_STALE_DAYS)} days",)
     conn.execute(
-        "DELETE FROM command_cache WHERE validated_at < "
-        "strftime('%Y-%m-%dT%H:%M:%SZ', datetime('now', ?))",
-        (f"-{int(_STALE_DAYS)} days",),
+        f"DELETE FROM command_cache WHERE validated_at < {cutoff_expr}",
+        cutoff_param,
     )
     conn.execute(
-        "DELETE FROM hook_invocations WHERE ts < "
-        "strftime('%Y-%m-%dT%H:%M:%SZ', datetime('now', ?))",
-        (f"-{int(_STALE_DAYS)} days",),
+        f"DELETE FROM hook_invocations WHERE ts < {cutoff_expr}",
+        cutoff_param,
     )
 
 
