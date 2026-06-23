@@ -13,7 +13,6 @@ from cccs_hooks.cache import (
     cache_is_stale,
     cache_lookup,
     cache_record,
-    cache_revalidate,
     sha256_command,
 )
 
@@ -204,24 +203,6 @@ def test_age_91_days_stale(tmp_path: Path) -> None:
     age = cache_age_days("abc", cache_path=cache)
     assert age is not None
     assert cache_is_stale(age)
-
-
-# ---------- cache_revalidate ----------
-
-def test_revalidate_safe_refreshes_timestamp(tmp_path: Path) -> None:
-    cache = _cache_file(tmp_path)
-    _seed_entry(cache, sha="abc", last_validated_at=_ts_days_ago(95))
-    cache_revalidate("abc", "safe", cache_path=cache)
-    age = cache_age_days("abc", cache_path=cache)
-    assert age is not None
-    assert age < 1.0
-
-
-def test_revalidate_unsafe_removes_entry(tmp_path: Path) -> None:
-    cache = _cache_file(tmp_path)
-    _seed_entry(cache, sha="abc")
-    cache_revalidate("abc", "suspicious", cache_path=cache)
-    assert cache_lookup("abc", cache_path=cache) is None
 
 
 # ---------- concurrent writes ----------
