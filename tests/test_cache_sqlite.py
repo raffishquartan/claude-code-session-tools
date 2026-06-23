@@ -200,7 +200,7 @@ def test_stats_main_no_crash(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, ca
     # Seed one row so the view returns data
     invocations_record(2, "safe", cache_source="exact", ms_elapsed=None)
     from cccs_hooks import stats as stats_mod
-    stats_mod.main()
+    stats_mod.main([])
     out = capsys.readouterr().out
     assert "Hook invocations" in out
     assert "Verdict breakdown" in out

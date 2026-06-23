@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import sqlite3
+import urllib.parse
 from pathlib import Path
 
 from cccs_hooks.cache import _db_path
@@ -19,7 +20,8 @@ def _connect_readonly() -> sqlite3.Connection | None:
     if not path.exists():
         return None
     try:
-        conn = sqlite3.connect(f"file:{path}?mode=ro", uri=True, timeout=3.0)
+        encoded = urllib.parse.quote(str(path), safe="/:")
+        conn = sqlite3.connect(f"file:{encoded}?mode=ro", uri=True, timeout=3.0)
         conn.row_factory = sqlite3.Row
         return conn
     except sqlite3.Error:
@@ -68,10 +70,10 @@ def _print_verdict_breakdown(conn: sqlite3.Connection) -> None:
         print(f"  {r['verdict']:<20} {r['n']:>6}")
 
 
-def main() -> None:
+def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(description="Show bash-security-review hook statistics")
     parser.add_argument("--days", type=int, default=30, help="Days of history to show (default: 30)")
-    args, _ = parser.parse_known_args()
+    args = parser.parse_args(argv)
 
     conn = _connect_readonly()
     if conn is None:
