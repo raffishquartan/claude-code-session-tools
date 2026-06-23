@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import tomllib
 from pathlib import Path
+from typing import cast
 
 from cc_session_tools.lib.scheduler.jobspec import (
     JobSpec,
@@ -41,7 +42,7 @@ def _spec_from_table(table: dict[str, object]) -> JobSpec:
             job_id=str(table["id"]),
             cadence=str(table["cadence"]),
             coalesce=str(table.get("coalesce", _DEFAULTS["coalesce"])),
-            command=[str(x) for x in table["command"]],  # type: ignore[union-attr]
+            command=[str(x) for x in cast(list[object], table["command"])],
             surface=bool(table.get("surface", _DEFAULTS["surface"])),
             enabled=bool(table.get("enabled", _DEFAULTS["enabled"])),
             catchup_window=str(table.get("catchup_window", _DEFAULTS["catchup_window"])),

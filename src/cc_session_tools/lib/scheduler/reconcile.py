@@ -19,6 +19,8 @@ from cc_session_tools.lib.scheduler.ledger import LedgerEntry, LedgerEvent
 from cc_session_tools.lib.scheduler.lock import pid_alive
 from cc_session_tools.lib.scheduler.runner import spawn_detached
 
+__all__ = ["ReconcileResult", "Spawn", "reconcile_and_launch", "spawn_detached"]
+
 logger = logging.getLogger(__name__)
 
 _DEFAULT_LAUNCH_CAP = 20

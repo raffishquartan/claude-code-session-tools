@@ -10,7 +10,7 @@ Three concerns, one repo, for life on the [Claude Code](https://docs.anthropic.c
 2. **Usage analytics** — parse `~/.claude/projects/**/*.jsonl` into tokens-and-dollars breakdowns by project, session, model, MCP server, plugin, and tool.
 3. **Hook library** — Python package (`cccs_hooks`) providing Claude Code SessionStart / PreToolUse / PostToolUse / UserPromptSubmit / Stop hook implementations, invokable via `ccst hooks run <name>`.
 
-The repo ships six CLIs, one shell helper, seven bundled skills, and eight bundled hooks:
+The repo ships seven CLIs, one shell helper, eight bundled skills, and ten bundled hooks:
 
 **CLIs and shell helper**
 
@@ -22,6 +22,7 @@ The repo ships six CLIs, one shell helper, seven bundled skills, and eight bundl
 | **`claude-code-usage`** | Multi-dimensional usage analytics CLI: query/group/filter by project, session, model, MCP server, plugin, tool, day/week/month/year. Reconciles dollar totals against `ccusage`. |
 | **`ccst <noun> <verb>`** | Umbrella CLI for hook and skill management: install, uninstall, health-check, shell helpers, telemetry trim, global CLAUDE.md messaging block. |
 | **`ccmsg <command>`** | Inter-session messaging CLI: send, deliver, read, list, claim, and archive durable messages between Claude Code sessions. |
+| **`ccsched <command>`** | Scheduled-task CLI: register, list, edit, enable/disable, and remove recurring jobs; inspect status; one-shot sweep. |
 | **`ccl` (shell fn)** | Shell function wrapping `ccs` for list-mode usage. Installed by `ccst shell install`. |
 
 **Bundled skills** (installed via `ccst skills install`)
@@ -35,6 +36,7 @@ The repo ships six CLIs, one shell helper, seven bundled skills, and eight bundl
 | **`list-empty-sessions`** | Wraps `ccs --emptiness only`. Finds sessions you never actually typed in — accumulate from accidental `ccd` invocations or abandoned starts. |
 | **`move-session`** | Move, rename, or move+rename a session while keeping its `~/.claude/projects/<encoded-cwd>/<uuid>.jsonl` transcript resumable. |
 | **`send-session-message`** | Guides recipient choice, message composition, and confirmation when sending an inter-session message via `ccmsg send`. |
+| **`manage-recurring-cc-jobs-using-ccsched`** | Translates natural-language cadence requests into `ccsched add` calls; disambiguates `ccsched` (local recurring jobs) vs `/schedule` (cloud cron) vs `/loop` (in-session poll). |
 
 **Bundled hooks** (installed via `ccst hooks install`)
 
@@ -48,6 +50,8 @@ The repo ships six CLIs, one shell helper, seven bundled skills, and eight bundl
 | **`edit-write-audit`** (PostToolUse) | Audits file writes for sensitive paths and checks that WORKLOG.md is being maintained. |
 | **`session-end`** (Stop) | Nudges you to commit uncommitted changes and update WORKLOG.md when a session ends. |
 | **`messaging-deliver`** (SessionStart + UserPromptSubmit) | Sweeps `~/.claude/cc-messages/` for messages addressed to this session and injects a compact digest as additional context. Handles auto-read, read-receipts, first-claim-wins claims, and 14-day archival without prompting. |
+| **`catchup`** (SessionStart) | Reconciles the scheduled-job registry, launches owed jobs as detached workers, and surfaces previously-completed runs as a digest. |
+| **`catchup`** (UserPromptSubmit) | Surfaces (reaps) completed scheduled runs on a throttle (60 s), so a job launched at session start surfaces at the next prompt in the same session. |
 
 See [CHANGELOG.md](CHANGELOG.md) for a full version history. See [TODO.md](TODO.md) for known follow-up work (including the notify-user skill integration).
 
@@ -437,6 +441,86 @@ The `send-session-message` skill guides you through choosing a recipient, compos
 
 The `install-everything.sh` script runs `ccst claude-md install --apply` automatically as part of the standard installation sequence.
 
+## Scheduled-task catch-up
+
+`ccsched` registers local recurring jobs in `~/.claude/cc-scheduler/jobs.toml`
+and reconciles them on Claude Code session activity. Jobs run on a declared
+cadence and are back-filled when missed (e.g. while the laptop was off), with
+coalescing controlled per-job.
+
+### Execution model
+
+The `catchup` hook only reconciles (what is owed?), launches detached background
+workers (`ccsched _run-job`), and surfaces previously-completed runs — job
+commands never run on the session critical path, so a slow or numerous backlog
+never blocks or slows session start. A per-job `O_EXCL` in-flight lock with
+stale-holder reclamation ensures each job runs at most once at a time; there is
+no global sweep lock, so a duplicate launch from two sessions is harmless (the
+loser exits).
+
+### `ccsched` subcommands
+
+| Subcommand | What it does |
+|---|---|
+| `add` | Register a new job with a declared cadence and command. |
+| `list` | List all registered jobs and their next-fire times. |
+| `edit` | Edit a job field (cadence, command, coalesce, etc.) in-place. |
+| `enable` / `disable` | Toggle a job on or off without removing it. |
+| `remove` | Delete a job from the registry. |
+| `run` | Run a job immediately (foreground; bypasses cadence). |
+| `status` | Show recent ledger history for a job (or all jobs). |
+| `sweep` | One-shot reconcile + launch from the shell. |
+| `_run-job` | Internal: run one owed instance and record the result (called by the hook). |
+
+### Cadence grammar
+
+| Form | Meaning |
+|---|---|
+| `every:2h` | Every 2 hours, drifting from last run. |
+| `every:@from=2026-06-01T09:00Z/2w` | Drift-free fortnightly anchored to a fixed epoch. |
+| `daily@09:00` | Once per calendar day at 09:00 local time. |
+| `weekly:mon@08:30` | Once per week on Monday at 08:30. |
+| `monthly:15@07:00` | Day-of-month (e.g. the 15th) at 07:00. |
+| `monthly:fri#2@07:00` | Nth weekday of the month (e.g. 2nd Friday). |
+
+Cadences that land on the same calendar occurrence are coalesced per the job's
+`coalesce` setting: `one` fires once for any backlog; `each` fires once per owed
+instant.
+
+### Delivery hooks
+
+Two hooks drive scheduled catch-up without extra steps:
+
+- **`catchup` on `SessionStart`** — reconciles, launches owed workers, and
+  surfaces any previously-completed runs when a session opens.
+- **`catchup` on `UserPromptSubmit`** — surfaces (reaps) completed runs and
+  re-reconciles on a 60-second throttle, so a job launched at session start
+  surfaces at the next prompt in the same session.
+
+Both hooks are included in the standard bundle and installed by
+`ccst hooks install --apply`. Surfacing is per-session (per-session cursor), so
+each session sees each completed run exactly once. Failures never block the
+session; every action is recorded to the shared `~/.claude/hooks/fires.jsonl`
+telemetry ledger.
+
+### `manage-recurring-cc-jobs-using-ccsched` skill
+
+The `manage-recurring-cc-jobs-using-ccsched` skill translates natural-language
+cadence requests ("run my Tesco shop every other Sunday at 09:00") into
+validated `ccsched add` calls and disambiguates between:
+
+- `ccsched` — local recurring jobs, runs off the session critical path.
+- `/schedule` — cloud-hosted agents that run on a cron schedule.
+- `/loop` — in-session polling that runs while the session is open.
+
+### Registry
+
+The registry lives at `~/.claude/cc-scheduler/jobs.toml` — plain TOML,
+hand-editable, created lazily on first `ccsched add`. Every job declares a
+`cadence`, `command` (argv), `coalesce` (`one`/`each`), optional `surface`
+(whether to include in the digest), and optional `catchup_window` (how far back
+to back-fill; default 7 days).
+
 ## Hook library (`cccs_hooks`)
 
 The `cccs_hooks` Python package provides Claude Code hook implementations.
@@ -458,6 +542,7 @@ to make the hook library available. Hooks are invoked through `ccst hooks run <n
 | `cccs_hooks.session_tag` | **SessionStart** | Writes `<uuid>.tag` so `claude-code-usage` can map session UUIDs to `ccd` name tags (see [Session tag hook](#session-tag-hook)). |
 | `cccs_hooks.last_screenshot` | UserPromptSubmit | Resolves the newest screenshot for the `>lss` token and injects its path (see [Last screenshot hook](#last-screenshot-hook)). |
 | `cccs_hooks.messaging_deliver` | SessionStart + UserPromptSubmit | Sweeps `~/.claude/cc-messages/` for messages addressed to this session and injects a compact digest as additional context (see [Inter-session messaging](#inter-session-messaging)). |
+| `cccs_hooks.catchup` | SessionStart + UserPromptSubmit | Reconciles + launches scheduled jobs detached, then surfaces completed runs as a digest (see [Scheduled-task catch-up](#scheduled-task-catch-up)). |
 
 ### Running hooks via `ccst hooks run <name>`
 
@@ -482,6 +567,7 @@ Where `<name>` is one of:
 | `session-tag` | `cccs_hooks.session_tag` |
 | `last-screenshot` | `cccs_hooks.last_screenshot` |
 | `messaging-deliver` | `cccs_hooks.messaging_deliver` |
+| `catchup` | `cccs_hooks.catchup` |
 
 The dispatcher reads the event payload from stdin, calls the matching module's
 `main()`, and propagates its exit code.

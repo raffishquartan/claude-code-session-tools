@@ -4,6 +4,7 @@ design — each session has its own cursor; cross-session dedup is a non-goal.""
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import cast
 
 from cc_session_tools.lib.scheduler import cursor, ledger, registry
 from cc_session_tools.lib.scheduler.digest import JobReport, Outcome
@@ -46,7 +47,7 @@ def surface(*, session_uuid: str) -> SurfaceResult:
             reports.append(JobReport(
                 job_id=job_id, outcome=Outcome.RAN,
                 surface=_surface_flag(job_id, surface_by_id), overdue="",
-                ran=int(e.get("ran", 0) or 0), deferred=0, expired=0,
+                ran=int(cast(int, e.get("ran", 0)) or 0), deferred=0, expired=0,
                 consecutive_failures=0,
             ))
         elif event in _LAUNCH_EVENTS:
