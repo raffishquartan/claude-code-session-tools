@@ -79,6 +79,7 @@ def test_hooks_install_bundle_all_hooks(tmp_path: Path) -> None:
         "ccst hooks run confirm-8digit",
         "ccst hooks run prompt-guard",
         "ccst hooks run edit-write-audit",
+        "ccst hooks run no-emdash",
         "ccst hooks run session-end",
         "ccst hooks run session-tag",
         "ccst hooks run last-screenshot",
