@@ -47,6 +47,40 @@ _READ_ONLY_BUILTINS: frozenset[str] = frozenset({
     'basename', 'dirname', 'realpath',
 })
 
+# ---------------------------------------------------------------------------
+# Git rule constants
+# ---------------------------------------------------------------------------
+
+_GIT_SAFE_SUBCMDS: frozenset[str] = frozenset({
+    'status', 'diff', 'log', 'show', 'fetch', 'pull', 'checkout',
+    'merge', 'rebase', 'stash', 'tag', 'describe', 'blame', 'shortlog',
+    'cherry-pick', 'branch', 'remote', 'rev-parse', 'ls-files',
+    'add', 'commit', 'push',
+})
+# 'config' is intentionally absent — git config --global can modify system state
+
+_GIT_DANGEROUS_FLAGS: frozenset[str] = frozenset({'--hard', '--force', '-f', '-fd', '--delete'})
+_GIT_DANGEROUS_SUBCMDS: frozenset[str] = frozenset({'clean', 'bisect', 'filter-branch', 'gc'})
+
+# ---------------------------------------------------------------------------
+# find rule constants
+# ---------------------------------------------------------------------------
+
+_FIND_BLOCK_FLAGS: frozenset[str] = frozenset({'-exec', '-execdir', '-delete', '-ok', '-okdir'})
+_FIND_SHORT_WORDS: frozenset[str] = frozenset({'f', 'd', 'l', 'b', 'c', 'p', 's'})  # -type/-xtype values
+
+# ---------------------------------------------------------------------------
+# Package manager rule constants
+# ---------------------------------------------------------------------------
+
+_PKG_SAFE_SUBCMDS: dict[str, frozenset[str]] = {
+    'npm':   frozenset({'install', 'ci', 'test', 'build'}),
+    # 'run', 'start', 'lint' excluded — script name determines what executes
+    'pip':   frozenset({'install', 'show', 'list', 'freeze'}),
+    'pip3':  frozenset({'install', 'show', 'list', 'freeze'}),
+    'cargo': frozenset({'build', 'test', 'check', 'clippy', 'fmt', 'doc'}),
+}
+
 
 # ---------------------------------------------------------------------------
 # Public API
@@ -92,7 +126,44 @@ def normalise(command: str) -> str | None:
     if verb in _READ_ONLY_BUILTINS:
         return _normalise_read_only(verb, tokens[1:])
 
-    # No rule matched (git, find, pkg mgr rules come in Task 2)
+    # Git rule
+    if verb == 'git' and len(tokens) >= 2:
+        subcmd = tokens[1]
+        all_flags = set(tokens[2:])
+        if subcmd in _GIT_DANGEROUS_SUBCMDS:
+            return None
+        if all_flags & _GIT_DANGEROUS_FLAGS:
+            return None
+        if subcmd in _GIT_SAFE_SUBCMDS:
+            return f"git {subcmd} <ARGS>"
+        return None
+
+    # find rule
+    if verb == 'find':
+        if set(tokens) & _FIND_BLOCK_FLAGS:
+            return None
+        parts: list[str] = ['find']
+        for t in tokens[1:]:
+            if t.startswith('-'):
+                parts.append(t)          # verbatim: flag names and negative values like -7
+            elif t in _FIND_SHORT_WORDS:
+                parts.append(t)          # -type value letters kept verbatim
+            else:
+                classified = _classify_token(t)
+                if classified == t:
+                    parts.append('<PATH>')   # unrecognised non-flag token → path
+                else:
+                    parts.append(classified)  # <GLOB>, <NUM>, <UUID>, etc.
+        return ' '.join(parts)
+
+    # Package manager rule
+    if verb in _PKG_SAFE_SUBCMDS and len(tokens) >= 2:
+        subcmd = tokens[1]
+        if subcmd in _PKG_SAFE_SUBCMDS[verb]:
+            return f"{verb} {subcmd} <ARGS>"
+        return None
+
+    # No rule matched
     return None
 
 

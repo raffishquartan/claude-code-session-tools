@@ -51,10 +51,8 @@ def test_unparseable_command_returns_none():
     assert normalise("git checkout 'unclosed") is None
 
 def test_absolute_path_verb_git():
-    # basename resolution — git rules come in Task 2, so still None for now
-    # but the verb IS resolved correctly (no crash)
-    result = normalise("/usr/bin/git status")
-    assert result is None  # git rule not yet implemented
+    # /usr/bin/git → basename 'git' → git rule applies
+    assert normalise("/usr/bin/git status") == "git status <ARGS>"
 
 def test_local_script_returns_none():
     assert normalise("./local-script.py") is None
@@ -70,3 +68,100 @@ def test_ls_normalises():
 
 def test_wc_normalises():
     assert normalise("wc -l file.txt") == "wc -l <PATHS>"
+
+
+# ---------------------------------------------------------------------------
+# Git rule tests (Task 2)
+# ---------------------------------------------------------------------------
+
+def test_git_checkout_normalises_branch():
+    assert normalise("git checkout feature/my-branch") == "git checkout <ARGS>"
+
+def test_git_checkout_normalises_sha():
+    assert normalise("git checkout abc1234") == "git checkout <ARGS>"
+
+def test_git_checkout_main_normalises():
+    assert normalise("git checkout main") == "git checkout <ARGS>"
+
+def test_git_reset_hard_returns_none():
+    assert normalise("git reset --hard") is None
+
+def test_git_reset_hard_with_ref_returns_none():
+    assert normalise("git reset --hard HEAD~1") is None
+
+def test_git_push_force_returns_none():
+    assert normalise("git push --force") is None
+    assert normalise("git push -f") is None
+
+def test_git_push_force_with_remote_returns_none():
+    assert normalise("git push origin main --force") is None
+
+def test_git_clean_returns_none():
+    assert normalise("git clean -fd") is None
+
+def test_git_diff_normalises():
+    assert normalise("git diff HEAD~3..HEAD") == "git diff <ARGS>"
+
+def test_git_log_normalises():
+    assert normalise("git log --oneline -10 main") == "git log <ARGS>"
+
+def test_git_config_returns_none():
+    assert normalise("git config --get user.email") is None
+
+def test_git_unknown_subcommand_returns_none():
+    assert normalise("git bisect start") is None
+
+
+# ---------------------------------------------------------------------------
+# find rule tests (Task 2)
+# ---------------------------------------------------------------------------
+
+def test_find_basic_normalises():
+    # -7 starts with '-' so it is kept verbatim (flag passthrough)
+    assert normalise('find . -name "*.py" -mtime -7') == "find <PATH> -name <GLOB> -mtime -7"
+
+def test_find_with_exec_returns_none():
+    assert normalise('find . -name "*.py" -exec cat {} \\;') is None
+
+def test_find_with_delete_returns_none():
+    assert normalise('find /tmp -name "*.log" -delete') is None
+
+def test_find_maxdepth_normalises():
+    # 3 has no leading '-' so _classify_token returns <NUM>
+    assert normalise("find . -maxdepth 3 -type f") == "find <PATH> -maxdepth <NUM> -type f"
+
+def test_find_multiple_paths_all_collapsed():
+    assert normalise("find /var/log /tmp -name '*.log'") == "find <PATH> <PATH> -name <GLOB>"
+
+
+# ---------------------------------------------------------------------------
+# Package manager rule tests (Task 2)
+# ---------------------------------------------------------------------------
+
+def test_npm_install_normalises():
+    assert normalise("npm install lodash") == "npm install <ARGS>"
+
+def test_npm_ci_normalises():
+    assert normalise("npm ci") == "npm ci <ARGS>"
+
+def test_npm_build_normalises():
+    assert normalise("npm build") == "npm build <ARGS>"
+
+def test_npm_test_normalises():
+    assert normalise("npm test") == "npm test <ARGS>"
+
+def test_npm_run_returns_none():
+    assert normalise("npm run build") is None
+    assert normalise("npm run exfiltrate-keys") is None
+
+def test_npm_start_returns_none():
+    assert normalise("npm start") is None
+
+def test_npm_uninstall_returns_none():
+    assert normalise("npm uninstall lodash") is None
+
+def test_pip_install_normalises():
+    assert normalise("pip3 install requests==2.31.0") == "pip3 install <ARGS>"
+
+def test_cargo_build_normalises():
+    assert normalise("cargo build") == "cargo build <ARGS>"
