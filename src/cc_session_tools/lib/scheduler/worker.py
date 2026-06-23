@@ -104,6 +104,12 @@ def run_job(
     try:
         with in_flight_lock(job_id):
             try:
+                # Ensure the job is registered in state.json before stamping
+                # in_flight; a job added via `ccsched add` writes only to
+                # jobs.toml. set_in_flight would KeyError without this guard.
+                _states = state.load_all_state()
+                state.ensure_registered(_states, job_id, now)
+                state.save_all_state(_states)
                 state.set_in_flight(
                     job_id, pid=os.getpid(), started_at=state.format_ts(now), instants=instants
                 )
