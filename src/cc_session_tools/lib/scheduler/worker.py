@@ -38,11 +38,13 @@ def _load_spec(job_id: str) -> JobSpec:
 
 
 def _record(spec: JobSpec, event: LedgerEvent, owed_n: int, ran: int,
-            outcome: RunOutcome | None, error: str | None) -> None:
+            outcome: RunOutcome | None, error: str | None,
+            consecutive_failures: int = 0) -> None:
     ledger.record(LedgerEntry(
         job_id=spec.job_id, event=event, owed=owed_n, ran=ran,
         exit_code=(outcome.exit_code if outcome else None),
         duration_ms=(outcome.duration_ms if outcome else 0), error=error,
+        consecutive_failures=consecutive_failures,
     ))
 
 
@@ -72,15 +74,19 @@ def _run_body(spec: JobSpec, instants: int, now: datetime, runner: Runner) -> No
     cur = states[spec.job_id]
 
     if failed:
+        # Discard any j-1 successful instants from this run — intentional and
+        # safe because jobs are idempotent-by-contract (re-running them is harmless).
+        new_consecutive = cur.consecutive_failures + 1
         states[spec.job_id] = JobState(
             registered_at=cur.registered_at, last_success=cur.last_success,
-            last_attempt=attempt_ts, consecutive_failures=cur.consecutive_failures + 1,
+            last_attempt=attempt_ts, consecutive_failures=new_consecutive,
             in_flight=cur.in_flight,
         )
         state.save_all_state(states)
         _record(spec, LedgerEvent.FAIL, owed_n, 0, last_outcome,
                 (last_outcome.stderr.strip()[:200] if last_outcome else None)
-                or ("timed out" if last_outcome and last_outcome.timed_out else None))
+                or ("timed out" if last_outcome and last_outcome.timed_out else None),
+                consecutive_failures=new_consecutive)
         return
 
     if spec.coalesce is CoalesceKind.ONE:

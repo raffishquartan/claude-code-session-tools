@@ -41,7 +41,7 @@ def _build_parser() -> argparse.ArgumentParser:
     add_p.add_argument("--cadence", required=True)
     add_p.add_argument("--coalesce", default="one")
     add_p.add_argument("--catchup-window", default="7d")
-    add_p.add_argument("--timeout", default="60s")
+    add_p.add_argument("--timeout", default="120s")
     add_surface = add_p.add_mutually_exclusive_group()
     add_surface.add_argument("--surface", dest="surface", action="store_true", default=True)
     add_surface.add_argument("--no-surface", dest="surface", action="store_false")
@@ -68,7 +68,6 @@ def _build_parser() -> argparse.ArgumentParser:
 
     run_p = sub.add_parser("run", help="Run one job now.")
     run_p.add_argument("id")
-    run_p.add_argument("--force", action="store_true")
 
     status_p = sub.add_parser("status", help="Recent ledger entries.")
     status_p.add_argument("id", nargs="?", default=None)
@@ -187,6 +186,7 @@ def _cmd_run(args: argparse.Namespace) -> int:
         owed=1, ran=0 if failed else 1, exit_code=outcome.exit_code,
         duration_ms=outcome.duration_ms,
         error=(outcome.stderr.strip()[:200] or None) if failed else None,
+        consecutive_failures=states[spec.job_id].consecutive_failures if failed else 0,
     ))
     print(f"{'failed' if failed else 'ran'} {spec.job_id} (exit={outcome.exit_code})")
     return 1 if failed else 0

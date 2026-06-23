@@ -65,7 +65,26 @@ def test_silent_success_is_marked_non_surfacing(monkeypatch: pytest.MonkeyPatch)
 def test_failure_event_maps_to_failed_outcome(monkeypatch: pytest.MonkeyPatch) -> None:
     _add("cal", surface=False)
     ld.record(ld.LedgerEntry(job_id="cal", event=ld.LedgerEvent.FAIL, owed=1,
-                             ran=0, exit_code=1, duration_ms=1, error="boom"))
+                             ran=0, exit_code=1, duration_ms=1, error="boom",
+                             consecutive_failures=1))
     result = sf.surface(session_uuid="s1")
     rep = next(r for r in result.reports if r.job_id == "cal")
     assert rep.outcome is Outcome.FAILED
+
+
+def test_second_consecutive_failure_surfaces_correct_ordinal(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _add("cal", surface=True)
+    # First failure
+    ld.record(ld.LedgerEntry(job_id="cal", event=ld.LedgerEvent.FAIL, owed=1,
+                             ran=0, exit_code=1, duration_ms=1, error="boom",
+                             consecutive_failures=1))
+    # Second consecutive failure — consecutive_failures=2 on the ledger entry
+    ld.record(ld.LedgerEntry(job_id="cal", event=ld.LedgerEvent.FAIL, owed=1,
+                             ran=0, exit_code=1, duration_ms=1, error="boom",
+                             consecutive_failures=2))
+    result = sf.surface(session_uuid="s1")
+    fail_reports = [r for r in result.reports if r.job_id == "cal" and r.outcome is Outcome.FAILED]
+    # The second report should carry consecutive_failures=2
+    assert any(r.consecutive_failures == 2 for r in fail_reports)

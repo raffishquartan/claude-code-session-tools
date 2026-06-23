@@ -30,6 +30,7 @@ class LedgerEntry:
     exit_code: int | None
     duration_ms: int
     error: str | None
+    consecutive_failures: int = 0
 
 
 def _hooks_dir() -> Path | None:
@@ -48,6 +49,7 @@ def record(entry: LedgerEntry) -> None:
             "exit_code": entry.exit_code,
             "duration_ms": entry.duration_ms,
             "error": entry.error,
+            "consecutive_failures": entry.consecutive_failures,
         },
         separators=(",", ":"),
     )

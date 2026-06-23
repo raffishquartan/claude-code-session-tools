@@ -92,10 +92,10 @@ def test_remove(tmp_path: Path) -> None:
     assert "tesco" not in _run(["list"], sched, hooks).stdout
 
 
-def test_run_force_records_ledger(tmp_path: Path) -> None:
+def test_run_records_ledger(tmp_path: Path) -> None:
     _add_ok(tmp_path)
     sched, hooks = _dirs(tmp_path)
-    res = _run(["run", "tesco", "--force"], sched, hooks)
+    res = _run(["run", "tesco"], sched, hooks)
     assert res.returncode == 0
     assert (hooks / "fires.jsonl").is_file()
 

@@ -34,14 +34,12 @@ def surface(*, session_uuid: str) -> SurfaceResult:
         event = str(e.get("event", ""))
         job_id = str(e.get("job_id", ""))
         if event in _FAIL_EVENTS:
-            # consecutive_failures is taken as 1 — the ledger entry does not
-            # carry the running count, and reading state.json from the reap
-            # phase would couple I/O layers. The digest "(1st consecutive)"
-            # is conservative and correct for the single visible failure.
+            raw_cf = e.get("consecutive_failures")
+            consecutive = int(raw_cf) if isinstance(raw_cf, int) else 1
             reports.append(JobReport(
                 job_id=job_id, outcome=Outcome.FAILED,
                 surface=_surface_flag(job_id, surface_by_id), overdue="",
-                ran=0, deferred=0, expired=0, consecutive_failures=1,
+                ran=0, deferred=0, expired=0, consecutive_failures=consecutive,
             ))
         elif event in _RAN_EVENTS:
             reports.append(JobReport(

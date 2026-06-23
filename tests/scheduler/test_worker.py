@@ -107,6 +107,21 @@ def test_each_runs_up_to_k_times(monkeypatch: pytest.MonkeyPatch) -> None:
     assert calls["n"] == 5
 
 
+def test_second_consecutive_failure_writes_correct_count_to_ledger(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _add("cal2")
+    # Pre-seed state with one prior consecutive failure
+    st.save_all_state({"cal2": st.JobState(
+        registered_at="2026-06-17T09:00:00Z", last_success=None, last_attempt=None,
+        consecutive_failures=1, in_flight=None)})
+    now = datetime(2026, 6, 20, 10, 0, tzinfo=UTC)
+    wk.run_job("cal2", instants=1, now=now, runner=_fail_runner)
+    rows = ld.read_recent(job_id="cal2")
+    assert rows[-1]["event"] == ld.LedgerEvent.FAIL.value
+    assert rows[-1]["consecutive_failures"] == 2
+
+
 def test_second_worker_exits_when_lock_held_by_live_pid(monkeypatch: pytest.MonkeyPatch) -> None:
     _add("busy")
     _seed("busy")

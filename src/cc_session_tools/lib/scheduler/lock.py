@@ -7,9 +7,10 @@ pid is dead, in which case the stale lock is reclaimed. This per-job lock is the
 sole overlap-prevention guarantee (§10): there is no global sweep lock, so two
 sessions launching the same owed job is harmless — only the lock winner runs.
 
-An in-process threading.Lock guards the O_EXCL create+check sequence because
-some filesystems (notably WSL2 tmpfs) do not guarantee O_CREAT|O_EXCL
-atomicity between threads in the same process."""
+An in-process threading.Lock guards the O_EXCL create+check sequence to close
+a TOCTOU window: without it, a stale-lock reclaim (FileExistsError → holder-dead
+check → unlink → re-create) can interleave with another thread's create attempt
+inside the same process, producing two simultaneous lock holders."""
 from __future__ import annotations
 
 import json
@@ -22,8 +23,8 @@ from pathlib import Path
 
 from cc_session_tools.lib.scheduler.state import scheduler_dir
 
-# Per-job threading locks guard the O_EXCL create+check sequence within a
-# single process. Inter-process exclusion is still provided by O_CREAT|O_EXCL.
+# Per-job threading locks close the stale-reclaim TOCTOU window within a single
+# process. Inter-process exclusion is still provided by O_CREAT|O_EXCL.
 _thread_locks: dict[str, threading.Lock] = {}
 _thread_locks_guard = threading.Lock()
 

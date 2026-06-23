@@ -49,7 +49,7 @@ def test_defaults_applied_for_omitted_fields(tmp_path: Path, monkeypatch: pytest
     assert loaded[0].surface is True
     assert loaded[0].enabled is True
     assert loaded[0].catchup_window == "7d"
-    assert loaded[0].timeout == "60s"
+    assert loaded[0].timeout == "120s"
 
 
 def test_malformed_toml_raises(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

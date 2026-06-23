@@ -127,3 +127,41 @@ def test_next_due_after_baseline() -> None:
     baseline = _dt(2026, 6, 20, 9, 0)
     now = _dt(2026, 6, 20, 12, 0)
     assert next_due(c, baseline, now) == _dt(2026, 6, 21, 9, 0)
+
+
+def test_next_due_anchored_every() -> None:
+    # Grid: 2026-01-09, 2026-01-23, 2026-02-06, ...
+    c = parse_cadence("every:2w@from=2026-01-09")
+    baseline = _dt(2026, 1, 9, 0, 0)
+    now = _dt(2026, 1, 21, 12, 0)  # between Jan 9 and Jan 23
+    assert next_due(c, baseline, now) == _dt(2026, 1, 23, 0, 0)
+
+
+def test_next_due_weekly() -> None:
+    c = parse_cadence("weekly:mon@09:00")
+    baseline = _dt(2026, 6, 15, 9, 0)  # Mon 2026-06-15
+    now = _dt(2026, 6, 17, 12, 0)      # Wednesday
+    assert next_due(c, baseline, now) == _dt(2026, 6, 22, 9, 0)  # next Monday
+
+
+def test_next_due_monthly_dom() -> None:
+    c = parse_cadence("monthly:1@09:00")
+    baseline = _dt(2026, 6, 1, 9, 0)
+    now = _dt(2026, 6, 10, 12, 0)
+    assert next_due(c, baseline, now) == _dt(2026, 7, 1, 9, 0)
+
+
+def test_next_due_monthly_nth_weekday() -> None:
+    # 3rd Thursday: May 2026 was the 21st; Jun 2026 is the 18th.
+    c = parse_cadence("monthly:thu#3@09:00")
+    baseline = _dt(2026, 5, 21, 9, 0)
+    now = _dt(2026, 5, 22, 10, 0)  # just after May 3rd Thu
+    assert next_due(c, baseline, now) == _dt(2026, 6, 18, 9, 0)
+
+
+def test_next_due_monthly_nth_last_weekday() -> None:
+    # Last Friday: Jan 2026 was 30th; Feb 2026 was 27th.
+    c = parse_cadence("monthly:fri#last@18:00")
+    baseline = _dt(2026, 1, 30, 18, 0)
+    now = _dt(2026, 1, 31, 10, 0)  # just after last-Friday Jan
+    assert next_due(c, baseline, now) == _dt(2026, 2, 27, 18, 0)

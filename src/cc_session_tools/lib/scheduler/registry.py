@@ -24,7 +24,7 @@ _DEFAULTS = {
     "surface": True,
     "enabled": True,
     "catchup_window": "7d",
-    "timeout": "60s",
+    "timeout": "120s",
 }
 
 
