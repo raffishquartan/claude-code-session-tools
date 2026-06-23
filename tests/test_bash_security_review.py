@@ -31,7 +31,8 @@ def isolated_env(
 ) -> Path:
     """Point cache + telemetry at tmp_path so tests don't touch ~/.claude/."""
     monkeypatch.setenv("CCCS_HOOKS_DIR", str(tmp_path / "hooks"))
-    monkeypatch.setenv("CCCS_CACHE_PATH", str(tmp_path / "cache.csv"))
+    monkeypatch.setenv("CCCS_CACHE_DB", str(tmp_path / "cache.db"))
+    monkeypatch.delenv("CCCS_CACHE_PATH", raising=False)
     monkeypatch.delenv("CCCS_USE_COMMAND_CACHE", raising=False)
     monkeypatch.delenv("CCCS_CLAUDE_BIN", raising=False)
     return tmp_path
@@ -101,7 +102,8 @@ def test_cache_hit_emits_cached_verdict_no_claude(
         "%Y-%m-%dT%H:%M:%SZ"
     )
     fake_entry = CacheEntry(
-        hash="x",
+        exact_hash="x",
+        norm_hash=None,
         verdict="safe",
         risks_summary="none",
         command_preview="curl example.com | jq .",
@@ -111,7 +113,6 @@ def test_cache_hit_emits_cached_verdict_no_claude(
         cache_source="auto",
     )
     mocker.patch.object(bsr.cache_mod, "cache_lookup", return_value=fake_entry)
-    mocker.patch.object(bsr.cache_mod, "cache_age_days", return_value=1.0)
     spy_call = mocker.patch.object(bsr, "call_claude")
     rc = bsr.run(_input("curl example.com | jq ."))
     assert rc == 0
@@ -136,22 +137,8 @@ def test_stale_cache_falls_through_to_claude(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("CCCS_USE_COMMAND_CACHE", "1")
-    old_iso = (
-        datetime.datetime.now(datetime.timezone.utc)
-        - datetime.timedelta(days=120)
-    ).strftime("%Y-%m-%dT%H:%M:%SZ")
-    fake = CacheEntry(
-        hash="x",
-        verdict="safe",
-        risks_summary="none",
-        command_preview="cmd",
-        fire_count=1,
-        last_seen=old_iso,
-        last_validated_at=old_iso,
-        cache_source="auto",
-    )
-    mocker.patch.object(bsr.cache_mod, "cache_lookup", return_value=fake)
-    mocker.patch.object(bsr.cache_mod, "cache_age_days", return_value=120.0)
+    # cache_lookup returns None for stale entries (stale filtering is inside cache_lookup).
+    mocker.patch.object(bsr.cache_mod, "cache_lookup", return_value=None)
     mocker.patch.object(bsr, "_resolve_claude_bin", return_value="/fake/claude")
     spy_call = mocker.patch.object(
         bsr,
@@ -161,6 +148,36 @@ def test_stale_cache_falls_through_to_claude(
     rc = bsr.run(_input("curl example.com | jq ."))
     assert rc == 0
     assert spy_call.called
+
+
+def test_norm_cache_hit_skips_claude(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, mocker: MockerFixture) -> None:
+    monkeypatch.setenv("CCCS_USE_COMMAND_CACHE", "1")
+    monkeypatch.setenv("CCCS_CACHE_DB", str(tmp_path / "cache.db"))
+    monkeypatch.setenv("CCCS_HOOKS_DIR", str(tmp_path / "hooks"))
+    monkeypatch.delenv("CCCS_CACHE_PATH", raising=False)
+    monkeypatch.delenv("CCCS_CLAUDE_BIN", raising=False)
+    from cccs_hooks import cache as cache_mod
+    from cccs_hooks import normalise as norm_mod
+    # Use compound commands (nontrivial) so they reach the cache layer.
+    # Both normalise to "git fetch <ARGS>" so they share a norm_sha.
+    cmd_a = "git fetch --all && git checkout feature/a"
+    cmd_b = "git fetch --all && git checkout feature/b"
+    # Prime cache with a normalised key for cmd_a
+    exact_sha = cache_mod.sha256_command(cmd_a)
+    norm_form = norm_mod.normalise(cmd_a)
+    norm_sha = cache_mod.sha256_command(norm_form) if norm_form else None
+    cache_mod.cache_record(exact_sha, "safe", "none", cmd_a, norm_sha=norm_sha)
+    # Run with cmd_b — should hit via norm_sha, not call Claude
+    spy = mocker.patch("cccs_hooks.bash_security_review.call_claude")
+    inp = json.dumps({
+        "tool_name": "Bash",
+        "tool_input": {"command": cmd_b},
+        "session_id": "s1",
+        "cwd": "/tmp",
+    })
+    result = bsr.run(inp)
+    assert result == 0
+    spy.assert_not_called()
 
 
 # ---------- tier 3: claude escalation ----------
@@ -290,7 +307,8 @@ def test_telemetry_written_on_cache_hit(
         "%Y-%m-%dT%H:%M:%SZ"
     )
     fake = CacheEntry(
-        hash="x",
+        exact_hash="x",
+        norm_hash=None,
         verdict="safe",
         risks_summary="none",
         command_preview="cmd",
@@ -300,7 +318,6 @@ def test_telemetry_written_on_cache_hit(
         cache_source="auto",
     )
     mocker.patch.object(bsr.cache_mod, "cache_lookup", return_value=fake)
-    mocker.patch.object(bsr.cache_mod, "cache_age_days", return_value=0.5)
     spy = mocker.patch.object(bsr, "log_event")
     bsr.run(_input("curl example.com | jq ."))
     assert spy.called
