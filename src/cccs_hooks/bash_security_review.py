@@ -327,6 +327,16 @@ def run(stdin_text: str) -> int:
             verdict="unavailable",
             sha=sha,
         )
+        cache_mod.invocations_record(
+            exit_tier=3,
+            verdict="unavailable",
+            session_id=hi.session_id,
+            tool_name=hi.tool_name,
+            heuristic_fired=bool(hits),
+            heuristic_names=list(hits) if hits else None,
+            exact_hash=sha,
+            ms_elapsed=_ms_elapsed,
+        )
         return 0
 
     assert review_text is not None

@@ -476,6 +476,7 @@ def test_invocation_row_written_on_claude_call(tmp_path, monkeypatch, mocker):
     monkeypatch.setenv("CCCS_USE_COMMAND_CACHE", "1")
     monkeypatch.setenv("CCCS_CACHE_DB", str(tmp_path / "cache.db"))
     monkeypatch.delenv("CCCS_CACHE_PATH", raising=False)
+    mocker.patch.object(bsr, "_resolve_claude_bin", return_value="/fake/claude")
     mocker.patch(
         "cccs_hooks.bash_security_review.call_claude",
         return_value=(
@@ -502,3 +503,32 @@ def test_invocation_row_written_on_claude_call(tmp_path, monkeypatch, mocker):
     assert row[2] is not None  # ms_elapsed recorded
     assert row[2] >= 0
     assert row[3] == "test-session-2"
+
+
+def test_invocation_row_written_on_claude_error(tmp_path, monkeypatch, mocker):
+    """A Tier 3 Claude call that errors must still write an invocations row with verdict='unavailable'."""
+    monkeypatch.setenv("CCCS_USE_COMMAND_CACHE", "1")
+    monkeypatch.setenv("CCCS_CACHE_DB", str(tmp_path / "cache.db"))
+    monkeypatch.delenv("CCCS_CACHE_PATH", raising=False)
+    mocker.patch.object(bsr, "_resolve_claude_bin", return_value="/fake/claude")
+    mocker.patch(
+        "cccs_hooks.bash_security_review.call_claude",
+        return_value=(None, "timeout after 30s"),
+    )
+    inp = json.dumps({
+        "tool_name": "Bash",
+        "tool_input": {"command": "git stash && git checkout feature/err"},
+        "session_id": "test-session-err",
+        "cwd": "/tmp",
+    })
+    result = bsr.run(inp)
+    assert result == 0  # error path returns 0 (allow on failure)
+    conn = sqlite3.connect(str(tmp_path / "cache.db"))
+    row = conn.execute(
+        "SELECT exit_tier, verdict, session_id FROM hook_invocations"
+    ).fetchone()
+    conn.close()
+    assert row is not None, "invocations_record() not called on error path"
+    assert row[0] == 3
+    assert row[1] == "unavailable"
+    assert row[2] == "test-session-err"
