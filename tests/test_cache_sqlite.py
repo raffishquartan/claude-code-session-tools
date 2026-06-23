@@ -77,14 +77,17 @@ def test_stale_entry_not_returned(db: Path) -> None:
     old_ts = (
         _datetime.datetime.now(_datetime.timezone.utc) - _datetime.timedelta(days=91)
     ).strftime("%Y-%m-%dT%H:%M:%SZ")
+    # Synthetic key (not a real sha256_command output) — sufficient for this test
+    # since we insert and look up the same literal; format does not affect behaviour
+    stale_key = "deadbeef" + "0" * 56  # 64-char hex string like a real sha256 digest
     conn = _sqlite3.connect(str(db))
     conn.execute(
         "INSERT INTO command_cache VALUES (?,NULL,'safe','none','cmd',1,?,?,'auto')",
-        ("sha256:stale", old_ts, old_ts),
+        (stale_key, old_ts, old_ts),
     )
     conn.commit()
     conn.close()
-    assert cache_lookup("sha256:stale") is None
+    assert cache_lookup(stale_key) is None
 
 
 def test_prune_removes_old_entries_on_write(db: Path) -> None:
@@ -92,10 +95,11 @@ def test_prune_removes_old_entries_on_write(db: Path) -> None:
     old_ts = (
         _datetime.datetime.now(_datetime.timezone.utc) - _datetime.timedelta(days=91)
     ).strftime("%Y-%m-%dT%H:%M:%SZ")
+    old_key = "cafebabe" + "0" * 56  # 64-char hex string like a real sha256 digest
     conn = _sqlite3.connect(str(db))
     conn.execute(
         "INSERT INTO command_cache VALUES (?,NULL,'safe','none','old',1,?,?,'auto')",
-        ("sha256:old", old_ts, old_ts),
+        (old_key, old_ts, old_ts),
     )
     conn.commit()
     conn.close()
@@ -106,7 +110,7 @@ def test_prune_removes_old_entries_on_write(db: Path) -> None:
     rows = conn2.execute("SELECT exact_hash FROM command_cache").fetchall()
     conn2.close()
     hashes = [r[0] for r in rows]
-    assert "sha256:old" not in hashes
+    assert old_key not in hashes
     assert sha in hashes
 
 
@@ -126,8 +130,10 @@ def test_concurrent_writes_do_not_corrupt(db: Path) -> None:
         t.start()
     for t in threads:
         t.join()
+    # assert not errors catches non-sqlite exceptions; count==20 is the real
+    # corruption signal since cache_record swallows sqlite3.Error internally
     assert not errors
     conn = _sqlite3.connect(str(db))
     count = conn.execute("SELECT COUNT(*) FROM command_cache").fetchone()[0]
     conn.close()
-    assert count == 20
+    assert count == 20  # all 20 distinct rows written; none dropped or doubled
