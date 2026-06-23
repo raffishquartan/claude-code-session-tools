@@ -5,6 +5,34 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.14.0] - 2026-06-22
+
+### Added
+
+- **Scheduled-task catch-up.** A new `ccsched` CLI registers local recurring
+  jobs in `~/.claude/cc-scheduler/jobs.toml`. Jobs run on a declared cadence
+  (`every:`/`every:@from=`/`daily@`/`weekly:`/`monthly:<dom>@`/`monthly:<dow>#<n>@`,
+  incl. drift-free anchored fortnightly and nth-weekday-of-month) and are
+  reconciled on Claude Code session activity: runs missed while the laptop was
+  off are back-filled, coalesced per the job's `coalesce` setting (`one`/`each`).
+  Subcommands: `add`, `list`, `edit`, `enable`, `disable`, `remove`, `run`,
+  `status`, `sweep`.
+- **Detached execution.** The `catchup` hook only reconciles + launches owed
+  jobs as detached background workers (`ccsched _run-job`) and surfaces
+  previously-completed runs — job commands never run on the session critical
+  path, so a slow or numerous backlog never blocks or slows session start. A
+  per-job `O_EXCL` in-flight lock (with stale-holder reclamation) is the sole
+  overlap guarantee; there is no global sweep lock.
+- **`catchup` hooks on both `SessionStart` and `UserPromptSubmit`.**
+  SessionStart reconciles+launches+surfaces; UserPromptSubmit surfaces (reaps)
+  and reconciles on a throttle, so a job launched at session start surfaces at
+  the next prompt in the same session. Surfacing is per-session (per-session
+  cursor). Failures never block the session; every action (launch/run/backfill/
+  fail/…) is recorded to the shared `fires.jsonl` telemetry ledger.
+- **`manage-recurring-cc-jobs-using-ccsched` skill** translates natural-language
+  cadence requests into validated `ccsched add` calls and disambiguates `ccsched`
+  vs `/schedule` (cloud cron) vs `/loop` (in-session poll).
+
 ## [0.13.0] - 2026-06-21
 
 ### Added

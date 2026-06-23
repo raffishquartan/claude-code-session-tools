@@ -14,6 +14,12 @@
             "command": "ccst hooks run messaging-deliver",
             "timeout": 10,
             "statusMessage": "Delivering inter-session messages..."
+          },
+          {
+            "type": "command",
+            "command": "ccst hooks run catchup",
+            "timeout": 10,
+            "statusMessage": "Reconciling scheduled-task catch-up..."
           }
         ]
       }
@@ -38,6 +44,12 @@
             "command": "ccst hooks run messaging-deliver",
             "timeout": 10,
             "statusMessage": "Checking for new inter-session messages..."
+          },
+          {
+            "type": "command",
+            "command": "ccst hooks run catchup",
+            "timeout": 10,
+            "statusMessage": "Surfacing scheduled-task catch-up..."
           }
         ]
       }
