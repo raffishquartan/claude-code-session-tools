@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from cccs_hooks.normalise import _classify_token, normalise
 
 # _classify_token tests
@@ -10,6 +12,11 @@ def test_classify_date_iso():
 
 def test_classify_date_compact():
     assert _classify_token("20260623") == "<DATE>"
+
+def test_classify_8digit_integer_returns_date():
+    # 8-digit integers are classified as <DATE> (not <NUM>) because in shell
+    # args they are overwhelmingly date-strings (YYYYMMDD) like 20260623.
+    assert _classify_token("12345678") == "<DATE>"
 
 def test_classify_number():
     assert _classify_token("42") == "<NUM>"

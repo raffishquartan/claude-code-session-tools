@@ -24,7 +24,7 @@ import shlex
 
 _UUID_RE = re.compile(r'^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$', re.I)
 _DATE_ISO_RE = re.compile(r'^\d{4}[-/]\d{2}[-/]\d{2}$')
-_DATE_YMD_RE = re.compile(r'^\d{8}$')
+_DATE_YMD_RE = re.compile(r'^\d{8}$')  # 8-digit integers in shell args are almost always date-strings (YYYYMMDD)
 _NUM_RE = re.compile(r'^-?\d+(\.\d+)?$')
 _URL_RE = re.compile(r'^https?://')
 _GLOB_RE = re.compile(r'[*?\[]')
@@ -51,34 +51,6 @@ _READ_ONLY_BUILTINS: frozenset[str] = frozenset({
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
-
-def _classify_token(token: str) -> str:
-    """Return the normalised placeholder for *token*, or *token* verbatim.
-
-    Tokens starting with '-' are always returned verbatim (flag passthrough;
-    covers negative numbers like -7 as well as flags like --verbose).
-
-    For all other tokens the classification is tested in priority order:
-    UUID → ISO date → compact date → number → URL → glob → verbatim.
-    """
-    if token.startswith('-'):
-        return token
-
-    if _UUID_RE.match(token):
-        return '<UUID>'
-    if _DATE_ISO_RE.match(token):
-        return '<DATE>'
-    if _DATE_YMD_RE.match(token):
-        return '<DATE>'
-    if _NUM_RE.match(token):
-        return '<NUM>'
-    if _URL_RE.match(token):
-        return '<URL>'
-    if _GLOB_RE.search(token):
-        return '<GLOB>'
-
-    return token
-
 
 def normalise(command: str) -> str | None:
     """Return the normalised form of *command*, or None if it cannot be generalised.
@@ -128,6 +100,33 @@ def normalise(command: str) -> str | None:
 # Internal helpers
 # ---------------------------------------------------------------------------
 
+def _classify_token(token: str) -> str:
+    """Return placeholder for *token*, or *token* verbatim.
+
+    Tokens starting with '-' are always returned verbatim (flag passthrough;
+    covers negative numbers like -7 as well as flags like --verbose).
+
+    Priority order: UUID → ISO date → compact date → number → URL → glob → verbatim.
+    """
+    if token.startswith('-'):
+        return token
+
+    if _UUID_RE.match(token):
+        return '<UUID>'
+    if _DATE_ISO_RE.match(token):
+        return '<DATE>'
+    if _DATE_YMD_RE.match(token):
+        return '<DATE>'
+    if _NUM_RE.match(token):
+        return '<NUM>'
+    if _URL_RE.match(token):
+        return '<URL>'
+    if _GLOB_RE.search(token):
+        return '<GLOB>'
+
+    return token
+
+
 def _normalise_read_only(verb: str, args: list[str]) -> str:
     """Apply the read-only builtins normalisation rule.
 
@@ -138,15 +137,13 @@ def _normalise_read_only(verb: str, args: list[str]) -> str:
 
     for token in args:
         if token.startswith('-'):
-            # Flag — keep verbatim
             parts.append(token)
-        elif _NUM_RE.match(token):
-            # Numeric argument (e.g. line count)
-            parts.append('<NUM>')
         else:
-            # Path / filename — collapse, deduplicating adjacent placeholders
-            if parts and parts[-1] == '<PATHS>':
-                pass  # deduplicate
+            classified = _classify_token(token)
+            if classified == '<NUM>':
+                parts.append('<NUM>')
+            elif parts and parts[-1] == '<PATHS>':
+                pass  # deduplicate adjacent <PATHS>
             else:
                 parts.append('<PATHS>')
 
