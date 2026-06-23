@@ -7,7 +7,9 @@ from pathlib import Path
 
 import pytest
 
-from cccs_hooks.cache import CacheEntry, cache_lookup, cache_record, sha256_command
+import json as _json
+
+from cccs_hooks.cache import CacheEntry, cache_lookup, cache_record, invocations_record, sha256_command
 
 
 @pytest.fixture
@@ -137,3 +139,70 @@ def test_concurrent_writes_do_not_corrupt(db: Path) -> None:
     count = conn.execute("SELECT COUNT(*) FROM command_cache").fetchone()[0]
     conn.close()
     assert count == 20  # all 20 distinct rows written; none dropped or doubled
+
+
+def test_invocations_record_basic(db: Path) -> None:
+    invocations_record(0, "allow", exact_hash="abc123")
+    conn = _sqlite3.connect(str(db))
+    row = conn.execute(
+        "SELECT exit_tier, verdict, heuristic_fired, exact_hash FROM hook_invocations"
+    ).fetchone()
+    conn.close()
+    assert row == (0, "allow", 0, "abc123")
+
+
+def test_invocations_record_heuristic_names(db: Path) -> None:
+    invocations_record(
+        3, "suspicious",
+        heuristic_fired=True,
+        heuristic_names=["pipe_to_shell", "curl_pipe"],
+    )
+    conn = _sqlite3.connect(str(db))
+    row = conn.execute(
+        "SELECT heuristic_fired, heuristic_names FROM hook_invocations"
+    ).fetchone()
+    conn.close()
+    assert row[0] == 1
+    assert _json.loads(row[1]) == ["pipe_to_shell", "curl_pipe"]
+
+
+def test_invocations_prune_removes_old(db: Path) -> None:
+    _bootstrap_schema(db)
+    old_ts = (
+        _datetime.datetime.now(_datetime.timezone.utc) - _datetime.timedelta(days=91)
+    ).strftime("%Y-%m-%dT%H:%M:%SZ")
+    conn = _sqlite3.connect(str(db))
+    conn.execute(
+        "INSERT INTO hook_invocations "
+        "(ts,tool_name,exit_tier,heuristic_fired,verdict) VALUES (?,?,?,?,?)",
+        (old_ts, "Bash", 3, 0, "safe"),
+    )
+    conn.commit()
+    conn.close()
+    # Trigger a write — prune fires inside cache_record()
+    cache_record(sha256_command("git status"), "safe", "none", "git status")
+    conn2 = _sqlite3.connect(str(db))
+    count = conn2.execute("SELECT COUNT(*) FROM hook_invocations").fetchone()[0]
+    conn2.close()
+    assert count == 0  # old row pruned; no invocations_record() call here
+
+
+def test_cache_efficiency_view(db: Path) -> None:
+    # Seed: 2 trivial exits + 1 cache hit + 1 claude call (500ms)
+    for _ in range(2):
+        invocations_record(0, "allow")
+    invocations_record(2, "safe", cache_source="exact")
+    invocations_record(3, "safe", ms_elapsed=500)
+    conn = _sqlite3.connect(str(db))
+    rows = conn.execute(
+        "SELECT total, trivial, cached, claude_calls, cache_hit_pct "
+        "FROM cache_efficiency"
+    ).fetchall()
+    conn.close()
+    assert len(rows) == 1
+    total, trivial, cached, claude, pct = rows[0]
+    assert total == 4
+    assert trivial == 2
+    assert cached == 1
+    assert claude == 1
+    assert pct == 25.0
