@@ -193,6 +193,19 @@ def test_invocations_prune_removes_old(db: Path) -> None:
     assert after_count == 0
 
 
+def test_stats_main_no_crash(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys) -> None:
+    """cccs-stats main() runs against an empty DB without error and prints expected headers."""
+    monkeypatch.setenv("CCCS_CACHE_DB", str(tmp_path / "cache.db"))
+    monkeypatch.delenv("CCCS_CACHE_PATH", raising=False)
+    # Seed one row so the view returns data
+    invocations_record(2, "safe", cache_source="exact", ms_elapsed=None)
+    from cccs_hooks import stats as stats_mod
+    stats_mod.main()
+    out = capsys.readouterr().out
+    assert "Hook invocations" in out
+    assert "Verdict breakdown" in out
+
+
 def test_cache_efficiency_view(db: Path) -> None:
     # Seed: 2 trivial exits + 1 cache hit + 1 claude call (500ms)
     for _ in range(2):

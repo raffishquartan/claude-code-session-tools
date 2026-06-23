@@ -50,6 +50,7 @@ claude-code-usage = "claude_code_usage.cli:main"
 ccst = "cc_session_tools.cli.ccst:main"
 ccmsg = "cc_session_tools.cli.ccmsg:main"
 ccsched = "cc_session_tools.cli.ccsched:main"
+cccs-stats = "cccs_hooks.stats:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
