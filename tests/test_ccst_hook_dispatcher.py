@@ -47,6 +47,7 @@ def test_hook_verbs_covers_every_shim_module() -> None:
         "confirm-8digit",
         "prompt-guard",
         "edit-write-audit",
+        "no-emdash",
         "session-end",
         "session-tag",
         "last-screenshot",
