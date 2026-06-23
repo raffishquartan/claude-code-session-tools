@@ -55,11 +55,13 @@ _GIT_SAFE_SUBCMDS: frozenset[str] = frozenset({
     'status', 'diff', 'log', 'show', 'fetch', 'pull', 'checkout',
     'merge', 'rebase', 'stash', 'tag', 'describe', 'blame', 'shortlog',
     'cherry-pick', 'branch', 'remote', 'rev-parse', 'ls-files',
-    'add', 'commit', 'push',
+    'add', 'commit', 'push', 'reset',
 })
 # 'config' is intentionally absent — git config --global can modify system state
+# 'reset' is safe because the dangerous-flag guard (--hard/-f) fires first
 
-_GIT_DANGEROUS_FLAGS: frozenset[str] = frozenset({'--hard', '--force', '-f', '-fd', '--delete'})
+_GIT_DANGEROUS_FLAGS: frozenset[str] = frozenset({'--hard', '--force', '-f', '--delete'})
+# Note: '-fd' removed — it is not a valid git flag; git clean -fd is blocked by _GIT_DANGEROUS_SUBCMDS
 _GIT_DANGEROUS_SUBCMDS: frozenset[str] = frozenset({'clean', 'bisect', 'filter-branch', 'gc'})
 
 # ---------------------------------------------------------------------------

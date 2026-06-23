@@ -165,3 +165,20 @@ def test_pip_install_normalises():
 
 def test_cargo_build_normalises():
     assert normalise("cargo build") == "cargo build <ARGS>"
+
+def test_pip_install_normalises():
+    assert normalise("pip install requests") == "pip install <ARGS>"
+
+def test_git_reset_soft_normalises():
+    assert normalise("git reset HEAD~1") == "git reset <ARGS>"
+    assert normalise("git reset --soft HEAD~1") == "git reset <ARGS>"
+
+def test_git_reset_hard_still_blocked():
+    # --hard is in _GIT_DANGEROUS_FLAGS — dangerous-flag guard fires before safe-subcmd check
+    assert normalise("git reset --hard HEAD~1") is None
+
+def test_git_bare_returns_none():
+    assert normalise("git") is None
+
+def test_find_relative_path_collapses():
+    assert normalise("find log -name '*.txt'") == "find <PATH> -name <GLOB>"
