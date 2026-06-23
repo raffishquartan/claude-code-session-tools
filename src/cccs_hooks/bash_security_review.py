@@ -19,6 +19,7 @@ import os
 import re
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 from cccs_hooks import cache as cache_mod
@@ -227,6 +228,13 @@ def run(stdin_text: str) -> int:
         _emit_telemetry(
             hi=hi, decision="allow", cache_state="none", verdict="trivial", sha=sha
         )
+        cache_mod.invocations_record(
+            exit_tier=0,
+            verdict="allow",
+            session_id=hi.session_id or None,
+            tool_name=hi.tool_name,
+            exact_hash=sha,
+        )
         return 0
 
     hits = heuristic_flags(command)
@@ -247,6 +255,13 @@ def run(stdin_text: str) -> int:
     if not nontrivial:
         _emit_telemetry(
             hi=hi, decision="allow", cache_state="none", verdict="trivial", sha=sha
+        )
+        cache_mod.invocations_record(
+            exit_tier=0,
+            verdict="allow",
+            session_id=hi.session_id or None,
+            tool_name=hi.tool_name,
+            exact_hash=sha,
         )
         return 0
 
@@ -270,6 +285,15 @@ def run(stdin_text: str) -> int:
                 verdict=entry.verdict,
                 sha=sha,
             )
+            cache_source = "exact" if entry.exact_hash == sha else "norm"
+            cache_mod.invocations_record(
+                exit_tier=2,
+                verdict=entry.verdict,
+                session_id=hi.session_id or None,
+                tool_name=hi.tool_name,
+                cache_source=cache_source,
+                exact_hash=sha,
+            )
             return 0
 
     # ---- Tier 3: claude escalation ----
@@ -291,7 +315,9 @@ def run(stdin_text: str) -> int:
         timeout = 30
 
     prompt = build_prompt(command, hi.cwd)
+    _t0 = time.monotonic()
     review_text, err = call_claude(prompt, claude_bin=claude_bin, timeout=timeout)
+    _ms_elapsed = int((time.monotonic() - _t0) * 1000)
     if err is not None:
         sys.stderr.write(f"[security review unavailable: {err}]\n")
         _emit_telemetry(
@@ -323,6 +349,16 @@ def run(stdin_text: str) -> int:
         cache_state=cache_state,
         verdict=verdict,
         sha=sha,
+    )
+    cache_mod.invocations_record(
+        exit_tier=3,
+        verdict=verdict,
+        session_id=hi.session_id or None,
+        tool_name=hi.tool_name,
+        heuristic_fired=bool(hits),
+        heuristic_names=list(hits) if hits else None,
+        exact_hash=sha,
+        ms_elapsed=_ms_elapsed,
     )
     return 0
 

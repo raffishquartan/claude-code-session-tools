@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import datetime
 import json
+import sqlite3
 from pathlib import Path
 from typing import Any
 
@@ -432,3 +433,72 @@ def test_extract_verdict_safe() -> None:
 
 def test_extract_verdict_unknown() -> None:
     assert bsr.extract_verdict("nonsense output") == "unknown"
+
+
+# ---------- invocations recording ----------
+
+def test_invocation_row_written_on_cache_hit(tmp_path, monkeypatch, mocker):
+    """A Tier 2 cache hit must write an invocations row with exit_tier=2."""
+    monkeypatch.setenv("CCCS_USE_COMMAND_CACHE", "1")
+    monkeypatch.setenv("CCCS_CACHE_DB", str(tmp_path / "cache.db"))
+    monkeypatch.delenv("CCCS_CACHE_PATH", raising=False)
+    from cccs_hooks import cache as cache_mod
+    from cccs_hooks import normalise as norm_mod
+    # Prime cache
+    sha = cache_mod.sha256_command("git stash && git checkout feature/x")
+    norm_form = norm_mod.normalise("git stash && git checkout feature/x")
+    norm_sha = cache_mod.sha256_command(norm_form) if norm_form else None
+    cache_mod.cache_record(sha, "safe", "none", "git stash && git checkout feature/x", norm_sha=norm_sha)
+    # Run — should hit cache, write invocation row
+    mocker.patch("cccs_hooks.bash_security_review.call_claude")
+    inp = json.dumps({
+        "tool_name": "Bash",
+        "tool_input": {"command": "git stash && git checkout feature/x"},
+        "session_id": "test-session-1",
+        "cwd": "/tmp",
+    })
+    result = bsr.run(inp)
+    assert result == 0
+    # Check invocations table
+    conn = sqlite3.connect(str(tmp_path / "cache.db"))
+    row = conn.execute(
+        "SELECT exit_tier, verdict, cache_source, session_id FROM hook_invocations"
+    ).fetchone()
+    conn.close()
+    assert row is not None, "invocations_record() was not called"
+    assert row[0] == 2   # exit_tier = 2 (cache hit)
+    assert row[1] == "safe"
+    assert row[3] == "test-session-1"
+
+
+def test_invocation_row_written_on_claude_call(tmp_path, monkeypatch, mocker):
+    """A Tier 3 Claude call must write an invocations row with exit_tier=3 and ms_elapsed."""
+    monkeypatch.setenv("CCCS_USE_COMMAND_CACHE", "1")
+    monkeypatch.setenv("CCCS_CACHE_DB", str(tmp_path / "cache.db"))
+    monkeypatch.delenv("CCCS_CACHE_PATH", raising=False)
+    mocker.patch(
+        "cccs_hooks.bash_security_review.call_claude",
+        return_value=(
+            "SUMMARY: test\nRISKS: none\nVERDICT: safe",
+            None,
+        ),
+    )
+    inp = json.dumps({
+        "tool_name": "Bash",
+        "tool_input": {"command": "git stash && git checkout feature/new"},
+        "session_id": "test-session-2",
+        "cwd": "/tmp",
+    })
+    result = bsr.run(inp)
+    assert result == 0
+    conn = sqlite3.connect(str(tmp_path / "cache.db"))
+    row = conn.execute(
+        "SELECT exit_tier, verdict, ms_elapsed, session_id FROM hook_invocations"
+    ).fetchone()
+    conn.close()
+    assert row is not None
+    assert row[0] == 3   # exit_tier = 3 (Claude call)
+    assert row[1] == "safe"
+    assert row[2] is not None  # ms_elapsed recorded
+    assert row[2] >= 0
+    assert row[3] == "test-session-2"
