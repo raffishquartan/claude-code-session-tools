@@ -24,6 +24,7 @@ from __future__ import annotations
 import dataclasses
 import datetime
 import hashlib
+import json
 import os
 import sqlite3
 from pathlib import Path
@@ -45,6 +46,33 @@ CREATE TABLE IF NOT EXISTS command_cache (
 );
 CREATE INDEX IF NOT EXISTS idx_norm ON command_cache(norm_hash)
     WHERE norm_hash IS NOT NULL;
+CREATE TABLE IF NOT EXISTS hook_invocations (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    ts              TEXT    NOT NULL,
+    session_id      TEXT,
+    tool_name       TEXT    NOT NULL DEFAULT 'Bash',
+    exit_tier       INTEGER NOT NULL,
+    heuristic_fired INTEGER NOT NULL DEFAULT 0,
+    heuristic_names TEXT,
+    verdict         TEXT    NOT NULL,
+    cache_source    TEXT,
+    exact_hash      TEXT,
+    ms_elapsed      INTEGER
+);
+CREATE INDEX IF NOT EXISTS idx_inv_ts      ON hook_invocations(ts);
+CREATE INDEX IF NOT EXISTS idx_inv_session ON hook_invocations(session_id);
+CREATE VIEW IF NOT EXISTS cache_efficiency AS
+SELECT
+    DATE(ts)                                                 AS day,
+    COUNT(*)                                                 AS total,
+    SUM(exit_tier = 0)                                       AS trivial,
+    SUM(exit_tier = 2)                                       AS cached,
+    SUM(exit_tier = 3)                                       AS claude_calls,
+    SUM(heuristic_fired)                                     AS heuristic_escalations,
+    ROUND(100.0 * SUM(exit_tier = 2) / COUNT(*), 1)         AS cache_hit_pct,
+    ROUND(AVG(CASE WHEN exit_tier=3 THEN ms_elapsed END), 0) AS avg_claude_ms
+FROM hook_invocations
+GROUP BY DATE(ts);
 """
 
 
@@ -70,6 +98,11 @@ def _connect() -> sqlite3.Connection:
     path = _db_path()
     path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     conn = sqlite3.connect(str(path), timeout=5.0, check_same_thread=False)
+    if sqlite3.sqlite_version_info < (3, 35, 0):
+        raise RuntimeError(
+            f"SQLite >= 3.35.0 required (got {sqlite3.sqlite_version}); "
+            "'CREATE VIEW IF NOT EXISTS' is not supported on older versions."
+        )
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA foreign_keys=ON")
     conn.executescript(_DDL)
@@ -160,18 +193,54 @@ def cache_record(
         pass  # never raise from cache — treat as no-op
 
 
+def invocations_record(
+    exit_tier: int,
+    verdict: str,
+    *,
+    session_id: str | None = None,
+    tool_name: str = "Bash",
+    heuristic_fired: bool = False,
+    heuristic_names: list[str] | None = None,
+    cache_source: str | None = None,
+    exact_hash: str | None = None,
+    ms_elapsed: int | None = None,
+) -> None:
+    """Record one hook invocation for analytics. Never raises."""
+    names_json = json.dumps(heuristic_names) if heuristic_names else None
+    now = _now()
+    try:
+        with _connect() as conn:
+            conn.execute(
+                "INSERT INTO hook_invocations "
+                "(ts,session_id,tool_name,exit_tier,heuristic_fired,"
+                "heuristic_names,verdict,cache_source,exact_hash,ms_elapsed) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?)",
+                (now, session_id, tool_name, exit_tier,
+                 1 if heuristic_fired else 0, names_json,
+                 verdict, cache_source, exact_hash, ms_elapsed),
+            )
+            conn.commit()
+    except sqlite3.Error:
+        pass
+
+
 def _prune_stale(conn: sqlite3.Connection) -> None:
-    """Delete entries older than _STALE_DAYS.
+    """Delete entries older than _STALE_DAYS from both cache tables.
 
     Uses strftime() to produce a cutoff string in %Y-%m-%dT%H:%M:%SZ format,
-    matching the stored validated_at format. bare datetime('now', '-90 days')
+    matching the stored ts/validated_at format. bare datetime('now', '-90 days')
     returns 'YYYY-MM-DD HH:MM:SS' (no T, no Z) and would never match stored
     rows in a text comparison.
     """
+    cutoff_expr = "strftime('%Y-%m-%dT%H:%M:%SZ', datetime('now', ?))"
+    cutoff_param = (f"-{int(_STALE_DAYS)} days",)
     conn.execute(
-        "DELETE FROM command_cache WHERE validated_at < "
-        "strftime('%Y-%m-%dT%H:%M:%SZ', datetime('now', ?))",
-        (f"-{int(_STALE_DAYS)} days",),
+        f"DELETE FROM command_cache WHERE validated_at < {cutoff_expr}",
+        cutoff_param,
+    )
+    conn.execute(
+        f"DELETE FROM hook_invocations WHERE ts < {cutoff_expr}",
+        cutoff_param,
     )
 
 
