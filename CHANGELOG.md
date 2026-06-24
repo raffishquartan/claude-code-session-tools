@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.15.1] - 2026-06-24
+
+### Fixed
+
+- `uv.lock` version reference updated to match `pyproject.toml` bump to 0.15.0.
+- CHANGELOG version-reference link table updated to include all releases since v0.11.0.
+
+### Documentation
+
+- Add superpowers design documents: last-screenshot hook spec and design, Claude.md bootstrap redesign plan.
+
 ## [0.15.0] - 2026-06-24
 
 ### Added
@@ -301,7 +312,12 @@ integration (push notifications when 8-digit confirmation gates fire).
 - `--version` flag on all three CLIs.
 - `.gitignore` entry for `.worktrees/`.
 
-[Unreleased]: https://github.com/raffishquartan/claude-code-session-tools/compare/v0.11.0...HEAD
+[Unreleased]: https://github.com/raffishquartan/claude-code-session-tools/compare/v0.15.1...HEAD
+[0.15.1]: https://github.com/raffishquartan/claude-code-session-tools/compare/v0.15.0...v0.15.1
+[0.15.0]: https://github.com/raffishquartan/claude-code-session-tools/compare/v0.14.0...v0.15.0
+[0.14.0]: https://github.com/raffishquartan/claude-code-session-tools/compare/v0.13.0...v0.14.0
+[0.13.0]: https://github.com/raffishquartan/claude-code-session-tools/compare/v0.12.0...v0.13.0
+[0.12.0]: https://github.com/raffishquartan/claude-code-session-tools/compare/v0.11.0...v0.12.0
 [0.11.0]: https://github.com/raffishquartan/claude-code-session-tools/compare/v0.10.1...v0.11.0
 [0.10.1]: https://github.com/raffishquartan/claude-code-session-tools/compare/v0.10.0...v0.10.1
 [0.10.0]: https://github.com/raffishquartan/claude-code-session-tools/compare/v0.9.0...v0.10.0
