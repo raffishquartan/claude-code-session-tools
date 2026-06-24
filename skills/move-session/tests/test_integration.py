@@ -529,3 +529,154 @@ class TestEmptyJsonlRefusedEarly:
         )
         assert rc == 0, f"{err}\n{out}"
         assert (dst_cwd / "cc-sessions" / "20260503-empty").is_dir()
+
+
+class TestTagFileDiscovery:
+    """Fix A: discover_session_jsonl must resolve the correct jsonl via the
+    .tag file when a RENAME has been performed but /rename hasn't run inside
+    CC yet (so custom_titles still contains the old tag, not the new one).
+
+    Scenario reproduced from the double-move investigation:
+      1. Two sessions exist on the same date (date-prefix fallback ambiguous).
+      2. One session is RENAME'd (writes .tag file, doesn't touch custom_titles).
+      3. A MOVE of the renamed session must succeed without --uuid."""
+
+    def test_move_after_rename_resolves_via_tag_file(
+            self, tmp_home, projects_root, roots_file, make_session):
+        """MOVE after RENAME (no /rename in CC): .tag file lookup resolves the
+        correct jsonl even when multiple same-date sessions exist."""
+        # Two sessions from the same date so date-prefix fallback is ambiguous.
+        src_dir_alpha, jsonl_alpha, uuid_alpha = make_session(
+            "src-proj", "20260601-alpha")
+        _, jsonl_beta, _ = make_session(
+            "src-proj", "20260601-beta")
+
+        # Simulate RENAME: copy cc-sessions dir, write .tag file, leave
+        # custom_titles unchanged (no /rename run in CC).
+        src_cwd = src_dir_alpha.parent.parent
+        renamed_dir = src_cwd / "cc-sessions" / "20260601-alpha-renamed"
+        renamed_dir.mkdir(parents=True)
+        (renamed_dir / "working").mkdir()
+        (renamed_dir / "out").mkdir()
+
+        key_dir = jsonl_alpha.parent
+        tag_file = key_dir / f"{uuid_alpha}.tag"
+        tag_file.write_text("alpha-renamed\n")
+        # custom_titles in the jsonl still has the OLD name: fine, that's the
+        # bug scenario. The .tag file is the only hint.
+
+        dst_cwd = projects_root / "dst-proj"
+        dst_cwd.mkdir()
+
+        rc, out, err = _run(
+            "--src-session", str(renamed_dir),
+            "--dst-cwd", str(dst_cwd),
+            "--execute",
+            env={"HOME": str(tmp_home)},
+        )
+        assert rc == 0, (
+            f"MOVE after RENAME failed; .tag file lookup did not work.\n"
+            f"stdout:\n{out}\nstderr:\n{err}"
+        )
+        # Correct uuid (alpha) was used, not beta.
+        dst_key_dir = tmp_home / ".claude" / "projects" / str(dst_cwd).replace("/", "-")
+        assert (dst_key_dir / f"{uuid_alpha}.jsonl").is_file(), (
+            f"Expected alpha uuid {uuid_alpha} in dst, but not found"
+        )
+
+    def test_single_session_still_works_without_tag_file(
+            self, tmp_home, projects_root, roots_file, make_session):
+        """Regression: with only one session in the project key (single-candidate
+        path, step 2), the .tag file step is skipped. Must still succeed."""
+        src_dir, _, uuid = make_session("proj", "20260601-solo")
+        dst_cwd = projects_root / "dst-proj"
+        dst_cwd.mkdir()
+
+        rc, out, err = _run(
+            "--src-session", str(src_dir),
+            "--dst-cwd", str(dst_cwd),
+            "--execute",
+            env={"HOME": str(tmp_home)},
+        )
+        assert rc == 0, f"{err}\n{out}"
+        assert (dst_cwd / "cc-sessions" / "20260601-solo").is_dir()
+
+
+class TestTombstoneChainWording:
+    """Fix B: TOMBSTONE.md and jsonl tombstone notice must include a
+    chain-traversal note so users following a double-moved session
+    know to follow the TOMBSTONE.md chain."""
+
+    def test_tombstone_md_includes_chain_note(
+            self, tmp_home, projects_root, roots_file, make_session):
+        """TOMBSTONE.md written by a MOVE must include the chain-traversal note."""
+        src_dir, _, uuid = make_session("src-proj", "20260601-source")
+        dst_cwd = projects_root / "dst-proj"
+        dst_cwd.mkdir()
+
+        rc, out, err = _run(
+            "--src-session", str(src_dir),
+            "--dst-cwd", str(dst_cwd),
+            "--uuid", uuid,
+            "--execute",
+            env={"HOME": str(tmp_home)},
+        )
+        assert rc == 0, f"{err}\n{out}"
+
+        tombstone_md = src_dir / "TOMBSTONE.md"
+        assert tombstone_md.is_file()
+        text = tombstone_md.read_text()
+        assert "follow the chain" in text, (
+            f"TOMBSTONE.md missing chain-traversal note:\n{text}"
+        )
+        assert "TOMBSTONE.md" in text
+
+    def test_jsonl_tombstone_notice_includes_chain_note(
+            self, tmp_home, projects_root, roots_file, make_session):
+        """The jsonl tombstone user-record content must include the chain note."""
+        src_dir, src_jsonl, uuid = make_session("src-proj", "20260601-source")
+        dst_cwd = projects_root / "dst-proj"
+        dst_cwd.mkdir()
+
+        rc, out, err = _run(
+            "--src-session", str(src_dir),
+            "--dst-cwd", str(dst_cwd),
+            "--uuid", uuid,
+            "--execute",
+            env={"HOME": str(tmp_home)},
+        )
+        assert rc == 0, f"{err}\n{out}"
+
+        # Read the appended tombstone records from the source jsonl.
+        records = [json.loads(l) for l in src_jsonl.read_text().splitlines() if l.strip()]
+        tombstone_user = next(
+            (r for r in records if r.get("type") == "user" and "[TOMBSTONE]" in
+             (r.get("message", {}).get("content", "") or "")),
+            None,
+        )
+        assert tombstone_user is not None, "No tombstone user record found in source jsonl"
+        notice_text = tombstone_user["message"]["content"]
+        assert "follow the chain" in notice_text, (
+            f"Jsonl tombstone notice missing chain note:\n{notice_text}"
+        )
+
+    def test_rename_tombstone_md_includes_chain_note(
+            self, tmp_home, projects_root, roots_file, make_session):
+        """RENAME-only TOMBSTONE.md must also include the chain-traversal note."""
+        src_dir, _, uuid = make_session("proj", "20260601-old-tag")
+
+        rc, out, err = _run(
+            "--src-session", str(src_dir),
+            "--rename-tag", "20260601-new-tag",
+            "--uuid", uuid,
+            "--execute",
+            env={"HOME": str(tmp_home)},
+        )
+        assert rc == 0, f"{err}\n{out}"
+
+        tombstone_md = src_dir / "TOMBSTONE.md"
+        assert tombstone_md.is_file()
+        text = tombstone_md.read_text()
+        assert "follow the chain" in text, (
+            f"RENAME TOMBSTONE.md missing chain note:\n{text}"
+        )
