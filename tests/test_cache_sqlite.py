@@ -17,6 +17,11 @@ def db(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     return tmp_path / "cache.db"
 
 
+def test_sha256_command_is_stable() -> None:
+    assert sha256_command("ls") == sha256_command("ls")
+    assert sha256_command("ls") != sha256_command("ls ")
+
+
 def test_lookup_empty_returns_none(db: Path) -> None:
     assert cache_lookup("sha256:abc") is None
 
