@@ -53,3 +53,59 @@ forces them to be at the terminal. For long-running agents (subagents,
 background tasks, /loop, scheduled routines) the user may be away from
 the keyboard when a gated action fires. A push notification means the
 agent does not silently stall.
+
+## Pending-rename marker accumulation and reminder noise
+
+The `move-session` skill drops a `.pending-rename` marker into a session's
+`cc-sessions/<tag>/` directory on any tag-changing (move/rename) operation.
+The SessionStart hook (`skills/move-session/hooks/sessionstart-pending-rename.sh`)
+then prints a per-marker reminder block on every session start. In practice
+these accumulate (one project had 84) and the reminder becomes persistent
+startup noise that the user stops acting on.
+
+Surfaced by an external config-review session
+(`20260620-claude-create-self-learning-skill`) as backlog item B-001.
+
+### Pre-existing test failures (fix first)
+
+`tests/test_hook.bats` has two failing tests against the current hook —
+cosmetic wording drift, not behaviour:
+
+- [ ] Test 4 ("surfaces a single marker...") expects the header
+  `Pending session-rename markers found`; the hook emits
+  `N pending session-rename marker(s) in this project`.
+- [ ] Test 6 ("emits copy-pastable /rename and rm commands...") expects
+  `INSIDE Claude Code`/`OUTSIDE Claude Code` (or `INSIDE CC`/`OUTSIDE CC`);
+  the hook emits `Inside CC:`/`Outside CC:`.
+
+Reconcile the hook and tests (pick one wording, update both) before adding
+new behaviour.
+
+### Proposed improvement — auto-prune fulfilled markers + terse reminder
+
+- [ ] **Auto-prune fulfilled markers.** A marker is *fulfilled* once the
+  session's picker label already matches its `tag`. The label lives as a
+  `custom-title` record in the session transcript jsonl — the same signal
+  `move_session.py:jsonl_summary()` already parses (keys: `title`,
+  `customTitle`, `content`, `value`). The hook can resolve the transcript at
+  `~/.claude/projects/<encoded-project-cwd>/<uuid>.jsonl` (encoding: replace
+  `/` and `.` in the cwd with `-`) and silently delete any marker whose
+  transcript contains a `custom-title` equal to the marker's `tag`.
+- [ ] **Collapse the reminder.** For markers that remain, print a 2-line
+  summary (count + the bulk-clear command) instead of the full per-marker
+  block. Keep the per-marker detail behind a flag or only when the count is
+  small (e.g. ≤ 3).
+- [ ] **Add a prune test** to `tests/test_hook.bats` (marker + matching
+  transcript custom-title → marker deleted, no output; marker + no match →
+  surfaced).
+
+### Caveat — auto-prune alone will not clear the existing backlog
+
+Markers are written only on a *move*. After a move, the transcript's
+`custom-title` is the *old* (creation-time) tag, not the new one, unless the
+user ran `/rename`. So for moved-but-never-renamed sessions there is no
+matching `custom-title` and the marker is *not* fulfilled — auto-prune will
+correctly leave it. Clearing a large existing backlog of never-renamed
+markers is a separate, explicit one-shot action
+(`find ~/cc -name .pending-rename -delete`), not something auto-prune should
+do silently.
