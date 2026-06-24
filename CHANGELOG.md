@@ -5,6 +5,49 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.15.0] - 2026-06-24
+
+### Added
+
+- **SQLite command cache** (`cache.py` rewrite). Replaces the CSV-backed
+  command cache with a WAL-mode SQLite database (`command-cache.db`).
+  Two-key lookup: `exact_hash` (SHA-256 of the exact command string) and
+  `norm_hash` (SHA-256 of the normalised form). Structurally identical
+  commands (e.g. `git checkout feature/a` and `git checkout feature/b`)
+  now share a cache entry without an exact-hash match. Stale entries
+  (> 90 days) are pruned automatically on every write; `cache_revalidate`
+  is removed (superseded by auto-prune). Concurrent-write safety via
+  SQLite WAL mode.
+- **Command normalisation** (`normalise.py`). Token-aware normalisation
+  that collapses variable arguments — branch names, paths, version strings,
+  UUIDs, dates, URLs, globs — into typed placeholders (`<ARGS>`, `<PATH>`,
+  `<DATE>`, `<UUID>`, etc.). Covers `git`, `find`, `npm`/`pip`/`cargo`,
+  and read-only builtins (`ls`, `cat`, `wc`, …).
+- **Hook invocation analytics** (`stats.py`, `hook_invocations` table).
+  Every `bash-security-review` invocation is now recorded in the SQLite
+  cache DB: exit tier (0 allowlist / 2 cache / 3 Claude), verdict,
+  whether a heuristic fired, exact hash, and elapsed milliseconds. A
+  `cache_efficiency` view aggregates hits vs total by verdict and tier.
+- **`cccs-stats` CLI.** New entry point (`cccs-stats`) for efficiency and
+  verdict reporting. Reads the `cache_efficiency` view and `hook_invocations`
+  table; outputs a human-readable summary and a `file://` URI for direct
+  DB inspection.
+- **No-emdash Stop hook** (`no_emdash.py`). Detects em-dashes (—) in
+  assistant responses and injects a correction prompt to replace them with
+  space-surrounded hyphens ( - ). Registered as a `Stop` hook in the bundle.
+- **move-session `.tag` file lookup** (step 4 in JSONL disambiguation).
+  After a RENAME the move-session skill writes `<uuid>.tag`; this step
+  resolves the disambiguation window between RENAME and the user running
+  `/rename` inside Claude Code (e.g. a MOVE immediately following a RENAME).
+
+### Fixed
+
+- `bash_security_review.py`: stale-entry filtering moved inside
+  `cache_lookup` (was a redundant second check in the caller).
+- `test_cache_sqlite.py`: concurrent-write test uses corruption-specific
+  assertions (fire_count per distinct key) rather than exact-count assertion,
+  eliminating a race-condition flake on macOS.
+
 ## [0.14.0] - 2026-06-22
 
 ### Added
