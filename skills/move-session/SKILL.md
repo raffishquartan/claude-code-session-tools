@@ -170,8 +170,9 @@ These rules are defined once in `scripts/cc_session_rules.py` and shared with `c
    1. `--uuid <id>` exact match wins (even hook-security transcripts).
    2. Single non-hook candidate -> use it.
    3. A `custom-title` record matching the cc-sessions tag (the strongest discriminator when present - written by `claude -n <tag>` at startup or by `/rename`).
-   4. Filter remaining candidates by YYYYMMDD prefix in the cc-sessions tag matched against the jsonl's first timestamp.
-   5. Otherwise list candidates and require `--uuid`.
+   4. A `.tag` file match: after a RENAME the script writes `<uuid>.tag` with the new tag suffix. `custom_titles` won't be updated until `/rename` runs inside CC, so this step resolves the window between RENAME and `/rename` (e.g. a MOVE that follows a RENAME before the user has run `/rename`).
+   5. Filter remaining candidates by YYYYMMDD prefix in the cc-sessions tag matched against the jsonl's first timestamp.
+   6. Otherwise list candidates and require `--uuid`.
 4. **Refuse early** if tombstoning is on (the default) and the source jsonl has no parseable records with a uuid - the tombstone path needs `last_record` and would otherwise crash deep inside the writer. The error names the offending jsonl and tells you to either fix it, pick a different source, or pass `--no-tombstone`.
 5. Refuses if any destination file already exists (clobber check).
 6. **On `--execute`:**

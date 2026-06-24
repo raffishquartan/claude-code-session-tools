@@ -313,9 +313,13 @@ def discover_session_jsonl(src_key_dir: Path, src_session_dir: Path, uuid_hint: 
     Resolution order:
       1. --uuid hint (exact match wins, even if it's a hook-security-check transcript).
       2. Single non-hook candidate -> use it.
-      3. If the tag has a YYYYMMDD- prefix, filter candidates to those whose first
-         timestamp falls on that calendar date.
-      4. If still ambiguous, list candidates and require --uuid.
+      3. Custom-title match: a custom-title record in the jsonl matches the cc-sessions
+         tag (written by `claude -n <tag>` at startup, or by /rename later).
+      4. .tag file match: after a RENAME the script writes <uuid>.tag with the new tag
+         suffix. custom_titles won't be updated until /rename runs inside CC, so this
+         step catches the window between RENAME and /rename.
+      5. Date-prefix fallback: filter by YYYYMMDD prefix vs jsonl first timestamp.
+      6. If still ambiguous, list candidates and require --uuid.
     """
     candidates = list_candidate_jsonls(src_key_dir)
     if uuid_hint:
@@ -333,15 +337,34 @@ def discover_session_jsonl(src_key_dir: Path, src_session_dir: Path, uuid_hint: 
         )
     if len(candidates) == 1:
         return candidates[0]
-    # Strongest discriminator: a custom-title record matching the cc-sessions tag
-    # (set by `claude -n <tag>` at startup, or by /rename later).
+    # Step 3: strongest discriminator — a custom-title record matching the cc-sessions
+    # tag (set by `claude -n <tag>` at startup, or by /rename later).
     tag = src_session_dir.name
     by_title = [c for c in candidates if tag in c.get("custom_titles", set())]
     if len(by_title) == 1:
         return by_title[0]
     if by_title:
         candidates = by_title  # narrow before next discriminator
-    # Fallback: tag date prefix vs jsonl first_ts date.
+    # Step 4: .tag file lookup. After a RENAME the script writes <uuid>.tag with the
+    # new tag suffix so that ccr <new-name> can resolve the jsonl before /rename
+    # updates custom_titles. Use the same file here to resolve MOVE/MOVE+RENAME that
+    # follow a RENAME without an intervening /rename in CC.
+    dm = DATE_PREFIX_RE.match(tag)
+    tag_suffix = dm.group(2) if dm else tag
+    by_tag_file: list[dict] = []
+    for c in candidates:
+        tag_file = src_key_dir / f"{c['path'].stem}.tag"
+        if tag_file.exists():
+            try:
+                if tag_file.read_text().strip() == tag_suffix:
+                    by_tag_file.append(c)
+            except OSError:
+                pass
+    if len(by_tag_file) == 1:
+        return by_tag_file[0]
+    if by_tag_file:
+        candidates = by_tag_file  # narrow before date-prefix step
+    # Step 5: date-prefix fallback — tag date vs jsonl first_ts.
     m = TAG_DATE_RE.match(src_session_dir.name)
     if m:
         iso_date = f"{m.group(1)}-{m.group(2)}-{m.group(3)}"
@@ -468,7 +491,9 @@ def make_tombstone_records(last_record: dict | None, src_session_dir: Path, dst_
         f"move-session skill on {ts_user}. The live transcript is now at:\n"
         f"  cc-sessions: {dst_session_dir}\n"
         f"  jsonl:       ~/.claude/projects/{encode_cwd(str(dst_session_dir.parent.parent.resolve()))}/{Path(last_record.get('sessionId', 'session')).name}.jsonl\n"
-        f"Continue work in the new location. This source transcript is preserved as a record."
+        f"Continue work in the new location. This source transcript is preserved as a record.\n"
+        f"If the destination listed above has itself been moved, follow the chain of "
+        f"TOMBSTONE.md files in each successive cc-sessions directory to find the current location."
     )
     user_record = {
         "parentUuid": parent_uuid,
@@ -536,7 +561,10 @@ def write_tombstone_md(src_session_dir: Path, dst_session_dir: Path, dst_jsonl: 
         f"- New transcript: `{dst_jsonl}`\n\n"
         f"Continue work in the new location. The source files here are preserved "
         f"as a record and can be deleted manually once you have verified the new "
-        f"location works.\n"
+        f"location works.\n\n"
+        f"If the destination folder above also contains a TOMBSTONE.md, the session "
+        f"has been moved again since this tombstone was written - follow the chain of "
+        f"TOMBSTONE.md files to find the current location.\n"
     )
     return md
 
