@@ -76,6 +76,7 @@ def test_hooks_install_bundle_all_hooks(tmp_path: Path) -> None:
                 all_cmds.add(h.get("command", ""))
     expected = {
         "ccst hooks run bash-security-review",
+        "ccst hooks run marker-allow",
         "ccst hooks run confirm-8digit",
         "ccst hooks run prompt-guard",
         "ccst hooks run edit-write-audit",
@@ -224,6 +225,7 @@ def test_bundle_json_confirm_8digit_has_no_matcher() -> None:
 
 ALL_HOOK_NAMES = (
     "bash-security-review",
+    "marker-allow",
     "confirm-8digit",
     "edit-write-audit",
     "prompt-guard",
