@@ -1,55 +1,57 @@
-"""SHA-256 command cache for bash-security-review.
+"""SQLite-backed command cache for bash-security-review.
 
-Stores reviewed-safe commands in a CSV at ~/.claude/hooks/command-cache.csv so
-the bash-security-review hook can skip the claude CLI escalation on repeats.
+Keys:
+  exact_hash  — SHA-256 of the exact command string (PRIMARY KEY)
+  norm_hash   — SHA-256 of the normalised command form (secondary index, NULLable)
 
-Cache write rules:
-- Only verdict=="safe" entries are auto-recorded (suspicious/dangerous never
-  cached).
-- 90-day re-validation window. Older entries are stale and trigger another
-  claude call on hit.
-- flock-protected writes; corruption on read returns a cache miss.
+Only 'safe' verdicts are stored. Auto-prunes entries older than 90 days on
+every write. WAL mode is set on open for concurrent read safety.
 
-NOTE: v1 uses exact-string SHA-256 hashing. A smarter matching strategy
-(e.g. light normalisation of git branch names, file paths, UUIDs) is
-planned for v2 but is deferred until we have telemetry data from
-~/.claude/hooks/fires.jsonl showing how big the near-miss class actually
-is. Do not add normalisation here without that data - the threat model
-changes when commands collapse to a shared key.
+Timestamp format: ISO-8601 with T separator and Z suffix (%Y-%m-%dT%H:%M:%SZ).
+The prune DELETE uses strftime() to produce a cutoff in the same format so the
+text comparison works correctly — bare datetime('now', '-90 days') returns
+'YYYY-MM-DD HH:MM:SS' (no T, no Z) and would never match stored rows.
+
+DB path: CCCS_CACHE_DB env var, else ~/.claude/hooks/command-cache.db
+
+Note: cache_revalidate from the previous CSV implementation is intentionally
+absent. Stale entries are pruned automatically on every cache_record() write
+(DELETE WHERE validated_at < 90 days ago). There are no valid stale entries
+to revalidate.
 """
 from __future__ import annotations
 
-import csv
 import dataclasses
 import datetime
-import fcntl
 import hashlib
 import os
-import sys
-from collections.abc import Callable
+import sqlite3
 from pathlib import Path
 
-_DEFAULT_CACHE_PATH = Path.home() / ".claude" / "hooks" / "command-cache.csv"
-_REVALIDATION_DAYS = 90.0
+_DEFAULT_DB = Path.home() / ".claude" / "hooks" / "command-cache.db"
+_STALE_DAYS = 90.0
 
-_CSV_FIELDS = [
-    "hash",
-    "verdict",
-    "risks_summary",
-    "command_preview",
-    "fire_count",
-    "last_seen",
-    "last_validated_at",
-    "cache_source",
-]
-
-_VALID_VERDICTS = frozenset({"safe", "suspicious", "dangerous"})
-_VALID_SOURCES = frozenset({"auto", "curated"})
+_DDL = """
+CREATE TABLE IF NOT EXISTS command_cache (
+    exact_hash    TEXT PRIMARY KEY,
+    norm_hash     TEXT,
+    verdict       TEXT    NOT NULL,
+    risks_summary TEXT    NOT NULL,
+    preview       TEXT    NOT NULL,
+    fire_count    INTEGER NOT NULL DEFAULT 1,
+    last_seen     TEXT    NOT NULL,
+    validated_at  TEXT    NOT NULL,
+    cache_source  TEXT    NOT NULL DEFAULT 'auto'
+);
+CREATE INDEX IF NOT EXISTS idx_norm ON command_cache(norm_hash)
+    WHERE norm_hash IS NOT NULL;
+"""
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
 class CacheEntry:
-    hash: str
+    exact_hash: str
+    norm_hash: str | None
     verdict: str
     risks_summary: str
     command_preview: str
@@ -59,286 +61,147 @@ class CacheEntry:
     cache_source: str
 
 
-def _resolve_path(cache_path: Path | None) -> Path:
-    if cache_path is not None:
-        return cache_path
-    env_override = os.environ.get("CCCS_CACHE_PATH")
-    if env_override:
-        return Path(env_override)
-    return _DEFAULT_CACHE_PATH
+def _db_path() -> Path:
+    env = os.environ.get("CCCS_CACHE_DB", "").strip()
+    return Path(env) if env else _DEFAULT_DB
+
+
+def _connect() -> sqlite3.Connection:
+    path = _db_path()
+    path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    conn = sqlite3.connect(str(path), timeout=5.0, check_same_thread=False)
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA foreign_keys=ON")
+    conn.executescript(_DDL)
+    conn.commit()
+    return conn
 
 
 def sha256_command(command: str) -> str:
-    """SHA-256 hex digest of the exact command string."""
-    return hashlib.sha256(command.encode("utf-8")).hexdigest()
+    return hashlib.sha256(command.encode()).hexdigest()
 
 
-def _now_iso() -> str:
+def _now() -> str:
     return datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-def _parse_iso(ts: str) -> datetime.datetime | None:
-    try:
-        return datetime.datetime.fromisoformat(ts.replace("Z", "+00:00"))
-    except (ValueError, AttributeError):
-        return None
+def _row_to_entry(row: tuple) -> CacheEntry:
+    exact, norm, verdict, risks, preview, fires, last_seen, validated_at, source = row
+    return CacheEntry(
+        exact_hash=exact,
+        norm_hash=norm,
+        verdict=verdict,
+        risks_summary=risks,
+        command_preview=preview,
+        fire_count=fires,
+        last_seen=last_seen,
+        last_validated_at=validated_at,
+        cache_source=source,
+    )
 
 
-def _row_to_entry(row: dict[str, str]) -> CacheEntry | None:
-    """Validate a CSV row and convert to a CacheEntry, or None if malformed."""
+def cache_lookup(exact_sha: str, norm_sha: str | None = None) -> CacheEntry | None:
+    """Return entry if exact_sha or norm_sha hits a fresh (non-stale) cache row."""
     try:
-        for f in _CSV_FIELDS:
-            if f not in row or row[f] is None:
+        with _connect() as conn:
+            row = conn.execute(
+                "SELECT exact_hash,norm_hash,verdict,risks_summary,preview,"
+                "fire_count,last_seen,validated_at,cache_source "
+                "FROM command_cache WHERE exact_hash=?",
+                (exact_sha,),
+            ).fetchone()
+            if row is None and norm_sha:
+                row = conn.execute(
+                    "SELECT exact_hash,norm_hash,verdict,risks_summary,preview,"
+                    "fire_count,last_seen,validated_at,cache_source "
+                    "FROM command_cache WHERE norm_hash=? LIMIT 1",
+                    (norm_sha,),
+                ).fetchone()
+            if row is None:
                 return None
-        if row["verdict"] not in _VALID_VERDICTS:
-            return None
-        if row["cache_source"] not in _VALID_SOURCES:
-            return None
-        if _parse_iso(row["last_seen"]) is None:
-            return None
-        if _parse_iso(row["last_validated_at"]) is None:
-            return None
-        fire_count = int(row["fire_count"])
-        if fire_count < 0:
-            return None
-        if not row["hash"]:
-            return None
-        return CacheEntry(
-            hash=row["hash"],
-            verdict=row["verdict"],
-            risks_summary=row["risks_summary"],
-            command_preview=row["command_preview"],
-            fire_count=fire_count,
-            last_seen=row["last_seen"],
-            last_validated_at=row["last_validated_at"],
-            cache_source=row["cache_source"],
-        )
-    except (ValueError, KeyError, TypeError):
-        return None
-
-
-def _parse_rows_from_text(text: str) -> list[CacheEntry]:
-    """Parse the raw CSV text into valid CacheEntry rows; warn on malformed."""
-    if not text.strip():
-        return []
-    entries: list[CacheEntry] = []
-    saw_malformed = False
-    import io
-
-    reader = csv.DictReader(io.StringIO(text))
-    if reader.fieldnames is None or set(_CSV_FIELDS) - set(reader.fieldnames):
-        sys.stderr.write(
-            "[telemetry-warn] cache: header invalid, treating as empty\n"
-        )
-        return []
-    for row in reader:
-        entry = _row_to_entry(row)
-        if entry is None:
-            saw_malformed = True
-            continue
-        entries.append(entry)
-    if saw_malformed:
-        sys.stderr.write("[telemetry-warn] cache: skipped malformed rows\n")
-    return entries
-
-
-def _read_all(path: Path) -> list[CacheEntry]:
-    """Read all valid entries from the cache CSV. Malformed rows are skipped."""
-    if not path.exists():
-        return []
-    try:
-        with path.open("r", newline="", encoding="utf-8") as f:
-            try:
-                fcntl.flock(f.fileno(), fcntl.LOCK_SH)
-            except OSError:
-                pass
-            try:
-                text = f.read()
-            finally:
-                try:
-                    fcntl.flock(f.fileno(), fcntl.LOCK_UN)
-                except OSError:
-                    pass
-    except OSError as e:
-        sys.stderr.write(f"[telemetry-warn] cache: read failed: {e}\n")
-        return []
-    return _parse_rows_from_text(text)
-
-
-def _serialize(entries: list[CacheEntry]) -> str:
-    import io
-
-    buf = io.StringIO()
-    writer = csv.DictWriter(buf, fieldnames=_CSV_FIELDS)
-    writer.writeheader()
-    for e in entries:
-        writer.writerow(dataclasses.asdict(e))
-    return buf.getvalue()
-
-
-def _with_exclusive_lock(
-    path: Path,
-    mutate: Callable[[list[CacheEntry]], list[CacheEntry]],
-) -> None:
-    """Acquire an exclusive flock on the cache file, read+mutate+write atomically.
-
-    Uses a sidecar lockfile (.lock) to keep the lock independent of the
-    truncate/rewrite cycle on the data file.
-    """
-    path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-    lock_path = path.with_suffix(path.suffix + ".lock")
-    lock_fd = os.open(str(lock_path), os.O_WRONLY | os.O_CREAT, 0o600)
-    try:
-        fcntl.flock(lock_fd, fcntl.LOCK_EX)
-        # Read current state under the lock.
-        current = _read_all(path)
-        new = mutate(current)
-        text = _serialize(new)
-        # Atomic replace: write to temp file then rename.
-        tmp = path.with_suffix(path.suffix + ".tmp")
-        fd = os.open(str(tmp), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-        try:
-            os.write(fd, text.encode("utf-8"))
-            os.fsync(fd)
-        finally:
-            os.close(fd)
-        os.replace(tmp, path)
-        os.chmod(path, 0o600)
-    finally:
-        try:
-            fcntl.flock(lock_fd, fcntl.LOCK_UN)
-        except OSError:
-            pass
-        os.close(lock_fd)
-
-
-def cache_lookup(sha: str, *, cache_path: Path | None = None) -> CacheEntry | None:
-    """Return the matching cache entry or None.
-
-    Treats any corruption/IO error as a cache miss. Logs warnings to stderr.
-    """
-    path = _resolve_path(cache_path)
-    try:
-        entries = _read_all(path)
-    except Exception as exc:  # belt-and-braces; never raise
-        sys.stderr.write(f"[telemetry-warn] cache: lookup failed: {exc}\n")
-        return None
-    for entry in entries:
-        if entry.hash == sha:
+            entry = _row_to_entry(row)
+            if cache_is_stale(cache_age_days_from_entry(entry)):
+                return None
             return entry
-    return None
+    except sqlite3.Error:
+        return None
 
 
 def cache_record(
-    sha: str,
+    exact_sha: str,
     verdict: str,
     risks_summary: str,
     command_preview: str,
     *,
-    cache_path: Path | None = None,
+    norm_sha: str | None = None,
 ) -> None:
-    """Append/update a cache entry. Only safe verdicts are auto-recorded.
-
-    If an entry with the same hash already exists, fire_count is incremented
-    and last_seen / last_validated_at are refreshed.
-    """
+    """Insert or update a cache entry. Only 'safe' verdicts are stored."""
     if verdict != "safe":
-        # Auto-fill rule: only safe verdicts go in the cache.
         return
-    path = _resolve_path(cache_path)
-
-    def mutate(entries: list[CacheEntry]) -> list[CacheEntry]:
-        now = _now_iso()
-        updated: list[CacheEntry] = []
-        found = False
-        for e in entries:
-            if e.hash == sha:
-                found = True
-                updated.append(
-                    CacheEntry(
-                        hash=sha,
-                        verdict=verdict,
-                        risks_summary=risks_summary,
-                        command_preview=command_preview,
-                        fire_count=e.fire_count + 1,
-                        last_seen=now,
-                        last_validated_at=now,
-                        cache_source=e.cache_source,
-                    )
-                )
-            else:
-                updated.append(e)
-        if not found:
-            updated.append(
-                CacheEntry(
-                    hash=sha,
-                    verdict=verdict,
-                    risks_summary=risks_summary,
-                    command_preview=command_preview,
-                    fire_count=1,
-                    last_seen=now,
-                    last_validated_at=now,
-                    cache_source="auto",
-                )
-            )
-        return updated
-
+    now = _now()
     try:
-        _with_exclusive_lock(path, mutate)
-    except OSError as e:
-        sys.stderr.write(f"[telemetry-warn] cache: record failed: {e}\n")
+        with _connect() as conn:
+            conn.execute(
+                """INSERT INTO command_cache
+                   (exact_hash,norm_hash,verdict,risks_summary,preview,
+                    fire_count,last_seen,validated_at,cache_source)
+                   VALUES (?,?,?,?,?,1,?,?,'auto')
+                   ON CONFLICT(exact_hash) DO UPDATE SET
+                       fire_count=fire_count+1,
+                       last_seen=excluded.last_seen,
+                       validated_at=excluded.validated_at,
+                       norm_hash=coalesce(excluded.norm_hash, norm_hash)
+                """,
+                (exact_sha, norm_sha, verdict, risks_summary, command_preview, now, now),
+            )
+            _prune_stale(conn)
+            conn.commit()
+    except sqlite3.Error:
+        pass  # never raise from cache — treat as no-op
 
 
-def cache_age_days(sha: str, *, cache_path: Path | None = None) -> float | None:
-    """Return the age in days of the entry's last_validated_at, or None."""
-    entry = cache_lookup(sha, cache_path=cache_path)
-    if entry is None:
+def _prune_stale(conn: sqlite3.Connection) -> None:
+    """Delete entries older than _STALE_DAYS.
+
+    Uses strftime() to produce a cutoff string in %Y-%m-%dT%H:%M:%SZ format,
+    matching the stored validated_at format. bare datetime('now', '-90 days')
+    returns 'YYYY-MM-DD HH:MM:SS' (no T, no Z) and would never match stored
+    rows in a text comparison.
+    """
+    conn.execute(
+        "DELETE FROM command_cache WHERE validated_at < "
+        "strftime('%Y-%m-%dT%H:%M:%SZ', datetime('now', ?))",
+        (f"-{int(_STALE_DAYS)} days",),
+    )
+
+
+def cache_age_days(sha: str) -> float | None:
+    """Return age of entry in days, or None if not found."""
+    try:
+        with _connect() as conn:
+            row = conn.execute(
+                "SELECT validated_at FROM command_cache WHERE exact_hash=?", (sha,)
+            ).fetchone()
+        if row is None:
+            return None
+        return _days_since(row[0])
+    except sqlite3.Error:
         return None
-    parsed = _parse_iso(entry.last_validated_at)
-    if parsed is None:
-        return None
-    now = datetime.datetime.now(datetime.timezone.utc)
-    delta = now - parsed
-    return delta.total_seconds() / 86400.0
+
+
+def cache_age_days_from_entry(entry: CacheEntry) -> float | None:
+    return _days_since(entry.last_validated_at)
+
+
+def _days_since(ts: str) -> float:
+    try:
+        dt = datetime.datetime.fromisoformat(ts.replace("Z", "+00:00"))
+        return (datetime.datetime.now(datetime.timezone.utc) - dt).total_seconds() / 86400
+    except ValueError:
+        return float("inf")
 
 
 def cache_is_stale(age_days: float | None) -> bool:
-    """True if age >= 90 days (or unknown). 89-day-old entries are still fresh."""
     if age_days is None:
         return True
-    return age_days >= _REVALIDATION_DAYS
-
-
-def cache_revalidate(
-    sha: str, new_verdict: str, *, cache_path: Path | None = None
-) -> None:
-    """Refresh last_validated_at for sha; remove entry if verdict flipped from safe."""
-    path = _resolve_path(cache_path)
-
-    def mutate(entries: list[CacheEntry]) -> list[CacheEntry]:
-        now = _now_iso()
-        updated: list[CacheEntry] = []
-        for e in entries:
-            if e.hash == sha:
-                if new_verdict != "safe":
-                    continue
-                updated.append(
-                    CacheEntry(
-                        hash=e.hash,
-                        verdict="safe",
-                        risks_summary=e.risks_summary,
-                        command_preview=e.command_preview,
-                        fire_count=e.fire_count,
-                        last_seen=e.last_seen,
-                        last_validated_at=now,
-                        cache_source=e.cache_source,
-                    )
-                )
-            else:
-                updated.append(e)
-        return updated
-
-    try:
-        _with_exclusive_lock(path, mutate)
-    except OSError as e:
-        sys.stderr.write(f"[telemetry-warn] cache: revalidate failed: {e}\n")
+    return age_days >= _STALE_DAYS

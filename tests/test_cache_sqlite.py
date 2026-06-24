@@ -1,0 +1,153 @@
+from __future__ import annotations
+
+import hashlib
+import sqlite3 as _sqlite3
+import datetime as _datetime
+from pathlib import Path
+
+import pytest
+
+from cccs_hooks.cache import CacheEntry, cache_lookup, cache_record, sha256_command
+
+
+@pytest.fixture
+def db(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    monkeypatch.setenv("CCCS_CACHE_DB", str(tmp_path / "cache.db"))
+    monkeypatch.delenv("CCCS_CACHE_PATH", raising=False)
+    return tmp_path / "cache.db"
+
+
+def test_sha256_command_is_stable() -> None:
+    assert sha256_command("ls") == sha256_command("ls")
+    assert sha256_command("ls") != sha256_command("ls ")
+
+
+def test_lookup_empty_returns_none(db: Path) -> None:
+    assert cache_lookup("sha256:abc") is None
+
+
+def test_record_then_lookup_returns_entry(db: Path) -> None:
+    sha = sha256_command("git status")
+    cache_record(sha, "safe", "none", "git status")
+    entry = cache_lookup(sha)
+    assert entry is not None
+    assert entry.verdict == "safe"
+    assert entry.fire_count == 1
+
+
+def test_record_twice_increments_fire_count(db: Path) -> None:
+    sha = sha256_command("git status")
+    cache_record(sha, "safe", "none", "git status")
+    cache_record(sha, "safe", "none", "git status")
+    entry = cache_lookup(sha)
+    assert entry is not None
+    assert entry.fire_count == 2
+
+
+def test_lookup_by_norm_hash_returns_entry(db: Path) -> None:
+    exact = sha256_command("git checkout feature/a")
+    norm = sha256_command("git checkout <ARGS>")
+    cache_record(exact, "safe", "none", "git checkout feature/a", norm_sha=norm)
+    # Different exact hash, same norm hash — should hit
+    new_exact = sha256_command("git checkout feature/b")
+    entry = cache_lookup(new_exact, norm_sha=norm)
+    assert entry is not None
+    assert entry.verdict == "safe"
+
+
+def test_only_safe_verdicts_are_recorded(db: Path) -> None:
+    sha = sha256_command("suspicious cmd")
+    cache_record(sha, "suspicious", "risky", "suspicious cmd")
+    assert cache_lookup(sha) is None
+
+
+def test_dangerous_verdict_not_stored(db: Path) -> None:
+    sha = sha256_command("rm -rf /")
+    cache_record(sha, "dangerous", "destroys filesystem", "rm -rf /")
+    assert cache_lookup(sha) is None
+
+
+def _bootstrap_schema(db: Path) -> None:
+    """Trigger schema creation by recording a dummy entry, then delete it."""
+    sha = sha256_command("bootstrap-schema-dummy")
+    cache_record(sha, "safe", "none", "bootstrap-schema-dummy")
+    conn = _sqlite3.connect(str(db))
+    conn.execute("DELETE FROM command_cache WHERE exact_hash=?", (sha,))
+    conn.commit()
+    conn.close()
+
+
+def test_stale_entry_not_returned(db: Path) -> None:
+    _bootstrap_schema(db)
+    old_ts = (
+        _datetime.datetime.now(_datetime.timezone.utc) - _datetime.timedelta(days=91)
+    ).strftime("%Y-%m-%dT%H:%M:%SZ")
+    # Synthetic key (not a real sha256_command output) — sufficient for this test
+    # since we insert and look up the same literal; format does not affect behaviour
+    stale_key = "deadbeef" + "0" * 56  # 64-char hex string like a real sha256 digest
+    conn = _sqlite3.connect(str(db))
+    conn.execute(
+        "INSERT INTO command_cache VALUES (?,NULL,'safe','none','cmd',1,?,?,'auto')",
+        (stale_key, old_ts, old_ts),
+    )
+    conn.commit()
+    conn.close()
+    assert cache_lookup(stale_key) is None
+
+
+def test_prune_removes_old_entries_on_write(db: Path) -> None:
+    _bootstrap_schema(db)
+    old_ts = (
+        _datetime.datetime.now(_datetime.timezone.utc) - _datetime.timedelta(days=91)
+    ).strftime("%Y-%m-%dT%H:%M:%SZ")
+    old_key = "cafebabe" + "0" * 56  # 64-char hex string like a real sha256 digest
+    conn = _sqlite3.connect(str(db))
+    conn.execute(
+        "INSERT INTO command_cache VALUES (?,NULL,'safe','none','old',1,?,?,'auto')",
+        (old_key, old_ts, old_ts),
+    )
+    conn.commit()
+    conn.close()
+    # Trigger a write — prune fires inside cache_record()
+    sha = sha256_command("git status")
+    cache_record(sha, "safe", "none", "git status")
+    conn2 = _sqlite3.connect(str(db))
+    rows = conn2.execute("SELECT exact_hash FROM command_cache").fetchall()
+    conn2.close()
+    hashes = [r[0] for r in rows]
+    assert old_key not in hashes
+    assert sha in hashes
+
+
+def test_concurrent_writes_do_not_corrupt(db: Path) -> None:
+    import threading
+    errors: list[Exception] = []
+
+    def write(i: int) -> None:
+        try:
+            sha = sha256_command(f"git status {i}")
+            cache_record(sha, "safe", "none", f"git status {i}")
+        except Exception as e:
+            errors.append(e)
+
+    threads = [threading.Thread(target=write, args=(i,)) for i in range(20)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    # assert not errors catches non-sqlite exceptions raised outside cache_record
+    # (cache_record itself swallows sqlite3.Error, so some writes may be silently
+    # lost under contention — that is acceptable cache-miss behaviour, not corruption).
+    assert not errors
+    conn = _sqlite3.connect(str(db))
+    rows = conn.execute(
+        "SELECT exact_hash, fire_count FROM command_cache"
+    ).fetchall()
+    conn.close()
+    # Corruption check: every successful write used a distinct SHA, so no row
+    # should have fire_count > 1 (that would mean two writes merged incorrectly).
+    assert all(fire == 1 for _, fire in rows), (
+        f"fire_count > 1 found — rows were incorrectly merged: {rows}"
+    )
+    # Sanity: at least half the writes must have landed (not all silently lost).
+    assert len(rows) >= 10, f"Too many writes silently lost: only {len(rows)}/20 written"

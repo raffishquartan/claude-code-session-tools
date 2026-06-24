@@ -22,6 +22,7 @@ import sys
 from pathlib import Path
 
 from cccs_hooks import cache as cache_mod
+from cccs_hooks import normalise as norm_mod
 from cccs_hooks.telemetry import TelemetryEntry, log_event, _shorten_cwd
 
 
@@ -233,6 +234,8 @@ def run(stdin_text: str) -> int:
 
     # ---- Tier 1: heuristic hit -> always escalate, never cache ----
     skip_cache = bool(hits)
+    norm_form = norm_mod.normalise(command) if not skip_cache else None
+    norm_sha  = cache_mod.sha256_command(norm_form) if norm_form else None
 
     # Only "non-trivial" commands continue past this gate to claude. The bash
     # original short-circuits when the command is borderline. Mirror that:
@@ -249,27 +252,25 @@ def run(stdin_text: str) -> int:
 
     # ---- Tier 2: cache lookup ----
     if use_cache and not skip_cache:
-        entry = cache_mod.cache_lookup(sha)
+        entry = cache_mod.cache_lookup(sha, norm_sha=norm_sha)
         if entry is not None:
-            age = cache_mod.cache_age_days(sha)
-            if not cache_mod.cache_is_stale(age):
-                # Fresh hit - emit cached review.
-                review = (
-                    f"[security review]\n"
-                    f"What it does: {entry.command_preview}\n"
-                    f"Risks: {entry.risks_summary}\n"
-                    f"Verdict: {entry.verdict}\n"
-                    f"(cached, source={entry.cache_source}, fires={entry.fire_count})"
-                )
-                sys.stderr.write(review + "\n")
-                _emit_telemetry(
-                    hi=hi,
-                    decision="allow",
-                    cache_state="hit",
-                    verdict=entry.verdict,
-                    sha=sha,
-                )
-                return 0
+            # cache_lookup already filters stale entries internally
+            review = (
+                f"[security review]\n"
+                f"What it does: {entry.command_preview}\n"
+                f"Risks: {entry.risks_summary}\n"
+                f"Verdict: {entry.verdict}\n"
+                f"(cached, source={entry.cache_source}, fires={entry.fire_count})"
+            )
+            sys.stderr.write(review + "\n")
+            _emit_telemetry(
+                hi=hi,
+                decision="allow",
+                cache_state="hit",
+                verdict=entry.verdict,
+                sha=sha,
+            )
+            return 0
 
     # ---- Tier 3: claude escalation ----
     claude_bin = _resolve_claude_bin()
@@ -313,6 +314,7 @@ def run(stdin_text: str) -> int:
             verdict,
             risks_summary=_extract_field(review_text, "RISKS") or "none",
             command_preview=_command_preview(command),
+            norm_sha=norm_sha,
         )
 
     _emit_telemetry(
