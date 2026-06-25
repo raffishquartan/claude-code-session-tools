@@ -576,11 +576,13 @@ The dispatcher reads the event payload from stdin, calls the matching module's
 
 `cccs_hooks.session_tag` is a **SessionStart** hook that writes a small tag file when a session is created via `ccd <tag>`:
 
-- File written: `~/.claude/projects/<encoded-cwd>/<session_id>.tag`
+- File written: `~/.cache/claude/session-tags/<session_id>.tag` (flat layout keyed by UUID; overrideable via `CCCS_SESSION_TAGS_DIR`)
 - File content: the `ccd` name tag (e.g. `oneshot-add-uuid-for-better-usage-mapping`)
 - If `CLD_SESSION_TAG` is not set (i.e. the session was not started by `ccd`), the hook exits silently.
 
 Claude Code stores each session as `~/.claude/projects/<encoded-cwd>/<uuid>.jsonl`. The display name (set by `ccd` via `claude -n`) survives only in ephemeral PID files that disappear when the process exits. The `.tag` file gives `claude-code-usage` and other tools a persistent, stable mapping from UUID to human name - so `--session-format name` shows `oneshot-add-uuid-for-better-usage-mapping` instead of `sess-8f3a2c1d`.
+
+To migrate existing `.tag` files from the old `~/.claude/projects/` location to the new flat cache dir, run `ccst tags migrate` (see the `tags migrate` subcommand).
 
 ### Last screenshot hook
 

@@ -25,9 +25,10 @@ sys.path.insert(0, _REPO_SRC)
 # Helpers shared by all tests
 # ---------------------------------------------------------------------------
 
-def _write_tag(transcript_dir: Path, uuid: str, tag: str) -> None:
-    transcript_dir.mkdir(parents=True, exist_ok=True)
-    (transcript_dir / f"{uuid}.tag").write_text(tag + "\n")
+def _write_tag(tags_dir: Path, uuid: str, tag: str) -> None:
+    """Write a .tag file to the flat tags dir."""
+    tags_dir.mkdir(parents=True, exist_ok=True)
+    (tags_dir / f"{uuid}.tag").write_text(tag + "\n")
 
 
 def _write_jsonl(path: Path, records: list[dict]) -> None:
@@ -40,6 +41,14 @@ def _write_jsonl(path: Path, records: list[dict]) -> None:
 def _transcript_dir(fake_home: Path, project: Path) -> Path:
     encoded = str(project).replace("/", "-").replace(".", "-")
     return fake_home / ".claude" / "projects" / encoded
+
+
+def _tags_dir_from_env() -> Path:
+    """Return the flat tags dir from CCCS_SESSION_TAGS_DIR env (set by fake_home fixture)."""
+    import os
+    override = os.environ.get("CCCS_SESSION_TAGS_DIR")
+    assert override, "CCCS_SESSION_TAGS_DIR must be set by the fake_home fixture"
+    return Path(override)
 
 
 def _make_empty_session(
@@ -56,7 +65,9 @@ def _make_empty_session(
 
     tag = basename.split("-", 1)[1]  # strip YYYYMMDD- prefix
     td = _transcript_dir(fake_home, project)
-    _write_tag(td, uuid, tag)
+    td.mkdir(parents=True, exist_ok=True)
+    # Write tag to the flat tags dir (new location, picked up via env var).
+    _write_tag(_tags_dir_from_env(), uuid, tag)
     _write_jsonl(td / f"{uuid}.jsonl", [
         {"type": "user", "isMeta": True, "message": {"content": "hook output"}},
     ])
@@ -77,7 +88,9 @@ def _make_nonempty_session(
 
     tag = basename.split("-", 1)[1]
     td = _transcript_dir(fake_home, project)
-    _write_tag(td, uuid, tag)
+    td.mkdir(parents=True, exist_ok=True)
+    # Write tag to the flat tags dir (new location, picked up via env var).
+    _write_tag(_tags_dir_from_env(), uuid, tag)
     _write_jsonl(td / f"{uuid}.jsonl", [
         {"type": "user", "isMeta": True, "message": {"content": "hook"}},
         {"type": "user", "message": {"content": "please help me"}},
@@ -96,6 +109,11 @@ def fake_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     (home / ".claude").mkdir()
     monkeypatch.setenv("HOME", str(home))
     monkeypatch.setattr(Path, "home", classmethod(lambda cls: home))
+    # Flat tags dir — set in env so the subprocess and in-process code
+    # both resolve to the same test-controlled location.
+    tags_dir = tmp_path / "session-tags"
+    tags_dir.mkdir()
+    monkeypatch.setenv("CCCS_SESSION_TAGS_DIR", str(tags_dir))
     return home
 
 

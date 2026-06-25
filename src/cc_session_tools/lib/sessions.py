@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -10,6 +11,17 @@ from typing import Iterator
 
 SESSION_BASENAME_RE = re.compile(r"^(\d{8})(?:-to-\d{8})?-")
 SESSION_FULL_RE = re.compile(r"^(\d{8})(?:-to-\d{8})?-(.+)$")
+
+DEFAULT_SESSION_TAGS_DIR: Path = Path.home() / ".cache" / "claude" / "session-tags"
+
+
+def _session_tags_dir() -> Path:
+    """Return the flat directory where .tag files are stored.
+
+    Overrideable via CCCS_SESSION_TAGS_DIR for testing and migration.
+    """
+    override = os.environ.get("CCCS_SESSION_TAGS_DIR")
+    return Path(override) if override else DEFAULT_SESSION_TAGS_DIR
 
 _ORPHAN_SENTINEL = "<orphan: no on-disk session dir>"
 
@@ -303,12 +315,13 @@ def find_jsonl_for_session(basename: str, project_dir: Path) -> Path | None:
     """Locate the JSONL transcript for a cc-sessions/<basename>/ directory.
 
     Strategy:
-      1. Read ~/.claude/projects/<encoded>/<uuid>.tag files (written by the
-         session-tag SessionStart hook). The tag file content matches the
-         session basename's suffix-after-date (e.g. "foo-bar" for basename
-         "20260516-foo-bar"). When a match is found, the corresponding
-         <uuid>.jsonl is the transcript.
-      2. Fall back to scanning JSONL `custom-title` records for a match.
+      1a. Check the flat tags dir (~/.cache/claude/session-tags/) for a
+          <uuid>.tag file matching each JSONL in the transcript dir. This is
+          the new location written by the session-tag hook.
+      1b. Backward-compat fallback: check for old-style <uuid>.tag files
+          still in the transcript dir (for sessions tagged before the migration
+          ran). This fallback can be removed after migration is confirmed complete.
+      2.  Fall back to scanning JSONL `custom-title` records for a match.
 
     Returns the resolved jsonl Path, or None if no match found.
     """
@@ -320,7 +333,19 @@ def find_jsonl_for_session(basename: str, project_dir: Path) -> Path | None:
     if suffix is None:
         return None
 
-    # Strategy 1: .tag files
+    # Strategy 1a: flat tags dir (new location)
+    tags_dir = _session_tags_dir()
+    for jsonl in transcript_dir.glob("*.jsonl"):
+        tag_path = tags_dir / f"{jsonl.stem}.tag"
+        if tag_path.is_file():
+            try:
+                content = tag_path.read_text().strip()
+            except OSError:
+                continue
+            if content == suffix or content == basename:
+                return jsonl
+
+    # Strategy 1b: old-style tag files still in transcript_dir (migration compatibility)
     for tag_file in transcript_dir.glob("*.tag"):
         try:
             content = tag_file.read_text().strip()

@@ -21,16 +21,20 @@ sys.path.insert(0, str(SCRIPTS_DIR))
 
 import delete_sessions as ds  # noqa: E402  (sys.path mutation first)
 
-from cc_session_tools.lib.sessions import transcript_dir_for_project  # noqa: E402
+from cc_session_tools.lib.sessions import (  # noqa: E402
+    _session_tags_dir,
+    transcript_dir_for_project,
+)
 
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _write_tag(transcript_dir: Path, uuid: str, tag: str) -> None:
-    transcript_dir.mkdir(parents=True, exist_ok=True)
-    (transcript_dir / f"{uuid}.tag").write_text(tag + "\n")
+def _write_tag(tags_dir: Path, uuid: str, tag: str) -> None:
+    """Write a .tag file to the flat tags dir."""
+    tags_dir.mkdir(parents=True, exist_ok=True)
+    (tags_dir / f"{uuid}.tag").write_text(tag + "\n")
 
 
 def _write_jsonl(path: Path, records: list[dict]) -> None:
@@ -54,7 +58,9 @@ def _make_empty_session(
 
     tag = basename.split("-", 1)[1]
     td = transcript_dir_for_project(project)
-    _write_tag(td, uuid, tag)
+    td.mkdir(parents=True, exist_ok=True)
+    # Write tag to the flat tags dir (respects CCCS_SESSION_TAGS_DIR).
+    _write_tag(_session_tags_dir(), uuid, tag)
     jsonl = td / f"{uuid}.jsonl"
     _write_jsonl(jsonl, [
         {"type": "user", "isMeta": True, "message": {"content": "hook output"}},
@@ -76,7 +82,9 @@ def _make_nonempty_session(
 
     tag = basename.split("-", 1)[1]
     td = transcript_dir_for_project(project)
-    _write_tag(td, uuid, tag)
+    td.mkdir(parents=True, exist_ok=True)
+    # Write tag to the flat tags dir (respects CCCS_SESSION_TAGS_DIR).
+    _write_tag(_session_tags_dir(), uuid, tag)
     jsonl = td / f"{uuid}.jsonl"
     _write_jsonl(jsonl, [
         {"type": "user", "isMeta": True, "message": {"content": "hook"}},
@@ -129,6 +137,10 @@ def fake_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     (home / ".claude").mkdir()
     monkeypatch.setenv("HOME", str(home))
     monkeypatch.setattr(Path, "home", classmethod(lambda cls: home))
+    # Flat tags dir for the new .tag file location.
+    tags_dir = tmp_path / "session-tags"
+    tags_dir.mkdir()
+    monkeypatch.setenv("CCCS_SESSION_TAGS_DIR", str(tags_dir))
     return home
 
 
@@ -314,7 +326,8 @@ class TestDryRunVsExecute:
         session_dir, jsonl = _make_empty_session(
             fake_home, project, "20260516-tag-test", uuid="tag-uuid"
         )
-        tag_file = jsonl.with_suffix(".tag")
+        # Tag file is now in the flat tags dir, keyed by UUID.
+        tag_file = _session_tags_dir() / "tag-uuid.tag"
         assert tag_file.exists()
         code = "87654321"
         with mock.patch.object(ds, "_generate_code", return_value=code):

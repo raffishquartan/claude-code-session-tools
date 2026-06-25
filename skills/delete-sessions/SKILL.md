@@ -74,7 +74,7 @@ accept filesystem paths — pass the basename, not the full path.
 |----------|------|
 | Session folder | `<project-cwd>/cc-sessions/<basename>/` |
 | JSONL transcript | `~/.claude/projects/<encoded-cwd>/<uuid>.jsonl` |
-| `.tag` file | `~/.claude/projects/<encoded-cwd>/<uuid>.tag` |
+| `.tag` file | `~/.cache/claude/session-tags/<uuid>.tag` (legacy: `~/.claude/projects/<encoded-cwd>/<uuid>.tag`) |
 | Tasks directory | `~/.claude/tasks/<encoded-session-dir>/` (if present, skipped with `--no-tasks`) |
 
 The dry-run plan prints the exact paths that would be deleted so you can

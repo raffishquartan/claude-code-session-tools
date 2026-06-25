@@ -17,6 +17,10 @@ Current subcommands:
   shell install                  Add the ccl() wrapper function to ~/.bashrc /
                                  ~/.zshrc between sentinel markers.
   shell uninstall                Remove the ccl() block from shell rc files.
+  tags migrate                   Migrate .tag files from ~/.claude/projects/**/*.tag
+                                 to ~/.cache/claude/session-tags/ (copy only;
+                                 source files not deleted — run the printed
+                                 find ... -delete after review).
   telemetry trim                 Trim ~/.claude/hooks/fires.jsonl by size / age.
   claude-md install              Add/update the inter-session-messaging block in
                                  ~/.claude/CLAUDE.md.
@@ -689,6 +693,22 @@ def _cmd_hooks_run(args: argparse.Namespace) -> int:
     return int(rc) if rc is not None else 0
 
 
+# ---------- tags migrate ----------
+
+
+def _cmd_tags_migrate(args: argparse.Namespace) -> int:
+    from cc_session_tools.cli.migrate_session_tags import main as migrate_main
+
+    argv: list[str] = []
+    if getattr(args, "dry_run", False):
+        argv.append("--dry-run")
+    if getattr(args, "tags_dir", None):
+        argv += ["--tags-dir", args.tags_dir]
+    if getattr(args, "projects_dir", None):
+        argv += ["--projects-dir", args.projects_dir]
+    return migrate_main(argv)
+
+
 # ---------- arg parser ----------
 
 
@@ -923,6 +943,39 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Hooks directory (default: ~/.claude/hooks/)",
     )
 
+    # ---- tags ----
+    tags_parser = sub.add_parser("tags", help="Tag file management commands")
+    tags_sub = tags_parser.add_subparsers(dest="verb", metavar="<verb>")
+    tags_sub.required = True
+
+    tags_migrate_parser = tags_sub.add_parser(
+        "migrate",
+        help=(
+            "Migrate .tag files from ~/.claude/projects/**/*.tag to "
+            "~/.cache/claude/session-tags/ (copy only; source files not deleted)"
+        ),
+    )
+    tags_migrate_parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Print what would be copied without writing anything.",
+    )
+    tags_migrate_parser.add_argument(
+        "--tags-dir",
+        default=None,
+        metavar="PATH",
+        help=(
+            "Override destination directory "
+            "(default: from CCCS_SESSION_TAGS_DIR or ~/.cache/claude/session-tags/)"
+        ),
+    )
+    tags_migrate_parser.add_argument(
+        "--projects-dir",
+        default=None,
+        metavar="PATH",
+        help="Override source projects directory (default: ~/.claude/projects/)",
+    )
+
     # ---- claude-md ----
     cmd_parser = sub.add_parser("claude-md", help="Manage the global CLAUDE.md messaging block")
     cmd_sub = cmd_parser.add_subparsers(dest="verb", metavar="<verb>")
@@ -973,6 +1026,10 @@ def main() -> None:
     if args.noun == "telemetry":
         if args.verb == "trim":
             sys.exit(_cmd_telemetry_trim(args))
+
+    if args.noun == "tags":
+        if args.verb == "migrate":
+            sys.exit(_cmd_tags_migrate(args))
 
     if args.noun == "claude-md":
         if args.verb == "install":
