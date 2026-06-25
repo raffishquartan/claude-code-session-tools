@@ -60,6 +60,12 @@
         "hooks": [
           {
             "type": "command",
+            "command": "ccst hooks run marker-allow",
+            "timeout": 5,
+            "statusMessage": "Checking for skill-marker touch..."
+          },
+          {
+            "type": "command",
             "command": "ccst hooks run bash-security-review",
             "timeout": 30,
             "statusMessage": "Reviewing shell command for security risks..."
