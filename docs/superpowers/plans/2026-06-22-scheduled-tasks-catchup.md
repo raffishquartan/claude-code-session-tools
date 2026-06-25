@@ -1,5 +1,7 @@
 # Scheduled-tasks Catch-up Implementation Plan
 
+> Note: as of 2026-06-25, the default telemetry path is `~/.cache/claude/logs/fires.jsonl`. The `~/.claude/hooks/` paths in this document are historical.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Make periodic local jobs (Tesco checks, calendar syncs, and any future argv) run on a declared cadence on a laptop that is frequently off, by turning the scheduler into a *reconciler* triggered on Claude Code `SessionStart` and `UserPromptSubmit`. On each session activity the hook does only the cheap part — reconcile (compute what is owed) and **launch each owed job as a detached background worker process**, then surface (reap) any previously-completed runs as an injected digest. Job commands run **off the session critical path**: a detached `ccsched _run-job` worker actually executes the command, records its own outcome to the ledger and state, and is reaped by a later session activity. This makes "never blocks or slows session start" absolute regardless of how slow or numerous the jobs are — the per-job timeout kills a *background* process, never the session. Ships inside CCST with the same packaging/installer/upgrade story as existing tooling.

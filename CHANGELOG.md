@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [next] - 2026-06-25
+
+### Changed
+
+- Default path for telemetry log (`fires.jsonl`) and rotation slots changed from
+  `~/.claude/hooks/` to `~/.cache/claude/logs/`. Override with `CCCS_HOOKS_DIR`.
+- Default path for command-cache DB changed from `~/.claude/hooks/command-cache.db`
+  to `~/.cache/claude/logs/command-cache.db`. Override with `CCCS_CACHE_DB`.
+- `command-cache.csv` retired; data migrated into `command-cache.db` (see migration
+  script `scripts/migrate_csv_to_db.py`).
+
 ## [0.15.1] - 2026-06-24
 
 ### Fixed

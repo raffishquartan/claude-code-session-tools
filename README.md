@@ -500,7 +500,7 @@ Two hooks drive scheduled catch-up without extra steps:
 Both hooks are included in the standard bundle and installed by
 `ccst hooks install --apply`. Surfacing is per-session (per-session cursor), so
 each session sees each completed run exactly once. Failures never block the
-session; every action is recorded to the shared `~/.claude/hooks/fires.jsonl`
+session; every action is recorded to the shared `~/.cache/claude/logs/fires.jsonl`
 telemetry ledger.
 
 ### `manage-recurring-cc-jobs-using-ccsched` skill
@@ -531,7 +531,7 @@ to make the hook library available. Hooks are invoked through `ccst hooks run <n
 
 | Module | Hook event | What it does |
 |---|---|---|
-| `cccs_hooks.telemetry` | — | Writes structured JSONL to `~/.claude/hooks/fires.jsonl`; used by other modules. Rotates at 10 MB (numbered slots: `fires.jsonl.1`, `.2`, `.3`). |
+| `cccs_hooks.telemetry` | — | Writes structured JSONL to `~/.cache/claude/logs/fires.jsonl`; used by other modules. Rotates at 10 MB (numbered slots: `fires.jsonl.1`, `.2`, `.3`). |
 | `cccs_hooks.transcript` | — | Walks parent session transcript JSONL; shared by `confirm_8digit`. |
 | `cccs_hooks.confirm_8digit` | PreToolUse | 8-digit confirmation guard for gated tools. |
 | `cccs_hooks.cache` | — | SHA-256 command cache (CSV); used by `bash_security_review`. |
@@ -770,7 +770,7 @@ Exit `0` if all checks are OK. Exit `1` if any check is WARN or FAIL.
 
 ### `ccst telemetry trim`
 
-Prune old hook telemetry data from `~/.claude/hooks/fires.jsonl`.
+Prune old hook telemetry data from `~/.cache/claude/logs/fires.jsonl`.
 
 ```sh
 # Remove entries older than 30 days, or if the file exceeds 5 MB

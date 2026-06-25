@@ -55,10 +55,10 @@ def test_fires_path_uses_hooks_dir(tmp_path: Path) -> None:
     assert _fires_path(tmp_path) == tmp_path / "fires.jsonl"
 
 
-def test_fires_path_defaults_to_dot_claude(tmp_path: Path) -> None:
+def test_fires_path_defaults_to_cache_logs(tmp_path: Path) -> None:
     p = _fires_path(None)
     assert p.name == "fires.jsonl"
-    assert ".claude" in str(p)
+    assert p.parent == Path.home() / ".cache" / "claude" / "logs"
 
 
 # ---------- trim_by_age ----------

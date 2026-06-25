@@ -98,11 +98,11 @@ def test_failure_path_writes_to_env_ledger_not_real_home(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     # The _dirs autouse fixture points CCCS_HOOKS_DIR at tmp_path/hooks. The bad-stdin
-    # failure path must log there, NOT to the real ~/.claude/hooks/fires.jsonl. If
+    # failure path must log there, NOT to the real ~/.cache/claude/logs/fires.jsonl. If
     # _log_failure ever drops the hooks_dir= argument, log_event falls back to
-    # Path.home()/.claude/hooks and this test fails. Guard the real home with a sentinel.
+    # Path.home()/.cache/claude/logs and this test fails. Guard the real home with a sentinel.
     # (Preserves the env-honouring ledger-routing fix.)
-    real_fires = Path.home() / ".claude" / "hooks" / "fires.jsonl"
+    real_fires = Path.home() / ".cache" / "claude" / "logs" / "fires.jsonl"
     before = real_fires.read_text() if real_fires.is_file() else None
     monkeypatch.setattr("sys.stdin", io.StringIO("not json"))
     _capture(monkeypatch)

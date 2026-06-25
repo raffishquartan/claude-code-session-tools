@@ -21,7 +21,7 @@ Current subcommands:
                                  to ~/.cache/claude/session-tags/ (copy only;
                                  source files not deleted — run the printed
                                  find ... -delete after review).
-  telemetry trim                 Trim ~/.claude/hooks/fires.jsonl by size / age.
+  telemetry trim                 Trim ~/.cache/claude/logs/fires.jsonl by size / age.
   claude-md install              Add/update the inter-session-messaging block in
                                  ~/.claude/CLAUDE.md.
   claude-md uninstall            Remove the messaging block from CLAUDE.md.
@@ -917,7 +917,7 @@ def _build_parser() -> argparse.ArgumentParser:
 
     telemetry_trim_parser = telemetry_sub.add_parser(
         "trim",
-        help="Trim ~/.claude/hooks/fires.jsonl by size and/or age",
+        help="Trim ~/.cache/claude/logs/fires.jsonl by size and/or age",
     )
     telemetry_trim_parser.add_argument(
         "--max-size",
@@ -940,7 +940,7 @@ def _build_parser() -> argparse.ArgumentParser:
         "--hooks-dir",
         default=None,
         metavar="DIR",
-        help="Hooks directory (default: ~/.claude/hooks/)",
+        help="Logs directory (default: ~/.cache/claude/logs/)",
     )
 
     # ---- tags ----

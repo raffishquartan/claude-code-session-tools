@@ -12,7 +12,7 @@ The prune DELETE uses strftime() to produce a cutoff in the same format so the
 text comparison works correctly — bare datetime('now', '-90 days') returns
 'YYYY-MM-DD HH:MM:SS' (no T, no Z) and would never match stored rows.
 
-DB path: CCCS_CACHE_DB env var, else ~/.claude/hooks/command-cache.db
+DB path: CCCS_CACHE_DB env var, else ~/.cache/claude/logs/command-cache.db
 
 Note: cache_revalidate from the previous CSV implementation is intentionally
 absent. Stale entries are pruned automatically on every cache_record() write
@@ -29,7 +29,7 @@ import os
 import sqlite3
 from pathlib import Path
 
-_DEFAULT_DB = Path.home() / ".claude" / "hooks" / "command-cache.db"
+_DEFAULT_DB = Path.home() / ".cache" / "claude" / "logs" / "command-cache.db"
 _STALE_DAYS = 90.0
 
 _DDL = """
