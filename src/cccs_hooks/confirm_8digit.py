@@ -32,6 +32,7 @@ import time
 from pathlib import Path
 from typing import Literal
 
+from cccs_hooks.markers import markers_dir
 from cccs_hooks.transcript import (
     TranscriptNotFound,
     Turn,
@@ -64,7 +65,7 @@ class VerificationResult:
 
 
 def _markers_dir() -> Path:
-    return Path.home() / ".claude" / "hooks" / "markers"
+    return markers_dir()
 
 
 def _marker_fresh(name: str) -> bool:

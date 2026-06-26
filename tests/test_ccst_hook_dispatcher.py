@@ -44,6 +44,7 @@ def test_every_known_verb_points_to_importable_module_with_main(verb: str) -> No
 def test_hook_verbs_covers_every_shim_module() -> None:
     expected = {
         "bash-security-review",
+        "marker-allow",
         "confirm-8digit",
         "prompt-guard",
         "edit-write-audit",

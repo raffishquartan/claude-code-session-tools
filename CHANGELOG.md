@@ -15,6 +15,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `no-emdash` dispatcher verb and description, and the `Stop` bundle entry.
   Uninstall it from an existing settings.json with
   `ccst hooks uninstall --hook no-emdash --apply`.
+  
+### Added
+
+- **`marker-allow` PreToolUse hook** (`cccs_hooks.marker_allow`). Returns a
+  PreToolUse `allow` decision for *exactly* a bare `touch <markers-dir>/<name>`
+  command, so marker-gated skills (e.g. do-tesco-shop) can refresh their
+  short-lived TTL marker under `~/.claude/hooks/markers/` without a permission
+  prompt. The match is deliberately tight: any shell metacharacter, extra
+  argument, flag, or out-of-directory path disqualifies the command, which then
+  falls through to the normal permission flow. The hook never denies or blocks.
+  Registered on the `Bash` matcher ahead of `bash-security-review`.
+- **`cccs_hooks.markers`** module exposing `markers_dir()` as the single source
+  of truth for the skill-marker directory, shared by `confirm_8digit` (which
+  honours fresh markers as gate exemptions) and `marker_allow`.
 
 ## [0.15.1] - 2026-06-24
 
