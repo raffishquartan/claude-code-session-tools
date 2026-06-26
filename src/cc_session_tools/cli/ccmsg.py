@@ -32,6 +32,7 @@ def _build_parser() -> argparse.ArgumentParser:
     rcpt.add_argument("--to-session", metavar="UUID")
     rcpt.add_argument("--to-project", metavar="NAME")
     rcpt.add_argument("--to-description", metavar="TEXT")
+    rcpt.add_argument("--to-session-tag", metavar="TAG")
     send_p.add_argument("--subject", required=True)
     body = send_p.add_mutually_exclusive_group(required=True)
     body.add_argument("--body")
@@ -77,10 +78,57 @@ def _build_parser() -> argparse.ArgumentParser:
     archive_p = sub.add_parser("archive", help="Manually archive a message.")
     archive_p.add_argument("id")
 
+    dl = sub.add_parser("sweep-dead-letters",
+                        help="Bounce/expire unread messages past a threshold.")
+    dl.add_argument("--threshold-days", type=int, default=14)
+    dl.add_argument("--dry-run", action="store_true")
+
     return p
 
 
-def _resolve_recipient(args: argparse.Namespace) -> tuple[ToKind, str]:
+def _resolve_session_tag_to_uuid(tag: str, sender_uuid: str) -> str:
+    from cc_session_tools.lib.messaging.tag_lookup import resolve_session_tag
+
+    if not tag.strip():
+        raise ValueError("--to-session-tag must not be empty")
+    matches = resolve_session_tag(tag)
+    if not matches:
+        raise ValueError(
+            f"no session found with tag '{tag}'. Run 'ccs' to list "
+            "sessions, or address by --to-session <uuid>."
+        )
+    live = [m for m in matches if m.is_live]
+    if len(live) == 1:
+        uuid = live[0].uuid
+        if uuid == sender_uuid:
+            raise ValueError(f"tag '{tag}' is this session; nothing to send")
+        if len(matches) > 1:
+            print(
+                f"ccmsg: tag '{tag}' → live session {uuid} "
+                f"({len(matches) - 1} stale match(es) ignored)",
+                file=sys.stderr,
+            )
+        return uuid
+    candidates = live if live else matches
+    header = (
+        "multiple live sessions"
+        if live
+        else "no live session; tag matches ended session(s)"
+    )
+    lines = "\n".join(f"  --to-session {m.uuid}" for m in candidates)
+    raise ValueError(f"tag '{tag}': {header}; re-send with one of:\n{lines}")
+
+
+def _resolve_recipient(args: argparse.Namespace, sender_uuid: str) -> tuple[ToKind, str]:
+    tag_val: str | None = args.to_session_tag
+    if tag_val is not None:
+        others = [args.to_session, args.to_project, args.to_description]
+        if any(v is not None for v in others):
+            raise ValueError(
+                "exactly one of --to-session / --to-project / --to-description / "
+                "--to-session-tag is required"
+            )
+        return "session", _resolve_session_tag_to_uuid(tag_val, sender_uuid)
     options: list[tuple[ToKind, str | None]] = [
         ("session", args.to_session),
         ("project", args.to_project),
@@ -89,7 +137,8 @@ def _resolve_recipient(args: argparse.Namespace) -> tuple[ToKind, str]:
     chosen = [(kind, val) for kind, val in options if val is not None]
     if len(chosen) != 1:
         raise ValueError(
-            "exactly one of --to-session / --to-project / --to-description is required"
+            "exactly one of --to-session / --to-project / --to-description / "
+            "--to-session-tag is required"
         )
     kind, val = chosen[0]
     assert val is not None  # the filter above guarantees this; narrows for mypy
@@ -153,10 +202,10 @@ def _cmd_send(args: argparse.Namespace) -> int:
     try:
         if not args.subject.strip():
             raise ValueError("subject must not be empty")
-        to_kind, to_value = _resolve_recipient(args)
+        from_uuid, from_session, from_project, from_partition = _resolve_sender(args)
+        to_kind, to_value = _resolve_recipient(args, from_uuid)
         body = _resolve_body(args)
         _validate_attachments(args.attach)
-        from_uuid, from_session, from_project, from_partition = _resolve_sender(args)
         to_partition = _resolve_to_partition(to_kind, to_value, args.to_partition)
     except ValueError as exc:
         print(f"ccmsg: {exc}", file=sys.stderr)
@@ -243,6 +292,28 @@ def _cmd_claim(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_sweep_dead_letters(args: argparse.Namespace) -> int:
+    if args.threshold_days < 0:
+        print("ccmsg: --threshold-days must be >= 0", file=sys.stderr)
+        return 2
+    from cc_session_tools.lib.messaging import dead_letter
+
+    results = dead_letter.sweep_dead_letters(
+        datetime.now(timezone.utc),
+        threshold_days=args.threshold_days,
+        dry_run=args.dry_run,
+    )
+    expired = sum(len(r.original_ids) for r in results if r.action in ("bounced", "dry-run"))
+    bounces = sum(1 for r in results if r.action == "bounced")
+    aged = sum(1 for r in results if r.action == "aged-out")
+    if args.dry_run:
+        dry_count = sum(1 for r in results if r.action == "dry-run")
+        print(f"would expire {expired} message(s) → {dry_count} bounce(s)")
+    else:
+        print(f"expired {expired} message(s) → {bounces} bounce(s); aged-out {aged} stale bounce(s)")
+    return 0
+
+
 def _cmd_archive(args: argparse.Namespace) -> int:
     try:
         service.archive(args.id, datetime.now(timezone.utc))
@@ -271,6 +342,8 @@ def main(argv: list[str] | None = None) -> int:
         return _cmd_claim(args)
     if args.command == "archive":
         return _cmd_archive(args)
+    if args.command == "sweep-dead-letters":
+        return _cmd_sweep_dead_letters(args)
     parser.print_help(sys.stderr)
     return 1
 

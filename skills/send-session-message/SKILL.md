@@ -25,6 +25,9 @@ is ambiguous**:
 2. `--to-project <name>` - any session in a named project.
 3. `--to-description "<text>"` - "whoever is working on X". Surfaced to candidate
    sessions; one claims it.
+4. `--to-session-tag <tag>` - a session by its `ccd` name tag. Auto-routes when
+   exactly one matching session is currently running; otherwise lists the matching
+   `--to-session <uuid>` candidates for you to pick (confirm with the user).
 
 If you are unsure which the user means, ask before sending.
 
