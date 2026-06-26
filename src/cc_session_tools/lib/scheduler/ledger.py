@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
 
-from cccs_hooks.telemetry import TelemetryEntry, log_event
+from cccs_hooks.telemetry import _DEFAULT_HOOKS_DIR, TelemetryEntry, log_event
 
 
 class LedgerEvent(str, Enum):
@@ -33,9 +33,13 @@ class LedgerEntry:
     consecutive_failures: int = 0
 
 
-def _hooks_dir() -> Path | None:
+def _hooks_dir() -> Path:
+    """The telemetry log directory: the CCCS_HOOKS_DIR override when set,
+    else the telemetry module's default. Single source of truth so the read
+    path (``_all_catchup_rows``) and the write path (``log_event``) can never
+    point at different directories."""
     raw = os.environ.get("CCCS_HOOKS_DIR")
-    return Path(raw) if raw else None
+    return Path(raw) if raw else _DEFAULT_HOOKS_DIR
 
 
 def record(entry: LedgerEntry) -> None:
@@ -71,8 +75,7 @@ def record(entry: LedgerEntry) -> None:
 
 def _all_catchup_rows() -> list[dict[str, object]]:
     """Every catch-up entry in fires.jsonl, oldest-first, with verdict unpacked."""
-    hooks_dir = _hooks_dir() or (Path.home() / ".claude" / "hooks")
-    fires = hooks_dir / "fires.jsonl"
+    fires = _hooks_dir() / "fires.jsonl"
     if not fires.is_file():
         return []
     rows: list[dict[str, object]] = []
