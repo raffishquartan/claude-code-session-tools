@@ -419,6 +419,32 @@ See `docs/design.md` for the full design and CLI contract.
 | `list` | List messages in compact form (ID, recipient, status, subject). |
 | `claim` | Claim a description-addressed message so no other session picks it up (first-claim-wins). |
 | `archive` | Manually archive a message without reading it. |
+| `sweep-dead-letters` | Bounce unread messages past a threshold back to their senders (one coalesced summary per sender) and archive the originals. Bounces are at-least-once: if interrupted, the next sweep re-processes unarchived remainders. System-generated bounces age out silently instead of being re-bounced. |
+
+### Sending by session name-tag
+
+`ccmsg send --to-session-tag <tag>` resolves a session's human-readable `ccd`
+name tag to its UUID:
+
+- **One live match** — routes automatically and prints a note to stderr if stale
+  matches were ignored.
+- **Multiple live matches** — exits with an error listing `--to-session <uuid>`
+  candidates so you can pick the right one.
+- **No live match** — exits with an error (tag matched only ended sessions) for
+  you to address by UUID instead.
+
+`ccs` lists current sessions and their tags if you need to look one up.
+
+### Scheduling the dead-letter sweep
+
+Register a daily sweep with the built-in scheduler:
+
+```sh
+ccsched add --id ccmsg-dead-letters --cadence 1d --command -- ccmsg sweep-dead-letters
+```
+
+Run once immediately with `ccsched run ccmsg-dead-letters`. The `--threshold-days`
+flag overrides the 14-day default; `--dry-run` previews without writing.
 
 ### Delivery hooks
 
