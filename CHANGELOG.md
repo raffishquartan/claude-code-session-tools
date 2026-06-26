@@ -15,6 +15,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   to `~/.cache/claude/logs/command-cache.db`. Override with `CCCS_CACHE_DB`.
 - `command-cache.csv` retired; data migrated into `command-cache.db` (see migration
   script `scripts/migrate_csv_to_db.py`).
+- Default directory for 8-digit-gate skill markers changed from
+  `~/.claude/hooks/markers/` to `~/.cache/claude/markers/`. Override with
+  `CCCS_MARKERS_DIR` (falls back to `$XDG_CACHE_HOME/claude/markers`). Marker
+  writers (e.g. the `do-tesco-shop` skill) must `touch` the new path.
 
 ## [0.15.1] - 2026-06-24
 
