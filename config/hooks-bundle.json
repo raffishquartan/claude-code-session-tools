@@ -98,12 +98,6 @@
             "command": "ccst hooks run session-end",
             "timeout": 10,
             "statusMessage": "Running end-of-session checks..."
-          },
-          {
-            "type": "command",
-            "command": "ccst hooks run no-emdash",
-            "timeout": 10,
-            "statusMessage": "Checking for em-dashes in response..."
           }
         ]
       }

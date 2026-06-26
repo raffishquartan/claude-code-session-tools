@@ -8,7 +8,7 @@ Current subcommands:
   hooks uninstall [--hook <name>] Remove hook entries from a target settings.json.
   hooks run <name>               Run a Claude Code hook by name.
                                  Available hooks: bash-security-review,
-                                 confirm-8digit, edit-write-audit, no-emdash,
+                                 confirm-8digit, edit-write-audit,
                                  prompt-guard, session-end, session-tag.
   skills install                 Symlink bundled skills into ~/.claude/skills/.
   skills uninstall [--skill <name>] Remove bundled skill symlinks.
@@ -43,7 +43,6 @@ HOOK_VERBS: dict[str, str] = {
     "confirm-8digit": "cccs_hooks.confirm_8digit",
     "prompt-guard": "cccs_hooks.prompt_guard",
     "edit-write-audit": "cccs_hooks.edit_write_audit",
-    "no-emdash": "cccs_hooks.no_emdash",
     "session-end": "cccs_hooks.session_end",
     "session-tag": "cccs_hooks.session_tag",
     "last-screenshot": "cccs_hooks.last_screenshot",
@@ -62,7 +61,6 @@ HOOK_DESCRIPTIONS: dict[str, str] = {
     "last-screenshot": "Resolves the newest screenshot for the >lss token and injects its path",
     "messaging-deliver": "Delivers inter-session messages (digest + auto-read + receipts) on session start and each prompt",
     "catchup": "Reconciles+launches missed scheduled jobs (ccsched) detached and surfaces a catch-up digest (SessionStart + UserPromptSubmit)",
-    "no-emdash": "Detects em-dashes (—) in assistant responses and injects a correction prompt to replace them with space-surrounded hyphens ( - )",
 }
 
 
