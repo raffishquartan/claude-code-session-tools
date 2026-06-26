@@ -32,6 +32,7 @@ import time
 from pathlib import Path
 from typing import Literal
 
+from cccs_hooks.markers import markers_dir
 from cccs_hooks.transcript import (
     TranscriptNotFound,
     Turn,

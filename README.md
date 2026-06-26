@@ -46,6 +46,7 @@ The repo ships seven CLIs, one shell helper, eight bundled skills, and ten bundl
 | **`prompt-guard`** (UserPromptSubmit) | Scans incoming prompts for credential shapes and injection patterns before they reach the model. |
 | **`last-screenshot`** (UserPromptSubmit) | Resolves your newest screenshot for the `>lss` token and injects its path. Requires `CCST_SCREENSHOT_DIR`. |
 | **`bash-security-review`** (PreToolUse) | Tiered Bash command security review with an allowlist cache and LLM fallback. |
+| **`marker-allow`** (PreToolUse) | Auto-approves a bare `touch` of a skill marker under `~/.claude/hooks/markers/` (and nothing else), so marker-gated skills can refresh their TTL marker without a permission prompt. |
 | **`confirm-8digit`** (PreToolUse) | Blocks a configurable set of high-stakes tool calls unless the user repeats back an 8-digit confirmation code. |
 | **`edit-write-audit`** (PostToolUse) | Audits file writes for sensitive paths and checks that WORKLOG.md is being maintained. |
 | **`session-end`** (Stop) | Nudges you to commit uncommitted changes and update WORKLOG.md when a session ends. |
@@ -536,6 +537,8 @@ to make the hook library available. Hooks are invoked through `ccst hooks run <n
 | `cccs_hooks.confirm_8digit` | PreToolUse | 8-digit confirmation guard for gated tools. |
 | `cccs_hooks.cache` | — | SHA-256 command cache (CSV); used by `bash_security_review`. |
 | `cccs_hooks.bash_security_review` | PreToolUse | Tiered Bash security review with cache. |
+| `cccs_hooks.marker_allow` | PreToolUse | Auto-approves a bare `touch` of a skill marker under `~/.claude/hooks/markers/`; silent otherwise. |
+| `cccs_hooks.markers` | — | Single source of truth for the skill-marker directory; shared by `confirm_8digit` and `marker_allow`. |
 | `cccs_hooks.edit_write_audit` | PostToolUse | Sensitive-path + WORKLOG audit. |
 | `cccs_hooks.prompt_guard` | UserPromptSubmit | Credential/injection pattern guard. |
 | `cccs_hooks.session_end` | Stop | WORKLOG/uncommitted-changes nudge. |
@@ -560,6 +563,7 @@ Where `<name>` is one of:
 | Verb | Module |
 |---|---|
 | `bash-security-review` | `cccs_hooks.bash_security_review` |
+| `marker-allow` | `cccs_hooks.marker_allow` |
 | `confirm-8digit` | `cccs_hooks.confirm_8digit` |
 | `prompt-guard` | `cccs_hooks.prompt_guard` |
 | `edit-write-audit` | `cccs_hooks.edit_write_audit` |

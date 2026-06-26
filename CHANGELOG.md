@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [next] - 2026-06-25
+## [Unreleased]
 
 ### Changed
 
@@ -19,6 +19,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `~/.claude/hooks/markers/` to `~/.cache/claude/markers/`. Override with
   `CCCS_MARKERS_DIR` (falls back to `$XDG_CACHE_HOME/claude/markers`). Marker
   writers (e.g. the `do-tesco-shop` skill) must `touch` the new path.
+
+### Added
+
+- **`marker-allow` PreToolUse hook** (`cccs_hooks.marker_allow`). Returns a
+  PreToolUse `allow` decision for *exactly* a bare `touch <markers-dir>/<name>`
+  command, so marker-gated skills (e.g. do-tesco-shop) can refresh their
+  short-lived TTL marker under `~/.claude/hooks/markers/` without a permission
+  prompt. The match is deliberately tight: any shell metacharacter, extra
+  argument, flag, or out-of-directory path disqualifies the command, which then
+  falls through to the normal permission flow. The hook never denies or blocks.
+  Registered on the `Bash` matcher ahead of `bash-security-review`.
+- **`cccs_hooks.markers`** module exposing `markers_dir()` as the single source
+  of truth for the skill-marker directory, shared by `confirm_8digit` (which
+  honours fresh markers as gate exemptions) and `marker_allow`.
 
 ## [0.15.1] - 2026-06-24
 
