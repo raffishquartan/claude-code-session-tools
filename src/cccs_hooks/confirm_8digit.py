@@ -13,9 +13,9 @@ If all three hold and the assistant-to-user reply gap is under 30 minutes,
 the call is allowed. Otherwise the hook either prints a warning (default,
 ``CCCS_ENFORCE_8DIGIT=warn``) or blocks with exit 2 (``=block``).
 
-Skill-marker exceptions live under ``~/.claude/hooks/markers/`` and have a
-1-hour TTL based on file mtime. Each marker permits a narrowly-scoped tool +
-input combination per CLAUDE.md.
+Skill-marker exceptions live under ``~/.cache/claude/markers/`` (override with
+the ``CCCS_MARKERS_DIR`` env var) and have a 1-hour TTL based on file mtime.
+Each marker permits a narrowly-scoped tool + input combination per CLAUDE.md.
 
 Fail-safe: when the transcript cannot be located the hook ALWAYS exits 2
 with a clear message, regardless of CCCS_ENFORCE_8DIGIT, because we cannot
@@ -65,7 +65,11 @@ class VerificationResult:
 
 
 def _markers_dir() -> Path:
-    return markers_dir()
+    custom = os.environ.get("CCCS_MARKERS_DIR")
+    if custom:
+        return Path(custom)
+    cache_home = os.environ.get("XDG_CACHE_HOME") or str(Path.home() / ".cache")
+    return Path(cache_home) / "claude" / "markers"
 
 
 def _marker_fresh(name: str) -> bool:

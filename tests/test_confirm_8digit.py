@@ -289,10 +289,37 @@ def test_marker_exception_tesco_happy_path(
 ) -> None:
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.setenv("CCCS_ENFORCE_8DIGIT", "block")
-    markers = tmp_path / ".claude" / "hooks" / "markers"
+    markers = tmp_path / ".cache" / "claude" / "markers"
+    monkeypatch.setenv("CCCS_MARKERS_DIR", str(markers))
     markers.mkdir(parents=True)
     (markers / "tesco_shop_active").write_text("")
     # No transcript exists - if marker did not short-circuit we'd block.
+    result = verify(
+        _hook_input(
+            tool_name="mcp__opentabs__tesco_create_order",
+            tool_input={},
+            session_id="any",
+        ),
+        GATED_TOOLS_DEFAULT,
+    )
+    assert result.exit_code == 0
+    assert "tesco_shop_active" in result.message
+
+
+def test_marker_default_dir_when_env_unset(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """With CCCS_MARKERS_DIR and XDG_CACHE_HOME both unset, _markers_dir()
+    must default to ``$HOME/.cache/claude/markers``. This exercises the
+    env-UNSET default branch, not just the explicit override."""
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.delenv("CCCS_MARKERS_DIR", raising=False)
+    monkeypatch.delenv("XDG_CACHE_HOME", raising=False)
+    monkeypatch.setenv("CCCS_ENFORCE_8DIGIT", "block")
+    markers = tmp_path / ".cache" / "claude" / "markers"
+    markers.mkdir(parents=True)
+    (markers / "tesco_shop_active").write_text("")
+    # No transcript exists - if the default-path marker is not found we'd block.
     result = verify(
         _hook_input(
             tool_name="mcp__opentabs__tesco_create_order",
@@ -310,7 +337,8 @@ def test_marker_exception_expired_treated_as_absent(
 ) -> None:
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.setenv("CCCS_ENFORCE_8DIGIT", "block")
-    markers = tmp_path / ".claude" / "hooks" / "markers"
+    markers = tmp_path / ".cache" / "claude" / "markers"
+    monkeypatch.setenv("CCCS_MARKERS_DIR", str(markers))
     markers.mkdir(parents=True)
     f = markers / "tesco_shop_active"
     f.write_text("")
@@ -336,7 +364,8 @@ def test_marker_telegram_requires_recipient_match(
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.setenv("TELEGRAM_CHAT_ID", "987654")
     monkeypatch.setenv("CCCS_ENFORCE_8DIGIT", "block")
-    markers = tmp_path / ".claude" / "hooks" / "markers"
+    markers = tmp_path / ".cache" / "claude" / "markers"
+    monkeypatch.setenv("CCCS_MARKERS_DIR", str(markers))
     markers.mkdir(parents=True)
     (markers / "telegram_notify").write_text("")
     # Wrong recipient - should NOT match the marker.
@@ -356,7 +385,8 @@ def test_marker_calendar_sync_email_requires_subject_prefix(
 ) -> None:
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.setenv("CCCS_ENFORCE_8DIGIT", "block")
-    markers = tmp_path / ".claude" / "hooks" / "markers"
+    markers = tmp_path / ".cache" / "claude" / "markers"
+    monkeypatch.setenv("CCCS_MARKERS_DIR", str(markers))
     markers.mkdir(parents=True)
     (markers / "calendar_sync_email").write_text("")
     result_ok = verify(

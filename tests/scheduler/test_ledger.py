@@ -7,6 +7,7 @@ import pytest
 
 from cc_session_tools.lib.scheduler import ledger
 from cc_session_tools.lib.scheduler.digest import Outcome
+from cccs_hooks import telemetry
 
 
 def test_record_then_read_recent(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -15,6 +16,27 @@ def test_record_then_read_recent(tmp_path: Path, monkeypatch: pytest.MonkeyPatch
         job_id="tesco", event=ledger.LedgerEvent.RUN, owed=1, ran=1,
         exit_code=0, duration_ms=42, error=None,
     ))
+    rows = ledger.read_recent(job_id="tesco")
+    assert len(rows) == 1
+    assert rows[0]["job_id"] == "tesco"
+    assert rows[0]["event"] == "run"
+
+
+def test_record_then_read_uses_default_dir_when_env_unset(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Production default: CCCS_HOOKS_DIR is unset, so both the write path
+    # (log_event) and the read path (_all_catchup_rows) must resolve to the
+    # telemetry module default dir. Point that default at tmp_path so the test
+    # never touches the real ledger, then assert read and write agree.
+    monkeypatch.delenv("CCCS_HOOKS_DIR", raising=False)
+    monkeypatch.setattr(telemetry, "_DEFAULT_HOOKS_DIR", tmp_path)
+    monkeypatch.setattr(ledger, "_DEFAULT_HOOKS_DIR", tmp_path)
+    ledger.record(ledger.LedgerEntry(
+        job_id="tesco", event=ledger.LedgerEvent.RUN, owed=1, ran=1,
+        exit_code=0, duration_ms=42, error=None,
+    ))
+    assert (tmp_path / "fires.jsonl").is_file()
     rows = ledger.read_recent(job_id="tesco")
     assert len(rows) == 1
     assert rows[0]["job_id"] == "tesco"

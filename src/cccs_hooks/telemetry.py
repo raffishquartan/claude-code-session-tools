@@ -1,10 +1,13 @@
-"""Hook-fire telemetry: writes structured JSONL to ~/.claude/hooks/fires.jsonl.
+"""Hook-fire telemetry: writes structured JSONL to ~/.cache/claude/logs/fires.jsonl.
 
 All bash hooks call this module via:
     echo "$INPUT" | python3 -m cccs_hooks.telemetry log --hook NAME ...
 
 Never raises — write failures are logged to stderr and silently suppressed so
 a telemetry error never blocks a hook.
+
+Override the directory with the CCCS_HOOKS_DIR env var (retained for test isolation
+and legacy overrides; now points at a logs directory, not a hooks directory).
 
 Rotation: when fires.jsonl exceeds _ROTATION_BYTES (default 10 MB), it is
 rotated to fires.jsonl.1; existing .1 shifts to .2, and so on up to
@@ -24,7 +27,7 @@ import sys
 from pathlib import Path
 from typing import Literal
 
-_DEFAULT_HOOKS_DIR = Path.home() / ".claude" / "hooks"
+_DEFAULT_HOOKS_DIR = Path.home() / ".cache" / "claude" / "logs"
 _ROTATION_BYTES = 10 * 1024 * 1024  # 10 MB
 _ROTATION_KEEP = 3
 

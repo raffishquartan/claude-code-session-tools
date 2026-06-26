@@ -1,15 +1,15 @@
-"""SessionStart hook: write <session_id>.tag into the CC projects directory.
+"""SessionStart hook: write <session_id>.tag into a flat cache directory.
 
 When CLD_SESSION_TAG is set (i.e. the session was started via ccd), writes a
 small tag file so that ccusage and other tools can map session UUIDs to the
 human-readable name tag assigned at session creation.
 
-File written:  ~/.claude/projects/<encoded-cwd>/<session_id>.tag
+File written:  ~/.cache/claude/session-tags/<session_id>.tag
+               (overrideable via CCCS_SESSION_TAGS_DIR env var)
 File content:  the session name tag, e.g. "oneshot-add-uuid-for-better-usage-mapping\n"
 
-Path encoding: Claude Code encodes the project cwd as the directory name under
-~/.claude/projects/ by replacing every non-alphanumeric character with '-'.
-This module uses the same encoding so the tag file lands in the correct directory.
+The flat layout (<dir>/<uuid>.tag) is viable because session IDs are globally
+unique UUIDs — no encoded-cwd subdirectory is needed.
 
 Runs silently when CLD_SESSION_TAG is not set (non-ccd sessions).
 Never raises — write failures are reported to stderr only.
@@ -22,7 +22,16 @@ import re
 import sys
 from pathlib import Path
 
-DEFAULT_PROJECTS_DIR = Path.home() / ".claude" / "projects"
+DEFAULT_SESSION_TAGS_DIR: Path = Path.home() / ".cache" / "claude" / "session-tags"
+
+
+def _session_tags_dir() -> Path:
+    """Return the directory where .tag files are written.
+
+    Overrideable via CCCS_SESSION_TAGS_DIR for testing and migration.
+    """
+    override = os.environ.get("CCCS_SESSION_TAGS_DIR")
+    return Path(override) if override else DEFAULT_SESSION_TAGS_DIR
 
 
 def encode_path(path: str) -> str:
@@ -34,6 +43,11 @@ def encode_path(path: str) -> str:
         /home/alice/.claude  -> -home-alice--claude   (the '.' also becomes '-')
         /mnt/c/Users/alice/repos/myproject
                              -> -mnt-c-Users-alice-repos-myproject
+
+    NOTE: encode_path() is no longer used for tag-file writing (tag files now
+    live in the flat ~/.cache/claude/session-tags/ directory keyed by UUID, not
+    by project cwd). It is kept because its documented contract is tested and
+    removing it is a separate cleanup commit.
     """
     return re.sub(r"[^a-zA-Z0-9]", "-", path)
 
@@ -66,9 +80,9 @@ def main(argv: list[str] | None = None) -> int:
     )
 
     try:
-        target_dir = DEFAULT_PROJECTS_DIR / encode_path(cwd)
-        target_dir.mkdir(parents=True, exist_ok=True)
-        tag_file = target_dir / f"{session_id}.tag"
+        tags_dir = _session_tags_dir()
+        tags_dir.mkdir(parents=True, exist_ok=True)
+        tag_file = tags_dir / f"{session_id}.tag"
         tag_file.write_text(tag + "\n")
     except OSError as exc:
         print(f"[session-tag] Failed to write tag file: {exc}", file=sys.stderr)

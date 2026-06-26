@@ -1,6 +1,6 @@
 """CLI for explicit telemetry pruning: ccst telemetry trim.
 
-Trims ~/.claude/hooks/fires.jsonl by:
+Trims ~/.cache/claude/logs/fires.jsonl by:
   --max-size <MB>      Rotate (gzip) any entries when the file exceeds this size.
   --max-age-days <N>   Drop JSONL lines older than N days from fires.jsonl.
 
@@ -20,7 +20,7 @@ import shutil
 import sys
 from pathlib import Path
 
-_DEFAULT_HOOKS_DIR = Path.home() / ".claude" / "hooks"
+_DEFAULT_HOOKS_DIR = Path.home() / ".cache" / "claude" / "logs"
 
 
 def _fires_path(hooks_dir: Path | None = None) -> Path:
@@ -159,7 +159,7 @@ def main(argv: list[str] | None = None) -> int:
     """Entry point for ``ccst telemetry trim``."""
     p = argparse.ArgumentParser(
         prog="ccst telemetry trim",
-        description="Trim ~/.claude/hooks/fires.jsonl by size and/or age.",
+        description="Trim ~/.cache/claude/logs/fires.jsonl by size and/or age.",
     )
     p.add_argument(
         "--max-size",
@@ -182,7 +182,7 @@ def main(argv: list[str] | None = None) -> int:
         "--hooks-dir",
         default=None,
         metavar="DIR",
-        help="Hooks directory (default: ~/.claude/hooks/)",
+        help="Logs directory (default: ~/.cache/claude/logs/)",
     )
     args = p.parse_args(argv)
 

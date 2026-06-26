@@ -11,7 +11,7 @@ if str(_SRC) not in sys.path:
 
 @pytest.fixture
 def tmp_hooks_dir(tmp_path: Path) -> Path:
-    """Temp directory standing in for ~/.claude/hooks/."""
+    """Temp directory standing in for ~/.cache/claude/logs/."""
     d = tmp_path / "hooks"
     d.mkdir(mode=0o700)
     return d
