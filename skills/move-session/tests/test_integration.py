@@ -559,8 +559,13 @@ class TestTagFileDiscovery:
         (renamed_dir / "working").mkdir()
         (renamed_dir / "out").mkdir()
 
-        key_dir = jsonl_alpha.parent
-        tag_file = key_dir / f"{uuid_alpha}.tag"
+        # Tag file now lives in the flat tags dir (new location).
+        # The tmp_home fixture sets CCCS_SESSION_TAGS_DIR so in-process lookups
+        # find it; we also pass it through to the subprocess env.
+        import os as _os
+        tags_dir = Path(_os.environ["CCCS_SESSION_TAGS_DIR"])
+        tags_dir.mkdir(parents=True, exist_ok=True)
+        tag_file = tags_dir / f"{uuid_alpha}.tag"
         tag_file.write_text("alpha-renamed\n")
         # custom_titles in the jsonl still has the OLD name: fine, that's the
         # bug scenario. The .tag file is the only hint.
@@ -572,7 +577,7 @@ class TestTagFileDiscovery:
             "--src-session", str(renamed_dir),
             "--dst-cwd", str(dst_cwd),
             "--execute",
-            env={"HOME": str(tmp_home)},
+            env={"HOME": str(tmp_home), "CCCS_SESSION_TAGS_DIR": str(tags_dir)},
         )
         assert rc == 0, (
             f"MOVE after RENAME failed; .tag file lookup did not work.\n"

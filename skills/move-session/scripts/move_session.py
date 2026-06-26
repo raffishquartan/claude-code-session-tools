@@ -46,6 +46,7 @@ from pathlib import Path
 # Import-* re-exports keep the existing test_validators.py module-attribute
 # access (`ms.validate_new_tag`, `ms.matched_session_root`, ...) working without
 # changes.
+from cc_session_tools.lib.sessions import _session_tags_dir
 from cc_session_rules import (  # noqa: F401  (re-exported for tests)
     DATE_PREFIX_RE,
     PROJECT_NAME_STRICT_RE,
@@ -349,11 +350,20 @@ def discover_session_jsonl(src_key_dir: Path, src_session_dir: Path, uuid_hint: 
     # new tag suffix so that ccr <new-name> can resolve the jsonl before /rename
     # updates custom_titles. Use the same file here to resolve MOVE/MOVE+RENAME that
     # follow a RENAME without an intervening /rename in CC.
+    # Tag files are now in the flat ~/.cache/claude/session-tags/ dir (keyed by UUID).
+    # Backward-compat: also check the old per-project location for tag files written
+    # before the migration ran.
     dm = DATE_PREFIX_RE.match(tag)
     tag_suffix = dm.group(2) if dm else tag
+    tags_dir = _session_tags_dir()
     by_tag_file: list[dict] = []
     for c in candidates:
-        tag_file = src_key_dir / f"{c['path'].stem}.tag"
+        uuid_stem = c["path"].stem
+        # New flat location
+        tag_file = tags_dir / f"{uuid_stem}.tag"
+        if not tag_file.exists():
+            # Backward-compat: old per-project location
+            tag_file = src_key_dir / f"{uuid_stem}.tag"
         if tag_file.exists():
             try:
                 if tag_file.read_text().strip() == tag_suffix:
@@ -926,7 +936,9 @@ def main() -> int:
         # the new project key dir.
         dst_tag_m = DATE_PREFIX_RE.match(dst_tag)
         dst_tag_suffix = dst_tag_m.group(2) if dst_tag_m else dst_tag
-        tag_file = dst_key_dir / f"{session_uuid}.tag"
+        flat_tags_dir = _session_tags_dir()
+        flat_tags_dir.mkdir(parents=True, exist_ok=True)
+        tag_file = flat_tags_dir / f"{session_uuid}.tag"
         tag_file.write_text(dst_tag_suffix + "\n")
         print(f"  wrote/updated .tag file: {tag_file}")
 

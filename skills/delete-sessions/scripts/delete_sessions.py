@@ -26,6 +26,7 @@ from pathlib import Path
 # or present via PYTHONPATH from the worktree src/ directory).
 from cc_session_tools.lib.sessions import (
     SESSION_BASENAME_RE,
+    _session_tags_dir,
     find_jsonl_for_session,
     is_empty_session,
     session_is_empty_safe,
@@ -207,10 +208,14 @@ def _artefacts_for_session(
     jsonl = find_jsonl_for_session(basename, project_dir)
     if jsonl is not None:
         artefacts.append(("JSONL transcript", jsonl))
-        # .tag file sits alongside the JSONL.
-        tag_file = jsonl.with_suffix(".tag")
-        if tag_file.exists():
-            artefacts.append((".tag file", tag_file))
+        # .tag file: check flat cache dir first (new location), then old
+        # per-project location (backward-compat for pre-migration files).
+        flat_tag = _session_tags_dir() / f"{jsonl.stem}.tag"
+        old_tag = jsonl.with_suffix(".tag")
+        if flat_tag.exists():
+            artefacts.append((".tag file", flat_tag))
+        if old_tag.exists():
+            artefacts.append((".tag file (legacy)", old_tag))
 
     # Tasks directory.
     if include_tasks:

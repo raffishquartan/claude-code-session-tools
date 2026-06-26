@@ -1,5 +1,7 @@
 # Scheduled-tasks catch-up for a frequently-off laptop
 
+> Note: as of 2026-06-25, the default telemetry path is `~/.cache/claude/logs/fires.jsonl`. The `~/.claude/hooks/` paths in this document are historical.
+
 - **Status:** Design — approved for spec-review (rev 2: detached execution + richer cadences)
 - **Date:** 2026-06-22
 - **Owner:** raffishquartan

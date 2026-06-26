@@ -38,8 +38,8 @@ def _emit(context: str, event: str) -> None:
 def _log_failure(reason: str) -> None:
     # Route through ledger._hooks_dir() so CCCS_HOOKS_DIR is honoured. telemetry.log_event
     # does NOT read CCCS_HOOKS_DIR itself (only telemetry.main() does), so without an
-    # explicit hooks_dir= this would write to the real ~/.claude/hooks/fires.jsonl even
-    # under tests that set CCCS_HOOKS_DIR — polluting the user's real ledger (§15).
+    # explicit hooks_dir= this would write to the real ~/.cache/claude/logs/fires.jsonl even
+    # under tests that set CCCS_HOOKS_DIR - polluting the user's real ledger (§15).
     log_event(
         TelemetryEntry(
             hook="catchup", event="", tool="", session_id="", cwd_short="",
