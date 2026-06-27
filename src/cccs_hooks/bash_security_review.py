@@ -155,6 +155,13 @@ def format_review_for_stderr(review_text: str, hits: list[str]) -> str:
 
 def call_claude(prompt: str, *, claude_bin: str, timeout: int) -> tuple[str | None, str | None]:
     """Run claude CLI. Return (review_text, error_message). Exactly one is non-None."""
+    _env = os.environ.copy()
+    # Give the sub-process its own distinct session identity so its SessionStart
+    # hook writes a .tag file that cannot collide with the parent session's tag.
+    # CLD_SESSION_DIR is intentionally kept: the sub-process belongs to the same
+    # session directory and its .last-opened write is harmless and correct.
+    _env["CLD_SESSION_TAG"] = f"bash-security-review-{time.strftime('%Y%m%d-%H%M')}"
+    _env["CLD_SESSION_MODE"] = "hook"
     try:
         result = subprocess.run(
             [claude_bin, "-p"],
@@ -162,6 +169,7 @@ def call_claude(prompt: str, *, claude_bin: str, timeout: int) -> tuple[str | No
             capture_output=True,
             text=True,
             timeout=timeout,
+            env=_env,
         )
     except FileNotFoundError:
         return None, "claude CLI not found"
