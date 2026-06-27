@@ -34,6 +34,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   of truth for the skill-marker directory, shared by `confirm_8digit` (which
   honours fresh markers as gate exemptions) and `marker_allow`.
 
+### Fixed
+
+- **`catchup` and `messaging-deliver` hooks read the wrong stdin field for the
+  event name.** They read `hookEventName` (camelCase - the *output* field name),
+  but Claude Code supplies the event on stdin as `hook_event_name` (snake_case).
+  The lookup always missed and fell back to a hardcoded default, so on every
+  `UserPromptSubmit` the `catchup` hook echoed `hookEventName: "SessionStart"`,
+  triggering `Hook returned incorrect event name: expected 'UserPromptSubmit'
+  but got 'SessionStart'`. `messaging-deliver` had the mirror bug (defaulting to
+  `UserPromptSubmit`, breaking SessionStart and forcing always-incremental
+  delivery). Both now read `hook_event_name`. Hook tests now feed the real
+  snake_case field and assert the echoed event matches the invoking event.
+- **`ccd` could permanently lock a name tag.** When a session failed to start
+  after `ccd` had created its `cc-sessions/<date>-<tag>/` scaffold (e.g. `claude`
+  aborted on a malformed `settings.json`), re-running `ccd <tag>` refused with
+  "already started today" while `ccr <tag>` could not resume a transcript that
+  was never written - leaving the tag unusable for the rest of the day. `ccd`
+  now reuses the existing directory when it belongs to an *empty* session (no
+  transcript, or a transcript with no user-typed messages), recovering the tag.
+  A directory whose transcript shows real user input is still treated as a
+  genuine duplicate and rejected.
+
 ### Removed
 
 - **No-emdash Stop hook** (`no_emdash.py`). The hook injected a correction

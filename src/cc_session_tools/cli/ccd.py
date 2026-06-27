@@ -15,6 +15,7 @@ from cc_session_tools.lib.roots import (
     load_session_roots,
     matched_session_root,
 )
+from cc_session_tools.lib.sessions import is_empty_session
 from cc_session_tools.lib.tasklist import id_for_project
 
 
@@ -165,7 +166,13 @@ def main(argv: list[str] | None = None) -> int:
     debug(f"tag: {tag!r}")
     debug(f"session_dir: {session_dir}")
 
-    if session_dir.exists():
+    # A leftover session_dir is only a blocker if it belongs to a session that
+    # actually received user input. A session that never started (e.g. claude
+    # aborted on a malformed settings.json, so no transcript exists) or that
+    # started but got no typed messages leaves behind only the empty scaffold
+    # dirs - that is safe to reuse, and reusing it is the ONLY way to recover,
+    # since ccr cannot resume a transcript that was never created.
+    if session_dir.exists() and not is_empty_session(session_name, real_pwd):
         print(
             f"ccd: session '{session_name}' already started today in this directory.",
             file=sys.stderr,
@@ -177,8 +184,11 @@ def main(argv: list[str] | None = None) -> int:
         )
         return 1
 
-    (session_dir / "working").mkdir(parents=True)
-    (session_dir / "out").mkdir(parents=True)
+    if session_dir.exists():
+        debug(f"reusing empty session dir: {session_dir}")
+
+    (session_dir / "working").mkdir(parents=True, exist_ok=True)
+    (session_dir / "out").mkdir(parents=True, exist_ok=True)
 
     # Build env for the SessionStart hook + task list. Drop any inherited
     # CLAUDE_CODE_TASK_LIST_ID so the new one (or absence of one) is authoritative.

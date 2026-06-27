@@ -80,7 +80,7 @@ def main(argv: list[str] | None = None) -> int:
         _log_failure("bad-stdin")
         _emit("", "SessionStart")
         return 0
-    event = str(data.get("hookEventName", "SessionStart"))
+    event = str(data.get("hook_event_name", "SessionStart"))
     uuid = str(data.get("session_id", "unknown"))
     now = _now()
     parse_error: str | None = None

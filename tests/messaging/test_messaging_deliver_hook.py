@@ -27,6 +27,26 @@ def _capture_failures(monkeypatch: pytest.MonkeyPatch) -> list[str]:
     return reasons
 
 
+def _capture_events(monkeypatch: pytest.MonkeyPatch) -> list[str]:
+    events: list[str] = []
+    monkeypatch.setattr(messaging_deliver, "_emit", lambda ctx, event: events.append(event))
+    return events
+
+
+@pytest.mark.parametrize("event", ["SessionStart", "UserPromptSubmit"])
+def test_emits_event_name_matching_invoking_event(
+    event: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Regression: the echoed hookSpecificOutput.hookEventName must match the
+    invoking event, read from the snake_case `hook_event_name` stdin field. The
+    old camelCase read defaulted to UserPromptSubmit and broke SessionStart."""
+    monkeypatch.setenv("CCST_MESSAGES_ROOT", str(tmp_path))
+    _stdin(monkeypatch, {"hook_event_name": event, "session_id": "u", "cwd": str(tmp_path)})
+    events = _capture_events(monkeypatch)
+    assert messaging_deliver.main() == 0
+    assert events == [event]
+
+
 def test_hook_emits_digest_for_addressed_message(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -43,7 +63,7 @@ def test_hook_emits_digest_for_addressed_message(
         to_kind="session", to_value="recipient-uuid", to_partition=partition,
         subject="Ping", body="b", attachments=[], thread=None,
     ))
-    _stdin(monkeypatch, {"hookEventName": "SessionStart", "session_id": "recipient-uuid", "cwd": str(cwd)})
+    _stdin(monkeypatch, {"hook_event_name": "SessionStart", "session_id": "recipient-uuid", "cwd": str(cwd)})
     emitted = _capture_emit(monkeypatch)
     rc = messaging_deliver.main()
     assert rc == 0
@@ -82,7 +102,7 @@ def test_hook_degrades_when_deliver_raises(
         raise OSError("disk gone")
 
     monkeypatch.setattr(service, "deliver", _boom)
-    _stdin(monkeypatch, {"hookEventName": "SessionStart", "session_id": "u", "cwd": str(tmp_path)})
+    _stdin(monkeypatch, {"hook_event_name": "SessionStart", "session_id": "u", "cwd": str(tmp_path)})
     emitted = _capture_emit(monkeypatch)
     reasons = _capture_failures(monkeypatch)
     rc = messaging_deliver.main()
@@ -106,7 +126,7 @@ def test_hook_does_not_resurface_after_first_sweep(
         to_kind="session", to_value="recipient-uuid", to_partition=partition,
         subject="Once", body="b", attachments=[], thread=None,
     ))
-    payload = {"hookEventName": "UserPromptSubmit", "session_id": "recipient-uuid", "cwd": str(cwd)}
+    payload = {"hook_event_name": "UserPromptSubmit", "session_id": "recipient-uuid", "cwd": str(cwd)}
     _stdin(monkeypatch, payload)
     out1 = _capture_emit(monkeypatch)
     messaging_deliver.main()

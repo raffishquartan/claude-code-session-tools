@@ -1,10 +1,17 @@
 from __future__ import annotations
 
+import json
+from datetime import datetime
 from pathlib import Path
 
 import pytest
 
 from cc_session_tools.cli import ccd
+from cc_session_tools.lib.sessions import (
+    _session_tags_dir,
+    session_tag,
+    transcript_dir_for_project,
+)
 
 
 @pytest.fixture
@@ -24,7 +31,35 @@ def fake_home(tmp_path, monkeypatch):
     home = tmp_path / "home"
     (home / ".claude").mkdir(parents=True)
     monkeypatch.setenv("HOME", str(home))
+    # Redirect the flat session-tags dir so transcript lookup is hermetic and
+    # never reads the developer's real ~/.cache/claude/session-tags.
+    monkeypatch.setenv("CCCS_SESSION_TAGS_DIR", str(tmp_path / "session-tags"))
     return home
+
+
+def _write_transcript(proj: Path, basename: str, *, user_typed: bool) -> Path:
+    """Fabricate a JSONL transcript for `basename` under proj's transcript dir.
+
+    user_typed=True  -> contains a real typed message (is_empty_session -> False).
+    user_typed=False -> contains only a SessionStart hook record (still "empty").
+    """
+    t_dir = transcript_dir_for_project(proj)
+    t_dir.mkdir(parents=True, exist_ok=True)
+    stem = f"uuid-{basename}"
+    tags_dir = _session_tags_dir()
+    tags_dir.mkdir(parents=True, exist_ok=True)
+    (tags_dir / f"{stem}.tag").write_text(session_tag(basename) or basename)
+    if user_typed:
+        rec = {"type": "user", "message": {"content": "do the thing"}}
+    else:
+        rec = {
+            "type": "user",
+            "isMeta": True,
+            "message": {"content": "<command-name>SessionStart</command-name>"},
+        }
+    jsonl = t_dir / f"{stem}.jsonl"
+    jsonl.write_text(json.dumps(rec) + "\n")
+    return jsonl
 
 
 def _set_repo_root(monkeypatch, path: Path) -> None:
@@ -184,26 +219,75 @@ def test_ccd_strict_root_missing_prefix_decline_exits_without_validation_error(
     assert "validation failed" not in err
 
 
-def test_ccd_rejects_duplicate_session_with_helpful_message(
+def test_ccd_rejects_duplicate_session_that_received_user_input(
     fake_home, tmp_path, monkeypatch, capsys, captured_launch
 ):
+    """A leftover dir whose transcript shows real user input is a genuine
+    duplicate: ccd must refuse and point at ccr."""
     repos = tmp_path / "repos"
     proj = repos / "myproj"
     proj.mkdir(parents=True)
     _set_repo_root(monkeypatch, repos)
     monkeypatch.chdir(proj)
 
-    # Pre-create the session dir for today's date.
-    from datetime import datetime
     date_str = datetime.now().strftime("%Y%m%d")
-    existing = proj / "cc-sessions" / f"{date_str}-mytag"
-    existing.mkdir(parents=True)
+    basename = f"{date_str}-mytag"
+    (proj / "cc-sessions" / basename).mkdir(parents=True)
+    _write_transcript(proj, basename, user_typed=True)
 
     rc = ccd.main(["mytag"])
     assert rc == 1
     err = capsys.readouterr().err
     assert "already started today" in err
     assert "ccr" in err  # remediation hint
+
+
+def test_ccd_reuses_empty_session_dir_with_no_transcript(
+    fake_home, tmp_path, monkeypatch, capsys, captured_launch
+):
+    """A leftover scaffold dir from a session that never started (no transcript,
+    e.g. claude aborted on a malformed settings.json) must be reusable - it is
+    the only way to recover, since ccr cannot resume a non-existent transcript."""
+    repos = tmp_path / "repos"
+    proj = repos / "myproj"
+    proj.mkdir(parents=True)
+    _set_repo_root(monkeypatch, repos)
+    monkeypatch.chdir(proj)
+
+    date_str = datetime.now().strftime("%Y%m%d")
+    existing = proj / "cc-sessions" / f"{date_str}-mytag"
+    (existing / "working").mkdir(parents=True)
+    (existing / "out").mkdir(parents=True)
+
+    rc = ccd.main(["mytag"])
+    assert rc == 0, capsys.readouterr().err
+    # Launched claude for the reused session name.
+    cmd = captured_launch["cmd"]
+    assert cmd[cmd.index("-n") + 1] == f"{date_str}-mytag"
+    # Scaffold dirs still present (mkdir exist_ok did not blow up).
+    assert (existing / "working").is_dir()
+    assert (existing / "out").is_dir()
+
+
+def test_ccd_reuses_session_dir_with_only_hook_transcript(
+    fake_home, tmp_path, monkeypatch, capsys, captured_launch
+):
+    """A dir whose transcript holds only SessionStart hook output (no user-typed
+    message) counts as empty and is reused rather than blocking the tag."""
+    repos = tmp_path / "repos"
+    proj = repos / "myproj"
+    proj.mkdir(parents=True)
+    _set_repo_root(monkeypatch, repos)
+    monkeypatch.chdir(proj)
+
+    date_str = datetime.now().strftime("%Y%m%d")
+    basename = f"{date_str}-mytag"
+    (proj / "cc-sessions" / basename).mkdir(parents=True)
+    _write_transcript(proj, basename, user_typed=False)
+
+    rc = ccd.main(["mytag"])
+    assert rc == 0, capsys.readouterr().err
+    assert captured_launch["cmd"][0] == "claude"
 
 
 def test_cld_session_dir_is_absolute(fake_home, tmp_path, monkeypatch, captured_launch):
