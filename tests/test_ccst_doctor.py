@@ -331,7 +331,7 @@ def test_run_all_checks_includes_hook_checks(tmp_path: Path) -> None:
         skip_pypi=True,
     )
     hook_checks = [r for r in results if r.name.startswith("hook:")]
-    assert len(hook_checks) == 11  # all bundled hooks
+    assert len(hook_checks) == 10  # all bundled hooks
 
 
 def test_run_all_checks_warns_for_missing_hooks(tmp_path: Path) -> None:

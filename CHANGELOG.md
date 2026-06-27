@@ -6,7 +6,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
-
+  
 ### Changed
 
 - Default path for telemetry log (`fires.jsonl`) and rotation slots changed from
@@ -33,6 +33,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`cccs_hooks.markers`** module exposing `markers_dir()` as the single source
   of truth for the skill-marker directory, shared by `confirm_8digit` (which
   honours fresh markers as gate exemptions) and `marker_allow`.
+
+### Removed
+
+- **No-emdash Stop hook** (`no_emdash.py`). The hook injected a correction
+  prompt whenever an assistant response contained an em-dash, but in practice
+  it was noisy and unreliable. Removed the hook module, its test, the
+  `no-emdash` dispatcher verb and description, and the `Stop` bundle entry.
+  Uninstall it from an existing settings.json with
+  `ccst hooks uninstall --hook no-emdash --apply`.
 
 ## [0.15.1] - 2026-06-24
 
