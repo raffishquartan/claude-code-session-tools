@@ -25,6 +25,9 @@ Current subcommands:
   claude-md install              Add/update the inter-session-messaging block in
                                  ~/.claude/CLAUDE.md.
   claude-md uninstall            Remove the messaging block from CLAUDE.md.
+  install-everything             Run all install steps (skills, hooks, shell,
+                                 claude-md) then health-check. Dry run by default;
+                                 pass --apply to write changes.
 """
 from __future__ import annotations
 
@@ -746,6 +749,87 @@ def _cmd_tags_migrate(args: argparse.Namespace) -> int:
     return migrate_main(argv)
 
 
+# ---------- install-everything ----------
+
+
+_INSTALL_STEPS: list[tuple[str, str]] = [
+    ("1/5  Skills",          "skills"),
+    ("2/5  Hooks",           "hooks"),
+    ("3/5  Shell helpers",   "shell"),
+    ("4/5  Global CLAUDE.md", "claude-md"),
+    ("5/5  Health check",    "doctor"),
+]
+
+
+def _cmd_install_everything(args: argparse.Namespace) -> int:
+    """Run all install steps in sequence, then health-check."""
+    apply: bool = args.apply
+    no_pypi: bool = args.no_pypi
+
+    steps: list[tuple[str, str, object]] = [
+        (
+            "1/5  Skills",
+            "skills",
+            argparse.Namespace(source=None, target=None, apply=apply, force=False),
+        ),
+        (
+            "2/5  Hooks",
+            "hooks",
+            argparse.Namespace(
+                source=None,
+                hook=None,
+                target=str(Path.home() / ".claude" / "settings.json"),
+                apply=apply,
+            ),
+        ),
+        (
+            "3/5  Shell helpers",
+            "shell",
+            argparse.Namespace(apply=apply, rc_file=None),
+        ),
+        (
+            "4/5  Global CLAUDE.md",
+            "claude-md",
+            argparse.Namespace(target=None, apply=apply),
+        ),
+    ]
+
+    dispatch: dict[str, object] = {
+        "skills": _cmd_skills_install,
+        "hooks": _cmd_hooks_install,
+        "shell": _cmd_shell_install,
+        "claude-md": _cmd_claude_md_install,
+    }
+
+    overall_rc = 0
+    for label, key, step_args in steps:
+        print(f"\n=== {label} ===")
+        rc = dispatch[key](step_args)  # type: ignore[operator]
+        if rc != 0:
+            overall_rc = rc
+
+    print("\n=== 5/5  Health check ===")
+    _cmd_doctor(
+        argparse.Namespace(
+            settings=None,
+            skills_dir=None,
+            no_pypi=no_pypi,
+            drift=False,
+            mute=None,
+            unmute=None,
+            list_mutes=False,
+            mutes_file=None,
+            mode=None,
+        )
+    )
+
+    if not apply:
+        print("\nDry run complete — re-run with --apply to write all changes.")
+    else:
+        print("\nAll install steps complete.")
+    return overall_rc
+
+
 # ---------- arg parser ----------
 
 
@@ -1061,6 +1145,25 @@ def _build_parser() -> argparse.ArgumentParser:
                                help="CLAUDE.md path (default: ~/.claude/CLAUDE.md)")
     cmd_uninstall.add_argument("--apply", action="store_true", help="Write changes (default: dry run)")
 
+    # ---- install-everything ----
+    ie_parser = sub.add_parser(
+        "install-everything",
+        help=(
+            "Run all install steps (skills, hooks, shell, claude-md) then health-check. "
+            "Dry run by default; pass --apply to write changes."
+        ),
+    )
+    ie_parser.add_argument(
+        "--apply",
+        action="store_true",
+        help="Write changes (default: dry run)",
+    )
+    ie_parser.add_argument(
+        "--no-pypi",
+        action="store_true",
+        help="Skip the PyPI version-drift check in the final health-check",
+    )
+
     return parser
 
 
@@ -1108,6 +1211,9 @@ def main() -> None:
             sys.exit(_cmd_claude_md_install(args))
         if args.verb == "uninstall":
             sys.exit(_cmd_claude_md_uninstall(args))
+
+    if args.noun == "install-everything":
+        sys.exit(_cmd_install_everything(args))
 
 
 if __name__ == "__main__":
