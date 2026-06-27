@@ -340,6 +340,9 @@ def format_results(results: list[CheckResult]) -> str:
     lines = []
     for r in results:
         lines.append(f"[{r.status.value:<4}] {r.name:<{name_w}}  {r.reason}")
+    has_issues = any(r.status in (Status.WARN, Status.FAIL) for r in results)
+    if has_issues:
+        lines.append("\nTip: run `ccst install-everything --apply` to sync skills, hooks, shell, and CLAUDE.md")
     return "\n".join(lines)
 
 

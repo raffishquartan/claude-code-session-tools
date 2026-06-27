@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# install-everything.sh — install or upgrade cc-session-tools completely.
+# install-everything.sh — first-time install of cc-session-tools.
 #
-# Installs (or upgrades) the CLIs, bundled skills, hooks, and the ccl shell
-# function in one shot. Idempotent: safe to re-run after an upgrade.
+# Installs the CLIs, bundled skills, hooks, and the ccl shell function in one
+# shot. Idempotent: safe to re-run after an upgrade.
 #
 # Usage:
 #   # Install from PyPI (recommended)
@@ -16,6 +16,10 @@
 #
 # After a successful run, restart your shell (or source ~/.bashrc / ~/.zshrc)
 # to pick up the ccl() function.
+#
+# For FUTURE UPGRADES (once the CLIs are already installed), you only need:
+#   uv tool install cc-session-tools --upgrade
+#   ccst install-everything --apply
 
 set -euo pipefail
 
@@ -86,3 +90,6 @@ echo ""
 echo "Done."
 echo "Restart your shell (or: source ~/.bashrc  /  source ~/.zshrc)"
 echo "to start using 'ccl' and 'ccl --global'."
+echo ""
+echo "For future upgrades, you only need:"
+echo "  uv tool install cc-session-tools --upgrade && ccst install-everything --apply"
