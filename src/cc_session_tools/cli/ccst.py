@@ -600,7 +600,7 @@ def _cmd_doctor(args: argparse.Namespace) -> int:
         skip_pypi=args.no_pypi,
     )
 
-    if args.drift:
+    if args.drift or getattr(args, "mode", None) == "drift":
         muted = set(doctor_mutes.load_mutes(mutes_path))
         unmuted = filter_unmuted_issues(results, muted)
         report = format_drift_report(unmuted, muted_count=len(muted))
@@ -936,6 +936,13 @@ def _build_parser() -> argparse.ArgumentParser:
         metavar="PATH",
         default=None,
         help="Mute-store path (default: ~/.claude/cc-doctor-mutes.json)",
+    )
+    doctor_parser.add_argument(
+        "mode",
+        nargs="?",
+        choices=["drift"],
+        default=None,
+        help=argparse.SUPPRESS,
     )
 
     # ---- shell ----

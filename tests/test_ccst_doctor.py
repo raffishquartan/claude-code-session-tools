@@ -372,3 +372,17 @@ def test_doctor_exits_1_when_issues_found(tmp_path: Path) -> None:
     # At minimum the hooks WARNs will be triggered (they're not in a real settings.json)
     # We just check it doesn't crash
     assert result.returncode in (0, 1)
+
+
+def test_doctor_drift_positional_accepted() -> None:
+    """ccst doctor drift (positional) is accepted and behaves like --drift."""
+    result_flag = _run("doctor", "--drift", "--no-pypi")
+    result_positional = _run("doctor", "drift", "--no-pypi")
+    assert result_positional.returncode == result_flag.returncode
+    assert result_positional.stdout == result_flag.stdout
+
+
+def test_doctor_drift_positional_not_exit_2() -> None:
+    """ccst doctor drift must not exit 2 (argparse error)."""
+    result = _run("doctor", "drift", "--no-pypi")
+    assert result.returncode != 2
