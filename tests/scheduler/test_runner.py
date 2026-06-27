@@ -26,6 +26,13 @@ def test_timeout_is_reported_not_raised() -> None:
     assert out.exit_code is None
 
 
+def test_command_not_found_returns_exit_127() -> None:
+    out = run_command(["__no_such_command_xyz__"], timeout=timedelta(seconds=5))
+    assert out.exit_code == 127
+    assert "not found" in out.stderr
+    assert out.timed_out is False
+
+
 def test_spawn_detached_returns_live_pid_and_does_not_block(tmp_path) -> None:  # type: ignore[no-untyped-def]
     import time
     from cc_session_tools.lib.scheduler.runner import spawn_detached

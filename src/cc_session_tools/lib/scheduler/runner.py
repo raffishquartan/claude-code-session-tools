@@ -42,7 +42,7 @@ def spawn_detached(argv: tuple[str, ...] | list[str]) -> int:
 def run_command(argv: tuple[str, ...] | list[str], timeout: timedelta) -> RunOutcome:
     """Run argv with a hard timeout, capturing stdout/stderr and wall duration.
 
-    Returns a RunOutcome. Never raises on non-zero exit or timeout.
+    Returns a RunOutcome. Never raises on non-zero exit, timeout, or missing command.
     """
     start = time.monotonic()
     try:
@@ -63,6 +63,16 @@ def run_command(argv: tuple[str, ...] | list[str], timeout: timedelta) -> RunOut
             stderr=stderr,
             duration_ms=elapsed,
             timed_out=True,
+        )
+    except FileNotFoundError:
+        elapsed = int((time.monotonic() - start) * 1000)
+        cmd = list(argv)[0] if argv else ""
+        return RunOutcome(
+            exit_code=127,
+            stdout="",
+            stderr=f"command not found: {cmd}",
+            duration_ms=elapsed,
+            timed_out=False,
         )
     elapsed = int((time.monotonic() - start) * 1000)
     return RunOutcome(
