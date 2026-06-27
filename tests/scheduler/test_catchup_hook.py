@@ -29,6 +29,14 @@ def _capture(monkeypatch: pytest.MonkeyPatch) -> list[str]:
     return out
 
 
+def _capture_events(monkeypatch: pytest.MonkeyPatch) -> list[str]:
+    """Capture the event name passed to _emit (the value echoed back to Claude
+    as hookSpecificOutput.hookEventName)."""
+    events: list[str] = []
+    monkeypatch.setattr(catchup, "_emit", lambda ctx, event: events.append(event))
+    return events
+
+
 class _Spawn:
     """A mocked detached-spawn: records launches, returns instantly, never runs."""
 
@@ -54,7 +62,7 @@ def test_session_start_launches_detached_and_does_not_block(
     # The hook must launch via a detached spawn, never run the command itself.
     spawn = _Spawn()
     monkeypatch.setattr(reconcile, "spawn_detached", spawn)
-    _stdin(monkeypatch, {"hookEventName": "SessionStart", "session_id": "u", "cwd": "/tmp"})
+    _stdin(monkeypatch, {"hook_event_name": "SessionStart", "session_id": "u", "cwd": "/tmp"})
     _capture(monkeypatch)
     assert catchup.main() == 0
     assert spawn.calls and spawn.calls[0][:3] == ["ccsched", "_run-job", "tesco"]
@@ -76,13 +84,13 @@ def test_surface_emits_digest_from_ledger_since_cursor_and_advances(
     monkeypatch.setattr(catchup, "_now", lambda: datetime(2026, 6, 20, 10, 0, tzinfo=timezone.utc))
     # Avoid launching anything real on this UserPromptSubmit reap.
     monkeypatch.setattr(reconcile, "spawn_detached", _Spawn())
-    _stdin(monkeypatch, {"hookEventName": "UserPromptSubmit", "session_id": "u", "cwd": "/tmp"})
+    _stdin(monkeypatch, {"hook_event_name": "UserPromptSubmit", "session_id": "u", "cwd": "/tmp"})
     out = _capture(monkeypatch)
     assert catchup.main() == 0
     assert any("tesco" in e for e in out)
     # Surfaced once: a second reap for the same session sees nothing new.
     out2 = _capture(monkeypatch)
-    _stdin(monkeypatch, {"hookEventName": "UserPromptSubmit", "session_id": "u", "cwd": "/tmp"})
+    _stdin(monkeypatch, {"hook_event_name": "UserPromptSubmit", "session_id": "u", "cwd": "/tmp"})
     assert catchup.main() == 0
     assert all("tesco" not in e for e in out2)
 
@@ -119,7 +127,25 @@ def test_hook_never_raises_on_parse_error(monkeypatch: pytest.MonkeyPatch) -> No
     registry.registry_path().write_text("[[job]\nbroken")
     monkeypatch.setattr(catchup, "_now", lambda: datetime(2026, 6, 20, 10, 0, tzinfo=timezone.utc))
     monkeypatch.setattr(reconcile, "spawn_detached", _Spawn())
-    _stdin(monkeypatch, {"hookEventName": "SessionStart", "session_id": "u", "cwd": "/tmp"})
+    _stdin(monkeypatch, {"hook_event_name": "SessionStart", "session_id": "u", "cwd": "/tmp"})
     out = _capture(monkeypatch)
     assert catchup.main() == 0
     assert any("failed to parse" in e for e in out)
+
+
+@pytest.mark.parametrize("event", ["SessionStart", "UserPromptSubmit"])
+def test_emits_event_name_matching_invoking_event(
+    event: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Regression: Claude Code rejects a hook whose hookSpecificOutput.hookEventName
+    does not match the invoking event. The event must be read from the stdin
+    `hook_event_name` field (snake_case), not `hookEventName` (camelCase), which
+    is absent on input and would silently default to SessionStart - making every
+    UserPromptSubmit invocation fail with 'expected UserPromptSubmit but got
+    SessionStart'."""
+    monkeypatch.setattr(catchup, "_now", lambda: datetime(2026, 6, 20, 10, 0, tzinfo=timezone.utc))
+    monkeypatch.setattr(reconcile, "spawn_detached", _Spawn())
+    _stdin(monkeypatch, {"hook_event_name": event, "session_id": "u", "cwd": "/tmp"})
+    events = _capture_events(monkeypatch)
+    assert catchup.main() == 0
+    assert events == [event]

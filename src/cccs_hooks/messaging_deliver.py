@@ -50,7 +50,7 @@ def main(argv: list[str] | None = None) -> int:
         _emit("", "unknown")
         return 0
 
-    event = str(data.get("hookEventName", "UserPromptSubmit"))
+    event = str(data.get("hook_event_name", "UserPromptSubmit"))
     mode: DeliverMode = "full" if event == "SessionStart" else "incremental"
     try:
         uuid = str(data.get("session_id", ""))
