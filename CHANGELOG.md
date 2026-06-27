@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.17.0] - 2026-06-27
+## [Unreleased]
 
 ### Added
 
@@ -14,7 +14,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   by default; pass `--apply` to write changes. Pass `--no-pypi` to skip the
   PyPI version-drift check in the final health check. Mirrors the
   `install-everything.sh` bootstrap script but as a first-class CLI command so
-  it can be re-run idempotently after upgrades.
+  it can be re-run idempotently after upgrades without needing the shell script.
+- `ccst doctor` now prints a tip (`Run: ccst install-everything --apply`) when
+  it finds WARN or FAIL items, so the fix is always one command away.
 
 ## [0.16.0] - 2026-06-27
   
