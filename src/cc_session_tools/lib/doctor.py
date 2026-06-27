@@ -341,3 +341,41 @@ def format_results(results: list[CheckResult]) -> str:
     for r in results:
         lines.append(f"[{r.status.value:<4}] {r.name:<{name_w}}  {r.reason}")
     return "\n".join(lines)
+
+
+# ---------- drift monitor (ccst doctor --drift) ----------
+
+
+def filter_unmuted_issues(
+    results: list[CheckResult], muted: set[str]
+) -> list[CheckResult]:
+    """Return the WARN/FAIL results whose ``name`` is not muted.
+
+    OK results never appear; muted names are dropped. Order is preserved.
+    """
+    return [
+        r
+        for r in results
+        if r.status in (Status.WARN, Status.FAIL) and r.name not in muted
+    ]
+
+
+def format_drift_report(unmuted: list[CheckResult], *, muted_count: int) -> str:
+    """Format the drift report for the monitor job.
+
+    Returns the empty string when there is nothing un-muted to report — the
+    caller prints nothing and exits 0 in that case, so a clean run produces no
+    surfaced output.
+    """
+    if not unmuted:
+        return ""
+    name_w = max(len(r.name) for r in unmuted)
+    lines = ["ccst doctor: un-muted drift detected —"]
+    for r in unmuted:
+        lines.append(f"  [{r.status.value:<4}] {r.name:<{name_w}}  {r.reason}")
+    lines.append("")
+    lines.append(
+        "Acknowledge an item with:  ccst doctor --mute <name>"
+        f"   ({muted_count} already muted)"
+    )
+    return "\n".join(lines)
