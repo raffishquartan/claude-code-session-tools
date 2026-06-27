@@ -34,6 +34,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   of truth for the skill-marker directory, shared by `confirm_8digit` (which
   honours fresh markers as gate exemptions) and `marker_allow`.
 
+### Fixed
+
+- **`ccd` could permanently lock a name tag.** When a session failed to start
+  after `ccd` had created its `cc-sessions/<date>-<tag>/` scaffold (e.g. `claude`
+  aborted on a malformed `settings.json`), re-running `ccd <tag>` refused with
+  "already started today" while `ccr <tag>` could not resume a transcript that
+  was never written - leaving the tag unusable for the rest of the day. `ccd`
+  now reuses the existing directory when it belongs to an *empty* session (no
+  transcript, or a transcript with no user-typed messages), recovering the tag.
+  A directory whose transcript shows real user input is still treated as a
+  genuine duplicate and rejected.
+
 ### Removed
 
 - **No-emdash Stop hook** (`no_emdash.py`). The hook injected a correction
