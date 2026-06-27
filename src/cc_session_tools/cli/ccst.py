@@ -533,12 +533,41 @@ def _remove_hooks(
 
 
 def _cmd_doctor(args: argparse.Namespace) -> int:
-    """Run the full health-check suite."""
+    """Run the full health-check suite, or a mute/drift sub-mode."""
+    from datetime import date
+
+    from cc_session_tools.lib import doctor_mutes
     from cc_session_tools.lib.doctor import (
         Status,
+        filter_unmuted_issues,
+        format_drift_report,
         format_results,
         run_all_checks,
     )
+
+    mutes_path = (
+        Path(args.mutes_file) if args.mutes_file else doctor_mutes.default_mutes_path()
+    )
+
+    # Mute-management modes short-circuit before running any checks.
+    if args.mute is not None:
+        doctor_mutes.add_mute(mutes_path, args.mute, today=date.today().isoformat())
+        print(f"Muted {args.mute!r}; 'ccst doctor --drift' will skip it.")
+        return 0
+    if args.unmute is not None:
+        if doctor_mutes.remove_mute(mutes_path, args.unmute):
+            print(f"Un-muted {args.unmute!r}.")
+            return 0
+        print(f"{args.unmute!r} was not muted.")
+        return 1
+    if args.list_mutes:
+        mutes = doctor_mutes.load_mutes(mutes_path)
+        if not mutes:
+            print("No checks are muted.")
+            return 0
+        for name in sorted(mutes):
+            print(f"{name}  (muted {mutes[name]})")
+        return 0
 
     settings_path = Path(args.settings) if args.settings else (
         Path.home() / ".claude" / "settings.json"
@@ -572,6 +601,14 @@ def _cmd_doctor(args: argparse.Namespace) -> int:
         env=env_vars,
         skip_pypi=args.no_pypi,
     )
+
+    if args.drift:
+        muted = set(doctor_mutes.load_mutes(mutes_path))
+        unmuted = filter_unmuted_issues(results, muted)
+        report = format_drift_report(unmuted, muted_count=len(muted))
+        if report:
+            print(report)
+        return 1 if unmuted else 0
 
     print(format_results(results))
 
@@ -873,6 +910,34 @@ def _build_parser() -> argparse.ArgumentParser:
         "--no-pypi",
         action="store_true",
         help="Skip the PyPI version-drift check",
+    )
+    doctor_parser.add_argument(
+        "--drift",
+        action="store_true",
+        help="Drift-monitor mode: print only un-muted WARN/FAIL, exit 1 if any",
+    )
+    doctor_parser.add_argument(
+        "--mute",
+        metavar="NAME",
+        default=None,
+        help="Mute a check by name so --drift ignores it",
+    )
+    doctor_parser.add_argument(
+        "--unmute",
+        metavar="NAME",
+        default=None,
+        help="Un-mute a previously muted check",
+    )
+    doctor_parser.add_argument(
+        "--list-mutes",
+        action="store_true",
+        help="List all muted check names",
+    )
+    doctor_parser.add_argument(
+        "--mutes-file",
+        metavar="PATH",
+        default=None,
+        help="Mute-store path (default: ~/.claude/cc-doctor-mutes.json)",
     )
 
     # ---- shell ----
