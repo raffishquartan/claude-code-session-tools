@@ -532,3 +532,51 @@ def test_invocation_row_written_on_claude_error(tmp_path, monkeypatch, mocker):
     assert row[0] == 3
     assert row[1] == "unavailable"
     assert row[2] == "test-session-err"
+
+
+# ---------- call_claude: session env isolation ----------
+
+def test_call_claude_uses_distinct_session_tag(monkeypatch, mocker):
+    """call_claude() must not pass the parent session's CLD_SESSION_TAG to the
+    subprocess; instead it should use a bash-security-review-prefixed tag."""
+    monkeypatch.setenv("CLD_SESSION_TAG", "parent-session-tag")
+    monkeypatch.setenv("CLD_SESSION_MODE", "resume")
+
+    captured_env: dict = {}
+
+    def fake_run(cmd, *, input, capture_output, text, timeout, env):
+        captured_env.update(env)
+        class R:
+            returncode = 0
+            stdout = "SUMMARY: test\nRISKS: none\nVERDICT: safe"
+        return R()
+
+    mocker.patch("cccs_hooks.bash_security_review.subprocess.run", side_effect=fake_run)
+
+    bsr.call_claude("some prompt", claude_bin="claude", timeout=30)
+
+    assert captured_env["CLD_SESSION_TAG"] != "parent-session-tag"
+    assert captured_env["CLD_SESSION_TAG"].startswith("bash-security-review-")
+    assert captured_env["CLD_SESSION_MODE"] == "hook"
+
+
+def test_call_claude_preserves_parent_session_dir(monkeypatch, mocker):
+    """call_claude() must keep CLD_SESSION_DIR from the parent env so the
+    sub-process writes .last-opened to the correct session directory."""
+    monkeypatch.setenv("CLD_SESSION_TAG", "parent-tag")
+    monkeypatch.setenv("CLD_SESSION_DIR", "/some/session/dir")
+
+    captured_env: dict = {}
+
+    def fake_run(cmd, *, input, capture_output, text, timeout, env):
+        captured_env.update(env)
+        class R:
+            returncode = 0
+            stdout = "SUMMARY: test\nRISKS: none\nVERDICT: safe"
+        return R()
+
+    mocker.patch("cccs_hooks.bash_security_review.subprocess.run", side_effect=fake_run)
+
+    bsr.call_claude("some prompt", claude_bin="claude", timeout=30)
+
+    assert captured_env.get("CLD_SESSION_DIR") == "/some/session/dir"

@@ -186,3 +186,37 @@ def test_safe_returns_bool_when_jsonl_found(synthetic_project):
     ])
 
     assert session_is_empty_safe(basename, project) is True
+
+
+# ---------- find_jsonl_for_session: custom-title preferred over lone tag-file ----------
+
+def test_find_jsonl_prefers_custom_title_over_unconfirmed_tag_file(synthetic_project):
+    """Defence-in-depth: when a .tag file match has no custom-title record but
+    another JSONL does have a matching custom-title, prefer the custom-title match.
+
+    This guards against hook sub-process transcripts that inherit the parent
+    session tag and write a .tag file that would otherwise steal the lookup.
+    """
+    _, project, tags_dir = synthetic_project
+    basename = "20260516-real-session"
+    transcript_dir = transcript_dir_for_project(project)
+
+    # hook-stub.jsonl: has a .tag file pointing to the session tag, but no
+    # custom-title record (simulates a hook sub-process transcript that
+    # inherited the parent's CLD_SESSION_TAG).
+    _write_tag(tags_dir, "uuid-hook-stub", "real-session")
+    _write_jsonl(transcript_dir / "uuid-hook-stub.jsonl", [
+        {"type": "user", "isMeta": True, "message": {"content": "hook output"}},
+    ])
+
+    # uuid-real.jsonl: no .tag file, but has the canonical custom-title record.
+    _write_jsonl(transcript_dir / "uuid-real.jsonl", [
+        {"type": "custom-title", "title": "20260516-real-session"},
+        {"type": "user", "message": {"content": "the real work"}},
+    ])
+
+    found = find_jsonl_for_session(basename, project)
+
+    assert found == transcript_dir / "uuid-real.jsonl", (
+        f"expected uuid-real.jsonl but got {found}"
+    )

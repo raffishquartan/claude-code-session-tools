@@ -311,6 +311,27 @@ def transcript_dir_for_project(project_dir: Path) -> Path:
     return Path.home() / ".claude" / "projects" / encoded
 
 
+def _jsonl_has_custom_title(jsonl: Path, basename: str, suffix: str) -> bool:
+    """Return True if `jsonl` contains a custom-title record matching basename or suffix."""
+    try:
+        with jsonl.open() as f:
+            for line in f:
+                line = line.strip()
+                if not line or '"custom-title"' not in line:
+                    continue
+                try:
+                    rec = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if rec.get("type") == "custom-title":
+                    title = rec.get("title") or rec.get("name") or ""
+                    if title == basename or title == suffix:
+                        return True
+    except OSError:
+        pass
+    return False
+
+
 def find_jsonl_for_session(basename: str, project_dir: Path) -> Path | None:
     """Locate the JSONL transcript for a cc-sessions/<basename>/ directory.
 
@@ -318,10 +339,16 @@ def find_jsonl_for_session(basename: str, project_dir: Path) -> Path | None:
       1a. Check the flat tags dir (~/.cache/claude/session-tags/) for a
           <uuid>.tag file matching each JSONL in the transcript dir. This is
           the new location written by the session-tag hook.
+          Defence-in-depth: if the tag-file match has no custom-title record
+          (e.g. a hook sub-process transcript that inherited the parent tag),
+          treat it as tentative and prefer a custom-title match from Strategy 2.
       1b. Backward-compat fallback: check for old-style <uuid>.tag files
           still in the transcript dir (for sessions tagged before the migration
           ran). This fallback can be removed after migration is confirmed complete.
       2.  Fall back to scanning JSONL `custom-title` records for a match.
+          Also runs when Strategy 1a found only a tentative (unconfirmed) match,
+          to catch the case where a hook transcript's .tag file holds the parent
+          session tag due to env-var inheritance.
 
     Returns the resolved jsonl Path, or None if no match found.
     """
@@ -335,6 +362,7 @@ def find_jsonl_for_session(basename: str, project_dir: Path) -> Path | None:
 
     # Strategy 1a: flat tags dir (new location)
     tags_dir = _session_tags_dir()
+    tag_file_match: Path | None = None
     for jsonl in transcript_dir.glob("*.jsonl"):
         tag_path = tags_dir / f"{jsonl.stem}.tag"
         if tag_path.is_file():
@@ -343,7 +371,9 @@ def find_jsonl_for_session(basename: str, project_dir: Path) -> Path | None:
             except OSError:
                 continue
             if content == suffix or content == basename:
-                return jsonl
+                if _jsonl_has_custom_title(jsonl, basename, suffix):
+                    return jsonl  # confirmed: tag file and custom-title agree
+                tag_file_match = tag_file_match or jsonl  # tentative: no custom-title yet
 
     # Strategy 1b: old-style tag files still in transcript_dir (migration compatibility)
     for tag_file in transcript_dir.glob("*.tag"):
@@ -356,7 +386,9 @@ def find_jsonl_for_session(basename: str, project_dir: Path) -> Path | None:
             if jsonl.is_file():
                 return jsonl
 
-    # Strategy 2: scan JSONLs for custom-title records (slower fallback)
+    # Strategy 2: scan JSONLs for custom-title records (slower fallback).
+    # Runs even when Strategy 1a found a tentative match: a custom-title match
+    # on a different JSONL overrides the unconfirmed tag-file match.
     for jsonl in transcript_dir.glob("*.jsonl"):
         try:
             with jsonl.open() as f:
@@ -375,7 +407,7 @@ def find_jsonl_for_session(basename: str, project_dir: Path) -> Path | None:
         except OSError:
             continue
 
-    return None
+    return tag_file_match
 
 
 # Substrings that mark a "user" record as not a free-typed message:
