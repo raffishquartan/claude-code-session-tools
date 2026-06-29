@@ -253,18 +253,44 @@ def _cmd_children(args) -> int:
         sys.stdout.write("No child sessions found for the given parent.\n")
         return 0
 
-    result = query.run_query(
-        child_rows,
-        group_by=["session"],
-        session_name_map=name_map,
-    )
-    if not result.empty and args.sort in result.columns:
-        result = result.sort_values(args.sort, ascending=False)
-    if args.top and len(result) > args.top:
-        result = result.head(args.top)
-    result = _apply_session_format(result, "name")
-    sys.stdout.write(_format_df(result, args.format))
-    if not _format_df(result, args.format).endswith("\n"):
+    # Subagent children record the parent's sessionId, so their session_id == parent UUID.
+    # These costs are already included in the parent's total; show them as a breakdown.
+    # Hook children have their own UUID; show them as separate sessions.
+    parent_uuid_set = set(wanted)
+    subagent_rows = child_rows[child_rows["session_id"].isin(parent_uuid_set)]
+    hook_rows = child_rows[~child_rows["session_id"].isin(parent_uuid_set)]
+
+    sections: list[str] = []
+
+    if not subagent_rows.empty:
+        sub_result = query.run_query(subagent_rows, group_by=[], session_name_map=name_map)
+        if not sub_result.empty:
+            from . import pricing as _pricing
+            total_agent_cost = _pricing.add_cost_column(subagent_rows)["cost_usd"].sum()
+            agent_rows_count = len(subagent_rows["session_id"].unique()) if "session_id" in subagent_rows.columns else 0
+            note = (
+                "Agent subagent activity (costs already included in parent session total):\n"
+                f"  {len(subagent_rows)} billable messages  |  ${total_agent_cost:.2f}\n"
+                f"  (Use --group-by session --include-children on the parent to see the breakdown.)"
+            )
+            sections.append(note)
+
+    if not hook_rows.empty:
+        hook_result = query.run_query(hook_rows, group_by=["session"], session_name_map=name_map)
+        if not hook_result.empty and args.sort in hook_result.columns:
+            hook_result = hook_result.sort_values(args.sort, ascending=False)
+        if args.top and not hook_result.empty and len(hook_result) > args.top:
+            hook_result = hook_result.head(args.top)
+        hook_result = _apply_session_format(hook_result, "name")
+        sections.append("Hook sessions (separately billed):\n" + _format_df(hook_result, args.format))
+
+    if not sections:
+        sys.stdout.write("No child sessions found for the given parent.\n")
+        return 0
+
+    output = "\n\n".join(sections)
+    sys.stdout.write(output)
+    if not output.endswith("\n"):
         sys.stdout.write("\n")
     return 0
 

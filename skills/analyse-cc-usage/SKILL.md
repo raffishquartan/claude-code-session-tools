@@ -48,6 +48,24 @@ claude-code-usage children <PARENT_SESSION>
   [--format markdown|csv|json] [--top N] [--sort COL]
 ```
 
+`--include-children`: when grouping by session, add a cost breakdown showing
+agent subagent activity and hook session costs. Two child types are handled:
+
+- **Agent subagents** (the `Agent()` tool): their JSONL files record the
+  parent's `sessionId`, so their costs are **already included** in `cost_usd`.
+  `--include-children` adds `agent_cost_usd` (what fraction of `cost_usd` came
+  from agent dispatches) and keeps the parent row visible.
+- **Hook sessions** (bash-security-review): these have their own UUID and are
+  billed separately. They are removed from the session list and their cost is
+  folded into `child_cost_usd` on the parent row.
+
+Added columns: `agent_cost_usd`, `child_session_count`, `child_token_total`,
+`child_cost_usd`, `total_cost_usd` (= `cost_usd + child_cost_usd`).
+
+**Important:** `query --group-by session` already includes agent subagent costs
+in `cost_usd`. Do NOT add `agent_cost_usd` to `cost_usd` — that would
+double-count. `agent_cost_usd` is a breakdown of cost already in `cost_usd`.
+
 `--exclude-hooks`: strip `bash-security-review.sh` hook sessions
 (classified as `initiation_type="hook-security-review"`) from all results
 before grouping. Useful whenever you want per-session cost breakdowns without
@@ -85,8 +103,8 @@ Recipes:
 | "Which native tools cost the most?"                   | `claude-code-usage query --group-by tool` then filter to kind=native in your summary      |
 | "Full report for Q2"                                  | `claude-code-usage report --since 2026-04-01 --until 2026-07-01 --output cc-sessions/<tag>/out/usage-report.md` |
 | "Are my numbers right?" / "Reconcile against ccusage" | `claude-code-usage reconcile --since 2026-04-01 --until 2026-05-01`                       |
-| "Show session cost including hook sessions"           | `claude-code-usage query --group-by session --include-children`                           |
-| "What hook sessions did this session spawn?"          | `claude-code-usage children <session-name-or-uuid>`                                       |
+| "Show session cost breakdown (interactive vs agents vs hooks)" | `claude-code-usage query --group-by session --include-children`              |
+| "What did this session's agents / hooks cost?"        | `claude-code-usage children <session-name-or-uuid>`                                       |
 | "Session cost breakdown excluding hook fires"         | `claude-code-usage query --group-by session --exclude-hooks`                              |
 
 After running, summarise the headline figure(s) in chat in plain English.

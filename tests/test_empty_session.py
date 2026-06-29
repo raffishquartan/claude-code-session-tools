@@ -209,9 +209,10 @@ def test_find_jsonl_prefers_custom_title_over_unconfirmed_tag_file(synthetic_pro
         {"type": "user", "isMeta": True, "message": {"content": "hook output"}},
     ])
 
-    # uuid-real.jsonl: no .tag file, but has the canonical custom-title record.
+    # uuid-real.jsonl: no .tag file, but has the canonical custom-title record
+    # using the real field name CC writes: "customTitle" (camelCase).
     _write_jsonl(transcript_dir / "uuid-real.jsonl", [
-        {"type": "custom-title", "title": "20260516-real-session"},
+        {"type": "custom-title", "customTitle": "20260516-real-session", "sessionId": "uuid-real"},
         {"type": "user", "message": {"content": "the real work"}},
     ])
 
@@ -219,4 +220,38 @@ def test_find_jsonl_prefers_custom_title_over_unconfirmed_tag_file(synthetic_pro
 
     assert found == transcript_dir / "uuid-real.jsonl", (
         f"expected uuid-real.jsonl but got {found}"
+    )
+
+
+def test_find_jsonl_hook_with_tag_and_real_session_with_tag_and_custom_title(synthetic_project):
+    """Root-cause regression test: a hook transcript that inherited the parent
+    session tag must not be returned when the real session JSONL has both a
+    tag file AND a customTitle record.
+
+    Before the fix, _jsonl_has_custom_title looked for rec["title"] instead of
+    rec["customTitle"], so the real session was never confirmed and the hook
+    transcript (tag file only, first in glob order) was returned instead.
+    """
+    _, project, tags_dir = synthetic_project
+    basename = "20260531-real-session"
+    suffix = "real-session"
+    transcript_dir = transcript_dir_for_project(project)
+
+    # Hook session: has a tag file (inherited from parent), no custom-title.
+    _write_tag(tags_dir, "aaa-hook-inherited", suffix)
+    _write_jsonl(transcript_dir / "aaa-hook-inherited.jsonl", [
+        {"type": "user", "isMeta": True, "message": {"content": "security hook output"}},
+    ])
+
+    # Real session: has both a tag file AND a customTitle record.
+    _write_tag(tags_dir, "zzz-real-session", suffix)
+    _write_jsonl(transcript_dir / "zzz-real-session.jsonl", [
+        {"type": "custom-title", "customTitle": basename, "sessionId": "zzz-real-session"},
+        {"type": "user", "message": {"content": "actual user work"}},
+    ])
+
+    found = find_jsonl_for_session(basename, project)
+
+    assert found == transcript_dir / "zzz-real-session.jsonl", (
+        f"expected zzz-real-session.jsonl but got {found}"
     )
