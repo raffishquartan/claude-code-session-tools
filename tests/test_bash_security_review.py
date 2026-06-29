@@ -580,3 +580,181 @@ def test_call_claude_preserves_parent_session_dir(monkeypatch, mocker):
     bsr.call_claude("some prompt", claude_bin="claude", timeout=30)
 
     assert captured_env.get("CLD_SESSION_DIR") == "/some/session/dir"
+
+
+# ---------- has_write_risk ----------
+
+@pytest.mark.parametrize("cmd", [
+    "echo content > file.txt",
+    "echo content >> file.txt",
+    "command 2> errors.log",
+    "rm -rf /tmp/dir",
+    "rmdir foo",
+    "mv old new",
+    "cp src dst",
+    "tee output.txt",
+    "chmod 755 script.sh",
+    "chown user file",
+    "sudo apt install vim",
+    "curl https://example.com",
+    "wget https://example.com/file",
+    "ssh user@host",
+    "scp local remote:path",
+    "rsync -av src/ dst/",
+    "systemctl restart nginx",
+    "service apache2 stop",
+    "crontab -e",
+    "git push origin main",
+    "git commit -m 'msg'",
+    "git clean -fd",
+    "git reset --hard HEAD",
+    "git reset HEAD~1",
+    "git rebase origin/main",
+    "git merge feature/branch",
+    "git fetch --all",
+    "git stash",
+    "git checkout main",
+    "git cherry-pick abc123",
+    "pip install requests",
+    "pip3 uninstall foo",
+    "npm install express",
+    "apt-get remove vim",
+    "brew install ripgrep",
+])
+def test_has_write_risk_flagged(cmd: str) -> None:
+    assert bsr.has_write_risk(cmd), f"Expected write risk in: {cmd!r}"
+
+
+@pytest.mark.parametrize("cmd", [
+    "grep -r 'pattern' .",
+    "grep foo bar | wc -l",
+    "find . -name '*.py'",
+    "find . -name '*.py' | sort",
+    "ls -la | head -20",
+    "git log --oneline | grep fix",
+    "cat file.json | jq '.field'",
+    "sort -u results.txt | uniq -c",
+    "wc -l *.py | sort -n",
+    "awk '{print $1}' data.txt | sort",
+    "diff file1.txt file2.txt",
+    "ps aux | grep python",
+    "df -h | grep /dev",
+    "du -sh * | sort -h",
+    "uv run pytest -q 2>&1 | tail -20",
+    "command 2>/dev/null",
+    "command >&2",
+    "command 2>&1",
+    "git log --oneline -10",
+    "git diff HEAD~1",
+    "git status --short",
+])
+def test_has_write_risk_not_flagged(cmd: str) -> None:
+    assert not bsr.has_write_risk(cmd), f"Unexpected write risk in: {cmd!r}"
+
+
+# ---------- tier 0.5: read-only pre-filter ----------
+
+def test_tier05_piped_grep_exits_silently(
+    isolated_env: Path, capsys: pytest.CaptureFixture[str], mocker: MockerFixture
+) -> None:
+    """grep | wc is nontrivial (has pipe) but read-only — must exit 0 without calling claude."""
+    spy = mocker.patch.object(bsr, "call_claude")
+    rc = bsr.run(_input("grep -r 'pattern' . | wc -l"))
+    assert rc == 0
+    assert capsys.readouterr().err == ""
+    assert not spy.called
+
+
+def test_tier05_piped_find_grep_exits_silently(
+    isolated_env: Path, mocker: MockerFixture
+) -> None:
+    spy = mocker.patch.object(bsr, "call_claude")
+    rc = bsr.run(_input("find . -name '*.py' | xargs grep 'import'"))
+    assert rc == 0
+    assert not spy.called
+
+
+def test_tier05_git_log_pipe_exits_silently(
+    isolated_env: Path, mocker: MockerFixture
+) -> None:
+    spy = mocker.patch.object(bsr, "call_claude")
+    rc = bsr.run(_input("git log --oneline | grep 'fix' | head -10"))
+    assert rc == 0
+    assert not spy.called
+
+
+def test_tier05_long_read_only_command_exits_silently(
+    isolated_env: Path, mocker: MockerFixture
+) -> None:
+    """Commands over 120 chars are nontrivial; read-only ones still exit at Tier 0.5."""
+    spy = mocker.patch.object(bsr, "call_claude")
+    long_cmd = "grep -r 'some_pattern' /home/user/project/src/module/subpackage/ --include='*.py' --exclude-dir='.git' | sort | uniq -c | sort -rn"
+    assert len(long_cmd) > 120
+    rc = bsr.run(_input(long_cmd))
+    assert rc == 0
+    assert not spy.called
+
+
+def test_tier05_stderr_redirect_devnull_exits_silently(
+    isolated_env: Path, mocker: MockerFixture
+) -> None:
+    """2>/dev/null is a harmless stderr suppression — must not trigger write risk."""
+    spy = mocker.patch.object(bsr, "call_claude")
+    rc = bsr.run(_input("uv run pytest -q 2>/dev/null | tail -20"))
+    assert rc == 0
+    assert not spy.called
+
+
+def test_tier05_write_redirect_escalates_to_claude(
+    isolated_env: Path, mocker: MockerFixture
+) -> None:
+    """Piped command writing via tee must NOT exit at Tier 0.5 — reaches Tier 3."""
+    mocker.patch.object(bsr, "_resolve_claude_bin", return_value="/fake/claude")
+    spy = mocker.patch.object(
+        bsr, "call_claude",
+        return_value=("SUMMARY: write\nRISKS: file write\nVERDICT: safe", None),
+    )
+    # grep | tee: nontrivial (has pipe) AND write-risk (tee writes to file)
+    rc = bsr.run(_input("grep -r 'pattern' . | tee output.txt"))
+    assert rc == 0
+    assert spy.called
+
+
+def test_tier05_curl_escalates_to_claude(
+    isolated_env: Path, mocker: MockerFixture
+) -> None:
+    """curl is a network operation — must NOT exit at Tier 0.5."""
+    mocker.patch.object(bsr, "_resolve_claude_bin", return_value="/fake/claude")
+    spy = mocker.patch.object(
+        bsr, "call_claude",
+        return_value=("SUMMARY: fetch\nRISKS: network\nVERDICT: safe", None),
+    )
+    rc = bsr.run(_input("curl https://api.example.com/data | jq ."))
+    assert rc == 0
+    assert spy.called
+
+
+def test_tier05_xargs_rm_escalates_to_claude(
+    isolated_env: Path, mocker: MockerFixture
+) -> None:
+    """find | xargs rm contains rm — write risk, must not skip."""
+    mocker.patch.object(bsr, "_resolve_claude_bin", return_value="/fake/claude")
+    spy = mocker.patch.object(
+        bsr, "call_claude",
+        return_value=("SUMMARY: delete\nRISKS: file deletion\nVERDICT: dangerous", None),
+    )
+    rc = bsr.run(_input("find . -name '*.pyc' | xargs rm"))
+    assert rc == 0
+    assert spy.called
+
+
+def test_tier05_telemetry_verdict_read_only(
+    isolated_env: Path, mocker: MockerFixture
+) -> None:
+    """Tier 0.5 exits emit telemetry with verdict='read-only'."""
+    spy = mocker.patch.object(bsr, "log_event")
+    mocker.patch.object(bsr, "call_claude")
+    bsr.run(_input("grep foo | wc -l"))
+    assert spy.called
+    entry = spy.call_args.args[0]
+    assert entry.verdict == "read-only"
