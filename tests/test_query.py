@@ -227,6 +227,62 @@ def test_include_children_orphan_sessions_get_zero_child_columns() -> None:
     assert solo["child_token_total"] == 0
 
 
+def test_include_children_subagent_rows_stay_in_output_and_populate_agent_cost() -> None:
+    # Subagent rows share the parent's session_id. The parent must NOT be removed
+    # from the result, and agent_cost_usd must reflect the subagent's cost.
+    df = _df(
+        [
+            _row(session_id="parent-s", input_tokens=1000, output_tokens=500,
+                 parent_session_id=None),
+            _row(session_id="parent-s", input_tokens=5000, output_tokens=2000,
+                 parent_session_id="parent-s"),  # subagent: same session_id
+        ]
+    )
+    result = query.run_query(df, group_by=["session"], include_children=True)
+    assert "parent-s" in result["session_count"].values
+    parent = result[result["session_count"] == "parent-s"].iloc[0]
+    assert parent["agent_cost_usd"] > 0.0
+    # Subagent cost is already IN cost_usd; agent_cost_usd must not exceed it
+    assert parent["agent_cost_usd"] <= parent["cost_usd"]
+    assert parent["child_cost_usd"] == 0.0  # no hook children
+
+
+def test_include_children_mixed_subagent_and_hook() -> None:
+    # When a session has both subagent children (shared UUID) and hook children
+    # (own UUID), only the hook child is removed; parent stays; both columns populated.
+    df = _df(
+        [
+            _row(session_id="parent-s", input_tokens=1000, output_tokens=500,
+                 parent_session_id=None),
+            _row(session_id="parent-s", input_tokens=2000, output_tokens=1000,
+                 parent_session_id="parent-s"),   # subagent (shared UUID)
+            _row(session_id="hook-child", input_tokens=3000, output_tokens=1500,
+                 parent_session_id="parent-s"),   # hook (own UUID)
+        ]
+    )
+    result = query.run_query(df, group_by=["session"], include_children=True)
+    # Hook child removed, parent stays
+    assert "parent-s" in result["session_count"].values
+    assert "hook-child" not in result["session_count"].values
+    parent = result[result["session_count"] == "parent-s"].iloc[0]
+    assert parent["agent_cost_usd"] > 0.0
+    assert parent["child_cost_usd"] > 0.0
+    assert parent["child_session_count"] == 1
+
+
+def test_include_children_total_cost_usd_present() -> None:
+    df = _df(
+        [
+            _row(session_id="solo-s", input_tokens=1000, output_tokens=500,
+                 parent_session_id=None),
+        ]
+    )
+    result = query.run_query(df, group_by=["session"], include_children=True)
+    assert "total_cost_usd" in result.columns
+    solo = result[result["session_count"] == "solo-s"].iloc[0]
+    assert solo["total_cost_usd"] == pytest.approx(solo["cost_usd"])
+
+
 def test_group_by_session_and_tool_returns_expected_rows() -> None:
     df = _df(
         [
