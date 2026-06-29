@@ -1,12 +1,15 @@
 """PreToolUse hook: tiered security review with command cache.
 
 Tiers:
-  0. Trivial allowlist (ls, pwd, git status, ...) - exit silently.
-  1. Heuristic-flagged (pipe-to-shell, eval, base64 -d, ...) - always claude,
-     never cache.
-  2. Cache hit (CCCS_USE_COMMAND_CACHE=1, fresh entry) - emit cached verdict.
-  3. Cache miss / disabled / stale - call claude CLI; on `safe` verdict and
-     no heuristic flags, record in cache.
+  0.  Trivial allowlist (ls, pwd, git status, ...) - exit silently.
+  0.5 Read-only pre-filter - nontrivial commands with no heuristic flags and
+      no write/network/exec risk patterns - exit silently. Eliminates LLM
+      calls for piped read-only commands like `grep foo | wc -l`.
+  1.  Heuristic-flagged (pipe-to-shell, eval, base64 -d, ...) - always claude,
+      never cache.
+  2.  Cache hit (CCCS_USE_COMMAND_CACHE=1, fresh entry) - emit cached verdict.
+  3.  Cache miss / disabled / stale - call claude CLI; on `safe` verdict and
+      no heuristic flags, record in cache.
 
 Never blocks. On any error/timeout, prints "[security review unavailable: ...]"
 and exits 0. Telemetry is always written, regardless of tier.
@@ -50,6 +53,37 @@ _HEURISTIC_PATTERNS: list[tuple[re.Pattern[str], str]] = [
 ]
 
 _VERDICT_RE = re.compile(r"^VERDICT:\s*(safe|suspicious|dangerous)\s*$", re.MULTILINE)
+
+# Write-risk patterns: if any match, the command warrants LLM review even when
+# it has no heuristic flags. Uses a blocklist rather than an allowlist so it
+# stays robust as new safe commands are added to sessions.
+#
+# Redirection note: `[0-9&]?>>?` matches `>`, `>>`, `2>`, `&>` etc.
+# Negative lookaheads exclude fd-merges (`>&N`) and `/dev/null` suppression,
+# which are harmless and appear in nearly every session.
+_WRITE_RISK_RE = re.compile(
+    r"""(?x)
+    # Output redirection to a real destination (not >&N or /dev/null)
+    [0-9&]?>>?\s*(?!/dev/null)(?!&\d)
+    # File-write / destructive operations
+    | \b(tee|dd|truncate|shred|rm|rmdir|unlink|mv|cp|chmod|chown|chgrp)\b
+    # Network operations (could exfiltrate or download)
+    | \b(curl|wget|ssh|scp|rsync|sftp|ftp)\b
+    # Privilege escalation
+    | \bsudo\b
+    # Package management install/remove
+    | \b(?:apt|apt-get|yum|dnf|brew)\s+(?:install|remove|purge|uninstall|update|upgrade)\b
+    | \bpip3?\s+(?:install|uninstall|remove)\b
+    | \bnpm\s+(?:install|uninstall|publish|update|ci)\b
+    # System service control
+    | \b(?:systemctl|service)\b
+    # Cron modification
+    | \bcrontab\s
+    # Git write operations (modifies working tree, history, or remote)
+    | \bgit\s+(?:push|commit|clean\b|reset|rebase|merge|fetch|stash|checkout|cherry-pick|am|apply)
+    """,
+    re.IGNORECASE,
+)
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
@@ -99,6 +133,11 @@ def heuristic_flags(command: str) -> list[str]:
         if pattern.search(command):
             hits.append(label)
     return hits
+
+
+def has_write_risk(command: str) -> bool:
+    """True if *command* contains write, network, or privilege-escalation risk patterns."""
+    return bool(_WRITE_RISK_RE.search(command))
 
 
 def session_prefix(cwd: str) -> str:
@@ -263,6 +302,25 @@ def run(stdin_text: str) -> int:
     if not nontrivial:
         _emit_telemetry(
             hi=hi, decision="allow", cache_state="none", verdict="trivial", sha=sha
+        )
+        cache_mod.invocations_record(
+            exit_tier=0,
+            verdict="allow",
+            session_id=hi.session_id or None,
+            tool_name=hi.tool_name,
+            exact_hash=sha,
+        )
+        return 0
+
+    # ---- Tier 0.5: read-only pre-filter ----
+    # At this point the command is nontrivial (has shell composition, heuristic
+    # flags, or exceeds the length threshold). If there are no heuristic flags
+    # and no write/network/exec risk patterns, the command is safe to skip
+    # regardless of shell composition — piped read-only chains like
+    # `grep foo | wc -l` or `git log | head -20` carry no meaningful risk.
+    if not hits and not has_write_risk(command):
+        _emit_telemetry(
+            hi=hi, decision="allow", cache_state="none", verdict="read-only", sha=sha
         )
         cache_mod.invocations_record(
             exit_tier=0,
