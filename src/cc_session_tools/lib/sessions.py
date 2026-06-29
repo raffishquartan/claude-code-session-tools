@@ -324,7 +324,7 @@ def _jsonl_has_custom_title(jsonl: Path, basename: str, suffix: str) -> bool:
                 except json.JSONDecodeError:
                     continue
                 if rec.get("type") == "custom-title":
-                    title = rec.get("title") or rec.get("name") or ""
+                    title = rec.get("customTitle") or rec.get("title") or rec.get("name") or ""
                     if title == basename or title == suffix:
                         return True
     except OSError:
@@ -401,7 +401,7 @@ def find_jsonl_for_session(basename: str, project_dir: Path) -> Path | None:
                     except json.JSONDecodeError:
                         continue
                     if rec.get("type") == "custom-title":
-                        title = rec.get("title") or rec.get("name") or ""
+                        title = rec.get("customTitle") or rec.get("title") or rec.get("name") or ""
                         if title == basename or title == suffix:
                             return jsonl
         except OSError:

@@ -231,11 +231,21 @@ def _aggregate(df: pd.DataFrame, group_by: list[str]) -> pd.DataFrame:
 def _fold_children(result: pd.DataFrame, work: pd.DataFrame) -> pd.DataFrame:
     """Fold child session tokens/cost into their parent rows.
 
-    Requires `work` to carry a `parent_session_id` column (added by
-    `parent_inference.resolve_parents`). Child sessions (those whose
-    `session_id` appears as any row's `parent_session_id`) are removed from
-    `result`; their aggregate tokens and cost are added to the parent rows
-    as `child_session_count`, `child_token_total`, `child_cost_usd`.
+    Two child types are handled differently:
+
+    Hook children (session_id != parent_session_id): these are separate sessions
+    billed under their own UUID (bash-security-review hook fires). They are
+    removed from `result` and their costs are added to the parent row as
+    `child_session_count`, `child_token_total`, `child_cost_usd`.
+
+    Subagent children (session_id == parent_session_id): Claude Code agent
+    subagents record the parent's sessionId in their JSONL files, so their
+    costs are ALREADY included in `cost_usd`. They are NOT removed from
+    `result`. `agent_cost_usd` shows how much of `cost_usd` came from
+    agent subagent rows (breakdown only, not additive).
+
+    All sessions also gain `total_cost_usd = cost_usd + child_cost_usd`,
+    the true total including any separately-billed hook sessions.
     """
     if "parent_session_id" not in work.columns or "session_count" not in result.columns:
         return result
@@ -246,36 +256,60 @@ def _fold_children(result: pd.DataFrame, work: pd.DataFrame) -> pd.DataFrame:
     out["child_session_count"] = 0
     out["child_token_total"] = 0
     out["child_cost_usd"] = 0.0
+    out["agent_cost_usd"] = 0.0
 
     if child_work.empty:
+        out["total_cost_usd"] = out["cost_usd"]
         return out
 
-    child_work["_row_total"] = (
-        child_work["input_tokens"]
-        + child_work["output_tokens"]
-        + child_work["cache_creation_5m"]
-        + child_work["cache_creation_1h"]
-        + child_work["cache_read"]
-    )
-    child_agg = (
-        child_work.groupby("parent_session_id")
-        .agg(
-            _child_sessions=("session_id", "nunique"),
-            _child_tokens=("_row_total", "sum"),
-            _child_cost=("cost_usd", "sum"),
+    # Separate the two child types.
+    # Hook children have their own UUID; subagent children inherit the parent's UUID.
+    is_subagent_child = child_work["session_id"] == child_work["parent_session_id"]
+    hook_children = child_work[~is_subagent_child]
+    subagent_children = child_work[is_subagent_child]
+
+    # --- Hook children: remove from output, fold cost into parent row ---
+    if not hook_children.empty:
+        hook_children = hook_children.copy()
+        hook_children["_row_total"] = (
+            hook_children["input_tokens"]
+            + hook_children["output_tokens"]
+            + hook_children["cache_creation_5m"]
+            + hook_children["cache_creation_1h"]
+            + hook_children["cache_read"]
         )
-        .reset_index()
-        .rename(columns={"parent_session_id": "_parent_id"})
-    )
+        hook_agg = (
+            hook_children.groupby("parent_session_id")
+            .agg(
+                _child_sessions=("session_id", "nunique"),
+                _child_tokens=("_row_total", "sum"),
+                _child_cost=("cost_usd", "sum"),
+            )
+            .reset_index()
+            .rename(columns={"parent_session_id": "_parent_id"})
+        )
+        hook_uuids = set(hook_children["session_id"].unique())
+        out = out[~out["session_count"].isin(hook_uuids)].copy()
+        out = out.merge(hook_agg, left_on="session_count", right_on="_parent_id", how="left")
+        out["child_session_count"] = out["_child_sessions"].fillna(0).astype(int)
+        out["child_token_total"] = out["_child_tokens"].fillna(0).astype(int)
+        out["child_cost_usd"] = out["_child_cost"].fillna(0.0)
+        out = out.drop(columns=["_child_sessions", "_child_tokens", "_child_cost", "_parent_id"], errors="ignore")
 
-    child_uuids = set(child_work["session_id"].unique())
-    out = out[~out["session_count"].isin(child_uuids)].copy()
+    # --- Subagent children: already in cost_usd; add breakdown column ---
+    if not subagent_children.empty:
+        sub_agg = (
+            subagent_children.groupby("session_id")
+            .agg(_agent_cost=("cost_usd", "sum"))
+            .reset_index()
+            .rename(columns={"session_id": "_agent_sess"})
+        )
+        out = out.merge(sub_agg, left_on="session_count", right_on="_agent_sess", how="left")
+        out["agent_cost_usd"] = out["_agent_cost"].fillna(0.0)
+        out = out.drop(columns=["_agent_cost", "_agent_sess"], errors="ignore")
 
-    out = out.merge(child_agg, left_on="session_count", right_on="_parent_id", how="left")
-    out["child_session_count"] = out["_child_sessions"].fillna(0).astype(int)
-    out["child_token_total"] = out["_child_tokens"].fillna(0).astype(int)
-    out["child_cost_usd"] = out["_child_cost"].fillna(0.0)
-    return out.drop(columns=["_child_sessions", "_child_tokens", "_child_cost", "_parent_id"], errors="ignore")
+    out["total_cost_usd"] = out["cost_usd"] + out["child_cost_usd"]
+    return out
 
 
 def _add_session_name_column(df: pd.DataFrame, name_map: Mapping[str, str]) -> pd.DataFrame:
