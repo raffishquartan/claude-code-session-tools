@@ -8,8 +8,8 @@ Current subcommands:
   hooks uninstall [--hook <name>] Remove hook entries from a target settings.json.
   hooks run <name>               Run a Claude Code hook by name.
                                  Available hooks: bash-security-review,
-                                 marker-allow, confirm-8digit, edit-write-audit,
-                                 prompt-guard, session-end, session-tag.
+                                 marker-allow, confirm-8digit, prompt-guard,
+                                 session-end, session-tag.
   skills install                 Symlink bundled skills into ~/.claude/skills/.
   skills uninstall [--skill <name>] Remove bundled skill symlinks.
   doctor                         Health-check: PATH, env vars, settings.json,
@@ -50,7 +50,6 @@ HOOK_VERBS: dict[str, str] = {
     "marker-allow": "cccs_hooks.marker_allow",
     "confirm-8digit": "cccs_hooks.confirm_8digit",
     "prompt-guard": "cccs_hooks.prompt_guard",
-    "edit-write-audit": "cccs_hooks.edit_write_audit",
     "session-end": "cccs_hooks.session_end",
     "session-tag": "cccs_hooks.session_tag",
     "last-screenshot": "cccs_hooks.last_screenshot",
@@ -64,7 +63,6 @@ HOOK_DESCRIPTIONS: dict[str, str] = {
     "marker-allow": "Auto-approves a bare `touch` of a skill marker under ~/.claude/hooks/markers/ (PreToolUse, Bash)",
     "confirm-8digit": "Enforces an 8-digit confirmation gate before risky tool calls",
     "prompt-guard": "Scans user prompts for credential shapes and prompt-injection patterns",
-    "edit-write-audit": "Audits Edit/Write/NotebookEdit paths for sensitive or out-of-root writes",
     "session-end": "Warns on stale WORKLOG and uncommitted changes when Claude stops",
     "session-tag": "Writes the session tag file so ccusage can map UUIDs to human-readable names",
     "last-screenshot": "Resolves the newest screenshot for the >lss token and injects its path",

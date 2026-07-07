@@ -83,19 +83,6 @@
         ]
       }
     ],
-    "PostToolUse": [
-      {
-        "matcher": "Edit|Write|NotebookEdit",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "ccst hooks run edit-write-audit",
-            "timeout": 10,
-            "statusMessage": "Auditing written paths..."
-          }
-        ]
-      }
-    ],
     "Stop": [
       {
         "hooks": [

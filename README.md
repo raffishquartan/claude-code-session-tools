@@ -48,7 +48,6 @@ The repo ships seven CLIs, one shell helper, eight bundled skills, and ten bundl
 | **`bash-security-review`** (PreToolUse) | Tiered Bash command security review with an allowlist cache and LLM fallback. |
 | **`marker-allow`** (PreToolUse) | Auto-approves a bare `touch` of a skill marker under `~/.claude/hooks/markers/` (and nothing else), so marker-gated skills can refresh their TTL marker without a permission prompt. |
 | **`confirm-8digit`** (PreToolUse) | Blocks a configurable set of high-stakes tool calls unless the user repeats back an 8-digit confirmation code. |
-| **`edit-write-audit`** (PostToolUse) | Audits file writes for sensitive paths and checks that WORKLOG.md is being maintained. |
 | **`session-end`** (Stop) | Nudges you to commit uncommitted changes and update WORKLOG.md when a session ends. |
 | **`messaging-deliver`** (SessionStart + UserPromptSubmit) | Sweeps `~/.claude/cc-messages/` for messages addressed to this session and injects a compact digest as additional context. Handles auto-read, read-receipts, first-claim-wins claims, and 14-day archival without prompting. |
 | **`catchup`** (SessionStart) | Reconciles the scheduled-job registry, launches owed jobs as detached workers, and surfaces previously-completed runs as a digest. |
@@ -539,7 +538,6 @@ to make the hook library available. Hooks are invoked through `ccst hooks run <n
 | `cccs_hooks.bash_security_review` | PreToolUse | Tiered Bash security review with cache. |
 | `cccs_hooks.marker_allow` | PreToolUse | Auto-approves a bare `touch` of a skill marker under `~/.claude/hooks/markers/`; silent otherwise. |
 | `cccs_hooks.markers` | — | Single source of truth for the skill-marker directory; shared by `confirm_8digit` and `marker_allow`. |
-| `cccs_hooks.edit_write_audit` | PostToolUse | Sensitive-path + WORKLOG audit. |
 | `cccs_hooks.prompt_guard` | UserPromptSubmit | Credential/injection pattern guard. |
 | `cccs_hooks.session_end` | Stop | WORKLOG/uncommitted-changes nudge. |
 | `cccs_hooks.session_tag` | **SessionStart** | Writes `<uuid>.tag` so `claude-code-usage` can map session UUIDs to `ccd` name tags (see [Session tag hook](#session-tag-hook)). |
@@ -566,7 +564,6 @@ Where `<name>` is one of:
 | `marker-allow` | `cccs_hooks.marker_allow` |
 | `confirm-8digit` | `cccs_hooks.confirm_8digit` |
 | `prompt-guard` | `cccs_hooks.prompt_guard` |
-| `edit-write-audit` | `cccs_hooks.edit_write_audit` |
 | `session-end` | `cccs_hooks.session_end` |
 | `session-tag` | `cccs_hooks.session_tag` |
 | `last-screenshot` | `cccs_hooks.last_screenshot` |

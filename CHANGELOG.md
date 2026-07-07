@@ -18,6 +18,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `ccst doctor` now prints a tip (`Run: ccst install-everything --apply`) when
   it finds WARN or FAIL items, so the fix is always one command away.
 
+### Removed
+
+- **`edit-write-audit` hook** (`cccs_hooks.edit_write_audit`) — dropped along with
+  its `PostToolUse` bundle entry, dispatcher registration, and docs. Its three
+  checks no longer earned their keep: the sensitive-path warning duplicated the
+  git-safety review already required before any commit, the out-of-repo-root
+  check hardcoded `~/repos` as the only known root (a personal OneDrive path was
+  stripped for PII reasons in a prior PII-scrub pass and never replaced with a
+  configurable equivalent, so it fired on any legitimate work outside `~/repos`),
+  and the WORKLOG.md auto-`git add` was a no-op wherever `cc-sessions/` is
+  gitignored (which it is in every repo using the convention).
+
 ## [0.16.0] - 2026-06-27
   
 ### Changed
