@@ -29,12 +29,6 @@
         "hooks": [
           {
             "type": "command",
-            "command": "ccst hooks run prompt-guard",
-            "timeout": 5,
-            "statusMessage": "Scanning prompt for credential shapes..."
-          },
-          {
-            "type": "command",
             "command": "ccst hooks run last-screenshot",
             "timeout": 5,
             "statusMessage": "Resolving latest screenshot for >lss..."

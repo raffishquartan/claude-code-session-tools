@@ -10,7 +10,7 @@ Three concerns, one repo, for life on the [Claude Code](https://docs.anthropic.c
 2. **Usage analytics** — parse `~/.claude/projects/**/*.jsonl` into tokens-and-dollars breakdowns by project, session, model, MCP server, plugin, and tool.
 3. **Hook library** — Python package (`cccs_hooks`) providing Claude Code SessionStart / PreToolUse / PostToolUse / UserPromptSubmit / Stop hook implementations, invokable via `ccst hooks run <name>`.
 
-The repo ships seven CLIs, one shell helper, eight bundled skills, and ten bundled hooks:
+The repo ships seven CLIs, one shell helper, eight bundled skills, and eight bundled hooks:
 
 **CLIs and shell helper**
 
@@ -43,7 +43,6 @@ The repo ships seven CLIs, one shell helper, eight bundled skills, and ten bundl
 | | What it does |
 |---|---|
 | **`session-tag`** (SessionStart) | Writes a `<uuid>.tag` file so `claude-code-usage` can map session UUIDs to human-readable names. |
-| **`prompt-guard`** (UserPromptSubmit) | Scans incoming prompts for credential shapes and injection patterns before they reach the model. |
 | **`last-screenshot`** (UserPromptSubmit) | Resolves your newest screenshot for the `>lss` token and injects its path. Requires `CCST_SCREENSHOT_DIR`. |
 | **`bash-security-review`** (PreToolUse) | Tiered Bash command security review with an allowlist cache and LLM fallback. |
 | **`marker-allow`** (PreToolUse) | Auto-approves a bare `touch` of a skill marker under `~/.claude/hooks/markers/` (and nothing else), so marker-gated skills can refresh their TTL marker without a permission prompt. |
@@ -538,7 +537,6 @@ to make the hook library available. Hooks are invoked through `ccst hooks run <n
 | `cccs_hooks.bash_security_review` | PreToolUse | Tiered Bash security review with cache. |
 | `cccs_hooks.marker_allow` | PreToolUse | Auto-approves a bare `touch` of a skill marker under `~/.claude/hooks/markers/`; silent otherwise. |
 | `cccs_hooks.markers` | — | Single source of truth for the skill-marker directory; shared by `confirm_8digit` and `marker_allow`. |
-| `cccs_hooks.prompt_guard` | UserPromptSubmit | Credential/injection pattern guard. |
 | `cccs_hooks.session_end` | Stop | WORKLOG/uncommitted-changes nudge. |
 | `cccs_hooks.session_tag` | **SessionStart** | Writes `<uuid>.tag` so `claude-code-usage` can map session UUIDs to `ccd` name tags (see [Session tag hook](#session-tag-hook)). |
 | `cccs_hooks.last_screenshot` | UserPromptSubmit | Resolves the newest screenshot for the `>lss` token and injects its path (see [Last screenshot hook](#last-screenshot-hook)). |
@@ -563,7 +561,6 @@ Where `<name>` is one of:
 | `bash-security-review` | `cccs_hooks.bash_security_review` |
 | `marker-allow` | `cccs_hooks.marker_allow` |
 | `confirm-8digit` | `cccs_hooks.confirm_8digit` |
-| `prompt-guard` | `cccs_hooks.prompt_guard` |
 | `session-end` | `cccs_hooks.session_end` |
 | `session-tag` | `cccs_hooks.session_tag` |
 | `last-screenshot` | `cccs_hooks.last_screenshot` |
@@ -627,7 +624,6 @@ or when installed via `uv tool install cc-session-tools`):
 ```sh
 python3 -m cccs_hooks.telemetry log --help
 python3 -m cccs_hooks.bash_security_review  # reads JSON from stdin
-python3 -m cccs_hooks.prompt_guard          # reads JSON from stdin
 ```
 
 ## Hook management CLI (`ccst`)

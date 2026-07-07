@@ -78,7 +78,6 @@ def test_hooks_install_bundle_all_hooks(tmp_path: Path) -> None:
         "ccst hooks run bash-security-review",
         "ccst hooks run marker-allow",
         "ccst hooks run confirm-8digit",
-        "ccst hooks run prompt-guard",
         "ccst hooks run session-end",
         "ccst hooks run session-tag",
         "ccst hooks run last-screenshot",
@@ -213,7 +212,6 @@ ALL_HOOK_NAMES = (
     "bash-security-review",
     "marker-allow",
     "confirm-8digit",
-    "prompt-guard",
     "session-end",
     "session-tag",
 )
@@ -288,7 +286,6 @@ def test_hooks_install_table_shows_descriptions(tmp_path: Path) -> None:
     # Spot-check that the description column carries meaningful text per hook
     assert "shell commands" in result.stdout  # bash-security-review
     assert "8-digit confirmation" in result.stdout
-    assert "credential" in result.stdout  # prompt-guard
     assert "WORKLOG" in result.stdout  # session-end
     assert "session tag" in result.stdout
 

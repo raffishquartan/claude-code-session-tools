@@ -29,6 +29,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   configurable equivalent, so it fired on any legitimate work outside `~/repos`),
   and the WORKLOG.md auto-`git add` was a no-op wherever `cc-sessions/` is
   gitignored (which it is in every repo using the convention).
+- **`prompt-guard` hook** (`cccs_hooks.prompt_guard`) — dropped along with its
+  `UserPromptSubmit` bundle entry, dispatcher registration, and docs. A grep of
+  every local session transcript for its literal warning text turned up zero
+  genuine firings ever (only source-code self-references and unsubstituted
+  template placeholders), against a real ongoing cost: it ran on every single
+  prompt in every session.
 
 ## [0.16.0] - 2026-06-27
   
