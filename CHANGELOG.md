@@ -19,6 +19,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   thing `ccs --order-by active` actually depends on — the old name implied
   "session end" but the hook fires after every single Claude response, not
   once per session, so it never matched what it does.
+- **`bash-security-review` now pins its Tier-3 LLM escalation to a fixed
+  model** (`--model sonnet` by default, override with `CCCS_REVIEW_MODEL`)
+  instead of inheriting whatever model the invoking session's `claude` CLI
+  defaults to. Without this, the review's cost and behaviour would silently
+  drift if the user's default model changed.
 
 ### Added
 

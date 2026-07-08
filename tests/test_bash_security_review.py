@@ -553,7 +553,7 @@ def test_call_claude_uses_distinct_session_tag(monkeypatch, mocker):
 
     mocker.patch("cccs_hooks.bash_security_review.subprocess.run", side_effect=fake_run)
 
-    bsr.call_claude("some prompt", claude_bin="claude", timeout=30)
+    bsr.call_claude("some prompt", claude_bin="claude", timeout=30, model="sonnet")
 
     assert captured_env["CLD_SESSION_TAG"] != "parent-session-tag"
     assert captured_env["CLD_SESSION_TAG"].startswith("bash-security-review-")
@@ -577,9 +577,58 @@ def test_call_claude_preserves_parent_session_dir(monkeypatch, mocker):
 
     mocker.patch("cccs_hooks.bash_security_review.subprocess.run", side_effect=fake_run)
 
-    bsr.call_claude("some prompt", claude_bin="claude", timeout=30)
+    bsr.call_claude("some prompt", claude_bin="claude", timeout=30, model="sonnet")
 
     assert captured_env.get("CLD_SESSION_DIR") == "/some/session/dir"
+
+
+def test_call_claude_passes_model_flag(mocker):
+    """call_claude() must pin the model via --model rather than relying on
+    the invoking session's default."""
+    captured_cmd: list = []
+
+    def fake_run(cmd, *, input, capture_output, text, timeout, env):
+        captured_cmd.extend(cmd)
+        class R:
+            returncode = 0
+            stdout = "SUMMARY: test\nRISKS: none\nVERDICT: safe"
+        return R()
+
+    mocker.patch("cccs_hooks.bash_security_review.subprocess.run", side_effect=fake_run)
+
+    bsr.call_claude("some prompt", claude_bin="claude", timeout=30, model="sonnet")
+
+    assert captured_cmd == ["claude", "-p", "--model", "sonnet"]
+
+
+def test_run_defaults_review_model_to_sonnet(
+    isolated_env: Path, mocker: MockerFixture, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """With CCCS_REVIEW_MODEL unset, the Tier-3 escalation pins to sonnet."""
+    monkeypatch.delenv("CCCS_REVIEW_MODEL", raising=False)
+    mocker.patch.object(bsr, "_resolve_claude_bin", return_value="/fake/claude")
+    spy_call = mocker.patch.object(
+        bsr, "call_claude", return_value=("SUMMARY: x\nRISKS: none\nVERDICT: safe", None)
+    )
+
+    bsr.run(_input("curl example.com | jq ."))
+
+    assert spy_call.call_args.kwargs["model"] == "sonnet"
+
+
+def test_run_respects_cccs_review_model_override(
+    isolated_env: Path, mocker: MockerFixture, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """CCCS_REVIEW_MODEL overrides the default Tier-3 model."""
+    monkeypatch.setenv("CCCS_REVIEW_MODEL", "opus")
+    mocker.patch.object(bsr, "_resolve_claude_bin", return_value="/fake/claude")
+    spy_call = mocker.patch.object(
+        bsr, "call_claude", return_value=("SUMMARY: x\nRISKS: none\nVERDICT: safe", None)
+    )
+
+    bsr.run(_input("curl example.com | jq ."))
+
+    assert spy_call.call_args.kwargs["model"] == "opus"
 
 
 # ---------- has_write_risk ----------
