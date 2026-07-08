@@ -10,7 +10,7 @@ Three concerns, one repo, for life on the [Claude Code](https://docs.anthropic.c
 2. **Usage analytics** — parse `~/.claude/projects/**/*.jsonl` into tokens-and-dollars breakdowns by project, session, model, MCP server, plugin, and tool.
 3. **Hook library** — Python package (`cccs_hooks`) providing Claude Code SessionStart / PreToolUse / PostToolUse / UserPromptSubmit / Stop hook implementations, invokable via `ccst hooks run <name>`.
 
-The repo ships seven CLIs, one shell helper, eight bundled skills, and eight bundled hooks:
+The repo ships seven CLIs, one shell helper, eight bundled skills, and nine bundled hooks:
 
 **CLIs and shell helper**
 
@@ -48,6 +48,7 @@ The repo ships seven CLIs, one shell helper, eight bundled skills, and eight bun
 | **`marker-allow`** (PreToolUse) | Auto-approves a bare `touch` of a skill marker under `~/.claude/hooks/markers/` (and nothing else), so marker-gated skills can refresh their TTL marker without a permission prompt. |
 | **`confirm-8digit`** (PreToolUse) | Blocks a configurable set of high-stakes tool calls unless the user repeats back an 8-digit confirmation code. |
 | **`after-response`** (Stop) | Touches a `.last-active` sentinel so `ccs --order-by active` can sort sessions by recency of Claude activity. |
+| **`worklog-guard`** (PreCompact, matcher: `manual`) | Blocks manual `/compact` if the session's WORKLOG.md is stale, so progress isn't lost to compaction unrecorded. |
 | **`messaging-deliver`** (SessionStart + UserPromptSubmit) | Sweeps `~/.claude/cc-messages/` for messages addressed to this session and injects a compact digest as additional context. Handles auto-read, read-receipts, first-claim-wins claims, and 14-day archival without prompting. |
 | **`catchup`** (SessionStart) | Reconciles the scheduled-job registry, launches owed jobs as detached workers, and surfaces previously-completed runs as a digest. |
 | **`catchup`** (UserPromptSubmit) | Surfaces (reaps) completed scheduled runs on a throttle (60 s), so a job launched at session start surfaces at the next prompt in the same session. |
@@ -538,6 +539,7 @@ to make the hook library available. Hooks are invoked through `ccst hooks run <n
 | `cccs_hooks.marker_allow` | PreToolUse | Auto-approves a bare `touch` of a skill marker under `~/.claude/hooks/markers/`; silent otherwise. |
 | `cccs_hooks.markers` | — | Single source of truth for the skill-marker directory; shared by `confirm_8digit` and `marker_allow`. |
 | `cccs_hooks.after_response` | Stop | `.last-active` sentinel for `ccs --order-by active`. |
+| `cccs_hooks.worklog_guard` | PreCompact (manual) | Blocks `/compact` if the session's WORKLOG.md is stale (see [Worklog guard hook](#worklog-guard-hook)). |
 | `cccs_hooks.session_tag` | **SessionStart** | Writes `<uuid>.tag` so `claude-code-usage` can map session UUIDs to `ccd` name tags (see [Session tag hook](#session-tag-hook)). |
 | `cccs_hooks.last_screenshot` | UserPromptSubmit | Resolves the newest screenshot for the `>lss` token and injects its path (see [Last screenshot hook](#last-screenshot-hook)). |
 | `cccs_hooks.messaging_deliver` | SessionStart + UserPromptSubmit | Sweeps `~/.claude/cc-messages/` for messages addressed to this session and injects a compact digest as additional context (see [Inter-session messaging](#inter-session-messaging)). |
@@ -562,6 +564,7 @@ Where `<name>` is one of:
 | `marker-allow` | `cccs_hooks.marker_allow` |
 | `confirm-8digit` | `cccs_hooks.confirm_8digit` |
 | `after-response` | `cccs_hooks.after_response` |
+| `worklog-guard` | `cccs_hooks.worklog_guard` |
 | `session-tag` | `cccs_hooks.session_tag` |
 | `last-screenshot` | `cccs_hooks.last_screenshot` |
 | `messaging-deliver` | `cccs_hooks.messaging_deliver` |
@@ -615,6 +618,26 @@ If `>lss` is used while `CCST_SCREENSHOT_DIR` is unset (or not a directory), the
 hook prints a visible warning to stderr telling you to set it. The hook never
 blocks and always exits 0.
 
+### Worklog guard hook
+
+`cccs_hooks.worklog_guard` is a **PreCompact** hook, registered with
+matcher `manual` only, that blocks `/compact` if the current session's
+`cc-sessions/<date>-<tag>/working/WORKLOG.md` hasn't been touched in the last
+hour. Compaction is the one moment where losing un-persisted progress is a
+real risk, which is why this hook blocks rather than just warning like
+`after-response` used to.
+
+- **Only fires for `ccd`/`ccr` sessions** - it reads `CLD_SESSION_DIR` to find
+  the session's own WORKLOG.md directly (no globbing across
+  `cc-sessions/*`, so it can't pick the wrong session's file). Sessions
+  started plainly via `claude` have no `CLD_SESSION_DIR` and are never
+  blocked.
+- **Only fires if a WORKLOG.md already exists** - it never forces you to
+  create one, and never blocks automatic (non-`/compact`) compaction, which
+  can happen mid-task in an unattended session with nobody present to react.
+- **Escape hatch:** set `CCCS_ALLOW_STALE_WORKLOG=1` to bypass the block for
+  one `/compact`.
+
 ### Running modules directly (debugging only)
 
 Each module is also runnable as a Python CLI if you want to bypass the dispatcher
@@ -634,7 +657,7 @@ The `ccst` umbrella CLI provides hook and skill management, shell helper install
 
 Merges hook entries from a source `settings.json` into `~/.claude/settings.json`.
 With no `--source`, auto-discovers the bundled `config/hooks-bundle.json` and
-installs all eight default hooks.
+installs all nine default hooks.
 
 ```sh
 # Dry run (default) - shows what would be added

@@ -88,6 +88,19 @@
           }
         ]
       }
+    ],
+    "PreCompact": [
+      {
+        "matcher": "manual",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "ccst hooks run worklog-guard",
+            "timeout": 5,
+            "statusMessage": "Checking WORKLOG.md freshness..."
+          }
+        ]
+      }
     ]
   }
 }

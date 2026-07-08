@@ -79,6 +79,7 @@ def test_hooks_install_bundle_all_hooks(tmp_path: Path) -> None:
         "ccst hooks run marker-allow",
         "ccst hooks run confirm-8digit",
         "ccst hooks run after-response",
+        "ccst hooks run worklog-guard",
         "ccst hooks run session-tag",
         "ccst hooks run last-screenshot",
         "ccst hooks run messaging-deliver",
@@ -179,7 +180,7 @@ def test_bundle_json_has_correct_events() -> None:
     assert bundle_path.is_file(), f"Bundle not found: {bundle_path}"
     bundle = json.loads(bundle_path.read_text())
     events = set(bundle["hooks"].keys())
-    assert events == {"SessionStart", "UserPromptSubmit", "PreToolUse", "Stop"}
+    assert events == {"SessionStart", "UserPromptSubmit", "PreToolUse", "Stop", "PreCompact"}
 
 
 def test_bundle_json_bash_security_review_has_bash_matcher() -> None:

@@ -27,6 +27,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`worklog-guard` hook** (`cccs_hooks.worklog_guard`) — PreCompact hook,
+  matcher `manual` only, that blocks `/compact` if the session's WORKLOG.md
+  is stale. This is the direct replacement for `after-response`'s deleted
+  WORKLOG-staleness nag: instead of a stderr warning fired on every Stop
+  event (ignorable, and it was — one file got nagged ~5,000 times with zero
+  effect), the check now fires once, at the one moment un-persisted context
+  is actually at risk of being lost, and blocks rather than just warns.
+  Only acts for `ccd`/`ccr` sessions with an existing WORKLOG.md; escape
+  hatch `CCCS_ALLOW_STALE_WORKLOG=1`.
 - **`ccst install-everything`** — runs all install steps (skills, hooks, shell,
   claude-md) in sequence and finishes with a `ccst doctor` health check. Dry run
   by default; pass `--apply` to write changes. Pass `--no-pypi` to skip the
