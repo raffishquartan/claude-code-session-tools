@@ -113,13 +113,13 @@ def _settings_with_cmd(command: str, event: str = "Stop") -> dict:
 
 
 def test_check_hook_registered_present() -> None:
-    settings = _settings_with_cmd("ccst hooks run session-end")
-    r = check_hook_registered("session-end", settings)
+    settings = _settings_with_cmd("ccst hooks run after-response")
+    r = check_hook_registered("after-response", settings)
     assert r.status == Status.OK
 
 
 def test_check_hook_registered_missing() -> None:
-    r = check_hook_registered("session-end", {})
+    r = check_hook_registered("after-response", {})
     assert r.status == Status.WARN
     assert "not found" in r.reason
 
@@ -283,14 +283,14 @@ def test_format_results_empty() -> None:
 def test_extract_bundle_hook_names(tmp_path: Path) -> None:
     bundle = {
         "hooks": {
-            "Stop": [{"hooks": [{"type": "command", "command": "ccst hooks run session-end"}]}],
+            "Stop": [{"hooks": [{"type": "command", "command": "ccst hooks run after-response"}]}],
             "SessionStart": [{"hooks": [{"type": "command", "command": "ccst hooks run session-tag"}]}],
         }
     }
     p = tmp_path / "bundle.json"
     p.write_text(json.dumps(bundle))
     names = _extract_bundle_hook_names(p)
-    assert set(names) == {"session-end", "session-tag"}
+    assert set(names) == {"after-response", "session-tag"}
 
 
 def test_extract_bundle_hook_names_missing_file(tmp_path: Path) -> None:

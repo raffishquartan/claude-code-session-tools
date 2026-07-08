@@ -82,9 +82,9 @@
         "hooks": [
           {
             "type": "command",
-            "command": "ccst hooks run session-end",
+            "command": "ccst hooks run after-response",
             "timeout": 10,
-            "statusMessage": "Running end-of-session checks..."
+            "statusMessage": "Recording session activity..."
           }
         ]
       }

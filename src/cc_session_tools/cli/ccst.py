@@ -9,7 +9,7 @@ Current subcommands:
   hooks run <name>               Run a Claude Code hook by name.
                                  Available hooks: bash-security-review,
                                  marker-allow, confirm-8digit,
-                                 session-end, session-tag.
+                                 after-response, session-tag.
   skills install                 Symlink bundled skills into ~/.claude/skills/.
   skills uninstall [--skill <name>] Remove bundled skill symlinks.
   doctor                         Health-check: PATH, env vars, settings.json,
@@ -49,7 +49,7 @@ HOOK_VERBS: dict[str, str] = {
     "bash-security-review": "cccs_hooks.bash_security_review",
     "marker-allow": "cccs_hooks.marker_allow",
     "confirm-8digit": "cccs_hooks.confirm_8digit",
-    "session-end": "cccs_hooks.session_end",
+    "after-response": "cccs_hooks.after_response",
     "session-tag": "cccs_hooks.session_tag",
     "last-screenshot": "cccs_hooks.last_screenshot",
     "messaging-deliver": "cccs_hooks.messaging_deliver",
@@ -61,7 +61,7 @@ HOOK_DESCRIPTIONS: dict[str, str] = {
     "bash-security-review": "Reviews shell commands for security risks (tiered: allowlist, heuristics, LLM)",
     "marker-allow": "Auto-approves a bare `touch` of a skill marker under ~/.claude/hooks/markers/ (PreToolUse, Bash)",
     "confirm-8digit": "Enforces an 8-digit confirmation gate before risky tool calls",
-    "session-end": "Warns on stale WORKLOG and uncommitted changes when Claude stops",
+    "after-response": "Touches a .last-active sentinel so `ccs --order-by active` can sort by recency",
     "session-tag": "Writes the session tag file so ccusage can map UUIDs to human-readable names",
     "last-screenshot": "Resolves the newest screenshot for the >lss token and injects its path",
     "messaging-deliver": "Delivers inter-session messages (digest + auto-read + receipts) on session start and each prompt",

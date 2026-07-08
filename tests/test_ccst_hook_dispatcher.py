@@ -39,7 +39,7 @@ def test_hook_verbs_covers_every_shim_module() -> None:
         "bash-security-review",
         "marker-allow",
         "confirm-8digit",
-        "session-end",
+        "after-response",
         "session-tag",
         "last-screenshot",
         "messaging-deliver",

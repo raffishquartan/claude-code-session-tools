@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **`session-end` hook renamed to `after-response`** (`cccs_hooks.session_end` →
+  `cccs_hooks.after_response`) and stripped of its two nagging checks
+  (uncommitted-changes-on-a-feature-branch, stale-WORKLOG.md). A transcript
+  audit found the uncommitted-changes check fires on every ordinary mid-task
+  Stop and the WORKLOG check nagged one file ~5,000 times with zero observed
+  effect, plus a real duplicate-registration bug meant both were firing twice
+  per Stop event. What's left is a `.last-active` sentinel touch, the one
+  thing `ccs --order-by active` actually depends on — the old name implied
+  "session end" but the hook fires after every single Claude response, not
+  once per session, so it never matched what it does.
+
 ### Added
 
 - **`ccst install-everything`** — runs all install steps (skills, hooks, shell,

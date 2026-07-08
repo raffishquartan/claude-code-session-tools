@@ -47,7 +47,7 @@ The repo ships seven CLIs, one shell helper, eight bundled skills, and eight bun
 | **`bash-security-review`** (PreToolUse) | Tiered Bash command security review with an allowlist cache and LLM fallback. |
 | **`marker-allow`** (PreToolUse) | Auto-approves a bare `touch` of a skill marker under `~/.claude/hooks/markers/` (and nothing else), so marker-gated skills can refresh their TTL marker without a permission prompt. |
 | **`confirm-8digit`** (PreToolUse) | Blocks a configurable set of high-stakes tool calls unless the user repeats back an 8-digit confirmation code. |
-| **`session-end`** (Stop) | Nudges you to commit uncommitted changes and update WORKLOG.md when a session ends. |
+| **`after-response`** (Stop) | Touches a `.last-active` sentinel so `ccs --order-by active` can sort sessions by recency of Claude activity. |
 | **`messaging-deliver`** (SessionStart + UserPromptSubmit) | Sweeps `~/.claude/cc-messages/` for messages addressed to this session and injects a compact digest as additional context. Handles auto-read, read-receipts, first-claim-wins claims, and 14-day archival without prompting. |
 | **`catchup`** (SessionStart) | Reconciles the scheduled-job registry, launches owed jobs as detached workers, and surfaces previously-completed runs as a digest. |
 | **`catchup`** (UserPromptSubmit) | Surfaces (reaps) completed scheduled runs on a throttle (60 s), so a job launched at session start surfaces at the next prompt in the same session. |
@@ -537,7 +537,7 @@ to make the hook library available. Hooks are invoked through `ccst hooks run <n
 | `cccs_hooks.bash_security_review` | PreToolUse | Tiered Bash security review with cache. |
 | `cccs_hooks.marker_allow` | PreToolUse | Auto-approves a bare `touch` of a skill marker under `~/.claude/hooks/markers/`; silent otherwise. |
 | `cccs_hooks.markers` | — | Single source of truth for the skill-marker directory; shared by `confirm_8digit` and `marker_allow`. |
-| `cccs_hooks.session_end` | Stop | WORKLOG/uncommitted-changes nudge. |
+| `cccs_hooks.after_response` | Stop | `.last-active` sentinel for `ccs --order-by active`. |
 | `cccs_hooks.session_tag` | **SessionStart** | Writes `<uuid>.tag` so `claude-code-usage` can map session UUIDs to `ccd` name tags (see [Session tag hook](#session-tag-hook)). |
 | `cccs_hooks.last_screenshot` | UserPromptSubmit | Resolves the newest screenshot for the `>lss` token and injects its path (see [Last screenshot hook](#last-screenshot-hook)). |
 | `cccs_hooks.messaging_deliver` | SessionStart + UserPromptSubmit | Sweeps `~/.claude/cc-messages/` for messages addressed to this session and injects a compact digest as additional context (see [Inter-session messaging](#inter-session-messaging)). |
@@ -561,7 +561,7 @@ Where `<name>` is one of:
 | `bash-security-review` | `cccs_hooks.bash_security_review` |
 | `marker-allow` | `cccs_hooks.marker_allow` |
 | `confirm-8digit` | `cccs_hooks.confirm_8digit` |
-| `session-end` | `cccs_hooks.session_end` |
+| `after-response` | `cccs_hooks.after_response` |
 | `session-tag` | `cccs_hooks.session_tag` |
 | `last-screenshot` | `cccs_hooks.last_screenshot` |
 | `messaging-deliver` | `cccs_hooks.messaging_deliver` |

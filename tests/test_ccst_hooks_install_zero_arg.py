@@ -78,7 +78,7 @@ def test_hooks_install_bundle_all_hooks(tmp_path: Path) -> None:
         "ccst hooks run bash-security-review",
         "ccst hooks run marker-allow",
         "ccst hooks run confirm-8digit",
-        "ccst hooks run session-end",
+        "ccst hooks run after-response",
         "ccst hooks run session-tag",
         "ccst hooks run last-screenshot",
         "ccst hooks run messaging-deliver",
@@ -212,7 +212,7 @@ ALL_HOOK_NAMES = (
     "bash-security-review",
     "marker-allow",
     "confirm-8digit",
-    "session-end",
+    "after-response",
     "session-tag",
 )
 
@@ -286,7 +286,7 @@ def test_hooks_install_table_shows_descriptions(tmp_path: Path) -> None:
     # Spot-check that the description column carries meaningful text per hook
     assert "shell commands" in result.stdout  # bash-security-review
     assert "8-digit confirmation" in result.stdout
-    assert "WORKLOG" in result.stdout  # session-end
+    assert "last-active" in result.stdout  # after-response
     assert "session tag" in result.stdout
 
 
@@ -314,7 +314,7 @@ def test_hooks_install_table_mixed_status_after_partial_install(tmp_path: Path) 
     # session-tag is already there
     line_st = next(ln for ln in result.stdout.splitlines() if ln.startswith("session-tag"))
     assert "already-installed" in line_st
-    # session-end is still new
-    line_se = next(ln for ln in result.stdout.splitlines() if ln.startswith("session-end"))
+    # after-response is still new
+    line_se = next(ln for ln in result.stdout.splitlines() if ln.startswith("after-response"))
     assert "install" in line_se
     assert "already-installed" not in line_se
