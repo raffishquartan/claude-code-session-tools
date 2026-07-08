@@ -78,9 +78,8 @@ def test_hooks_install_bundle_all_hooks(tmp_path: Path) -> None:
         "ccst hooks run bash-security-review",
         "ccst hooks run marker-allow",
         "ccst hooks run confirm-8digit",
-        "ccst hooks run prompt-guard",
-        "ccst hooks run edit-write-audit",
-        "ccst hooks run session-end",
+        "ccst hooks run after-response",
+        "ccst hooks run worklog-guard",
         "ccst hooks run session-tag",
         "ccst hooks run last-screenshot",
         "ccst hooks run messaging-deliver",
@@ -181,7 +180,7 @@ def test_bundle_json_has_correct_events() -> None:
     assert bundle_path.is_file(), f"Bundle not found: {bundle_path}"
     bundle = json.loads(bundle_path.read_text())
     events = set(bundle["hooks"].keys())
-    assert events == {"SessionStart", "UserPromptSubmit", "PreToolUse", "PostToolUse", "Stop"}
+    assert events == {"SessionStart", "UserPromptSubmit", "PreToolUse", "Stop", "PreCompact"}
 
 
 def test_bundle_json_bash_security_review_has_bash_matcher() -> None:
@@ -194,18 +193,6 @@ def test_bundle_json_bash_security_review_has_bash_matcher() -> None:
             assert block.get("matcher") == "Bash"
             found = True
     assert found, "bash-security-review not found in PreToolUse"
-
-
-def test_bundle_json_edit_write_audit_has_matcher() -> None:
-    bundle_path = Path(__file__).parent.parent / "config" / "hooks-bundle.json"
-    bundle = json.loads(bundle_path.read_text())
-    found = False
-    for block in bundle["hooks"]["PostToolUse"]:
-        cmds = [h["command"] for h in block.get("hooks", [])]
-        if "ccst hooks run edit-write-audit" in cmds:
-            assert "matcher" in block
-            found = True
-    assert found, "edit-write-audit not found in PostToolUse"
 
 
 def test_bundle_json_confirm_8digit_has_no_matcher() -> None:
@@ -226,9 +213,7 @@ ALL_HOOK_NAMES = (
     "bash-security-review",
     "marker-allow",
     "confirm-8digit",
-    "edit-write-audit",
-    "prompt-guard",
-    "session-end",
+    "after-response",
     "session-tag",
 )
 
@@ -291,7 +276,6 @@ def test_hooks_install_table_shows_event_names(tmp_path: Path) -> None:
     assert "PreToolUse[Bash]" in out  # bash-security-review's matcher
     assert "SessionStart" in out
     assert "UserPromptSubmit" in out
-    assert "PostToolUse[Edit|Write|NotebookEdit]" in out
     assert "Stop" in out
 
 
@@ -303,10 +287,8 @@ def test_hooks_install_table_shows_descriptions(tmp_path: Path) -> None:
     # Spot-check that the description column carries meaningful text per hook
     assert "shell commands" in result.stdout  # bash-security-review
     assert "8-digit confirmation" in result.stdout
-    assert "credential" in result.stdout  # prompt-guard
-    assert "WORKLOG" in result.stdout  # session-end
+    assert "last-active" in result.stdout  # after-response
     assert "session tag" in result.stdout
-    assert "Edit/Write" in result.stdout  # edit-write-audit
 
 
 def test_hooks_install_hook_selector_table_only_named_row(tmp_path: Path) -> None:
@@ -333,7 +315,7 @@ def test_hooks_install_table_mixed_status_after_partial_install(tmp_path: Path) 
     # session-tag is already there
     line_st = next(ln for ln in result.stdout.splitlines() if ln.startswith("session-tag"))
     assert "already-installed" in line_st
-    # session-end is still new
-    line_se = next(ln for ln in result.stdout.splitlines() if ln.startswith("session-end"))
+    # after-response is still new
+    line_se = next(ln for ln in result.stdout.splitlines() if ln.startswith("after-response"))
     assert "install" in line_se
     assert "already-installed" not in line_se

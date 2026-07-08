@@ -22,13 +22,6 @@ def _run(*args: str, stdin: str = "") -> subprocess.CompletedProcess[str]:
     )
 
 
-def test_hooks_run_prompt_guard_empty_stdin_exits_zero() -> None:
-    result = _run("hooks", "run", "prompt-guard", stdin="")
-    assert result.returncode == 0, (
-        f"stdout={result.stdout!r} stderr={result.stderr!r}"
-    )
-
-
 def test_hooks_run_unknown_hook_name_rejected() -> None:
     result = _run("hooks", "run", "no-such-hook")
     assert result.returncode != 0
@@ -46,9 +39,8 @@ def test_hook_verbs_covers_every_shim_module() -> None:
         "bash-security-review",
         "marker-allow",
         "confirm-8digit",
-        "prompt-guard",
-        "edit-write-audit",
-        "session-end",
+        "after-response",
+        "worklog-guard",
         "session-tag",
         "last-screenshot",
         "messaging-deliver",

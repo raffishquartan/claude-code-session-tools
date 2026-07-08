@@ -29,12 +29,6 @@
         "hooks": [
           {
             "type": "command",
-            "command": "ccst hooks run prompt-guard",
-            "timeout": 5,
-            "statusMessage": "Scanning prompt for credential shapes..."
-          },
-          {
-            "type": "command",
             "command": "ccst hooks run last-screenshot",
             "timeout": 5,
             "statusMessage": "Resolving latest screenshot for >lss..."
@@ -83,27 +77,27 @@
         ]
       }
     ],
-    "PostToolUse": [
-      {
-        "matcher": "Edit|Write|NotebookEdit",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "ccst hooks run edit-write-audit",
-            "timeout": 10,
-            "statusMessage": "Auditing written paths..."
-          }
-        ]
-      }
-    ],
     "Stop": [
       {
         "hooks": [
           {
             "type": "command",
-            "command": "ccst hooks run session-end",
+            "command": "ccst hooks run after-response",
             "timeout": 10,
-            "statusMessage": "Running end-of-session checks..."
+            "statusMessage": "Recording session activity..."
+          }
+        ]
+      }
+    ],
+    "PreCompact": [
+      {
+        "matcher": "manual",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "ccst hooks run worklog-guard",
+            "timeout": 5,
+            "statusMessage": "Checking WORKLOG.md freshness..."
           }
         ]
       }

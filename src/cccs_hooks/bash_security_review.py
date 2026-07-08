@@ -11,6 +11,10 @@ Tiers:
   3.  Cache miss / disabled / stale - call claude CLI; on `safe` verdict and
       no heuristic flags, record in cache.
 
+Tier 3 always pins the review model via `--model` (default `sonnet`,
+override with CCCS_REVIEW_MODEL) so the review's cost and behaviour don't
+silently drift if the invoking session's default model changes.
+
 Never blocks. On any error/timeout, prints "[security review unavailable: ...]"
 and exits 0. Telemetry is always written, regardless of tier.
 """
@@ -192,7 +196,7 @@ def format_review_for_stderr(review_text: str, hits: list[str]) -> str:
     return "\n".join(out_lines)
 
 
-def call_claude(prompt: str, *, claude_bin: str, timeout: int) -> tuple[str | None, str | None]:
+def call_claude(prompt: str, *, claude_bin: str, timeout: int, model: str) -> tuple[str | None, str | None]:
     """Run claude CLI. Return (review_text, error_message). Exactly one is non-None."""
     _env = os.environ.copy()
     # Give the sub-process its own distinct session identity so its SessionStart
@@ -203,7 +207,7 @@ def call_claude(prompt: str, *, claude_bin: str, timeout: int) -> tuple[str | No
     _env["CLD_SESSION_MODE"] = "hook"
     try:
         result = subprocess.run(
-            [claude_bin, "-p"],
+            [claude_bin, "-p", "--model", model],
             input=prompt,
             capture_output=True,
             text=True,
@@ -379,10 +383,11 @@ def run(stdin_text: str) -> int:
         timeout = int(os.environ.get("CCCS_REVIEW_TIMEOUT", "30"))
     except ValueError:
         timeout = 30
+    model = os.environ.get("CCCS_REVIEW_MODEL", "sonnet")
 
     prompt = build_prompt(command, hi.cwd)
     _t0 = time.monotonic()
-    review_text, err = call_claude(prompt, claude_bin=claude_bin, timeout=timeout)
+    review_text, err = call_claude(prompt, claude_bin=claude_bin, timeout=timeout, model=model)
     _ms_elapsed = int((time.monotonic() - _t0) * 1000)
     if err is not None:
         sys.stderr.write(f"[security review unavailable: {err}]\n")
