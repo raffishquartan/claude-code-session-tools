@@ -7,64 +7,74 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Changed
-
-- **`session-end` hook renamed to `after-response`** (`cccs_hooks.session_end` →
-  `cccs_hooks.after_response`) and stripped of its two nagging checks
-  (uncommitted-changes-on-a-feature-branch, stale-WORKLOG.md). A transcript
-  audit found the uncommitted-changes check fires on every ordinary mid-task
-  Stop and the WORKLOG check nagged one file ~5,000 times with zero observed
-  effect, plus a real duplicate-registration bug meant both were firing twice
-  per Stop event. What's left is a `.last-active` sentinel touch, the one
-  thing `ccs --order-by active` actually depends on — the old name implied
-  "session end" but the hook fires after every single Claude response, not
-  once per session, so it never matched what it does.
-- **`bash-security-review` now pins its Tier-3 LLM escalation to a fixed
-  model** (`--model sonnet` by default, override with `CCCS_REVIEW_MODEL`)
-  instead of inheriting whatever model the invoking session's `claude` CLI
-  defaults to. Without this, the review's cost and behaviour would silently
-  drift if the user's default model changed.
+## [0.17.0] - 2026-07-09
 
 ### Added
 
+- **Tier 0.5 read-only pre-filter in `bash-security-review`.** Piped read-only
+  commands (`grep | wc`, `git log | head`, `find | sort`) were classed as
+  nontrivial and escalated to Tier-3 LLM review despite no write/exec/network
+  risk — 20-30 needless `claude` invocations per busy session. A `has_write_risk()`
+  check (`_WRITE_RISK_RE` blocklist) now exits such commands immediately with
+  verdict `read-only`; anything with redirection, `tee`, `rm`, `curl`, `ssh`,
+  `sudo`, git write ops, or package managers still escalates.
 - **`worklog-guard` hook** (`cccs_hooks.worklog_guard`) — PreCompact hook,
-  matcher `manual` only, that blocks `/compact` if the session's WORKLOG.md
-  is stale. This is the direct replacement for `after-response`'s deleted
-  WORKLOG-staleness nag: instead of a stderr warning fired on every Stop
-  event (ignorable, and it was — one file got nagged ~5,000 times with zero
-  effect), the check now fires once, at the one moment un-persisted context
-  is actually at risk of being lost, and blocks rather than just warns.
-  Only acts for `ccd`/`ccr` sessions with an existing WORKLOG.md; escape
-  hatch `CCCS_ALLOW_STALE_WORKLOG=1`.
+  matcher `manual` only, blocks `/compact` when the session's WORKLOG.md is
+  stale. Replaces `after-response`'s deleted per-Stop WORKLOG nag: the check now
+  fires once, at the moment un-persisted context is actually at risk, and blocks
+  rather than warns. Only acts for `ccd`/`ccr` sessions with an existing
+  WORKLOG.md; escape hatch `CCCS_ALLOW_STALE_WORKLOG=1`.
 - **`ccst install-everything`** — runs all install steps (skills, hooks, shell,
-  claude-md) in sequence and finishes with a `ccst doctor` health check. Dry run
-  by default; pass `--apply` to write changes. Pass `--no-pypi` to skip the
-  PyPI version-drift check in the final health check. Mirrors the
-  `install-everything.sh` bootstrap script but as a first-class CLI command so
-  it can be re-run idempotently after upgrades without needing the shell script.
-- `ccst doctor` now prints a tip (`Run: ccst install-everything --apply`) when
-  it finds WARN or FAIL items, so the fix is always one command away.
+  claude-md) then a `ccst doctor` health check. Dry-run by default; `--apply` to
+  write, `--no-pypi` to skip the version-drift check. A first-class, idempotent
+  CLI equivalent of the `install-everything.sh` bootstrap script.
+- `ccst doctor` prints `Run: ccst install-everything --apply` when it reports any
+  WARN or FAIL item.
+
+### Changed
+
+- **`session-end` hook renamed to `after-response`** (`cccs_hooks.session_end` →
+  `cccs_hooks.after_response`). The old name implied "once per session", but the
+  Stop event fires after every Claude response. Both its nagging checks are gone:
+  the uncommitted-changes-on-a-feature-branch warning fired on every ordinary
+  mid-task Stop, and the WORKLOG-staleness warning nagged one file ~5,000 times
+  with no observed effect (a duplicate-registration bug also fired both twice per
+  Stop). What remains is the `.last-active` sentinel touch that `ccs --order-by
+  active` depends on.
+- **`bash-security-review` pins its Tier-3 LLM escalation to a fixed model**
+  (`--model sonnet`, override with `CCCS_REVIEW_MODEL`) instead of inheriting the
+  invoking session's default `claude` model, whose cost and behaviour would
+  otherwise drift silently.
+
+### Fixed
+
+- **`claude-code-usage --include-children` and the `children` command dropped
+  parent sessions for agent subagents.** Subagent JSONL rows share the parent's
+  `sessionId` (already billed under it), but `_fold_children` treated them as
+  separate children and stripped the parent row from output entirely. It now
+  distinguishes hook children (own UUID, separately billed — folded into
+  `child_cost_usd`) from subagent children (shared UUID — parent stays visible,
+  cost shown as a non-additive `agent_cost_usd` breakdown column), and adds
+  `total_cost_usd = cost_usd + child_cost_usd`. Also fixes `sessions.py` to read
+  the `customTitle` field.
 
 ### Removed
 
-- **`edit-write-audit` hook** (`cccs_hooks.edit_write_audit`) — dropped along with
-  its `PostToolUse` bundle entry, dispatcher registration, and docs. Its three
+- **`edit-write-audit` hook** (`cccs_hooks.edit_write_audit`) — PostToolUse hook
+  dropped with its bundle entry, dispatcher registration, and docs. Its three
   checks no longer earned their keep: the sensitive-path warning duplicated the
-  git-safety review already required before any commit, the out-of-repo-root
-  check hardcoded `~/repos` as the only known root (a personal OneDrive path was
-  stripped for PII reasons in a prior PII-scrub pass and never replaced with a
-  configurable equivalent, so it fired on any legitimate work outside `~/repos`),
-  and the WORKLOG.md auto-`git add` was a no-op wherever `cc-sessions/` is
-  gitignored (which it is in every repo using the convention).
-- **`prompt-guard` hook** (`cccs_hooks.prompt_guard`) — dropped along with its
-  `UserPromptSubmit` bundle entry, dispatcher registration, and docs. A grep of
-  every local session transcript for its literal warning text turned up zero
-  genuine firings ever (only source-code self-references and unsubstituted
-  template placeholders), against a real ongoing cost: it ran on every single
-  prompt in every session.
+  pre-commit git-safety review; the out-of-repo-root check hardcoded `~/repos` as
+  the only root (its OneDrive counterpart was stripped in a PII scrub and never
+  replaced, so it fired on any work outside `~/repos`); and the WORKLOG.md
+  auto-`git add` was a no-op wherever `cc-sessions/` is gitignored, which it
+  always is under the convention.
+- **`prompt-guard` hook** (`cccs_hooks.prompt_guard`) — UserPromptSubmit hook
+  dropped with its bundle entry, dispatcher registration, and docs. It ran a
+  credential/prompt-injection regex scan on every prompt in every session; a grep
+  of every local transcript for its warning text found zero genuine firings ever.
 
 ## [0.16.0] - 2026-06-27
-  
+
 ### Changed
 
 - Default path for telemetry log (`fires.jsonl`) and rotation slots changed from
@@ -430,7 +440,9 @@ integration (push notifications when 8-digit confirmation gates fire).
 - `--version` flag on all three CLIs.
 - `.gitignore` entry for `.worktrees/`.
 
-[Unreleased]: https://github.com/raffishquartan/claude-code-session-tools/compare/v0.15.1...HEAD
+[Unreleased]: https://github.com/raffishquartan/claude-code-session-tools/compare/v0.17.0...HEAD
+[0.17.0]: https://github.com/raffishquartan/claude-code-session-tools/compare/v0.16.0...v0.17.0
+[0.16.0]: https://github.com/raffishquartan/claude-code-session-tools/compare/v0.15.1...v0.16.0
 [0.15.1]: https://github.com/raffishquartan/claude-code-session-tools/compare/v0.15.0...v0.15.1
 [0.15.0]: https://github.com/raffishquartan/claude-code-session-tools/compare/v0.14.0...v0.15.0
 [0.14.0]: https://github.com/raffishquartan/claude-code-session-tools/compare/v0.13.0...v0.14.0
