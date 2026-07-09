@@ -77,15 +77,23 @@ def test_surface_emits_digest_from_ledger_since_cursor_and_advances(
         job_id="tesco", cadence="daily@09:00", coalesce="one", command=["true"],
         surface=True, enabled=True, catchup_window="30d", timeout="5s",
     ))
-    # Seed the ledger as if a worker had already completed a run.
-    ledger.record(ledger.LedgerEntry(
-        job_id="tesco", event=ledger.LedgerEvent.RUN, owed=1, ran=1,
-        exit_code=0, duration_ms=1, error=None))
     monkeypatch.setattr(catchup, "_now", lambda: datetime(2026, 6, 20, 10, 0, tzinfo=timezone.utc))
     # Avoid launching anything real on this UserPromptSubmit reap.
     monkeypatch.setattr(reconcile, "spawn_detached", _Spawn())
+    # First-ever catchup call for this session seeds its cursor at the current end of
+    # the ledger and sees nothing yet - establishing that baseline is exactly what stops
+    # a later-created backlog from replaying as if it just happened (see
+    # test_new_session_seed_skips_pre_existing_backlog in test_surface.py).
     _stdin(monkeypatch, {"hook_event_name": "UserPromptSubmit", "session_id": "u", "cwd": "/tmp"})
+    out0 = _capture(monkeypatch)
+    assert catchup.main() == 0
+    assert all("tesco" not in e for e in out0)
+    # A worker completes a run after this session's baseline was established.
+    ledger.record(ledger.LedgerEntry(
+        job_id="tesco", event=ledger.LedgerEvent.RUN, owed=1, ran=1,
+        exit_code=0, duration_ms=1, error=None))
     out = _capture(monkeypatch)
+    _stdin(monkeypatch, {"hook_event_name": "UserPromptSubmit", "session_id": "u", "cwd": "/tmp"})
     assert catchup.main() == 0
     assert any("tesco" in e for e in out)
     # Surfaced once: a second reap for the same session sees nothing new.

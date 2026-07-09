@@ -111,3 +111,10 @@ def read_since(offset: int) -> tuple[list[dict[str, object]], int]:
     """
     rows = _all_catchup_rows()
     return rows[offset:], len(rows)
+
+
+def current_offset() -> int:
+    """The line-count offset of the current end of the catch-up ledger. Used to
+    seed a brand-new session's cursor (§9.3) so its first digest reflects only
+    activity from this point forward, not pre-existing history."""
+    return len(_all_catchup_rows())

@@ -9,6 +9,7 @@ from datetime import datetime, timezone
 
 from cc_session_tools import __version__
 from cc_session_tools.lib.scheduler import (
+    cursor,
     ledger,
     reconcile,
     registry,
@@ -205,6 +206,10 @@ def _cmd_status(args: argparse.Namespace) -> int:
 
 def _cmd_sweep(args: argparse.Namespace) -> int:
     now = datetime.now(timezone.utc)
+    # Seed the fixed "cli-sweep" cursor before reconcile writes anything, so the very
+    # first `ccsched sweep` invocation on a machine doesn't replay the entire
+    # pre-existing ledger history (same fix as the catchup hook, §9.3).
+    cursor.seed_new_session("cli-sweep")
     rec = reconcile.reconcile_and_launch(now=now)
     surfaced = surface.surface(session_uuid="cli-sweep")
     digest = format_digest(surfaced.reports, parse_error=rec.parse_error)

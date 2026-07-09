@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **`ccst hooks run catchup` no longer replays full ledger history for a
+  brand-new session.** A new session's cursor defaulted to offset `0`, so its
+  first digest read the *entire* `fires.jsonl` history, including old,
+  long-since-resolved failure streaks (e.g. 150+ stale `consecutive_failures`
+  from a since-fixed job config). `cursor.seed_new_session()` now seeds a new
+  session's cursor at the current end of the ledger before reconcile runs, so
+  the first digest reflects only activity from that point forward. Wired into
+  both the `catchup` hook and `ccsched sweep`'s fixed `cli-sweep` cursor.
+
 ## [0.17.0] - 2026-07-09
 
 ### Added

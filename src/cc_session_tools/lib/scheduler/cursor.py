@@ -7,6 +7,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+from cc_session_tools.lib.scheduler import ledger
 from cc_session_tools.lib.scheduler.state import scheduler_dir
 
 
@@ -32,3 +33,13 @@ def write_cursor(uuid: str, offset: int) -> None:
     tmp = path.with_suffix(".json.tmp")
     tmp.write_text(json.dumps({"offset": offset}) + "\n")
     tmp.replace(path)
+
+
+def seed_new_session(uuid: str) -> None:
+    """If this session_id has no cursor yet, seed one at the current end of the
+    ledger, so its first catchup digest reflects only activity from this point
+    forward - not the entire pre-existing ledger history. No-op if a cursor
+    already exists (idempotent; safe to call on every hook invocation)."""
+    if _cursor_path(uuid).is_file():
+        return
+    write_cursor(uuid, ledger.current_offset())
