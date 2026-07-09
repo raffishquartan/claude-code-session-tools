@@ -44,7 +44,7 @@ written_at: 2026-05-03T14:00:00Z
 EOF
     run env CLAUDE_PROJECT_DIR="$PROJECT" bash "$HOOK" <<<'{}'
     [ "$status" -eq 0 ]
-    [[ "$output" == *"Pending session-rename markers found"* ]]
+    [[ "$output" == *"pending session-rename marker(s)"* ]]
     [[ "$output" == *"$SESSION"* ]]
     [[ "$output" == *"aaaaaaaa-1111-2222-3333-bbbbbbbbbbbb"* ]]
     [[ "$output" == *"20260503-test-tag"* ]]
@@ -83,8 +83,8 @@ EOF
     [ "$status" -eq 0 ]
     # The hook explains the split: /rename inside CC, rm outside CC, both
     # remain valid until run.
-    [[ "$output" == *"INSIDE Claude Code"* || "$output" == *"INSIDE CC"* ]]
-    [[ "$output" == *"OUTSIDE Claude Code"* || "$output" == *"OUTSIDE CC"* ]]
+    [[ "$output" == *"Inside CC:"* ]]
+    [[ "$output" == *"Outside CC:"* ]]
     # Exact /rename command for this marker.
     [[ "$output" == *"/rename 20260503-renamed-tag"* ]]
     # Exact rm command for this marker - quoted, with the full marker path.
@@ -108,6 +108,22 @@ EOF
     # The /rename command must use the tag from the file, not the dir name.
     [[ "$output" == *"/rename 20260503-correct-tag-from-file"* ]]
     [[ "$output" != *"/rename some-old-name"* ]]
+}
+
+@test "cross-project remedy command uses -L so it descends through a symlinked ~/cc" {
+    # ~/cc is commonly a symlink to the real projects root (e.g. an OneDrive
+    # sync target). GNU find does not follow a symlink given as the search
+    # root unless -L is passed, so the printed command must include it or
+    # running it silently deletes nothing while claiming to have cleared
+    # every reminder.
+    SESSION="$PROJECT/cc-sessions/20260503-test-tag"
+    mkdir -p "$SESSION"
+    echo "uuid: aaaaaaaa-1111-2222-3333-bbbbbbbbbbbb" > "$SESSION/.pending-rename"
+    echo "tag: 20260503-test-tag" >> "$SESSION/.pending-rename"
+
+    run env CLAUDE_PROJECT_DIR="$PROJECT" bash "$HOOK" <<<'{}'
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"find -L ~/cc -name .pending-rename -delete"* ]]
 }
 
 @test "ignores markers nested deeper than 2 levels" {
