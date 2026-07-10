@@ -51,6 +51,8 @@ def reconcile_and_launch(
         if not spec.enabled:
             continue
         js = state.ensure_registered(states, spec.job_id, now)
+        if js.suspended:
+            continue  # auto-suspended after repeated failures; ccsched enable to resume
         if js.in_flight is not None and pid_alive(js.in_flight.pid):
             continue  # fast-path skip; not the correctness guarantee (§9.1)
 
