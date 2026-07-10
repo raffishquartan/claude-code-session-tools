@@ -66,6 +66,17 @@ def test_launch_event_records(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -
     assert rows[-1]["event"] == "launch"
 
 
+def test_suspend_event_round_trips(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("CCCS_HOOKS_DIR", str(tmp_path))
+    ledger.record(ledger.LedgerEntry(
+        job_id="broken-job", event=ledger.LedgerEvent.SUSPEND, owed=0, ran=0,
+        exit_code=None, duration_ms=0, error=None, consecutive_failures=10,
+    ))
+    row = ledger.read_recent(job_id="broken-job")[-1]
+    assert row["event"] == "suspend"
+    assert row["consecutive_failures"] == 10
+
+
 def test_read_since_advances_offset_and_ignores_other_hooks(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
