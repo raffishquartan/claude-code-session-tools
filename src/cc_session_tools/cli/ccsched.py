@@ -150,6 +150,8 @@ def _cmd_set_enabled(job_id: str, enabled: bool) -> int:
         registry.set_enabled(job_id, enabled)
     except registry.RegistryError as exc:
         return _err(str(exc))
+    if enabled:
+        state.clear_suspended(job_id)
     print(f"{'enabled' if enabled else 'disabled'} {job_id}")
     return 0
 
@@ -178,6 +180,7 @@ def _cmd_run(args: argparse.Namespace) -> int:
         last_success=js.last_success if failed else state.format_ts(now),
         last_attempt=state.format_ts(now),
         consecutive_failures=js.consecutive_failures + 1 if failed else 0,
+        suspended=js.suspended,
     )
     state.save_all_state(states)
     ledger.record(ledger.LedgerEntry(

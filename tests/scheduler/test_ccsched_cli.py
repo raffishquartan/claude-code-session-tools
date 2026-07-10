@@ -5,6 +5,10 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
+from cc_session_tools.lib.scheduler import state as st
+
 
 def _run(args: list[str], sched_dir: Path, hooks_dir: Path) -> subprocess.CompletedProcess[str]:
     env = dict(os.environ)
@@ -83,6 +87,28 @@ def test_enable_unknown_id_errors(tmp_path: Path) -> None:
     sched, hooks = _dirs(tmp_path)
     res = _run(["enable", "ghost"], sched, hooks)
     assert res.returncode == 2
+
+
+def test_enable_clears_suspension(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    _add_ok(tmp_path)
+    sched, hooks = _dirs(tmp_path)
+    monkeypatch.setenv("CC_SCHEDULER_DIR", str(sched))
+    st.save_all_state({"tesco": st.JobState(
+        registered_at="2026-01-01T00:00:00Z", last_success=None, last_attempt=None,
+        consecutive_failures=10, in_flight=None, suspended=True)})
+    assert _run(["enable", "tesco"], sched, hooks).returncode == 0
+    assert st.load_all_state()["tesco"].suspended is False
+
+
+def test_run_does_not_clear_existing_suspension(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    _add_ok(tmp_path)
+    sched, hooks = _dirs(tmp_path)
+    monkeypatch.setenv("CC_SCHEDULER_DIR", str(sched))
+    st.save_all_state({"tesco": st.JobState(
+        registered_at="2026-01-01T00:00:00Z", last_success=None, last_attempt=None,
+        consecutive_failures=10, in_flight=None, suspended=True)})
+    assert _run(["run", "tesco"], sched, hooks).returncode == 0  # `true` succeeds
+    assert st.load_all_state()["tesco"].suspended is True  # still suspended
 
 
 def test_remove(tmp_path: Path) -> None:
