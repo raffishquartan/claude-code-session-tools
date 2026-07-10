@@ -58,3 +58,12 @@ def test_unparseable_registry_warning_runs_nothing() -> None:
     out = format_digest([], parse_error="jobs.toml line 4: invalid TOML")
     assert "jobs.toml failed to parse" in out
     assert "no jobs ran" in out
+
+
+def test_suspended_job_always_surfaces_even_when_silent() -> None:
+    r = JobReport(job_id="broken-job", outcome=Outcome.SUSPENDED, surface=False,
+                  overdue="", ran=0, deferred=0, expired=0, consecutive_failures=10)
+    out = format_digest([r])
+    assert "broken-job auto-suspended after 10 consecutive failures" in out
+    assert "ccsched enable broken-job" in out
+    assert "fires.jsonl" in out

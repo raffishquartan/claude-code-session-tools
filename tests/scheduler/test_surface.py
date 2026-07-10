@@ -88,3 +88,14 @@ def test_second_consecutive_failure_surfaces_correct_ordinal(
     fail_reports = [r for r in result.reports if r.job_id == "cal" and r.outcome is Outcome.FAILED]
     # The second report should carry consecutive_failures=2
     assert any(r.consecutive_failures == 2 for r in fail_reports)
+
+
+def test_suspend_event_surfaces_as_suspended_report(monkeypatch: pytest.MonkeyPatch) -> None:
+    _add("broken-job", surface=False)
+    ld.record(ld.LedgerEntry(job_id="broken-job", event=ld.LedgerEvent.SUSPEND, owed=0,
+                             ran=0, exit_code=None, duration_ms=0, error=None,
+                             consecutive_failures=10))
+    result = sf.surface(session_uuid="s1")
+    rep = next(r for r in result.reports if r.job_id == "broken-job")
+    assert rep.outcome is Outcome.SUSPENDED
+    assert rep.consecutive_failures == 10

@@ -10,6 +10,7 @@ class Outcome(str, Enum):
     RAN = "ran"
     FAILED = "failed"
     LAUNCHED = "launched"
+    SUSPENDED = "suspended"
 
 
 @dataclass(frozen=True, slots=True)
@@ -33,6 +34,12 @@ def _ordinal(n: int) -> str:
 
 
 def _line(report: JobReport) -> str | None:
+    if report.outcome is Outcome.SUSPENDED:
+        return (
+            f"⛔ {report.job_id} auto-suspended after "
+            f"{report.consecutive_failures} consecutive failures — see fires.jsonl / "
+            f"run `ccsched enable {report.job_id}` after fixing"
+        )
     if report.outcome is Outcome.FAILED:
         return (
             f"✗ {report.job_id} failed "
