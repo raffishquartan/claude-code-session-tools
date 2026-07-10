@@ -1,6 +1,6 @@
 # ccsched auto-suspend on repeated failure — Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [x]`) syntax for tracking.
 
 **Goal:** A scheduled job that fails every time it runs (misconfigured command, missing binary, etc.) auto-suspends after 10 consecutive failures instead of storm-retrying on every `SessionStart`/throttled `UserPromptSubmit` forever, and a Telegram push fires the moment it suspends so a permanently-broken job in a rarely-opened project doesn't go unnoticed.
 
@@ -35,7 +35,7 @@ invocation — never `uv tool install` from the worktree.
 - Modify: `src/cc_session_tools/lib/scheduler/state.py`
 - Test: `tests/scheduler/test_state.py`
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Add to `tests/scheduler/test_state.py`:
 
@@ -98,12 +98,12 @@ def test_clear_suspended_on_unknown_job_is_a_noop(
     assert st.load_all_state() == {}
 ```
 
-- [ ] **Step 2: Run to verify failure**
+- [x] **Step 2: Run to verify failure**
 
 Run: `uv run pytest tests/scheduler/test_state.py -q`
 Expected: FAIL — `JobState` has no `suspended` field, `next_failure_count`/`clear_suspended` don't exist.
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 In `state.py`:
 
@@ -183,17 +183,17 @@ def clear_suspended(job_id: str) -> None:
         save_all_state(states)
 ```
 
-- [ ] **Step 4: Run to verify pass**
+- [x] **Step 4: Run to verify pass**
 
 Run: `uv run pytest tests/scheduler/test_state.py -q`
 Expected: PASS, all tests including the pre-existing ones in this file.
 
-- [ ] **Step 5: mypy**
+- [x] **Step 5: mypy**
 
 Run: `uv run mypy --strict src/cc_session_tools/lib/scheduler/state.py`
 Expected: `Success: no issues found`
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add src/cc_session_tools/lib/scheduler/state.py tests/scheduler/test_state.py
@@ -217,7 +217,7 @@ first and falls back to parsing `~/.creds` directly.
 - Create: `src/cc_session_tools/lib/scheduler/notify.py`
 - Test: `tests/scheduler/test_notify.py`
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Create `tests/scheduler/test_notify.py`:
 
@@ -298,12 +298,12 @@ def test_suspended_message_names_job_and_enable_command(monkeypatch: pytest.Monk
     assert b"ccsched enable ccmsg-dead-letter-sweep" in data
 ```
 
-- [ ] **Step 2: Run to verify failure**
+- [x] **Step 2: Run to verify failure**
 
 Run: `uv run pytest tests/scheduler/test_notify.py -q`
 Expected: FAIL — module doesn't exist.
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 Create `src/cc_session_tools/lib/scheduler/notify.py`:
 
@@ -407,17 +407,17 @@ def suspended(job_id: str, consecutive_failures: int, *, post: Poster = _default
     return send_telegram(message, post=post)
 ```
 
-- [ ] **Step 4: Run to verify pass**
+- [x] **Step 4: Run to verify pass**
 
 Run: `uv run pytest tests/scheduler/test_notify.py -q`
 Expected: PASS
 
-- [ ] **Step 5: mypy**
+- [x] **Step 5: mypy**
 
 Run: `uv run mypy --strict src/cc_session_tools/lib/scheduler/notify.py`
 Expected: `Success: no issues found`
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add src/cc_session_tools/lib/scheduler/notify.py tests/scheduler/test_notify.py
@@ -432,7 +432,7 @@ git commit -m "feat(scheduler): add best-effort Telegram push for headless worke
 - Modify: `src/cc_session_tools/lib/scheduler/ledger.py`
 - Test: `tests/scheduler/test_ledger.py`
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Read `tests/scheduler/test_ledger.py` first to match its exact style (likely asserts
 on `record()` + `read_recent()` round-tripping enum values). Add:
@@ -452,12 +452,12 @@ def test_suspend_event_round_trips(tmp_path, monkeypatch):
 (Match fixture/import names to whatever `test_ledger.py` already uses — read it
 before writing this so it's consistent, not a guess.)
 
-- [ ] **Step 2: Run to verify failure**
+- [x] **Step 2: Run to verify failure**
 
 Run: `uv run pytest tests/scheduler/test_ledger.py -q`
 Expected: FAIL — `LedgerEvent.SUSPEND` doesn't exist.
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 In `ledger.py`, add one line to the enum:
 
@@ -472,12 +472,12 @@ class LedgerEvent(str, Enum):
     SUSPEND = "suspend"
 ```
 
-- [ ] **Step 4: Run to verify pass**
+- [x] **Step 4: Run to verify pass**
 
 Run: `uv run pytest tests/scheduler/test_ledger.py -q`
 Expected: PASS
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/cc_session_tools/lib/scheduler/ledger.py tests/scheduler/test_ledger.py
@@ -498,7 +498,7 @@ whether this failure crosses the suspend threshold, persists `suspended` on the
 `JobState`, and — only on the instant it first crosses — records a `SUSPEND`
 ledger entry and fires the Telegram push.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Add to `tests/scheduler/test_worker.py`:
 
@@ -572,13 +572,13 @@ def test_success_preserves_existing_suspended_flag(monkeypatch: pytest.MonkeyPat
     assert after.suspended is True  # but does not clear suspension
 ```
 
-- [ ] **Step 2: Run to verify failure**
+- [x] **Step 2: Run to verify failure**
 
 Run: `uv run pytest tests/scheduler/test_worker.py -q`
 Expected: FAIL — `run_job`/`_run_body` don't accept `notify_suspended`, `suspended`
 isn't tracked, `SUSPEND` events aren't written.
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 In `worker.py`:
 
@@ -656,17 +656,17 @@ def run_job(
     )
 ```
 
-- [ ] **Step 4: Run to verify pass**
+- [x] **Step 4: Run to verify pass**
 
 Run: `uv run pytest tests/scheduler/test_worker.py -q`
 Expected: PASS, all tests including pre-existing ones.
 
-- [ ] **Step 5: mypy**
+- [x] **Step 5: mypy**
 
 Run: `uv run mypy --strict src/cc_session_tools/lib/scheduler/worker.py`
 Expected: `Success: no issues found`
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add src/cc_session_tools/lib/scheduler/worker.py tests/scheduler/test_worker.py
@@ -685,7 +685,7 @@ This is the other half of the actual incident fix: even once a job is marked
 `suspended`, nothing stops the hook-triggered reconcile sweep from launching it
 again unless it explicitly checks the flag.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Add to `tests/scheduler/test_reconcile.py`:
 
@@ -702,12 +702,12 @@ def test_suspended_job_not_launched(monkeypatch: pytest.MonkeyPatch) -> None:
     assert spawn.calls == []
 ```
 
-- [ ] **Step 2: Run to verify failure**
+- [x] **Step 2: Run to verify failure**
 
 Run: `uv run pytest tests/scheduler/test_reconcile.py -q`
 Expected: FAIL — job still launches (the whole point of the original bug).
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 In `reconcile.py`, inside the `for spec in specs:` loop, right after
 `js = state.ensure_registered(states, spec.job_id, now)` and before the
@@ -725,17 +725,17 @@ No new ledger event here — the suspend event was already recorded once, at the
 moment `worker.py` set the flag (Task 4). Re-logging a skip on every subsequent
 sweep would just reproduce the original noise problem in a new form.
 
-- [ ] **Step 4: Run to verify pass**
+- [x] **Step 4: Run to verify pass**
 
 Run: `uv run pytest tests/scheduler/test_reconcile.py -q`
 Expected: PASS, all tests including pre-existing ones.
 
-- [ ] **Step 5: mypy**
+- [x] **Step 5: mypy**
 
 Run: `uv run mypy --strict src/cc_session_tools/lib/scheduler/reconcile.py`
 Expected: `Success: no issues found`
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add src/cc_session_tools/lib/scheduler/reconcile.py tests/scheduler/test_reconcile.py
@@ -754,7 +754,7 @@ git commit -m "fix(scheduler): reconcile_and_launch skips auto-suspended jobs"
 
 **Files:**
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Add to `tests/scheduler/test_digest.py`:
 
@@ -780,12 +780,12 @@ def test_suspend_event_surfaces_as_suspended_report(monkeypatch, tmp_path):
     assert result.reports[-1].consecutive_failures == 10
 ```
 
-- [ ] **Step 2: Run to verify failure**
+- [x] **Step 2: Run to verify failure**
 
 Run: `uv run pytest tests/scheduler/test_digest.py tests/scheduler/test_surface.py -q`
 Expected: FAIL — `Outcome.SUSPENDED` doesn't exist; SUSPEND events aren't surfaced.
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 In `digest.py`:
 
@@ -839,17 +839,17 @@ _SUSPEND_EVENTS = {ledger.LedgerEvent.SUSPEND.value}
 (Add this `elif` branch alongside the existing `_FAIL_EVENTS`/`_RAN_EVENTS`/
 `_LAUNCH_EVENTS` branches in the same `for e in entries:` loop.)
 
-- [ ] **Step 4: Run to verify pass**
+- [x] **Step 4: Run to verify pass**
 
 Run: `uv run pytest tests/scheduler/test_digest.py tests/scheduler/test_surface.py -q`
 Expected: PASS, all tests including pre-existing ones.
 
-- [ ] **Step 5: mypy**
+- [x] **Step 5: mypy**
 
 Run: `uv run mypy --strict src/cc_session_tools/lib/scheduler/digest.py src/cc_session_tools/lib/scheduler/surface.py`
 Expected: `Success: no issues found`
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add src/cc_session_tools/lib/scheduler/digest.py src/cc_session_tools/lib/scheduler/surface.py \
@@ -876,7 +876,7 @@ Two related fixes in the CLI layer:
    un-suspend a suspended job as an unintended side effect of adding the field.
    This must be fixed as part of adding the field, not left as a latent bug.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Add to `tests/scheduler/test_ccsched_cli.py`:
 
@@ -921,12 +921,12 @@ manual backup/restore code needed. `test_ccsched_cli.py` does not currently impo
 `import pytest` alongside the existing `from pathlib import Path` import so the
 `monkeypatch: pytest.MonkeyPatch` fixture type-hints resolve.
 
-- [ ] **Step 2: Run to verify failure**
+- [x] **Step 2: Run to verify failure**
 
 Run: `uv run pytest tests/scheduler/test_ccsched_cli.py -q`
 Expected: FAIL — `enable` doesn't clear suspension; `run` clobbers it.
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 In `ccsched.py`:
 
@@ -980,17 +980,17 @@ def _cmd_run(args: argparse.Namespace) -> int:
     ...
 ```
 
-- [ ] **Step 4: Run to verify pass**
+- [x] **Step 4: Run to verify pass**
 
 Run: `uv run pytest tests/scheduler/test_ccsched_cli.py -q`
 Expected: PASS, all tests including pre-existing ones.
 
-- [ ] **Step 5: mypy**
+- [x] **Step 5: mypy**
 
 Run: `uv run mypy --strict src/cc_session_tools/cli/ccsched.py`
 Expected: `Success: no issues found`
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add src/cc_session_tools/cli/ccsched.py tests/scheduler/test_ccsched_cli.py
@@ -1004,13 +1004,13 @@ git commit -m "fix(ccsched): enable clears auto-suspension; run no longer clobbe
 **Files:**
 - Modify: `CHANGELOG.md`
 
-- [ ] **Step 1: Run the entire suite**
+- [x] **Step 1: Run the entire suite**
 
 Run: `uv run pytest -q`
 Expected: all tests pass, including everything outside `tests/scheduler/` (nothing
 else should be touched by this change, but a full run confirms it).
 
-- [ ] **Step 2: Run mypy strict over the whole touched surface**
+- [x] **Step 2: Run mypy strict over the whole touched surface**
 
 Run:
 ```bash
@@ -1026,7 +1026,7 @@ uv run mypy --strict \
 ```
 Expected: `Success: no issues found`
 
-- [ ] **Step 3: Update CHANGELOG.md**
+- [x] **Step 3: Update CHANGELOG.md**
 
 Check the current state of `## [Unreleased]` first — as of this plan being
 written, the 2026-07-09 cursor-seeding fix that used to live under
@@ -1052,7 +1052,7 @@ with no `### Fixed` heading. Create a fresh one:
   `ccsched enable <job>` after fixing the job to clear the suspension and resume.
 ```
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add CHANGELOG.md
