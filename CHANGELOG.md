@@ -28,6 +28,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   session's cursor at the current end of the ledger before reconcile runs, so
   the first digest reflects only activity from that point forward. Wired into
   both the `catchup` hook and `ccsched sweep`'s fixed `cli-sweep` cursor.
+- **`ccsched` jobs now auto-suspend after 10 consecutive failures instead of
+  storm-retrying forever.** A misconfigured job (e.g. the `ccmsg-dead-letter-sweep`
+  incident on 2026-06-27 — 153 consecutive failures over ~2h43m before a human
+  noticed) had no backoff: `reconcile_and_launch()` relaunched it on every
+  `SessionStart`/throttled `UserPromptSubmit` regardless of how many times it had
+  already failed. The detached worker now flips a new `suspended` flag in
+  `state.json` once `consecutive_failures` reaches 10, `reconcile_and_launch()`
+  skips suspended jobs, and a one-time Telegram push (`notify.py`, direct Bot API
+  call — no live session required) fires at the moment of suspension so a
+  permanently broken job in a rarely-opened project doesn't go unnoticed. Run
+  `ccsched enable <job>` after fixing the job to clear the suspension and resume.
 
 ## [0.17.0] - 2026-07-09
 

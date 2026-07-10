@@ -19,6 +19,7 @@ class LedgerEvent(str, Enum):
     SKIP_EXPIRED = "skip_expired"
     DEFER = "defer"
     FAIL = "fail"
+    SUSPEND = "suspend"
 
 
 @dataclass(frozen=True, slots=True)

@@ -105,3 +105,14 @@ def test_new_session_seed_skips_pre_existing_backlog(monkeypatch: pytest.MonkeyP
     cursor.seed_new_session("brand-new-uuid")
     result = sf.surface(session_uuid="brand-new-uuid")
     assert result.reports == []
+
+
+def test_suspend_event_surfaces_as_suspended_report(monkeypatch: pytest.MonkeyPatch) -> None:
+    _add("broken-job", surface=False)
+    ld.record(ld.LedgerEntry(job_id="broken-job", event=ld.LedgerEvent.SUSPEND, owed=0,
+                             ran=0, exit_code=None, duration_ms=0, error=None,
+                             consecutive_failures=10))
+    result = sf.surface(session_uuid="s1")
+    rep = next(r for r in result.reports if r.job_id == "broken-job")
+    assert rep.outcome is Outcome.SUSPENDED
+    assert rep.consecutive_failures == 10

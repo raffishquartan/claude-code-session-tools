@@ -122,6 +122,71 @@ def test_second_consecutive_failure_writes_correct_count_to_ledger(
     assert rows[-1]["consecutive_failures"] == 2
 
 
+def test_tenth_consecutive_failure_suspends_and_notifies(monkeypatch: pytest.MonkeyPatch) -> None:
+    _add("broken")
+    st.save_all_state({"broken": st.JobState(
+        registered_at="2026-06-17T09:00:00Z", last_success=None, last_attempt=None,
+        consecutive_failures=9, in_flight=None, suspended=False)})
+    notified: list[tuple[str, int]] = []
+
+    def fake_notify(job_id: str, consecutive_failures: int) -> bool:
+        notified.append((job_id, consecutive_failures))
+        return True
+
+    now = datetime(2026, 6, 20, 10, 0, tzinfo=UTC)
+    wk.run_job("broken", instants=1, now=now, runner=_fail_runner, notify_suspended=fake_notify)
+
+    after = st.load_all_state()["broken"]
+    assert after.consecutive_failures == 10
+    assert after.suspended is True
+    assert notified == [("broken", 10)]
+    rows = ld.read_recent(job_id="broken")
+    assert rows[-1]["event"] == ld.LedgerEvent.SUSPEND.value
+
+
+def test_eleventh_consecutive_failure_does_not_renotify(monkeypatch: pytest.MonkeyPatch) -> None:
+    _add("broken")
+    st.save_all_state({"broken": st.JobState(
+        registered_at="2026-06-17T09:00:00Z", last_success=None, last_attempt=None,
+        consecutive_failures=10, in_flight=None, suspended=True)})
+    notified: list[tuple[str, int]] = []
+
+    def fake_notify(job_id: str, consecutive_failures: int) -> bool:
+        notified.append((job_id, consecutive_failures))
+        return True
+
+    now = datetime(2026, 6, 20, 10, 0, tzinfo=UTC)
+    wk.run_job("broken", instants=1, now=now, runner=_fail_runner, notify_suspended=fake_notify)
+
+    assert notified == []  # already suspended — no repeat push
+    rows = ld.read_recent(job_id="broken")
+    assert rows[-1]["event"] == ld.LedgerEvent.FAIL.value  # still a FAIL, no new SUSPEND
+
+
+def test_healthy_job_never_suspends(monkeypatch: pytest.MonkeyPatch) -> None:
+    _add("tesco")
+    _seed("tesco")
+    notified: list[tuple[str, int]] = []
+    now = datetime(2026, 6, 20, 10, 0, tzinfo=UTC)
+    wk.run_job("tesco", instants=1, now=now, runner=_ok_runner,
+               notify_suspended=lambda j, n: notified.append((j, n)) or True)
+    after = st.load_all_state()["tesco"]
+    assert after.suspended is False
+    assert notified == []
+
+
+def test_success_preserves_existing_suspended_flag(monkeypatch: pytest.MonkeyPatch) -> None:
+    _add("flaky")
+    st.save_all_state({"flaky": st.JobState(
+        registered_at="2026-06-17T09:00:00Z", last_success=None, last_attempt=None,
+        consecutive_failures=10, in_flight=None, suspended=True)})
+    now = datetime(2026, 6, 20, 10, 0, tzinfo=UTC)
+    wk.run_job("flaky", instants=1, now=now, runner=_ok_runner)
+    after = st.load_all_state()["flaky"]
+    assert after.consecutive_failures == 0  # success still resets the streak
+    assert after.suspended is True  # but does not clear suspension
+
+
 def test_second_worker_exits_when_lock_held_by_live_pid(monkeypatch: pytest.MonkeyPatch) -> None:
     _add("busy")
     _seed("busy")
