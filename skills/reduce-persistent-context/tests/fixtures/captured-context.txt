@@ -1,0 +1,12 @@
+### DEFERRED_TOOL_NAMES
+WebFetch
+WebSearch
+mcp__opentabs__tesco_search_products
+mcp__opentabs__tesco_add_to_basket
+mcp__amazon-shopping__amazon_search
+
+### SESSIONSTART_HOOKS
+SessionStart hook: shop reminder, sync status, etc.
+
+### MCP_INSTRUCTIONS
+opentabs: interact with web apps through the authenticated browser session.

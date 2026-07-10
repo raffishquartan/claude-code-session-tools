@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`reduce-persistent-context` bundled skill.** Measures the fixed per-session
+  context footprint (CLAUDE.md files — global and project — skill descriptions,
+  MCP tool names, hooks, harness baseline), ranks reduction candidates by
+  token-saved-per-risk, and applies approved reductions behind 8-digit
+  confirmation. Migrated from a previously unbacked `~/.claude/skills/`
+  directory; no functional changes, just the move to
+  `skills/reduce-persistent-context/{SKILL.md,scripts/,tests/}` and
+  `ccst skills install` symlink deployment.
+
 ### Fixed
 
 - **`ccst hooks run catchup` no longer replays full ledger history for a

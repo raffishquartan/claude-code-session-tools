@@ -10,7 +10,7 @@ Three concerns, one repo, for life on the [Claude Code](https://docs.anthropic.c
 2. **Usage analytics** — parse `~/.claude/projects/**/*.jsonl` into tokens-and-dollars breakdowns by project, session, model, MCP server, plugin, and tool.
 3. **Hook library** — Python package (`cccs_hooks`) providing Claude Code SessionStart / PreToolUse / PostToolUse / UserPromptSubmit / Stop hook implementations, invokable via `ccst hooks run <name>`.
 
-The repo ships seven CLIs, one shell helper, eight bundled skills, and nine bundled hooks:
+The repo ships seven CLIs, one shell helper, nine bundled skills, and nine bundled hooks:
 
 **CLIs and shell helper**
 
@@ -35,6 +35,7 @@ The repo ships seven CLIs, one shell helper, eight bundled skills, and nine bund
 | **`generate-8digit-code`** | Generates a cryptographically secure 8-digit confirmation code via `secrets.randbelow`. LLMs are statistically biased random number generators — this ensures gated-action codes are genuinely unpredictable. |
 | **`list-empty-sessions`** | Wraps `ccs --emptiness only`. Finds sessions you never actually typed in — accumulate from accidental `ccd` invocations or abandoned starts. |
 | **`move-session`** | Move, rename, or move+rename a session while keeping its `~/.claude/projects/<encoded-cwd>/<uuid>.jsonl` transcript resumable. |
+| **`reduce-persistent-context`** | Measures the fixed per-session context footprint (CLAUDE.md, skill descriptions, MCP tool names, hooks, harness baseline), ranks reduction candidates by token-saved-per-risk, and applies approved reductions behind 8-digit confirmation. |
 | **`send-session-message`** | Guides recipient choice, message composition, and confirmation when sending an inter-session message via `ccmsg send`. |
 | **`manage-recurring-cc-jobs-using-ccsched`** | Translates natural-language cadence requests into `ccsched add` calls; disambiguates `ccsched` (local recurring jobs) vs `/schedule` (cloud cron) vs `/loop` (in-session poll). |
 
@@ -402,6 +403,10 @@ Wraps `ccs --emptiness only`. Triggers on prompts like "list empty sessions", "f
 Permanently deletes one or more sessions. Triggers on "delete session", "remove empty sessions", "clean up sessions". Inputs must be explicit session basenames — the user or the `list-empty-sessions` skill must supply them. Pre-flight checks confirm each session exists and is not the currently running session. Dry-run by default; requires `--execute` plus an 8-digit confirmation code for actual deletion. Deletes the `cc-sessions/<basename>/` directory, the JSONL transcript, the `.tag` file, and optionally the `~/.claude/tasks/<encoded>/` task directory.
 
 Note: the 8-digit confirmation in `delete-sessions` is an inline prompt (not a reuse of the `cccs_hooks.confirm_8digit` PreToolUse hook). The hook guards tool calls; the script guards its own execution.
+
+### `reduce-persistent-context`
+
+Measures the persistent context — everything loaded into every session before the user types anything (CLAUDE.md files, skill descriptions, MCP tool names, hooks, harness baseline) — attributes token cost per contributor, ranks reduction candidates by token-saved-per-risk, and applies approved reductions behind per-item 8-digit confirmation. Triggers on "reduce context", "what's eating my context window", "shrink persistent context", "audit my context footprint", "trim startup overhead". CLAUDE.md files and SKILL.md frontmatter are read straight from disk by `scripts/analyze_context.py`; only the harness system-prompt baseline is an estimate, flagged `(estimated)` in the report. See `skills/reduce-persistent-context/CALIBRATION.md` for how that estimate was derived and how to re-derive it if the harness changes.
 
 See `docs/design.md` for the full design and CLI contract.
 
