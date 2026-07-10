@@ -11,7 +11,7 @@ import os
 from collections.abc import Callable
 from datetime import datetime, timedelta
 
-from cc_session_tools.lib.scheduler import ledger, registry, state
+from cc_session_tools.lib.scheduler import ledger, notify, registry, state
 from cc_session_tools.lib.scheduler.cadence import parse_cadence
 from cc_session_tools.lib.scheduler.duration import parse_duration
 from cc_session_tools.lib.scheduler.due import owed
@@ -24,6 +24,7 @@ from cc_session_tools.lib.scheduler.state import JobState
 logger = logging.getLogger(__name__)
 
 Runner = Callable[[tuple[str, ...], timedelta], RunOutcome]
+NotifySuspended = Callable[[str, int], bool]
 
 
 class UnknownJob(ValueError):
@@ -48,7 +49,10 @@ def _record(spec: JobSpec, event: LedgerEvent, owed_n: int, ran: int,
     ))
 
 
-def _run_body(spec: JobSpec, instants: int, now: datetime, runner: Runner) -> None:
+def _run_body(
+    spec: JobSpec, instants: int, now: datetime, runner: Runner,
+    notify_suspended: NotifySuspended,
+) -> None:
     timeout = parse_duration(spec.timeout)
     cadence = parse_cadence(spec.cadence)
     window = parse_duration(spec.catchup_window)
@@ -76,17 +80,23 @@ def _run_body(spec: JobSpec, instants: int, now: datetime, runner: Runner) -> No
     if failed:
         # Discard any j-1 successful instants from this run — intentional and
         # safe because jobs are idempotent-by-contract (re-running them is harmless).
-        new_consecutive = cur.consecutive_failures + 1
+        new_consecutive, new_suspended, newly_suspended = state.next_failure_count(
+            cur.consecutive_failures, suspended=cur.suspended,
+        )
         states[spec.job_id] = JobState(
             registered_at=cur.registered_at, last_success=cur.last_success,
             last_attempt=attempt_ts, consecutive_failures=new_consecutive,
-            in_flight=cur.in_flight,
+            in_flight=cur.in_flight, suspended=new_suspended,
         )
         state.save_all_state(states)
         _record(spec, LedgerEvent.FAIL, owed_n, 0, last_outcome,
                 (last_outcome.stderr.strip()[:200] if last_outcome else None)
                 or ("timed out" if last_outcome and last_outcome.timed_out else None),
                 consecutive_failures=new_consecutive)
+        if newly_suspended:
+            notify_suspended(spec.job_id, new_consecutive)
+            _record(spec, LedgerEvent.SUSPEND, owed_n, 0, None, None,
+                    consecutive_failures=new_consecutive)
         return
 
     if spec.coalesce is CoalesceKind.ONE:
@@ -96,6 +106,7 @@ def _run_body(spec: JobSpec, instants: int, now: datetime, runner: Runner) -> No
     states[spec.job_id] = JobState(
         registered_at=cur.registered_at, last_success=new_success,
         last_attempt=attempt_ts, consecutive_failures=0, in_flight=cur.in_flight,
+        suspended=cur.suspended,
     )
     state.save_all_state(states)
     # RUN only for a single on-time instant; BACKFILL when >1 owed or coalesced.
@@ -104,7 +115,8 @@ def _run_body(spec: JobSpec, instants: int, now: datetime, runner: Runner) -> No
 
 
 def run_job(
-    job_id: str, *, instants: int, now: datetime, runner: Runner = run_command
+    job_id: str, *, instants: int, now: datetime, runner: Runner = run_command,
+    notify_suspended: NotifySuspended = notify.suspended,
 ) -> None:
     spec = _load_spec(job_id)
     try:
@@ -119,7 +131,7 @@ def run_job(
                 state.set_in_flight(
                     job_id, pid=os.getpid(), started_at=state.format_ts(now), instants=instants
                 )
-                _run_body(spec, instants, now, runner)
+                _run_body(spec, instants, now, runner, notify_suspended)
             finally:
                 state.clear_in_flight(job_id)
     except InFlightLockHeld:
