@@ -9,6 +9,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`bash-hard-deny` PreToolUse hook.** Ported from claude-code-config-sync's
+  `hooks/pre-tool-use/bash-hard-deny.sh`. A hard-deny gate for Bash commands: it
+  categorically blocks destructive deletes (rm/rmdir/unlink/shred), delete-by-move
+  into tmp-like locations, the same patterns inside inline python/node scripts,
+  script files and heredoc bodies fed to interpreters, `gh api`/`gh release`
+  DELETE calls, curl/wget mutating methods, `sudo`, `opentabs ... plugin_mark_reviewed`
+  self-approval, and direct reads of the `fires.jsonl` telemetry log; everything
+  else is auto-allowed. Runs via `ccst hooks run bash-hard-deny` (PreToolUse,
+  matcher `Bash`) and ships in the hooks bundle. One bug fix vs the bash source:
+  the fires.jsonl block now targets the real telemetry directory
+  (`cccs_hooks.telemetry._DEFAULT_HOOKS_DIR`, `~/.cache/claude/logs`) instead of
+  the stale `~/.claude/hooks` path; the `CCCS_FIRES_ACCESS=1` bypass is unchanged.
+- **`update-command-cache` bundled skill.** Migrated from claude-code-config-sync;
+  curates the SHA-256 command cache used by `bash-security-review`. Shares the
+  `CCCS_FIRES_ACCESS=1` convention documented by the new `bash-hard-deny` hook (a
+  discipline-maintained shared convention, not an enforced runtime dependency).
 - **`reduce-persistent-context` bundled skill.** Measures the fixed per-session
   context footprint (CLAUDE.md files — global and project — skill descriptions,
   MCP tool names, hooks, harness baseline), ranks reduction candidates by
