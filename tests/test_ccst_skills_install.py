@@ -190,6 +190,54 @@ def test_source_and_target_overrides(tmp_path: Path) -> None:
         assert link.resolve() == (custom_src / name).resolve()
 
 
+# ---------- Test 8: apply reports how many symlinks it actually linked ----------
+
+
+def test_apply_reports_linked_count(tmp_path: Path) -> None:
+    src = _make_skills_source(tmp_path / "src", ["alpha", "beta", "gamma"])
+    tgt = _make_target_dir(tmp_path / "tgt")
+
+    result = _run("skills", "install", "--source", str(src), "--target", str(tgt), "--apply")
+
+    assert result.returncode == 0
+    assert "linked 3 skill" in result.stdout.lower()
+
+
+# ---------- Test 9: idempotent apply must not claim it linked anything ----------
+
+
+def test_idempotent_apply_does_not_claim_it_wrote_symlinks(tmp_path: Path) -> None:
+    src = _make_skills_source(tmp_path / "src", ["alpha", "beta", "gamma"])
+    tgt = _make_target_dir(tmp_path / "tgt")
+
+    _run("skills", "install", "--source", str(src), "--target", str(tgt), "--apply")
+
+    # Second apply: nothing should actually change.
+    result = _run("skills", "install", "--source", str(src), "--target", str(tgt), "--apply")
+
+    assert result.returncode == 0
+    assert "skipped 3" in result.stdout.lower()
+    # Must not claim anything was linked/created — nothing was.
+    assert "linked 0" not in result.stdout.lower()
+    assert "linked 3" not in result.stdout.lower()
+
+
+# ---------- Test 10: apply failure is summarised, not just per-item ----------
+
+
+def test_apply_failure_reports_summary_count(tmp_path: Path) -> None:
+    src = _make_skills_source(tmp_path / "src", ["alpha"])
+    tgt = _make_target_dir(tmp_path / "tgt")
+    real_file = tgt / "alpha"
+    real_file.write_text("I am a real file\n")
+
+    result = _run("skills", "install", "--source", str(src), "--target", str(tgt), "--apply")
+
+    assert result.returncode == 1
+    assert "1 skill" in result.stderr.lower()
+    assert "could not be installed" in result.stderr.lower()
+
+
 # ---------- Test 7: directories without SKILL.md are ignored ----------
 
 

@@ -37,7 +37,7 @@ echo "  Run this in a normal shell outside CC — deletes markers without updati
 echo "    find \"$cc_sessions_dir\" -name .pending-rename -delete"
 echo ""
 echo "TO SILENCE ALL REMINDERS ACROSS ALL PROJECTS AT ONCE:"
-echo "    find ~/cc -name .pending-rename -delete"
+echo "    find -L ~/cc -name .pending-rename -delete"
 echo ""
 echo "TO FIX AN INDIVIDUAL SESSION (updates picker label AND silences reminder):"
 echo "  1. Resume the session:  cd <project-dir> && claude --resume <uuid>"

@@ -87,6 +87,18 @@ def test_disabled_job_not_launched(monkeypatch: pytest.MonkeyPatch) -> None:
     assert spawn.calls == []
 
 
+def test_suspended_job_not_launched(monkeypatch: pytest.MonkeyPatch) -> None:
+    _add("broken")
+    st.save_all_state({"broken": st.JobState(
+        registered_at="2026-06-17T09:00:00Z", last_success=None,
+        last_attempt=None, consecutive_failures=10, in_flight=None, suspended=True)})
+    spawn = _Spawn()
+    now = datetime(2026, 6, 20, 10, 0, tzinfo=UTC)
+    result = rc.reconcile_and_launch(now=now, spawn=spawn)
+    assert "broken" not in result.launched
+    assert spawn.calls == []
+
+
 def test_launch_cap_defers_overflow(monkeypatch: pytest.MonkeyPatch) -> None:
     for i in range(3):
         _add(f"job-{i}")

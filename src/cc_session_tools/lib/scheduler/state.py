@@ -13,6 +13,7 @@ from pathlib import Path
 SCHEDULER_DIR_ENV = "CC_SCHEDULER_DIR"
 _TS_FMT = "%Y-%m-%dT%H:%M:%SZ"
 _UTC = timezone.utc
+DEFAULT_SUSPEND_THRESHOLD = 10
 
 
 def scheduler_dir() -> Path:
@@ -50,6 +51,7 @@ class JobState:
     last_attempt: str | None
     consecutive_failures: int
     in_flight: InFlight | None = None
+    suspended: bool = False
 
 
 def _in_flight_from(raw: object) -> InFlight | None:
@@ -75,6 +77,7 @@ def load_all_state() -> dict[str, JobState]:
             last_attempt=fields.get("last_attempt"),
             consecutive_failures=int(fields.get("consecutive_failures", 0)),
             in_flight=_in_flight_from(fields.get("in_flight")),
+            suspended=bool(fields.get("suspended", False)),
         )
     return out
 
@@ -88,6 +91,7 @@ def save_all_state(states: dict[str, JobState]) -> None:
             "last_success": js.last_success,
             "last_attempt": js.last_attempt,
             "consecutive_failures": js.consecutive_failures,
+            "suspended": js.suspended,
             "in_flight": (
                 None if js.in_flight is None
                 else {
@@ -117,6 +121,7 @@ def ensure_registered(
             last_attempt=None,
             consecutive_failures=0,
             in_flight=None,
+            suspended=False,
         )
     return states[job_id]
 
@@ -125,8 +130,34 @@ def _replace(js: JobState, *, in_flight: InFlight | None) -> JobState:
     return JobState(
         registered_at=js.registered_at, last_success=js.last_success,
         last_attempt=js.last_attempt, consecutive_failures=js.consecutive_failures,
-        in_flight=in_flight,
+        in_flight=in_flight, suspended=js.suspended,
     )
+
+
+def next_failure_count(
+    consecutive_failures: int, *, suspended: bool, threshold: int = DEFAULT_SUSPEND_THRESHOLD
+) -> tuple[int, bool, bool]:
+    """Pure: given the current consecutive_failures/suspended, return
+    (new_consecutive_failures, new_suspended, newly_suspended). ``newly_suspended``
+    is True only the instant the threshold is first crossed, so callers notify
+    exactly once per suspend event rather than on every failure after."""
+    new_consecutive = consecutive_failures + 1
+    newly_suspended = not suspended and new_consecutive >= threshold
+    return new_consecutive, suspended or newly_suspended, newly_suspended
+
+
+def clear_suspended(job_id: str) -> None:
+    """Atomic read-modify-write clearing one job's suspended flag (mirrors
+    clear_in_flight). A no-op if the job has no state yet."""
+    states = load_all_state()
+    if job_id in states:
+        js = states[job_id]
+        states[job_id] = JobState(
+            registered_at=js.registered_at, last_success=js.last_success,
+            last_attempt=js.last_attempt, consecutive_failures=js.consecutive_failures,
+            in_flight=js.in_flight, suspended=False,
+        )
+        save_all_state(states)
 
 
 def set_in_flight(job_id: str, *, pid: int, started_at: str, instants: int) -> None:

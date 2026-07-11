@@ -15,7 +15,7 @@ import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from cc_session_tools.lib.scheduler import ledger, reconcile, state, surface
+from cc_session_tools.lib.scheduler import cursor, ledger, reconcile, state, surface
 from cc_session_tools.lib.scheduler.digest import format_digest
 from cccs_hooks.telemetry import TelemetryEntry, log_event
 
@@ -85,6 +85,10 @@ def main(argv: list[str] | None = None) -> int:
     now = _now()
     parse_error: str | None = None
     try:
+        # Seed a brand-new session's cursor to the current end of the ledger before
+        # reconcile writes anything, so its first digest reflects only activity from
+        # this point forward - not weeks of pre-existing history (§9.3 fix).
+        cursor.seed_new_session(uuid)
         if _should_reconcile(event, uuid, now):
             rec = reconcile.reconcile_and_launch(now=now, spawn=reconcile.spawn_detached)
             parse_error = rec.parse_error

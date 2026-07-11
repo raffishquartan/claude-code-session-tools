@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "cc-session-tools"
-version = "0.17.0"
+version = "0.18.0"
 description = "Claude Code session management CLI tools (ccd, ccr, ccs, claude-code-usage, ccst) and hook library (cccs_hooks)"
 readme = "README.md"
 license = { file = "LICENSE" }
@@ -59,7 +59,7 @@ where = ["src"]
 claude_code_usage = ["data/*.json"]
 
 [tool.pytest.ini_options]
-testpaths = ["tests", "tests/scheduler", "skills/move-session/tests", "skills/list-empty-sessions/tests", "skills/delete-sessions/tests", "skills/generate-8digit-code/tests"]
+testpaths = ["tests", "tests/scheduler", "skills/move-session/tests", "skills/list-empty-sessions/tests", "skills/delete-sessions/tests", "skills/generate-8digit-code/tests", "skills/reduce-persistent-context/tests"]
 addopts = "-q"
 pythonpath = ["src"]
 

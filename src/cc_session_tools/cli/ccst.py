@@ -7,9 +7,10 @@ Current subcommands:
                                  custom --source) into a target settings.json.
   hooks uninstall [--hook <name>] Remove hook entries from a target settings.json.
   hooks run <name>               Run a Claude Code hook by name.
-                                 Available hooks: bash-security-review,
-                                 marker-allow, confirm-8digit,
-                                 after-response, worklog-guard, session-tag.
+                                 Available hooks: bash-hard-deny,
+                                 bash-security-review, marker-allow,
+                                 confirm-8digit, after-response, worklog-guard,
+                                 session-tag.
   skills install                 Symlink bundled skills into ~/.claude/skills/.
   skills uninstall [--skill <name>] Remove bundled skill symlinks.
   doctor                         Health-check: PATH, env vars, settings.json,
@@ -46,6 +47,7 @@ from cc_session_tools.hooks_install import load_json, merge_hook_settings, write
 
 
 HOOK_VERBS: dict[str, str] = {
+    "bash-hard-deny": "cccs_hooks.bash_hard_deny",
     "bash-security-review": "cccs_hooks.bash_security_review",
     "marker-allow": "cccs_hooks.marker_allow",
     "confirm-8digit": "cccs_hooks.confirm_8digit",
@@ -59,12 +61,13 @@ HOOK_VERBS: dict[str, str] = {
 
 
 HOOK_DESCRIPTIONS: dict[str, str] = {
+    "bash-hard-deny": "Hard-deny gate for Bash: blocks deletes, delete-by-move, gh/curl mutations, sudo, opentabs self-approval, fires.jsonl reads; auto-allows the rest (PreToolUse, Bash)",
     "bash-security-review": "Reviews shell commands for security risks (tiered: allowlist, heuristics, LLM)",
     "marker-allow": "Auto-approves a bare `touch` of a skill marker under ~/.claude/hooks/markers/ (PreToolUse, Bash)",
     "confirm-8digit": "Enforces an 8-digit confirmation gate before risky tool calls",
     "after-response": "Touches a .last-active sentinel so `ccs --order-by active` can sort by recency",
     "worklog-guard": "Blocks manual /compact if the session's WORKLOG.md is stale (PreCompact, matcher: manual)",
-    "session-tag": "Writes the session tag file so ccusage can map UUIDs to human-readable names",
+    "session-tag": "For ccd/ccr-launched sessions: writes the session tag file so ccusage can map UUIDs to human-readable names, and emits additionalContext telling the assistant the tag/session-dir is already set",
     "last-screenshot": "Resolves the newest screenshot for the >lss token and injects its path",
     "messaging-deliver": "Delivers inter-session messages (digest + auto-read + receipts) on session start and each prompt",
     "catchup": "Reconciles+launches missed scheduled jobs (ccsched) detached and surfaces a catch-up digest (SessionStart + UserPromptSubmit)",
@@ -186,19 +189,22 @@ def _cmd_skills_install(args: argparse.Namespace) -> int:
         return 0
 
     # Perform writes
-    has_error = False
+    linked: list[Path] = []
+    skipped: list[Path] = []
+    failed: list[Path] = []
     target_dir.mkdir(parents=True, exist_ok=True)
 
     for action, skill_src, dest in decisions:
         if action == SkillAction.ALREADY_CORRECT:
-            continue  # no-op
+            skipped.append(dest)
+            continue
 
         if action == SkillAction.NON_SYMLINK_EXISTS and not args.force:
             print(
                 f"error: {dest} exists and is not a symlink; use --force to move it aside",
                 file=sys.stderr,
             )
-            has_error = True
+            failed.append(dest)
             continue
 
         if action == SkillAction.WRONG_TARGET and not args.force:
@@ -206,7 +212,7 @@ def _cmd_skills_install(args: argparse.Namespace) -> int:
                 f"error: {dest} is a symlink to a different path; use --force to replace it",
                 file=sys.stderr,
             )
-            has_error = True
+            failed.append(dest)
             continue
 
         # Move aside existing non-symlink or wrong-target symlink
@@ -221,12 +227,24 @@ def _cmd_skills_install(args: argparse.Namespace) -> int:
                 dest.unlink()
 
         dest.symlink_to(skill_src)
+        linked.append(dest)
         print(f"  linked: {dest} -> {skill_src}")
 
-    if has_error:
+    print()
+    if linked:
+        print(f"Linked {len(linked)} skill(s) in {target_dir}")
+    if skipped:
+        print(f"Skipped {len(skipped)} (already correct)")
+    if not linked and not skipped and not failed:
+        print(f"Nothing to do in {target_dir}")
+
+    if failed:
+        print(
+            f"\n{len(failed)} skill(s) could not be installed — see errors above",
+            file=sys.stderr,
+        )
         return 1
 
-    print(f"\nDone — symlinks written to {target_dir}")
     return 0
 
 

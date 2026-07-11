@@ -4,6 +4,7 @@ from pathlib import Path
 
 import pytest
 
+from cc_session_tools.lib.scheduler import cursor
 from cc_session_tools.lib.scheduler import ledger as ld
 from cc_session_tools.lib.scheduler import registry as reg
 from cc_session_tools.lib.scheduler import surface as sf
@@ -88,3 +89,30 @@ def test_second_consecutive_failure_surfaces_correct_ordinal(
     fail_reports = [r for r in result.reports if r.job_id == "cal" and r.outcome is Outcome.FAILED]
     # The second report should carry consecutive_failures=2
     assert any(r.consecutive_failures == 2 for r in fail_reports)
+
+
+def test_new_session_seed_skips_pre_existing_backlog(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Regression for a real incident: ccmsg-dead-letter-sweep had a misconfigured
+    command and failed 150+ times over weeks before the config was fixed. Any
+    brand-new session_id must not replay that pre-existing backlog as if it just
+    happened - only a session that already had a cursor before the backlog was
+    written should see it."""
+    _add("flaky", surface=True)
+    for n in range(1, 10):
+        ld.record(ld.LedgerEntry(job_id="flaky", event=ld.LedgerEvent.FAIL, owed=1,
+                                 ran=0, exit_code=2, duration_ms=1, error="boom",
+                                 consecutive_failures=n))
+    cursor.seed_new_session("brand-new-uuid")
+    result = sf.surface(session_uuid="brand-new-uuid")
+    assert result.reports == []
+
+
+def test_suspend_event_surfaces_as_suspended_report(monkeypatch: pytest.MonkeyPatch) -> None:
+    _add("broken-job", surface=False)
+    ld.record(ld.LedgerEntry(job_id="broken-job", event=ld.LedgerEvent.SUSPEND, owed=0,
+                             ran=0, exit_code=None, duration_ms=0, error=None,
+                             consecutive_failures=10))
+    result = sf.surface(session_uuid="s1")
+    rep = next(r for r in result.reports if r.job_id == "broken-job")
+    assert rep.outcome is Outcome.SUSPENDED
+    assert rep.consecutive_failures == 10

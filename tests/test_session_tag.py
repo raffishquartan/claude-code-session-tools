@@ -261,6 +261,105 @@ def test_last_opened_not_written_when_no_cld_session_dir(tmp_path, monkeypatch):
     assert sentinels == []
 
 
+# ---------------------------------------------------------------------------
+# main() — additionalContext emission
+# ---------------------------------------------------------------------------
+
+def test_no_tag_emits_no_additional_context(monkeypatch, capsys):
+    monkeypatch.delenv("CLD_SESSION_TAG", raising=False)
+    monkeypatch.setattr("sys.stdin", _stdin("{}"))
+
+    session_tag.main()
+
+    assert capsys.readouterr().out == ""
+
+
+def test_new_mode_additional_context(tmp_path, monkeypatch, capsys):
+    sess_dir = tmp_path / "cc-sessions" / "20260711-my-feature"
+    payload = json.dumps({"session_id": "sid-new", "cwd": "/some/project"})
+    monkeypatch.setenv("CLD_SESSION_TAG", "my-feature")
+    monkeypatch.setenv("CLD_SESSION_DIR", str(sess_dir))
+    monkeypatch.setenv("CLD_SESSION_MODE", "new")
+    monkeypatch.setattr("sys.stdin", _stdin(payload))
+    monkeypatch.setenv("CCCS_SESSION_TAGS_DIR", str(tmp_path / "tags"))
+
+    rc = session_tag.main()
+    out = json.loads(capsys.readouterr().out)
+
+    assert rc == 0
+    assert out["hookSpecificOutput"]["hookEventName"] == "SessionStart"
+    msg = out["hookSpecificOutput"]["additionalContext"]
+    assert "ccd shell wrapper" in msg
+    assert "my-feature" in msg
+    assert str(sess_dir) in msg
+    assert "/rename is unnecessary" in msg
+
+
+def test_resume_mode_additional_context(tmp_path, monkeypatch, capsys):
+    sess_dir = tmp_path / "cc-sessions" / "20260701-my-feature"
+    payload = json.dumps({"session_id": "sid-resume", "cwd": "/some/project"})
+    monkeypatch.setenv("CLD_SESSION_TAG", "my-feature")
+    monkeypatch.setenv("CLD_SESSION_DIR", str(sess_dir))
+    monkeypatch.setenv("CLD_SESSION_MODE", "resume")
+    monkeypatch.setattr("sys.stdin", _stdin(payload))
+    monkeypatch.setenv("CCCS_SESSION_TAGS_DIR", str(tmp_path / "tags"))
+
+    rc = session_tag.main()
+    out = json.loads(capsys.readouterr().out)
+
+    assert rc == 0
+    msg = out["hookSpecificOutput"]["additionalContext"]
+    assert "ccr shell wrapper" in msg
+    assert "being resumed today" in msg
+    assert str(sess_dir) in msg
+
+
+def test_defaults_to_new_mode_when_cld_session_mode_unset(tmp_path, monkeypatch, capsys):
+    payload = json.dumps({"session_id": "sid-default", "cwd": "/some/project"})
+    monkeypatch.setenv("CLD_SESSION_TAG", "my-feature")
+    monkeypatch.setenv("CLD_SESSION_DIR", str(tmp_path / "sess"))
+    monkeypatch.delenv("CLD_SESSION_MODE", raising=False)
+    monkeypatch.setattr("sys.stdin", _stdin(payload))
+    monkeypatch.setenv("CCCS_SESSION_TAGS_DIR", str(tmp_path / "tags"))
+
+    session_tag.main()
+    out = json.loads(capsys.readouterr().out)
+
+    assert "ccd shell wrapper" in out["hookSpecificOutput"]["additionalContext"]
+
+
+def test_additional_context_emitted_even_when_session_id_missing(tmp_path, monkeypatch, capsys):
+    """Tag-file write can fail (no session_id) but additionalContext still emits."""
+    payload = json.dumps({"cwd": "/some/project"})
+    monkeypatch.setenv("CLD_SESSION_TAG", "my-feature")
+    monkeypatch.setenv("CLD_SESSION_DIR", str(tmp_path / "sess"))
+    monkeypatch.setattr("sys.stdin", _stdin(payload))
+    monkeypatch.setenv("CCCS_SESSION_TAGS_DIR", str(tmp_path / "tags"))
+
+    rc = session_tag.main()
+    err = capsys.readouterr()
+
+    assert rc == 0
+    assert "[session-tag]" in err.err
+    out = json.loads(err.out)
+    assert "my-feature" in out["hookSpecificOutput"]["additionalContext"]
+
+
+def test_session_dir_falls_back_to_date_tag_when_cld_session_dir_unset(tmp_path, monkeypatch, capsys):
+    payload = json.dumps({"session_id": "sid-fallback", "cwd": "/some/project"})
+    monkeypatch.setenv("CLD_SESSION_TAG", "my-feature")
+    monkeypatch.delenv("CLD_SESSION_DIR", raising=False)
+    monkeypatch.setattr("sys.stdin", _stdin(payload))
+    monkeypatch.setenv("CCCS_SESSION_TAGS_DIR", str(tmp_path / "tags"))
+
+    session_tag.main()
+    out = json.loads(capsys.readouterr().out)
+
+    msg = out["hookSpecificOutput"]["additionalContext"]
+    assert "cc-sessions/" in msg
+    assert "-my-feature/" in msg
+
+
 def test_last_opened_oserror_logs_to_stderr_no_exception(tmp_path, monkeypatch, capsys):
     """.touch() raises OSError: error printed to stderr (contains [session-tag]), no exception propagated."""
     # Point CLD_SESSION_DIR at a non-existent nested path so .touch() raises

@@ -13,6 +13,7 @@ from cc_session_tools.lib.scheduler.digest import JobReport, Outcome
 _RAN_EVENTS = {ledger.LedgerEvent.RUN.value, ledger.LedgerEvent.BACKFILL.value}
 _FAIL_EVENTS = {ledger.LedgerEvent.FAIL.value}
 _LAUNCH_EVENTS = {ledger.LedgerEvent.LAUNCH.value}
+_SUSPEND_EVENTS = {ledger.LedgerEvent.SUSPEND.value}
 
 
 @dataclass(frozen=True, slots=True)
@@ -53,6 +54,14 @@ def surface(*, session_uuid: str) -> SurfaceResult:
                 job_id=job_id, outcome=Outcome.LAUNCHED,
                 surface=_surface_flag(job_id, surface_by_id), overdue="",
                 ran=0, deferred=0, expired=0, consecutive_failures=0,
+            ))
+        elif event in _SUSPEND_EVENTS:
+            raw_cf = e.get("consecutive_failures")
+            consecutive = int(raw_cf) if isinstance(raw_cf, int) else 0
+            reports.append(JobReport(
+                job_id=job_id, outcome=Outcome.SUSPENDED,
+                surface=_surface_flag(job_id, surface_by_id), overdue="",
+                ran=0, deferred=0, expired=0, consecutive_failures=consecutive,
             ))
         # skip_expired and defer events are not surfaced as standalone lines.
 
