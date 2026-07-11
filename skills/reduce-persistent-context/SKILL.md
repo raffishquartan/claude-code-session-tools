@@ -18,7 +18,6 @@ token weight"). Keep them distinct.
 
 ## Prerequisites
 
-- `count-text-tokens` on PATH (tiktoken-tools; same backend as `count-file-tokens`).
 - `claude-code-usage` on PATH (the analyse-cc-usage repo).
 - Run all `python3` commands from the skill's `scripts/` directory so sibling imports resolve.
 
