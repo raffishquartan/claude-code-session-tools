@@ -54,6 +54,12 @@
         "hooks": [
           {
             "type": "command",
+            "command": "ccst hooks run bash-hard-deny",
+            "timeout": 5,
+            "statusMessage": "Checking Bash command against hard-deny rules..."
+          },
+          {
+            "type": "command",
             "command": "ccst hooks run marker-allow",
             "timeout": 5,
             "statusMessage": "Checking for skill-marker touch..."
