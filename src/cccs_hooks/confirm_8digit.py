@@ -29,7 +29,6 @@ import json
 import os
 import sys
 import time
-from pathlib import Path
 from typing import Literal
 
 from cccs_hooks.markers import markers_dir
@@ -64,16 +63,8 @@ class VerificationResult:
 # ---------- skill-marker exceptions ----------
 
 
-def _markers_dir() -> Path:
-    custom = os.environ.get("CCCS_MARKERS_DIR")
-    if custom:
-        return Path(custom)
-    cache_home = os.environ.get("XDG_CACHE_HOME") or str(Path.home() / ".cache")
-    return Path(cache_home) / "claude" / "markers"
-
-
 def _marker_fresh(name: str) -> bool:
-    p = _markers_dir() / name
+    p = markers_dir() / name
     if not p.exists():
         return False
     try:

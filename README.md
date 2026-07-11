@@ -46,7 +46,7 @@ The repo ships seven CLIs, one shell helper, nine bundled skills, and nine bundl
 | **`session-tag`** (SessionStart) | Writes a `<uuid>.tag` file so `claude-code-usage` can map session UUIDs to human-readable names. |
 | **`last-screenshot`** (UserPromptSubmit) | Resolves your newest screenshot for the `>lss` token and injects its path. Requires `CCST_SCREENSHOT_DIR`. |
 | **`bash-security-review`** (PreToolUse) | Tiered Bash command security review with an allowlist cache and LLM fallback. |
-| **`marker-allow`** (PreToolUse) | Auto-approves a bare `touch` of a skill marker under `~/.claude/hooks/markers/` (and nothing else), so marker-gated skills can refresh their TTL marker without a permission prompt. |
+| **`marker-allow`** (PreToolUse) | Auto-approves a bare `touch` of a skill marker under `~/.cache/claude/markers/` (and nothing else), so marker-gated skills can refresh their TTL marker without a permission prompt. |
 | **`confirm-8digit`** (PreToolUse) | Blocks a configurable set of high-stakes tool calls unless the user repeats back an 8-digit confirmation code. |
 | **`after-response`** (Stop) | Touches a `.last-active` sentinel so `ccs --order-by active` can sort sessions by recency of Claude activity. |
 | **`worklog-guard`** (PreCompact, matcher: `manual`) | Blocks manual `/compact` if the session's WORKLOG.md is stale, so progress isn't lost to compaction unrecorded. |
@@ -541,7 +541,7 @@ to make the hook library available. Hooks are invoked through `ccst hooks run <n
 | `cccs_hooks.confirm_8digit` | PreToolUse | 8-digit confirmation guard for gated tools. |
 | `cccs_hooks.cache` | — | SHA-256 command cache (CSV); used by `bash_security_review`. |
 | `cccs_hooks.bash_security_review` | PreToolUse | Tiered Bash security review with cache. |
-| `cccs_hooks.marker_allow` | PreToolUse | Auto-approves a bare `touch` of a skill marker under `~/.claude/hooks/markers/`; silent otherwise. |
+| `cccs_hooks.marker_allow` | PreToolUse | Auto-approves a bare `touch` of a skill marker under `~/.cache/claude/markers/`; silent otherwise. |
 | `cccs_hooks.markers` | — | Single source of truth for the skill-marker directory; shared by `confirm_8digit` and `marker_allow`. |
 | `cccs_hooks.after_response` | Stop | `.last-active` sentinel for `ccs --order-by active`. |
 | `cccs_hooks.worklog_guard` | PreCompact (manual) | Blocks `/compact` if the session's WORKLOG.md is stale (see [Worklog guard hook](#worklog-guard-hook)). |

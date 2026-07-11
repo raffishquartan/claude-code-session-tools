@@ -1,12 +1,12 @@
 """PreToolUse hook: auto-approve the ``touch`` that refreshes a skill marker.
 
 Marker-gated skills (e.g. do-tesco-shop) keep a short-lived marker fresh under
-``~/.claude/hooks/markers/`` by ``touch``-ing it. That path is outside any
-project working directory, so without this hook every refresh prompts for Bash
-permission. This hook returns a PreToolUse ``allow`` decision for *exactly* a
-bare ``touch <markers-dir>/<name>`` command and nothing else, so marker refresh
-is silent while every other Bash call falls through to the normal permission
-flow.
+``~/.cache/claude/markers/`` (see :mod:`cccs_hooks.markers`) by ``touch``-ing
+it. That path is outside any project working directory, so without this hook
+every refresh prompts for Bash permission. This hook returns a PreToolUse
+``allow`` decision for *exactly* a bare ``touch <markers-dir>/<name>`` command
+and nothing else, so marker refresh is silent while every other Bash call
+falls through to the normal permission flow.
 
 Security: the match is deliberately tight. The command must be a single ``touch``
 with one path argument that resolves to a direct child of the markers directory

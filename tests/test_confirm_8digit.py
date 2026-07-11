@@ -8,6 +8,8 @@ from pathlib import Path
 import pytest
 
 from cccs_hooks.confirm_8digit import GATED_TOOLS_DEFAULT, verify
+from cccs_hooks.confirm_8digit import markers_dir as confirm_8digit_markers_dir
+from cccs_hooks.marker_allow import markers_dir as marker_allow_markers_dir
 
 
 # ---------- transcript builder ----------
@@ -408,6 +410,36 @@ def test_marker_calendar_sync_email_requires_subject_prefix(
         GATED_TOOLS_DEFAULT,
     )
     assert result_bad.exit_code == 2
+
+
+# ---------- shared markers_dir resolution ----------
+
+
+def test_confirm_8digit_and_marker_allow_share_markers_dir(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """confirm_8digit and marker_allow both import markers_dir from
+    cccs_hooks.markers - it is the identical function, so a marker refreshed
+    via marker-allow's auto-approved touch is always seen as fresh by
+    confirm_8digit's exemption check."""
+    assert confirm_8digit_markers_dir is marker_allow_markers_dir
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.delenv("CCCS_MARKERS_DIR", raising=False)
+    monkeypatch.delenv("XDG_CACHE_HOME", raising=False)
+    expected = tmp_path / ".cache" / "claude" / "markers"
+    assert confirm_8digit_markers_dir() == expected
+    assert marker_allow_markers_dir() == expected
+
+
+def test_shared_markers_dir_honours_cccs_markers_dir_override(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    custom = tmp_path / "custom-markers"
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("CCCS_MARKERS_DIR", str(custom))
+    assert confirm_8digit_markers_dir() == custom
+    assert marker_allow_markers_dir() == custom
 
 
 # ---------- self-send exception ----------
