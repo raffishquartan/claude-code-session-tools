@@ -186,19 +186,22 @@ def _cmd_skills_install(args: argparse.Namespace) -> int:
         return 0
 
     # Perform writes
-    has_error = False
+    linked: list[Path] = []
+    skipped: list[Path] = []
+    failed: list[Path] = []
     target_dir.mkdir(parents=True, exist_ok=True)
 
     for action, skill_src, dest in decisions:
         if action == SkillAction.ALREADY_CORRECT:
-            continue  # no-op
+            skipped.append(dest)
+            continue
 
         if action == SkillAction.NON_SYMLINK_EXISTS and not args.force:
             print(
                 f"error: {dest} exists and is not a symlink; use --force to move it aside",
                 file=sys.stderr,
             )
-            has_error = True
+            failed.append(dest)
             continue
 
         if action == SkillAction.WRONG_TARGET and not args.force:
@@ -206,7 +209,7 @@ def _cmd_skills_install(args: argparse.Namespace) -> int:
                 f"error: {dest} is a symlink to a different path; use --force to replace it",
                 file=sys.stderr,
             )
-            has_error = True
+            failed.append(dest)
             continue
 
         # Move aside existing non-symlink or wrong-target symlink
@@ -221,12 +224,24 @@ def _cmd_skills_install(args: argparse.Namespace) -> int:
                 dest.unlink()
 
         dest.symlink_to(skill_src)
+        linked.append(dest)
         print(f"  linked: {dest} -> {skill_src}")
 
-    if has_error:
+    print()
+    if linked:
+        print(f"Linked {len(linked)} skill(s) in {target_dir}")
+    if skipped:
+        print(f"Skipped {len(skipped)} (already correct)")
+    if not linked and not skipped and not failed:
+        print(f"Nothing to do in {target_dir}")
+
+    if failed:
+        print(
+            f"\n{len(failed)} skill(s) could not be installed — see errors above",
+            file=sys.stderr,
+        )
         return 1
 
-    print(f"\nDone — symlinks written to {target_dir}")
     return 0
 
 
