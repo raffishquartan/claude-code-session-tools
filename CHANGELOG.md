@@ -18,6 +18,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `skills/reduce-persistent-context/{SKILL.md,scripts/,tests/}` and
   `ccst skills install` symlink deployment.
 
+### Changed
+
+- **`session-tag` hook now also emits the ccd/ccr SessionStart `additionalContext`
+  message**, not just the `<session_id>.tag` file. Ported from
+  claude-code-config-sync's `cc-wrapper-session-tag.sh`, which is being retired
+  in favour of calling `ccst hooks run session-tag` directly. Mode-specific
+  wording for `CLD_SESSION_MODE=new` vs `resume`; still a no-op when
+  `CLD_SESSION_TAG` is unset (non-ccd/ccr sessions).
+
 ### Fixed
 
 - **`ccst hooks run catchup` no longer replays full ledger history for a
@@ -39,6 +48,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   call — no live session required) fires at the moment of suspension so a
   permanently broken job in a rarely-opened project doesn't go unnoticed. Run
   `ccsched enable <job>` after fixing the job to clear the suspension and resume.
+- **`sessionstart-pending-rename` hook's cross-project cleanup command silently
+  deleted nothing when `~/cc` is a symlink** (e.g. to an OneDrive sync target).
+  GNU `find` does not descend through a directory symlink given as the search
+  root unless `-L` is passed, so the printed
+  `find ~/cc -name .pending-rename -delete` remedy cleared no markers while
+  claiming to have cleared every one. Now prints `find -L ~/cc -name
+  .pending-rename -delete`, with a regression test covering the symlinked-root
+  case.
 
 ## [0.17.0] - 2026-07-09
 

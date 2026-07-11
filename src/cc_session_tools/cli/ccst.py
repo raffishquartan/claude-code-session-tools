@@ -64,7 +64,7 @@ HOOK_DESCRIPTIONS: dict[str, str] = {
     "confirm-8digit": "Enforces an 8-digit confirmation gate before risky tool calls",
     "after-response": "Touches a .last-active sentinel so `ccs --order-by active` can sort by recency",
     "worklog-guard": "Blocks manual /compact if the session's WORKLOG.md is stale (PreCompact, matcher: manual)",
-    "session-tag": "Writes the session tag file so ccusage can map UUIDs to human-readable names",
+    "session-tag": "For ccd/ccr-launched sessions: writes the session tag file so ccusage can map UUIDs to human-readable names, and emits additionalContext telling the assistant the tag/session-dir is already set",
     "last-screenshot": "Resolves the newest screenshot for the >lss token and injects its path",
     "messaging-deliver": "Delivers inter-session messages (digest + auto-read + receipts) on session start and each prompt",
     "catchup": "Reconciles+launches missed scheduled jobs (ccsched) detached and surfaces a catch-up digest (SessionStart + UserPromptSubmit)",
