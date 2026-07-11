@@ -13,15 +13,19 @@ import re
 import subprocess
 
 
+def _run(text: str) -> str:
+    return subprocess.run(
+        ["count-text-tokens", "-f", "-"],
+        input=text, capture_output=True, text=True, check=True,
+    ).stdout
+
+
 def token_count(text: str) -> int:
     if text == "":
         return 0
-    proc = subprocess.run(
-        ["count-text-tokens", "-f", "-"],
-        input=text, capture_output=True, text=True, check=True,
-    )
+    stdout = _run(text)
     # Match a line that is exactly "Tokens: <int>" (not "Tokens/word:").
-    m = re.search(r"^Tokens:\s*([\d,]+)\s*$", proc.stdout, re.MULTILINE)
+    m = re.search(r"^Tokens:\s*([\d,]+)\s*$", stdout, re.MULTILINE)
     if not m:
-        raise ValueError(f"could not parse 'Tokens:' line from: {proc.stdout!r}")
+        raise ValueError(f"could not parse 'Tokens:' line from: {stdout!r}")
     return int(m.group(1).replace(",", ""))
