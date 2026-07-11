@@ -75,6 +75,7 @@ def test_hooks_install_bundle_all_hooks(tmp_path: Path) -> None:
             for h in block.get("hooks", []):
                 all_cmds.add(h.get("command", ""))
     expected = {
+        "ccst hooks run bash-hard-deny",
         "ccst hooks run bash-security-review",
         "ccst hooks run marker-allow",
         "ccst hooks run confirm-8digit",
