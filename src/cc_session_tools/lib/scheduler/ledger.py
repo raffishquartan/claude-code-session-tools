@@ -108,9 +108,13 @@ def read_since(offset: int) -> tuple[list[dict[str, object]], int]:
     catch-up entries previously surfaced), plus the new offset.
 
     Used by the surface/reap phase (§9.3). Filters to catch-up entries first,
-    so unrelated hook lines in the shared ledger never shift the offset.
+    so unrelated hook lines in the shared ledger never shift the offset. A
+    stale ``offset`` beyond the current row count (e.g. after a future ledger
+    rotation/shrink) is clamped rather than allowed to produce a negative
+    slice or otherwise misbehave — it just returns nothing new.
     """
     rows = _all_catchup_rows()
+    offset = min(offset, len(rows))
     return rows[offset:], len(rows)
 
 

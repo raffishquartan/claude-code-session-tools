@@ -121,6 +121,8 @@ def _run_main(
     monkeypatch: pytest.MonkeyPatch, home: Path, payload: object
 ) -> str:
     monkeypatch.setenv("HOME", str(home))
+    monkeypatch.delenv("CCCS_MARKERS_DIR", raising=False)
+    monkeypatch.delenv("XDG_CACHE_HOME", raising=False)
     monkeypatch.setattr("sys.stdin", io.StringIO(json.dumps(payload)))
     out = io.StringIO()
     monkeypatch.setattr("sys.stdout", out)
@@ -132,10 +134,10 @@ def _run_main(
 def test_main_allows_marker_touch(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    (tmp_path / ".claude" / "hooks" / "markers").mkdir(parents=True)
+    (tmp_path / ".cache" / "claude" / "markers").mkdir(parents=True)
     payload = {
         "tool_name": "Bash",
-        "tool_input": {"command": "touch ~/.claude/hooks/markers/tesco_shop_active"},
+        "tool_input": {"command": "touch ~/.cache/claude/markers/tesco_shop_active"},
     }
     out = _run_main(monkeypatch, tmp_path, payload)
     decision = json.loads(out)
@@ -148,11 +150,11 @@ def test_main_allows_marker_touch(
 def test_main_silent_on_compound_command(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    (tmp_path / ".claude" / "hooks" / "markers").mkdir(parents=True)
+    (tmp_path / ".cache" / "claude" / "markers").mkdir(parents=True)
     payload = {
         "tool_name": "Bash",
         "tool_input": {
-            "command": "touch ~/.claude/hooks/markers/x && rm -rf ~"
+            "command": "touch ~/.cache/claude/markers/x && rm -rf ~"
         },
     }
     assert _run_main(monkeypatch, tmp_path, payload) == ""
@@ -163,7 +165,7 @@ def test_main_silent_on_non_bash_tool(
 ) -> None:
     payload = {
         "tool_name": "Write",
-        "tool_input": {"command": "touch ~/.claude/hooks/markers/x"},
+        "tool_input": {"command": "touch ~/.cache/claude/markers/x"},
     }
     assert _run_main(monkeypatch, tmp_path, payload) == ""
 

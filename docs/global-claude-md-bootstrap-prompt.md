@@ -250,7 +250,8 @@ After writing, tell the user:
    then `source ~/.bashrc` (or open a new shell) to activate it.
 3. If any skills were missing, run `ccst skills install --apply`.
 4. If hooks were not registered, run `ccst hooks install --apply`.
-5. If they want fine-grained telemetry pruning, use
+5. Telemetry is pruned automatically every 7 days via a `ccsched` job. If they
+   want tighter one-off pruning in the meantime, use
    `ccst telemetry trim --max-age-days 30 --max-size 5`.
 
 Remind them that re-running this bootstrap prompt at any time is safe — it

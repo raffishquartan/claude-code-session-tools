@@ -54,6 +54,27 @@ background tasks, /loop, scheduled routines) the user may be away from
 the keyboard when a gated action fires. A push notification means the
 agent does not silently stall.
 
+## Real dead-letter semantics for ccmsg
+
+Build genuine dead-letter handling for `cc_session_tools/lib/messaging`:
+messages that sit unclaimed past some age (e.g. 14 days) with no session ever
+matching their recipient/description should be actively surfaced, not just
+silently sit in the inbox forever. At minimum, this should send a message
+back to the original sender explicitly flagging that their message has not
+yet been received or processed. Beyond that, further handling (re-notify on
+a cadence, auto-archive as undeliverable, etc.) is TBD — design it when
+picked up.
+
+Full background and the concrete design sketch (option 4.1.1.2, "Real
+dead-letter semantics") is in:
+`/mnt/c/Users/cfoge/OneDrive/claude/claude/cc-sessions/20260710-claude-identify-all-information-stored/working/investigation-notes-v2.md`
+
+This TODO exists because the *current* `ccmsg-dead-letter-sweep` ccsched job
+does not do this — it just re-runs the ordinary delivery sweep and has no
+dead-letter logic at all (confirmed via code read, no matches for
+`dead.letter` anywhere in the codebase). That job is being removed/renamed
+separately; this TODO is the "build the real thing" follow-up if wanted.
+
 ## Pending-rename marker accumulation and reminder noise
 
 The `move-session` skill drops a `.pending-rename` marker into a session's
