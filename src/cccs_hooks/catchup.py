@@ -98,7 +98,7 @@ def main(argv: list[str] | None = None) -> int:
             # parse-error digest immediately so the user sees the warning.
             _emit(format_digest([], parse_error=parse_error), event)
             return 0
-        surfaced = surface.surface(session_uuid=uuid)
+        surfaced = surface.surface(session_uuid=uuid, now=now)
         digest = format_digest(surfaced.reports, parse_error=None)
     except (OSError, ValueError) as exc:
         _log_failure(type(exc).__name__)

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -10,6 +12,8 @@ from cc_session_tools.lib.scheduler import registry as reg
 from cc_session_tools.lib.scheduler import surface as sf
 from cc_session_tools.lib.scheduler.digest import Outcome
 from cc_session_tools.lib.scheduler.jobspec import validate_job_fields
+
+_NOW = datetime(2026, 6, 20, 10, 0, tzinfo=timezone.utc)
 
 
 @pytest.fixture(autouse=True)
@@ -30,26 +34,56 @@ def _run_event(job_id: str) -> None:
                              ran=1, exit_code=0, duration_ms=1, error=None))
 
 
+def _raw_catchup_line(*, ts: str, job_id: str, event: str, **extra: object) -> str:
+    """A hand-crafted fires.jsonl line with a caller-chosen ``ts``, matching the
+    shape ``cccs_hooks.telemetry.TelemetryEntry.to_json_line`` writes plus the
+    catchup-specific verdict payload ``ledger.record`` packs in. Lets tests pin
+    the age of a ledger row without depending on the real wall clock."""
+    verdict = json.dumps({
+        "job_id": job_id,
+        "event": event,
+        "owed": extra.get("owed", 1),
+        "ran": extra.get("ran", 0),
+        "exit_code": extra.get("exit_code"),
+        "duration_ms": extra.get("duration_ms", 1),
+        "error": extra.get("error"),
+        "consecutive_failures": extra.get("consecutive_failures", 0),
+    })
+    return json.dumps({
+        "v": 1, "ts": ts, "hook": "catchup", "event": "", "tool": "",
+        "session_id": "", "cwd": "", "decision": "annotate", "cache": "none",
+        "verdict": verdict, "input_hash": "",
+    })
+
+
+def _write_raw_lines(tmp_path: Path, lines: list[str]) -> None:
+    hooks_dir = tmp_path / "hooks"
+    hooks_dir.mkdir(parents=True, exist_ok=True)
+    fires = hooks_dir / "fires.jsonl"
+    existing = fires.read_text() if fires.is_file() else ""
+    fires.write_text(existing + "\n".join(lines) + "\n")
+
+
 def test_fresh_session_surfaces_all(monkeypatch: pytest.MonkeyPatch) -> None:
     _add("tesco")
     _run_event("tesco")
-    result = sf.surface(session_uuid="s1")
+    result = sf.surface(session_uuid="s1", now=_NOW)
     assert any(r.job_id == "tesco" and r.outcome is Outcome.RAN for r in result.reports)
 
 
 def test_cursor_advances_so_second_surface_is_empty(monkeypatch: pytest.MonkeyPatch) -> None:
     _add("tesco")
     _run_event("tesco")
-    sf.surface(session_uuid="s1")
-    again = sf.surface(session_uuid="s1")
+    sf.surface(session_uuid="s1", now=_NOW)
+    again = sf.surface(session_uuid="s1", now=_NOW)
     assert again.reports == []
 
 
 def test_two_sessions_each_surface_the_same_run_once(monkeypatch: pytest.MonkeyPatch) -> None:
     _add("tesco")
     _run_event("tesco")
-    a = sf.surface(session_uuid="a")
-    b = sf.surface(session_uuid="b")
+    a = sf.surface(session_uuid="a", now=_NOW)
+    b = sf.surface(session_uuid="b", now=_NOW)
     assert any(r.job_id == "tesco" for r in a.reports)
     assert any(r.job_id == "tesco" for r in b.reports)
 
@@ -57,7 +91,7 @@ def test_two_sessions_each_surface_the_same_run_once(monkeypatch: pytest.MonkeyP
 def test_silent_success_is_marked_non_surfacing(monkeypatch: pytest.MonkeyPatch) -> None:
     _add("quiet", surface=False)
     _run_event("quiet")
-    result = sf.surface(session_uuid="s1")
+    result = sf.surface(session_uuid="s1", now=_NOW)
     # The report carries surface=False so digest omits it; failures would still show.
     rep = next(r for r in result.reports if r.job_id == "quiet")
     assert rep.surface is False
@@ -68,7 +102,7 @@ def test_failure_event_maps_to_failed_outcome(monkeypatch: pytest.MonkeyPatch) -
     ld.record(ld.LedgerEntry(job_id="cal", event=ld.LedgerEvent.FAIL, owed=1,
                              ran=0, exit_code=1, duration_ms=1, error="boom",
                              consecutive_failures=1))
-    result = sf.surface(session_uuid="s1")
+    result = sf.surface(session_uuid="s1", now=_NOW)
     rep = next(r for r in result.reports if r.job_id == "cal")
     assert rep.outcome is Outcome.FAILED
 
@@ -85,7 +119,7 @@ def test_second_consecutive_failure_surfaces_correct_ordinal(
     ld.record(ld.LedgerEntry(job_id="cal", event=ld.LedgerEvent.FAIL, owed=1,
                              ran=0, exit_code=1, duration_ms=1, error="boom",
                              consecutive_failures=2))
-    result = sf.surface(session_uuid="s1")
+    result = sf.surface(session_uuid="s1", now=_NOW)
     fail_reports = [r for r in result.reports if r.job_id == "cal" and r.outcome is Outcome.FAILED]
     # The second report should carry consecutive_failures=2
     assert any(r.consecutive_failures == 2 for r in fail_reports)
@@ -103,7 +137,7 @@ def test_new_session_seed_skips_pre_existing_backlog(monkeypatch: pytest.MonkeyP
                                  ran=0, exit_code=2, duration_ms=1, error="boom",
                                  consecutive_failures=n))
     cursor.seed_new_session("brand-new-uuid")
-    result = sf.surface(session_uuid="brand-new-uuid")
+    result = sf.surface(session_uuid="brand-new-uuid", now=_NOW)
     assert result.reports == []
 
 
@@ -112,7 +146,77 @@ def test_suspend_event_surfaces_as_suspended_report(monkeypatch: pytest.MonkeyPa
     ld.record(ld.LedgerEntry(job_id="broken-job", event=ld.LedgerEvent.SUSPEND, owed=0,
                              ran=0, exit_code=None, duration_ms=0, error=None,
                              consecutive_failures=10))
-    result = sf.surface(session_uuid="s1")
+    result = sf.surface(session_uuid="s1", now=_NOW)
     rep = next(r for r in result.reports if r.job_id == "broken-job")
     assert rep.outcome is Outcome.SUSPENDED
     assert rep.consecutive_failures == 10
+
+
+# --- Dormant-session staleness/replay fix -----------------------------------
+
+
+def test_large_routine_backlog_collapses_to_one_summary_line(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A dormant session catching up on 500 routine RUN events must see one
+    summary report, not 500 individual ones — and the cursor must still
+    advance past all 500 so nothing replays twice."""
+    _add("tesco", surface=True)
+    for _ in range(500):
+        _run_event("tesco")
+    result = sf.surface(session_uuid="s1", now=_NOW)
+    summary_reports = [r for r in result.reports if r.outcome is Outcome.SUMMARY]
+    assert len(summary_reports) == 1
+    assert summary_reports[0].count == 500
+    assert not any(r.outcome is Outcome.RAN for r in result.reports)
+    # Cursor fully advanced: a second surface for the same session sees nothing new.
+    again = sf.surface(session_uuid="s1", now=_NOW)
+    assert again.reports == []
+
+
+def test_stale_failed_entry_replays_in_full_with_age_suffix(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A single FAILED entry from ~20 days ago, mixed in among otherwise-routine
+    entries, must be shown in full with an age suffix — never folded into a
+    summary, regardless of how old it is."""
+    old_ts = (_NOW - timedelta(days=20)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    _write_raw_lines(tmp_path, [
+        _raw_catchup_line(
+            ts=old_ts, job_id="cal", event="fail", ran=0, exit_code=1,
+            error="boom", consecutive_failures=1,
+        ),
+    ])
+    result = sf.surface(session_uuid="s1", now=_NOW)
+    fail_reports = [r for r in result.reports if r.outcome is Outcome.FAILED]
+    assert len(fail_reports) == 1
+    assert fail_reports[0].job_id == "cal"
+    assert fail_reports[0].age == "20d ago"
+    assert not any(r.outcome is Outcome.SUMMARY for r in result.reports)
+
+
+def test_many_stale_routine_entries_and_one_recent_failure_coexist(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Both paths must coexist in one digest: a large stale routine backlog
+    collapses to a summary while a recent FAILED entry (mixed into the same
+    backlog) still replays individually with its own age suffix."""
+    old_ts = (_NOW - timedelta(days=10)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    recent_ts = (_NOW - timedelta(hours=1)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    lines = [
+        _raw_catchup_line(ts=old_ts, job_id="tesco", event="run", ran=1)
+        for _ in range(150)
+    ]
+    lines.append(_raw_catchup_line(
+        ts=recent_ts, job_id="cal", event="fail", ran=0, exit_code=1,
+        error="boom", consecutive_failures=1,
+    ))
+    _write_raw_lines(tmp_path, lines)
+    result = sf.surface(session_uuid="s1", now=_NOW)
+    summary_reports = [r for r in result.reports if r.outcome is Outcome.SUMMARY]
+    fail_reports = [r for r in result.reports if r.outcome is Outcome.FAILED]
+    assert len(summary_reports) == 1
+    assert summary_reports[0].count == 150
+    assert len(fail_reports) == 1
+    assert fail_reports[0].job_id == "cal"
+    assert fail_reports[0].age == "1h ago"

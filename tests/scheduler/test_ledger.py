@@ -103,3 +103,18 @@ def test_read_since_advances_offset_and_ignores_other_hooks(
     third, offset3 = ledger.read_since(offset2)
     assert [r["job_id"] for r in third] == ["b"]
     assert offset3 == 2
+
+
+def test_read_since_clamps_stale_offset_beyond_row_count(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A stale offset past the current row count (e.g. after a future ledger
+    rotation/shrink) must be clamped, not raise or slice negatively."""
+    monkeypatch.setenv("CCCS_HOOKS_DIR", str(tmp_path))
+    ledger.record(ledger.LedgerEntry(
+        job_id="a", event=ledger.LedgerEvent.RUN, owed=1, ran=1,
+        exit_code=0, duration_ms=1, error=None,
+    ))
+    rows, offset = ledger.read_since(999)
+    assert rows == []
+    assert offset == 1

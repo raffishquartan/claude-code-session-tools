@@ -11,6 +11,7 @@ class Outcome(str, Enum):
     FAILED = "failed"
     LAUNCHED = "launched"
     SUSPENDED = "suspended"
+    SUMMARY = "summary"
 
 
 @dataclass(frozen=True, slots=True)
@@ -23,6 +24,12 @@ class JobReport:
     deferred: int
     expired: int
     consecutive_failures: int
+    # Relative-age suffix (e.g. "12d ago"). Always set by the surfacing layer
+    # for FAILED/SUSPENDED reports, and for SUMMARY reports (oldest folded
+    # entry); unused otherwise.
+    age: str | None = None
+    # SUMMARY only: number of routine entries folded into this one line.
+    count: int = 0
 
 
 def _ordinal(n: int) -> str:
@@ -34,16 +41,23 @@ def _ordinal(n: int) -> str:
 
 
 def _line(report: JobReport) -> str | None:
+    if report.outcome is Outcome.SUMMARY:
+        return (
+            f"⏱ {report.count} routine job runs since your last session, "
+            f"oldest {report.age}"
+        )
     if report.outcome is Outcome.SUSPENDED:
+        age_suffix = f", {report.age}" if report.age else ""
         return (
             f"⛔ {report.job_id} auto-suspended after "
-            f"{report.consecutive_failures} consecutive failures — see fires.jsonl / "
+            f"{report.consecutive_failures} consecutive failures{age_suffix} — see fires.jsonl / "
             f"run `ccsched enable {report.job_id}` after fixing"
         )
     if report.outcome is Outcome.FAILED:
+        age_suffix = f", {report.age}" if report.age else ""
         return (
             f"✗ {report.job_id} failed "
-            f"({_ordinal(report.consecutive_failures)} consecutive) — see fires.jsonl"
+            f"({_ordinal(report.consecutive_failures)} consecutive{age_suffix}) — see fires.jsonl"
         )
     if not report.surface:
         return None

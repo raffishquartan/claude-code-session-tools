@@ -214,7 +214,7 @@ def _cmd_sweep(args: argparse.Namespace) -> int:
     # pre-existing ledger history (same fix as the catchup hook, §9.3).
     cursor.seed_new_session("cli-sweep")
     rec = reconcile.reconcile_and_launch(now=now)
-    surfaced = surface.surface(session_uuid="cli-sweep")
+    surfaced = surface.surface(session_uuid="cli-sweep", now=now)
     digest = format_digest(surfaced.reports, parse_error=rec.parse_error)
     print(digest or "nothing surfaced")
     return 0
