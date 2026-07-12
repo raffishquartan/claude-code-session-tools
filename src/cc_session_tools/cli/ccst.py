@@ -23,6 +23,9 @@ Current subcommands:
                                  source files not deleted — run the printed
                                  find ... -delete after review).
   telemetry trim                 Trim ~/.cache/claude/logs/fires.jsonl by size / age.
+  gc report                      Report orphaned per-session-uuid entries across the
+                                 scheduler, messaging, and session-env stores (never
+                                 deletes anything).
   claude-md install              Add/update the inter-session-messaging block in
                                  ~/.claude/CLAUDE.md.
   claude-md uninstall            Remove the messaging block from CLAUDE.md.
@@ -740,6 +743,22 @@ def _cmd_telemetry_trim(args: argparse.Namespace) -> int:
     return trim_main(argv)
 
 
+# ---------- gc report ----------
+
+
+def _cmd_gc_report(args: argparse.Namespace) -> int:
+    from cc_session_tools.lib.session_gc import build_report, format_report
+
+    report = build_report(
+        projects_dir=Path(args.projects_dir) if args.projects_dir else None,
+        scheduler_dir=Path(args.scheduler_dir) if args.scheduler_dir else None,
+        messages_root=Path(args.messages_root) if args.messages_root else None,
+        session_env_dir=Path(args.session_env_dir) if args.session_env_dir else None,
+    )
+    print(format_report(report))
+    return 0
+
+
 # ---------- hooks run ----------
 
 
@@ -1115,6 +1134,44 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Logs directory (default: ~/.cache/claude/logs/)",
     )
 
+    # ---- gc ----
+    gc_parser = sub.add_parser("gc", help="Garbage-collection reports for per-session-uuid stores")
+    gc_sub = gc_parser.add_subparsers(dest="verb", metavar="<verb>")
+    gc_sub.required = True
+
+    gc_report_parser = gc_sub.add_parser(
+        "report",
+        help=(
+            "Report orphaned per-session-uuid entries across the scheduler, "
+            "messaging, and session-env stores. Report-only — never deletes "
+            "or modifies anything."
+        ),
+    )
+    gc_report_parser.add_argument(
+        "--projects-dir",
+        default=None,
+        metavar="PATH",
+        help="Transcript projects directory (default: ~/.claude/projects/)",
+    )
+    gc_report_parser.add_argument(
+        "--scheduler-dir",
+        default=None,
+        metavar="PATH",
+        help="Scheduler directory (default: from CC_SCHEDULER_DIR or ~/.claude/cc-scheduler/)",
+    )
+    gc_report_parser.add_argument(
+        "--messages-root",
+        default=None,
+        metavar="PATH",
+        help="Messaging store root (default: from CCST_MESSAGES_ROOT or ~/.claude/cc-messages/)",
+    )
+    gc_report_parser.add_argument(
+        "--session-env-dir",
+        default=None,
+        metavar="PATH",
+        help="Session-env directory (default: ~/.claude/session-env/)",
+    )
+
     # ---- tags ----
     tags_parser = sub.add_parser("tags", help="Tag file management commands")
     tags_sub = tags_parser.add_subparsers(dest="verb", metavar="<verb>")
@@ -1217,6 +1274,10 @@ def main() -> None:
     if args.noun == "telemetry":
         if args.verb == "trim":
             sys.exit(_cmd_telemetry_trim(args))
+
+    if args.noun == "gc":
+        if args.verb == "report":
+            sys.exit(_cmd_gc_report(args))
 
     if args.noun == "tags":
         if args.verb == "migrate":
