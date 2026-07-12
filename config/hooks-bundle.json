@@ -7,7 +7,7 @@
             "type": "command",
             "command": "ccst hooks run session-tag",
             "timeout": 5,
-            "statusMessage": "Writing session tag file..."
+            "statusMessage": "Checking cc wrapper session tag..."
           },
           {
             "type": "command",

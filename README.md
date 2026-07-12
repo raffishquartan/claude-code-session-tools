@@ -804,6 +804,10 @@ ccst telemetry trim --max-age-days 30 --max-size 5
 
 Telemetry is also rotated automatically at 10 MB (numbered slots `fires.jsonl.1/.2/.3`).
 
+Also runs automatically on a `telemetry-trim-weekly` `ccsched` job (`every:7d`,
+`--max-size 10 --max-age-days 90`) — manual invocation is for tighter
+one-off pruning, not required for routine upkeep.
+
 ## How it interacts with Claude Code's task lists
 
 Claude Code lets multiple sessions share a single task list if they all set the same `CLAUDE_CODE_TASK_LIST_ID` environment variable. `ccd` and `ccr` derive this from the project layout:
