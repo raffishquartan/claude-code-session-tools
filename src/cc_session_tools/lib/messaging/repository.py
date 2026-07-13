@@ -248,3 +248,52 @@ def claim(message_id: str, uuid: str, session: str, now_iso: str) -> Message:
         return _row_to_message(updated)
     finally:
         conn.close()
+
+
+def archive_one(message_id: str) -> Message:
+    """Manually archive a message (status flip). Raises MessageNotFoundError for
+    an unknown id. Idempotent on an already-archived row."""
+    conn = connect()
+    try:
+        with _immediate(conn):
+            row = conn.execute(
+                "SELECT id FROM messages WHERE id=?", (message_id,)
+            ).fetchone()
+            if row is None:
+                raise MessageNotFoundError(message_id)
+            conn.execute(
+                "UPDATE messages SET status='archived' WHERE id=?", (message_id,)
+            )
+            updated = conn.execute(
+                "SELECT * FROM messages WHERE id=?", (message_id,)
+            ).fetchone()
+        return _row_to_message(updated)
+    finally:
+        conn.close()
+
+
+def archive_aged(partition: str, cutoff_iso: str) -> list[str]:
+    """Archive every read/claimed message in ``partition`` whose settle time
+    (claimed_at, else read_at) is at or before ``cutoff_iso``, in one atomic
+    statement. Returns the archived ids (sorted).
+
+    R1: a second concurrent sweep runs the identical UPDATE, matches 0 rows
+    (those messages are already 'archived'), and neither crashes nor double-
+    archives. Because this is a status flip, a claim that landed first keeps its
+    claimed_at / read_by_uuid. Timestamps are fixed-width ISO-8601 Z strings, so
+    lexical <= is chronological <=."""
+    conn = connect()
+    try:
+        with _immediate(conn):
+            cur = conn.execute(
+                "UPDATE messages SET status='archived' "
+                "WHERE to_location=? AND status IN ('read','claimed') "
+                "AND COALESCE(claimed_at, read_at) IS NOT NULL "
+                "AND COALESCE(claimed_at, read_at) <= ? "
+                "RETURNING id",
+                (partition, cutoff_iso),
+            )
+            ids = sorted(r["id"] for r in cur.fetchall())
+        return ids
+    finally:
+        conn.close()

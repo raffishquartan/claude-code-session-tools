@@ -122,3 +122,37 @@ def test_second_claim_raises_already_claimed(root: Path) -> None:
     repo.claim("20260620T000000Z-0001", "me", "s", "2026-06-20T05:00:00Z")
     with pytest.raises(AlreadyClaimedError):
         repo.claim("20260620T000000Z-0001", "other", "s2", "2026-06-20T06:00:00Z")
+
+
+def test_archive_one_flips_status(root: Path) -> None:
+    repo.insert(_msg("20260620T000000Z-0001", status="read",
+                     read_at="2026-06-20T00:00:00Z"))
+    m = repo.archive_one("20260620T000000Z-0001")
+    assert m.status == "archived"
+
+
+def test_archive_one_missing_raises(root: Path) -> None:
+    with pytest.raises(repo.MessageNotFoundError):
+        repo.archive_one("ghost")
+
+
+def test_archive_aged_only_settled_older_than_cutoff(root: Path) -> None:
+    # read 15 days ago -> archived; read 13 days ago -> stays; unread -> stays.
+    repo.insert(_msg("20260101T000000Z-0001", status="read",
+                     read_at="2026-06-05T00:00:00Z"))            # old
+    repo.insert(_msg("20260101T000000Z-0002", status="read",
+                     read_at="2026-06-17T00:00:00Z"))            # recent
+    repo.insert(_msg("20260101T000000Z-0003", status="sent"))   # unread
+    cutoff = "2026-06-06T00:00:00Z"  # now(2026-06-20) - 14d
+    archived = repo.archive_aged("projects/alpha", cutoff)
+    assert archived == ["20260101T000000Z-0001"]
+    assert repo.get_by_id("20260101T000000Z-0002").status == "read"
+    assert repo.get_by_id("20260101T000000Z-0003").status == "sent"
+
+
+def test_archive_aged_uses_claimed_at_when_read_at_null(root: Path) -> None:
+    repo.insert(_msg("20260101T000000Z-0004", to_kind="description", to_value="w",
+                     to_location="projects/alpha", status="claimed", read_at=None,
+                     claimed_at="2026-06-05T00:00:00Z"))
+    assert repo.archive_aged("projects/alpha", "2026-06-06T00:00:00Z") == \
+        ["20260101T000000Z-0004"]
