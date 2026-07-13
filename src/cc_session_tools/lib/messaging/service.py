@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Literal
 
 from cc_session_tools.lib.messaging import cursor as cursor_mod
+from cc_session_tools.lib.messaging import repository
 from cc_session_tools.lib.messaging import retention
 from cc_session_tools.lib.messaging.addressing import (
     MatchKind,
@@ -22,17 +23,11 @@ from cc_session_tools.lib.messaging.message import (
     Message,
     Status,
     ToKind,
-    parse,
-    safe_parse,
-    write_atomic,
 )
+from cc_session_tools.lib.messaging.repository import MessageNotFoundError
 from cc_session_tools.lib.messaging.store import (
     GLOBAL_PARTITION,
-    archive_dir,
-    ensure_inbox_dir,
     generate_id,
-    message_filename,
-    store_root,
 )
 
 logger = logging.getLogger(__name__)
@@ -83,8 +78,7 @@ def send(request: SendRequest) -> str:
         attachments=list(request.attachments),
         body=request.body,
     )
-    inbox = ensure_inbox_dir(request.to_partition)
-    write_atomic(inbox / message_filename(message_id, request.subject), message)
+    repository.insert(message)
     return message_id
 
 
@@ -94,23 +88,9 @@ class Claimer:
     session: str
 
 
-class MessageNotFoundError(Exception):
-    """Raised when a message id resolves to no file."""
-
-
-def _iter_message_files() -> list[Path]:
-    root = store_root()
-    if not root.is_dir():
-        return []
-    return sorted(p for p in root.rglob("*.md") if p.is_file())
-
-
-def find_by_id(message_id: str) -> Path | None:
-    """Scan inbox and archive across all partitions for a message by id."""
-    for path in _iter_message_files():
-        if path.name.startswith(f"{message_id}__"):
-            return path
-    return None
+def find_by_id(message_id: str) -> Message | None:
+    """Single indexed primary-key lookup (was a full rglob scan)."""
+    return repository.get_by_id(message_id)
 
 
 def claim(message_id: str, claimer: Claimer) -> Message:
@@ -165,12 +145,7 @@ def archive(message_id: str, now: datetime) -> Message:
 
 
 def read_one(message_id: str) -> Message | None:
-    """Return the parsed ``Message`` for *message_id*, or ``None`` if not found.
-
-    A found-but-corrupt file raises ``ValueError`` (from ``parse``) so the caller
-    can report that specific id as unreadable rather than silently "not found"."""
-    path = find_by_id(message_id)
-    return parse(path.read_text(encoding="utf-8")) if path is not None else None
+    return repository.get_by_id(message_id)
 
 
 @dataclass(frozen=True)
@@ -190,26 +165,13 @@ def list_messages(
     from_uuid: str | None = None,
 ) -> list[MessageRow]:
     """Return compact rows, optionally filtered by status, partition, or sender uuid."""
-    rows: list[MessageRow] = []
-    for path in _iter_message_files():
-        m = safe_parse(path)
-        if m is None:
-            continue
-        if status is not None and m.status != status:
-            continue
-        if partition is not None and m.to_location != partition:
-            continue
-        if from_uuid is not None and m.from_uuid != from_uuid:
-            continue
-        rows.append(MessageRow(
-            id=m.id,
-            status=m.status,
-            to_kind=m.to_kind,
-            to_value=m.to_value,
-            from_session=m.from_session,
-            subject=m.subject,
-        ))
-    return rows
+    return [
+        MessageRow(
+            id=m.id, status=m.status, to_kind=m.to_kind, to_value=m.to_value,
+            from_session=m.from_session, subject=m.subject,
+        )
+        for m in repository.list_rows(status=status, partition=partition, from_uuid=from_uuid)
+    ]
 
 
 def _relative_age(sent_at: str, now: datetime) -> str:

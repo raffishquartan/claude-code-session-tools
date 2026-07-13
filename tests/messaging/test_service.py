@@ -30,10 +30,9 @@ def test_send_writes_message_to_partition_inbox(
 ) -> None:
     monkeypatch.setenv("CCST_MESSAGES_ROOT", str(tmp_path))
     mid = service.send(_sender())
-    files = list((tmp_path / "projects" / "alpha" / "inbox").glob("*.md"))
-    assert len(files) == 1
-    m = parse(files[0].read_text())
-    assert m.id == mid
+    m = service.read_one(mid)
+    assert m is not None
+    assert m.to_location == "projects/alpha"
     assert m.status == "sent"
     assert m.subject == "Hello there"
     assert m.attachments == ["/abs/a.md"]
@@ -85,14 +84,12 @@ def test_list_messages_filters_by_from_uuid(tmp_path: Path, monkeypatch: pytest.
     assert len(rows) == 1
 
 
-def test_list_messages_skips_malformed_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_list_messages_returns_compact_rows(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("CCST_MESSAGES_ROOT", str(tmp_path))
     service.send(_sender())
-    # A stale/hand-edited file in the store must not abort the listing.
-    bad = store.ensure_inbox_dir("projects/alpha") / "20990101T000000Z-bbbb__broken.md"
-    bad.write_text("not a valid message\n", encoding="utf-8")
     rows = service.list_messages()
     assert len(rows) == 1
+    assert rows[0].to_kind == "project" and rows[0].to_value == "alpha"
 
 
 def _ctx(
