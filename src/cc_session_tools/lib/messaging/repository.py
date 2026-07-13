@@ -297,3 +297,84 @@ def archive_aged(partition: str, cutoff_iso: str) -> list[str]:
         return ids
     finally:
         conn.close()
+
+
+def pending_receipts(from_uuid: str) -> list[Message]:
+    """Messages this uuid sent that have been read/claimed but whose receipt has
+    not yet been surfaced. An indexed lookup (idx_messages_receipts) replacing
+    the old full-store filesystem scan on every hook fire."""
+    conn = connect()
+    try:
+        rows = conn.execute(
+            "SELECT * FROM messages WHERE from_uuid=? AND status IN ('read','claimed') "
+            "AND receipt_shown=0 ORDER BY id",
+            (from_uuid,),
+        ).fetchall()
+    finally:
+        conn.close()
+    return [_row_to_message(r) for r in rows]
+
+
+def mark_receipts_shown(ids: list[str]) -> None:
+    if not ids:
+        return
+    conn = connect()
+    try:
+        with _immediate(conn):
+            conn.executemany(
+                "UPDATE messages SET receipt_shown=1 WHERE id=?",
+                [(mid,) for mid in ids],
+            )
+    finally:
+        conn.close()
+
+
+def load_cursor(session_uuid: str) -> dict[str, str]:
+    conn = connect()
+    try:
+        rows = conn.execute(
+            "SELECT partition, high_water_message_id FROM cursors WHERE session_uuid=?",
+            (session_uuid,),
+        ).fetchall()
+    finally:
+        conn.close()
+    return {r["partition"]: r["high_water_message_id"] for r in rows}
+
+
+def save_cursor(session_uuid: str, high_water: dict[str, str]) -> None:
+    if not high_water:
+        return
+    conn = connect()
+    try:
+        with _immediate(conn):
+            conn.executemany(
+                "INSERT INTO cursors (session_uuid, partition, high_water_message_id) "
+                "VALUES (?,?,?) ON CONFLICT(session_uuid, partition) "
+                "DO UPDATE SET high_water_message_id=excluded.high_water_message_id",
+                [(session_uuid, p, hw) for p, hw in high_water.items()],
+            )
+    finally:
+        conn.close()
+
+
+def refresh_display_tags(uuid: str, new_tag: str) -> int:
+    """Re-stamp from_session / read_by_session for non-archived messages
+    referencing ``uuid``, in one targeted UPDATE. Returns the count changed."""
+    conn = connect()
+    try:
+        with _immediate(conn):
+            cur = conn.execute(
+                "UPDATE messages SET "
+                "from_session = CASE WHEN from_uuid=:u AND from_session<>:t "
+                "THEN :t ELSE from_session END, "
+                "read_by_session = CASE WHEN read_by_uuid=:u AND read_by_session<>:t "
+                "THEN :t ELSE read_by_session END "
+                "WHERE status<>'archived' AND "
+                "((from_uuid=:u AND from_session<>:t) OR "
+                " (read_by_uuid=:u AND read_by_session<>:t)) "
+                "RETURNING id",
+                {"u": uuid, "t": new_tag},
+            )
+            return len(cur.fetchall())
+    finally:
+        conn.close()

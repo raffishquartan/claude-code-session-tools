@@ -156,3 +156,44 @@ def test_archive_aged_uses_claimed_at_when_read_at_null(root: Path) -> None:
                      claimed_at="2026-06-05T00:00:00Z"))
     assert repo.archive_aged("projects/alpha", "2026-06-06T00:00:00Z") == \
         ["20260101T000000Z-0004"]
+
+
+def test_pending_receipts_only_unshown_read_or_claimed(root: Path) -> None:
+    repo.insert(_msg("20260620T000000Z-0001", from_uuid="me", status="read",
+                     read_at="2026-06-20T00:00:00Z", read_by_session="rA"))
+    repo.insert(_msg("20260620T000000Z-0002", from_uuid="me", status="sent"))
+    repo.insert(_msg("20260620T000000Z-0003", from_uuid="other", status="read",
+                     read_at="2026-06-20T00:00:00Z"))
+    pending = repo.pending_receipts("me")
+    assert [m.id for m in pending] == ["20260620T000000Z-0001"]
+
+
+def test_mark_receipts_shown_is_idempotent(root: Path) -> None:
+    repo.insert(_msg("20260620T000000Z-0001", from_uuid="me", status="read",
+                     read_at="2026-06-20T00:00:00Z"))
+    repo.mark_receipts_shown(["20260620T000000Z-0001"])
+    assert repo.pending_receipts("me") == []
+    repo.mark_receipts_shown(["20260620T000000Z-0001"])  # no-op, no error
+
+
+def test_cursor_load_save_round_trip(root: Path) -> None:
+    assert repo.load_cursor("uuid-1") == {}
+    repo.save_cursor("uuid-1", {"projects/alpha": "20260620T120000Z-0002"})
+    assert repo.load_cursor("uuid-1") == {"projects/alpha": "20260620T120000Z-0002"}
+    # upsert overwrites the same (uuid, partition)
+    repo.save_cursor("uuid-1", {"projects/alpha": "20260620T130000Z-0003"})
+    assert repo.load_cursor("uuid-1")["projects/alpha"] == "20260620T130000Z-0003"
+
+
+def test_refresh_display_tags_updates_sender_and_reader(root: Path) -> None:
+    repo.insert(_msg("20260620T000000Z-0001", from_uuid="u", from_session="old"))
+    repo.insert(_msg("20260620T000000Z-0002", from_uuid="z", read_by_uuid="u",
+                     read_by_session="old", status="read",
+                     read_at="2026-06-20T00:00:00Z"))
+    repo.insert(_msg("20260620T000000Z-0003", from_uuid="u", from_session="old",
+                     status="archived"))  # archived: untouched
+    n = repo.refresh_display_tags("u", "new-tag")
+    assert n == 2
+    assert repo.get_by_id("20260620T000000Z-0001").from_session == "new-tag"
+    assert repo.get_by_id("20260620T000000Z-0002").read_by_session == "new-tag"
+    assert repo.get_by_id("20260620T000000Z-0003").from_session == "old"

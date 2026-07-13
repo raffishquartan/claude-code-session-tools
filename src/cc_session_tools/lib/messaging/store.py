@@ -33,8 +33,6 @@ from cc_session_tools.lib.roots import (
 STORE_ROOT_ENV = "CCST_MESSAGES_ROOT"
 GLOBAL_PARTITION = "_global"
 DB_FILENAME = "ccmsg.db"
-# Retained only until Task 8 removes the flat-file helpers below.
-CURSORS_DIRNAME = ".cursors"
 
 _SLUG_MAX = 31
 _SLUG_NON_ALNUM = re.compile(r"[^a-z0-9]+")
@@ -113,32 +111,3 @@ def partition_for_project(name: str) -> str:
     if rr is not None and (rr / name).is_dir():
         return partition_for_cwd(rr / name)
     return GLOBAL_PARTITION
-
-
-def partition_dir(partition: str) -> Path:
-    """Absolute directory for a partition string under the store root."""
-    return store_root() / partition
-
-
-def ensure_inbox_dir(partition: str) -> Path:
-    inbox = partition_dir(partition) / "inbox"
-    inbox.mkdir(parents=True, exist_ok=True)
-    return inbox
-
-
-def archive_dir(partition: str, when: datetime) -> Path:
-    month = when.strftime("%Y-%m")
-    d = partition_dir(partition) / "archive" / month
-    d.mkdir(parents=True, exist_ok=True)
-    return d
-
-
-def cursors_dir() -> Path:
-    d = store_root() / CURSORS_DIRNAME
-    d.mkdir(parents=True, exist_ok=True)
-    return d
-
-
-def message_filename(message_id: str, subject: str) -> str:
-    """``<sortable-id>__<slug>.md`` — id is the routing key, slug is cosmetic."""
-    return f"{message_id}__{slug_subject(subject)}.md"
