@@ -96,3 +96,29 @@ def test_mark_read_is_first_writer_wins(root: Path) -> None:
     assert got.status == "read"
     assert got.read_by_uuid == "uuid-A"   # first writer won
     assert got.read_by_session == "projA"
+
+
+from cc_session_tools.lib.messaging.lock import AlreadyClaimedError
+
+
+def test_claim_flips_and_stamps(root: Path) -> None:
+    repo.insert(_msg("20260620T000000Z-0001", to_kind="description", to_value="X",
+                     to_location="_global"))
+    m = repo.claim("20260620T000000Z-0001", "me-uuid", "beta", "2026-06-20T05:00:00Z")
+    assert m.status == "claimed"
+    assert m.read_by_uuid == "me-uuid"
+    assert m.claimed_at == "2026-06-20T05:00:00Z"
+    assert m.read_at == "2026-06-20T05:00:00Z"  # back-filled from now
+
+
+def test_claim_missing_raises_not_found(root: Path) -> None:
+    with pytest.raises(repo.MessageNotFoundError):
+        repo.claim("ghost", "u", "s", "2026-06-20T05:00:00Z")
+
+
+def test_second_claim_raises_already_claimed(root: Path) -> None:
+    repo.insert(_msg("20260620T000000Z-0001", to_kind="description", to_value="X",
+                     to_location="_global"))
+    repo.claim("20260620T000000Z-0001", "me", "s", "2026-06-20T05:00:00Z")
+    with pytest.raises(AlreadyClaimedError):
+        repo.claim("20260620T000000Z-0001", "other", "s2", "2026-06-20T06:00:00Z")

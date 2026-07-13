@@ -16,6 +16,7 @@ from contextlib import contextmanager
 
 from cc_session_tools.lib import db
 from cc_session_tools.lib.messaging import store
+from cc_session_tools.lib.messaging.lock import AlreadyClaimedError
 from cc_session_tools.lib.messaging.message import Message
 
 _DDL = """
@@ -214,5 +215,36 @@ def mark_read(message_id: str, uuid: str, now_iso: str, session_label: str) -> b
                 (now_iso, uuid, session_label, message_id),
             )
             return cur.rowcount == 1
+    finally:
+        conn.close()
+
+
+def claim(message_id: str, uuid: str, session: str, now_iso: str) -> Message:
+    """First-claim-wins: inside one BEGIN IMMEDIATE, verify the message is
+    claimable and flip it to 'claimed'. Raises MessageNotFoundError for an
+    unknown id, AlreadyClaimedError if already read/claimed/archived.
+
+    Correctness comes from BEGIN IMMEDIATE serialising concurrent claimers; the
+    SELECT and UPDATE see one consistent snapshot."""
+    conn = connect()
+    try:
+        with _immediate(conn):
+            row = conn.execute(
+                "SELECT status FROM messages WHERE id=?", (message_id,)
+            ).fetchone()
+            if row is None:
+                raise MessageNotFoundError(message_id)
+            if row["status"] in ("claimed", "read", "archived"):
+                raise AlreadyClaimedError(message_id)
+            conn.execute(
+                "UPDATE messages SET status='claimed', claimed_at=?, "
+                "read_at=COALESCE(read_at, ?), read_by_uuid=?, read_by_session=? "
+                "WHERE id=?",
+                (now_iso, now_iso, uuid, session, message_id),
+            )
+            updated = conn.execute(
+                "SELECT * FROM messages WHERE id=?", (message_id,)
+            ).fetchone()
+        return _row_to_message(updated)
     finally:
         conn.close()
