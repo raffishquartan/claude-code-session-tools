@@ -5,9 +5,8 @@ from pathlib import Path
 
 import pytest
 
-from cc_session_tools.lib.messaging import service, store
+from cc_session_tools.lib.messaging import service
 from cc_session_tools.lib.messaging.addressing import SessionContext
-from cc_session_tools.lib.messaging.message import parse
 
 
 def _sender() -> service.SendRequest:
@@ -166,16 +165,22 @@ def test_deliver_surfaces_description_as_proposal_without_reading(
     assert read.status == "sent"  # candidate, not read
 
 
-def test_deliver_skips_malformed_file_in_swept_partition(
+def test_deliver_project_message_auto_read_by_first_session_only(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setenv("CCST_MESSAGES_ROOT", str(tmp_path))
-    mid = _send_to_session("me-uuid")
-    # A stale/hand-edited file in a swept partition must not abort the sweep.
-    bad = store.ensure_inbox_dir("projects/alpha") / "20990101T000000Z-bbbb__broken.md"
-    bad.write_text("not a valid message\n", encoding="utf-8")
-    digest = service.deliver(_ctx(), mode="full")
-    assert mid in digest
+    mid = service.send(service.SendRequest(
+        from_project="o", from_session="s", from_uuid="sender",
+        to_kind="project", to_value="alpha", to_partition="projects/alpha",
+        subject="team ping", body="b", attachments=[], thread=None,
+    ))
+    a = _ctx(uuid="sess-A", project="alpha", partition="projects/alpha")
+    b = _ctx(uuid="sess-B", project="alpha", partition="projects/alpha")
+    d_a = service.deliver(a, mode="full")
+    d_b = service.deliver(b, mode="full")
+    assert mid in d_a and mid not in d_b          # first reader wins the digest line
+    read = service.read_one(mid)
+    assert read is not None and read.read_by_uuid == "sess-A"
 
 
 def _send_to_session_in_tmp(

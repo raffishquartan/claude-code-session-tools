@@ -4,10 +4,8 @@
 This module holds business logic; argparse validation stays in the CLI."""
 from __future__ import annotations
 
-import logging
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from pathlib import Path
 from typing import Literal
 
 from cc_session_tools.lib.messaging import cursor as cursor_mod
@@ -18,7 +16,7 @@ from cc_session_tools.lib.messaging.addressing import (
     SessionContext,
     targets,
 )
-from cc_session_tools.lib.messaging.lock import AlreadyClaimedError, claim_lock
+from cc_session_tools.lib.messaging.lock import claim_lock
 from cc_session_tools.lib.messaging.message import (
     Message,
     Status,
@@ -29,8 +27,6 @@ from cc_session_tools.lib.messaging.store import (
     GLOBAL_PARTITION,
     generate_id,
 )
-
-logger = logging.getLogger(__name__)
 
 DeliverMode = Literal["full", "incremental"]
 
@@ -171,69 +167,56 @@ def deliver(ctx: SessionContext, *, mode: DeliverMode) -> str:
     return a compact digest (empty if nothing to show). ``mode`` is advisory
     (``full`` vs ``incremental``); the cursor bounds both identically."""
     now = datetime.now(timezone.utc)
+    now_iso = now.strftime("%Y-%m-%dT%H:%M:%SZ")
     cur = cursor_mod.load(ctx.uuid)
     inbound: list[str] = []
     proposals: list[str] = []
 
-    for partition in _swept_partitions(ctx):
-        inbox = ensure_inbox_dir(partition)
-        for path in sorted(inbox.glob("*.md")):
-            message = safe_parse(path)
-            if message is None:
-                continue
-            if not cursor_mod.is_new(message, cur):
-                continue
-            kind = targets(message, ctx)
-            if kind is MatchKind.RECIPIENT:
-                message.status = "read"
-                message.read_at = now.strftime("%Y-%m-%dT%H:%M:%SZ")
-                message.read_by_uuid = ctx.uuid
-                # SessionContext carries no display tag (the SessionStart/
-                # UserPromptSubmit stdin does not include one), so auto-read
-                # stamps the project label here. The sender's receipt will
-                # therefore read "by <project>" for auto-read and "by
-                # <session-tag>" for an explicit claim. This is intentional —
-                # do NOT "fix" it by inventing a tag. If a true session tag is
-                # ever wanted in receipts, add a ``session_tag`` field to
-                # SessionContext threaded from the hook stdin.
-                message.read_by_session = ctx.project
-                write_atomic(path, message)
+    partitions = _swept_partitions(ctx)
+    for message in repository.sweep_new(partitions, cur.high_water):
+        kind = targets(message, ctx)
+        if kind is MatchKind.RECIPIENT:
+            # First-writer-wins (R2): only the session that actually flips
+            # sent->read surfaces the line and back-fills read_by_session.
+            # SessionContext carries no display tag (the SessionStart/
+            # UserPromptSubmit stdin does not include one), so auto-read stamps
+            # the project label (ctx.project). The sender's receipt therefore
+            # reads "by <project>" for auto-read and "by <session-tag>" for an
+            # explicit claim. This is intentional — do NOT "fix" it by inventing
+            # a tag. If a true session tag is ever wanted in receipts, add a
+            # ``session_tag`` field to SessionContext threaded from the hook stdin.
+            if repository.mark_read(message.id, ctx.uuid, now_iso, ctx.project):
                 inbound.append(_digest_line(message, now))
-                cur = cursor_mod.advance(cur, message)
-            elif kind is MatchKind.CANDIDATE:
-                # A description proposal is surfaced to this session once, then
-                # the cursor advances so it is not re-nudged every prompt. Other
-                # sessions still see it (their own cursors are independent), so
-                # first-claim-wins is unaffected.
-                proposals.append(_digest_line(message, now))
-                cur = cursor_mod.advance(cur, message)
+            cur = cursor_mod.advance(cur, message)
+        elif kind is MatchKind.CANDIDATE:
+            # A description proposal is surfaced to this session once, then the
+            # cursor advances so it is not re-nudged every prompt. Other sessions
+            # still see it (their own cursors are independent), so first-claim-
+            # wins is unaffected.
+            proposals.append(_digest_line(message, now))
+            cur = cursor_mod.advance(cur, message)
+
+    # Retention runs once per swept partition (opportunistic, atomic per R1).
+    for partition in partitions:
         retention.archive_old(partition, now)
 
     cursor_mod.save(ctx.uuid, cur)
     receipts = _collect_receipts(ctx, now)
-
     return _format_digest(inbound, proposals, receipts)
 
 
 def _collect_receipts(ctx: SessionContext, now: datetime) -> list[str]:
+    pending = repository.pending_receipts(ctx.uuid)
     lines: list[str] = []
-    for path in _iter_message_files():
-        message = safe_parse(path)
-        if message is None:
-            continue
-        if message.from_uuid != ctx.uuid:
-            continue
-        if message.status not in ("read", "claimed"):
-            continue
-        if message.receipt_shown:
-            continue
+    shown: list[str] = []
+    for message in pending:
         who = message.read_by_session or "a session"
         lines.append(
             f'✓ read: "{message.subject}" by {who} '
             f"({_relative_age(message.sent_at, now)}) [{message.id}]"
         )
-        message.receipt_shown = True
-        write_atomic(path, message)
+        shown.append(message.id)
+    repository.mark_receipts_shown(shown)
     return lines
 
 
