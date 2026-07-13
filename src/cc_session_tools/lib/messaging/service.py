@@ -94,54 +94,18 @@ def find_by_id(message_id: str) -> Message | None:
 
 
 def claim(message_id: str, claimer: Claimer) -> Message:
-    """First-claim-wins: atomically flip the message to status=claimed.
-
-    Raises ``MessageNotFoundError`` if the id is unknown, or
-    ``AlreadyClaimedError`` if the lock is already held (concurrent claim)
-    or the message is already in a claimed/read state."""
-    path = find_by_id(message_id)
-    if path is None:
-        raise MessageNotFoundError(message_id)
-    now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    """First-claim-wins. The file-based claim_lock (R4, kept outside the DB) is
+    the coarse envelope; repository.claim provides the atomic state transition."""
+    now = _now_iso()
     with claim_lock(message_id):
-        try:
-            message = parse(path.read_text(encoding="utf-8"))
-        except FileNotFoundError as exc:
-            # The file was archived/removed between find_by_id and the lock.
-            raise MessageNotFoundError(message_id) from exc
-        if message.status in ("claimed", "read", "archived"):
-            raise AlreadyClaimedError(message_id)
-        message.status = "claimed"
-        message.claimed_at = now
-        message.read_at = message.read_at or now
-        message.read_by_uuid = claimer.uuid
-        message.read_by_session = claimer.session
-        write_atomic(path, message)
-        return message
+        return repository.claim(message_id, claimer.uuid, claimer.session, now)
 
 
-def archive(message_id: str, now: datetime) -> Message:
-    """Move a message file into the archive/YYYY-MM/ sub-directory and flip
-    its status to archived.
-
-    Acquires the per-message claim lock so a manual archive cannot race a
-    concurrent ``claim`` and silently drop its metadata. Raises
-    ``MessageNotFoundError`` if the id is unknown, or ``AlreadyClaimedError``
-    if a claim is in flight for the same id."""
-    path = find_by_id(message_id)
-    if path is None:
-        raise MessageNotFoundError(message_id)
+def archive(message_id: str, now: datetime) -> Message:  # noqa: ARG001 - kept for CLI signature stability
+    """Manual archive. Acquires claim_lock so it cannot race a concurrent claim
+    (R4), then flips status atomically."""
     with claim_lock(message_id):
-        try:
-            message = parse(path.read_text(encoding="utf-8"))
-        except FileNotFoundError as exc:
-            raise MessageNotFoundError(message_id) from exc
-        message.status = "archived"
-        dest = archive_dir(message.to_location, now) / path.name
-        write_atomic(dest, message)
-        if dest != path:
-            path.unlink()
-        return message
+        return repository.archive_one(message_id)
 
 
 def read_one(message_id: str) -> Message | None:

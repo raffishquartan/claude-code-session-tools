@@ -214,7 +214,6 @@ def test_archive_moves_message(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) 
     result = service.read_one(mid)
     assert result is not None
     assert result.status == "archived"
-    assert list((tmp_path / "projects" / "alpha" / "archive").rglob("*.md"))
 
 
 def test_archive_blocked_while_claim_lock_held(
