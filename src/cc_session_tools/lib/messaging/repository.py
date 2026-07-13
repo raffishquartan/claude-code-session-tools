@@ -102,3 +102,70 @@ def _row_to_message(row: sqlite3.Row) -> Message:
         attachments=list(json.loads(row["attachments"])),
         body=row["body"],
     )
+
+
+_COLUMNS = (
+    'id', '"schema"', 'from_project', 'from_session', 'from_uuid', 'to_kind',
+    'to_value', 'to_location', 'subject', 'sent_at', 'status', 'read_at',
+    'read_by_uuid', 'read_by_session', 'claimed_at', 'receipt_shown', 'thread',
+    'attachments', 'body',
+)
+
+
+def _insert_params(message: Message) -> tuple[object, ...]:
+    return (
+        message.id, message.schema, message.from_project, message.from_session,
+        message.from_uuid, message.to_kind, message.to_value, message.to_location,
+        message.subject, message.sent_at, message.status, message.read_at,
+        message.read_by_uuid, message.read_by_session, message.claimed_at,
+        int(message.receipt_shown), message.thread,
+        json.dumps(list(message.attachments)), message.body,
+    )
+
+
+def insert(message: Message) -> None:
+    placeholders = ", ".join("?" for _ in _COLUMNS)
+    sql = f"INSERT INTO messages ({', '.join(_COLUMNS)}) VALUES ({placeholders})"
+    conn = connect()
+    try:
+        with _immediate(conn):
+            conn.execute(sql, _insert_params(message))
+    finally:
+        conn.close()
+
+
+def get_by_id(message_id: str) -> Message | None:
+    conn = connect()
+    try:
+        row = conn.execute("SELECT * FROM messages WHERE id=?", (message_id,)).fetchone()
+    finally:
+        conn.close()
+    return _row_to_message(row) if row is not None else None
+
+
+def list_rows(
+    *,
+    status: str | None = None,
+    partition: str | None = None,
+    from_uuid: str | None = None,
+) -> list[Message]:
+    clauses: list[str] = []
+    params: list[object] = []
+    if status is not None:
+        clauses.append("status=?")
+        params.append(status)
+    if partition is not None:
+        clauses.append("to_location=?")
+        params.append(partition)
+    if from_uuid is not None:
+        clauses.append("from_uuid=?")
+        params.append(from_uuid)
+    where = f" WHERE {' AND '.join(clauses)}" if clauses else ""
+    conn = connect()
+    try:
+        rows = conn.execute(
+            f"SELECT * FROM messages{where} ORDER BY id", params
+        ).fetchall()
+    finally:
+        conn.close()
+    return [_row_to_message(r) for r in rows]
