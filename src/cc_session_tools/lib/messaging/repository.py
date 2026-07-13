@@ -169,3 +169,50 @@ def list_rows(
     finally:
         conn.close()
     return [_row_to_message(r) for r in rows]
+
+
+def sweep_new(partitions: list[str], high_water: dict[str, str]) -> list[Message]:
+    """All messages in ``partitions`` newer (by id) than the caller's per-
+    partition high-water, ordered by (input-partition order, id). Ordering
+    follows the caller's partition list — not lexical to_location — so the
+    result matches the pre-SQL deliver sweep, which iterated
+    ``_swept_partitions`` (ctx partition first, then _global) and sorted by id
+    within each. Terminal-status filtering is left to addressing.targets so
+    cursor advancement matches the pre-SQL behaviour exactly."""
+    if not partitions:
+        return []
+    placeholders = ", ".join("?" for _ in partitions)
+    conn = connect()
+    try:
+        rows = conn.execute(
+            f"SELECT * FROM messages WHERE to_location IN ({placeholders}) "
+            "ORDER BY id",
+            partitions,
+        ).fetchall()
+    finally:
+        conn.close()
+    order = {p: i for i, p in enumerate(partitions)}
+    out: list[Message] = []
+    for r in rows:
+        hw = high_water.get(r["to_location"])
+        if hw is None or r["id"] > hw:
+            out.append(_row_to_message(r))
+    out.sort(key=lambda m: (order.get(m.to_location, len(order)), m.id))
+    return out
+
+
+def mark_read(message_id: str, uuid: str, now_iso: str, session_label: str) -> bool:
+    """Atomically flip a 'sent' message to 'read', stamping the reader. Returns
+    True iff this call was the writer (first-writer-wins under WAL); False if the
+    message was already non-'sent'."""
+    conn = connect()
+    try:
+        with _immediate(conn):
+            cur = conn.execute(
+                "UPDATE messages SET status='read', read_at=?, read_by_uuid=?, "
+                "read_by_session=? WHERE id=? AND status='sent'",
+                (now_iso, uuid, session_label, message_id),
+            )
+            return cur.rowcount == 1
+    finally:
+        conn.close()

@@ -73,3 +73,26 @@ def test_list_rows_filters(root: Path) -> None:
     assert len(repo.list_rows(status="sent")) == 1
     assert len(repo.list_rows(partition="projects/beta")) == 1
     assert len(repo.list_rows(from_uuid="u1")) == 1
+
+
+def test_sweep_new_respects_high_water(root: Path) -> None:
+    repo.insert(_msg("20260620T000000Z-0001", to_location="projects/alpha"))
+    repo.insert(_msg("20260620T120000Z-0002", to_location="projects/alpha"))
+    repo.insert(_msg("20260620T000000Z-0003", to_location="_global", to_value="x",
+                     to_kind="description"))
+    swept = repo.sweep_new(["projects/alpha", "_global"],
+                           {"projects/alpha": "20260620T000000Z-0001"})
+    ids = [m.id for m in swept]
+    assert ids == ["20260620T120000Z-0002", "20260620T000000Z-0003"]
+
+
+def test_mark_read_is_first_writer_wins(root: Path) -> None:
+    repo.insert(_msg("20260620T000000Z-0001", to_kind="project"))
+    assert repo.mark_read("20260620T000000Z-0001", "uuid-A", "2026-06-20T02:00:00Z", "projA") is True
+    # Second attempt: row is already 'read', so it stamps nothing and returns False.
+    assert repo.mark_read("20260620T000000Z-0001", "uuid-B", "2026-06-20T03:00:00Z", "projB") is False
+    got = repo.get_by_id("20260620T000000Z-0001")
+    assert got is not None
+    assert got.status == "read"
+    assert got.read_by_uuid == "uuid-A"   # first writer won
+    assert got.read_by_session == "projA"
