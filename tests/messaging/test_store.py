@@ -14,9 +14,15 @@ def test_store_root_honours_env_override(tmp_path: Path, monkeypatch: pytest.Mon
     assert store.store_root() == tmp_path / "msgs"
 
 
-def test_store_root_defaults_to_home(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_store_root_defaults_to_data_home(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.delenv("CCST_MESSAGES_ROOT", raising=False)
-    assert store.store_root() == Path.home() / ".claude" / "cc-messages"
+    monkeypatch.setenv("CCST_DATA_HOME", str(tmp_path / "dh"))
+    assert store.store_root() == tmp_path / "dh"
+
+
+def test_db_path_is_ccmsg_db_under_root(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("CCST_MESSAGES_ROOT", str(tmp_path))
+    assert store.db_path() == tmp_path / "ccmsg.db"
 
 
 def test_generate_id_is_sortable_and_unique() -> None:
@@ -63,13 +69,6 @@ def test_partition_for_unknown_cwd_is_other_paths(
     monkeypatch.delenv("CLAUDE_SESSION_TOOLS_PROJ_ROOT", raising=False)
     part = store.partition_for_cwd(tmp_path / "nowhere" / "thing")
     assert part.startswith("other-paths/")
-
-
-def test_inbox_dir_is_created_lazily(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("CCST_MESSAGES_ROOT", str(tmp_path))
-    inbox = store.ensure_inbox_dir("projects/alpha")
-    assert inbox == tmp_path / "projects" / "alpha" / "inbox"
-    assert inbox.is_dir()
 
 
 def test_partition_for_project_strict_root(

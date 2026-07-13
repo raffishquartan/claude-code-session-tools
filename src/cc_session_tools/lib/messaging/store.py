@@ -1,17 +1,15 @@
 # src/cc_session_tools/lib/messaging/store.py
 """Message store layout: root resolution, partition derivation, id and slug
-generation, and lazy directory creation.
+generation.
 
 Store layout (under ``store_root()``)::
 
-    <root>/projects/<name>/{inbox,archive/YYYY-MM}/
-    <root>/repos/<name>/{inbox,archive/YYYY-MM}/
-    <root>/other-paths/<slug>/{inbox,archive/YYYY-MM}/   # keyed on path slug
-    <root>/_global/{inbox,archive/YYYY-MM}/              # description + broadcast
-    <root>/.cursors/<session-uuid>.json
+    <root>/ccmsg.db
 
-Partition strings are POSIX-style relative paths (``"projects/alpha"``) so they
-are stable cursor keys and store-portable.
+A single WAL-mode SQLite database holds every message row and the per-session
+delivery cursors; ``repository.py`` owns all SQL. Partition strings are
+POSIX-style relative paths (``"projects/alpha"``) kept as the ``to_location``
+routing column and as stable cursor keys.
 """
 from __future__ import annotations
 
@@ -22,6 +20,7 @@ import secrets
 from datetime import datetime, timezone
 from pathlib import Path
 
+from cc_session_tools.lib import paths
 from cc_session_tools.lib.roots import (
     RootsConfigError,
     is_strict_root,
@@ -33,6 +32,8 @@ from cc_session_tools.lib.roots import (
 
 STORE_ROOT_ENV = "CCST_MESSAGES_ROOT"
 GLOBAL_PARTITION = "_global"
+DB_FILENAME = "ccmsg.db"
+# Retained only until Task 8 removes the flat-file helpers below.
 CURSORS_DIRNAME = ".cursors"
 
 _SLUG_MAX = 31
@@ -40,12 +41,16 @@ _SLUG_NON_ALNUM = re.compile(r"[^a-z0-9]+")
 
 
 def store_root() -> Path:
-    """Resolve the message-store root. ``CCST_MESSAGES_ROOT`` overrides the
-    default ``~/.claude/cc-messages`` (tests redirect via the env var)."""
+    """Directory holding ``ccmsg.db``. ``CCST_MESSAGES_ROOT`` overrides the
+    default ``paths.data_home()`` (tests redirect via the env var)."""
     raw = os.environ.get(STORE_ROOT_ENV)
     if raw:
         return Path(raw).expanduser()
-    return Path.home() / ".claude" / "cc-messages"
+    return paths.data_home()
+
+
+def db_path() -> Path:
+    return store_root() / DB_FILENAME
 
 
 def generate_id() -> str:
