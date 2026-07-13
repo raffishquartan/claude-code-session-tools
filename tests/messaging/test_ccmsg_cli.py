@@ -31,7 +31,10 @@ def test_send_happy_path(tmp_path: Path) -> None:
         tmp_path,
     )
     assert res.returncode == 0, res.stderr
-    assert (tmp_path / "projects" / "alpha" / "inbox").is_dir()
+    mid = res.stdout.strip()
+    read = _run(["read", mid], tmp_path)
+    assert read.returncode == 0
+    assert "Hi" in read.stdout
 
 
 def test_send_rejects_no_recipient(tmp_path: Path) -> None:
@@ -79,7 +82,10 @@ def test_send_body_file_happy_path(tmp_path: Path) -> None:
                 "--from-partition", "projects/o", "--to-partition", "projects/alpha"],
                tmp_path)
     assert res.returncode == 0, res.stderr
-    assert (tmp_path / "projects" / "alpha" / "inbox").is_dir()
+    mid = res.stdout.strip()
+    read = _run(["read", mid], tmp_path)
+    assert read.returncode == 0
+    assert "From a file." in read.stdout
 
 
 def test_send_rejects_unreadable_body_file(tmp_path: Path) -> None:
@@ -162,8 +168,6 @@ def _send_env(store_root: Path, **extra: str) -> dict[str, str]:
 
 
 def test_send_derives_uuid_from_env_and_routes_session_to_global(tmp_path: Path) -> None:
-    from cc_session_tools.lib.messaging.message import parse
-
     env = _send_env(tmp_path, CLAUDE_CODE_SESSION_ID="env-sender-uuid")
     res = subprocess.run(
         [sys.executable, "-m", "cc_session_tools.cli.ccmsg", "send",
@@ -171,12 +175,19 @@ def test_send_derives_uuid_from_env_and_routes_session_to_global(tmp_path: Path)
         capture_output=True, text=True, env=env, cwd=str(tmp_path),
     )
     assert res.returncode == 0, res.stderr
-    files = list((tmp_path / "_global" / "inbox").glob("*.md"))
-    assert len(files) == 1
-    m = parse(files[0].read_text(encoding="utf-8"))
-    assert m.from_uuid == "env-sender-uuid"  # taken from $CLAUDE_CODE_SESSION_ID
-    assert m.to_kind == "session" and m.to_value == "target-uuid"
-    assert m.to_location == "_global"
+
+    def _list(*extra: str) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            [sys.executable, "-m", "cc_session_tools.cli.ccmsg", "list", *extra],
+            capture_output=True, text=True, env=env, cwd=str(tmp_path),
+        )
+
+    # Routed to the _global partition (session-addressed), taken there by uuid.
+    glob_rows = _list("--partition", "_global").stdout.strip().splitlines()
+    assert len(glob_rows) == 1
+    assert "session=target-uuid" in glob_rows[0]
+    # from_uuid derived from $CLAUDE_CODE_SESSION_ID.
+    assert len(_list("--from-uuid", "env-sender-uuid").stdout.strip().splitlines()) == 1
 
 
 def test_send_routes_project_to_project_partition(tmp_path: Path) -> None:
@@ -191,7 +202,12 @@ def test_send_routes_project_to_project_partition(tmp_path: Path) -> None:
         capture_output=True, text=True, env=env, cwd=str(tmp_path),
     )
     assert res.returncode == 0, res.stderr
-    assert list((store_dir / "projects" / "alpha" / "inbox").glob("*.md"))
+    listed = subprocess.run(
+        [sys.executable, "-m", "cc_session_tools.cli.ccmsg", "list",
+         "--partition", "projects/alpha"],
+        capture_output=True, text=True, env=env, cwd=str(tmp_path),
+    )
+    assert len(listed.stdout.strip().splitlines()) == 1
 
 
 def test_send_errors_without_session_uuid(tmp_path: Path) -> None:
