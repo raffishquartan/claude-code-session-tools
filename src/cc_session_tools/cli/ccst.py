@@ -70,7 +70,7 @@ HOOK_VERBS: dict[str, str] = {
 
 
 HOOK_DESCRIPTIONS: dict[str, str] = {
-    "bash-hard-deny": "Hard-deny gate for Bash: blocks deletes, delete-by-move, gh/curl mutations, sudo, opentabs self-approval, fires.jsonl reads; auto-allows the rest (PreToolUse, Bash)",
+    "bash-hard-deny": "Hard-deny gate for Bash: blocks deletes, delete-by-move, gh/curl mutations, sudo, opentabs self-approval, telemetry-log reads (telemetry.db/fires.jsonl); auto-allows the rest (PreToolUse, Bash)",
     "bash-security-review": "Reviews shell commands for security risks (tiered: allowlist, heuristics, LLM)",
     "marker-allow": "Auto-approves a bare `touch` of a skill marker under ~/.cache/claude/markers/ (PreToolUse, Bash)",
     "confirm-8digit": "Enforces an 8-digit confirmation gate before risky tool calls",
