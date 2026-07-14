@@ -74,7 +74,7 @@ def _line(report: JobReport) -> str | None:
 
 def format_digest(reports: list[JobReport], *, parse_error: str | None = None) -> str:
     if parse_error is not None:
-        return f"[cc-scheduler] jobs.toml failed to parse — no jobs ran: {parse_error}"
+        return f"[cc-scheduler] job registry failed to load — no jobs ran: {parse_error}"
     lines = [line for line in (_line(r) for r in reports) if line is not None]
     if not lines:
         return ""

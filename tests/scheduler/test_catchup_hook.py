@@ -130,15 +130,22 @@ def test_failure_path_writes_to_env_ledger_not_real_home(
     assert after == before  # real ledger untouched
 
 
-def test_hook_never_raises_on_parse_error(monkeypatch: pytest.MonkeyPatch) -> None:
-    state.scheduler_dir().mkdir(parents=True, exist_ok=True)
-    registry.registry_path().write_text("[[job]\nbroken")
+def test_hook_never_raises_on_corrupt_db(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Post-consolidation, registry/cursor/state/throttle all share one ccsched.db.
+    # main() calls cursor.seed_new_session(uuid) BEFORE reconcile, so a corrupt DB
+    # makes store.connect() inside seed_new_session raise sqlite3.DatabaseError,
+    # caught by main()'s top-level `except (..., sqlite3.Error)` guard BEFORE
+    # reconcile's parse_error digest path is reached. The correct observable
+    # behaviour is therefore an empty degrade, not a "failed to load" digest.
+    from cc_session_tools.lib.scheduler import store
+    store.scheduler_dir().mkdir(parents=True, exist_ok=True)
+    store.db_path().write_bytes(b"not a sqlite db")
     monkeypatch.setattr(catchup, "_now", lambda: datetime(2026, 6, 20, 10, 0, tzinfo=timezone.utc))
     monkeypatch.setattr(reconcile, "spawn_detached", _Spawn())
     _stdin(monkeypatch, {"hook_event_name": "SessionStart", "session_id": "u", "cwd": "/tmp"})
     out = _capture(monkeypatch)
-    assert catchup.main() == 0
-    assert any("failed to parse" in e for e in out)
+    assert catchup.main() == 0  # never raises, never blocks a session — the §15 invariant
+    assert out == [""]  # empty degrade, not a digest string
 
 
 @pytest.mark.parametrize("event", ["SessionStart", "UserPromptSubmit"])

@@ -55,8 +55,8 @@ def test_silent_launch_is_omitted() -> None:
 
 
 def test_unparseable_registry_warning_runs_nothing() -> None:
-    out = format_digest([], parse_error="jobs.toml line 4: invalid TOML")
-    assert "jobs.toml failed to parse" in out
+    out = format_digest([], parse_error="ccsched.db is unreadable: file is not a database")
+    assert "job registry failed to load" in out
     assert "no jobs ran" in out
 
 
