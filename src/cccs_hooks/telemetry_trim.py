@@ -209,8 +209,9 @@ def main(argv: list[str] | None = None) -> int:
             )
         if args.max_size is not None:
             print(f"  Size trim: removed {result['rows_removed_by_size']} row(s)")
-        new_size = result.get("size_bytes", 0)
-        print(f"  New size: {new_size:,} bytes ({new_size / 1024:.1f} KB)")  # type: ignore[str-bytes-safe]
+        raw_size = result.get("size_bytes", 0)
+        new_size = raw_size if isinstance(raw_size, int) else 0
+        print(f"  New size: {new_size:,} bytes ({new_size / 1024:.1f} KB)")
 
     return 0
 
