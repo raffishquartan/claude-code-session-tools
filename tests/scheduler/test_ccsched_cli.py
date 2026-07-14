@@ -123,7 +123,7 @@ def test_run_records_ledger(tmp_path: Path) -> None:
     sched, hooks = _dirs(tmp_path)
     res = _run(["run", "tesco"], sched, hooks)
     assert res.returncode == 0
-    assert (hooks / "fires.jsonl").is_file()
+    assert (hooks / "telemetry.db").is_file()
 
 
 def test_status_empty_ok(tmp_path: Path) -> None:
@@ -145,7 +145,7 @@ def test_run_job_worker_executes_and_records(tmp_path: Path, monkeypatch: pytest
     sched, hooks = _dirs(tmp_path)
     res = _run(["_run-job", "tesco", "--instants", "1"], sched, hooks)
     assert res.returncode == 0, res.stderr
-    assert (hooks / "fires.jsonl").is_file()
+    assert (hooks / "telemetry.db").is_file()
     # state advanced (last_success set) and in_flight cleared.
     monkeypatch.setenv("CC_SCHEDULER_DIR", str(sched))
     after = st.load_all_state()["tesco"]
