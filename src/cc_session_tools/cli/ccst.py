@@ -800,6 +800,7 @@ def _cmd_gc_report(args: argparse.Namespace) -> int:
         scheduler_dir=Path(args.scheduler_dir) if args.scheduler_dir else None,
         messages_root=Path(args.messages_root) if args.messages_root else None,
         session_env_dir=Path(args.session_env_dir) if args.session_env_dir else None,
+        sessions_dir=Path(args.sessions_dir) if args.sessions_dir else None,
     )
     print(format_report(report))
     return 0
@@ -1283,8 +1284,8 @@ def _build_parser() -> argparse.ArgumentParser:
         "report",
         help=(
             "Report orphaned per-session-uuid entries across the scheduler, "
-            "messaging, and session-env stores. Report-only — never deletes "
-            "or modifies anything."
+            "messaging, session-env, and sessions-index stores. Report-only "
+            "— never deletes or modifies anything."
         ),
     )
     gc_report_parser.add_argument(
@@ -1297,19 +1298,25 @@ def _build_parser() -> argparse.ArgumentParser:
         "--scheduler-dir",
         default=None,
         metavar="PATH",
-        help="Scheduler directory (default: from CC_SCHEDULER_DIR or ~/.claude/cc-scheduler/)",
+        help="Scheduler directory holding ccsched.db (default: from CC_SCHEDULER_DIR or data_home())",
     )
     gc_report_parser.add_argument(
         "--messages-root",
         default=None,
         metavar="PATH",
-        help="Messaging store root (default: from CCST_MESSAGES_ROOT or ~/.claude/cc-messages/)",
+        help="Messaging store directory holding ccmsg.db (default: from CCST_MESSAGES_ROOT or data_home())",
     )
     gc_report_parser.add_argument(
         "--session-env-dir",
         default=None,
         metavar="PATH",
         help="Session-env directory (default: ~/.claude/session-env/)",
+    )
+    gc_report_parser.add_argument(
+        "--sessions-dir",
+        default=None,
+        metavar="PATH",
+        help="Directory holding sessions.db (default: from CCST_SESSIONS_DIR or data_home())",
     )
 
     # ---- sessions ----
