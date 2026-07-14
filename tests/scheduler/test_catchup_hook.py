@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import io
 import json
+import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -114,20 +115,24 @@ def test_failure_path_writes_to_env_ledger_not_real_home(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     # The _dirs autouse fixture points CCCS_HOOKS_DIR at tmp_path/hooks. The bad-stdin
-    # failure path must log there, NOT to the real ~/.cache/claude/logs/fires.jsonl. If
+    # failure path must log there, NOT to the real ~/.local/share/claude/telemetry.db. If
     # _log_failure ever drops the hooks_dir= argument, log_event falls back to
-    # Path.home()/.cache/claude/logs and this test fails. Guard the real home with a sentinel.
-    # (Preserves the env-honouring ledger-routing fix.)
-    real_fires = Path.home() / ".cache" / "claude" / "logs" / "fires.jsonl"
-    before = real_fires.read_text() if real_fires.is_file() else None
+    # paths.data_home() and this test fails. Guard the real home with a sentinel.
+    real_db = Path.home() / ".local" / "share" / "claude" / "telemetry.db"
+    before_mtime = real_db.stat().st_mtime if real_db.is_file() else None
     monkeypatch.setattr("sys.stdin", io.StringIO("not json"))
     _capture(monkeypatch)
     assert catchup.main() == 0
-    env_fires = tmp_path / "hooks" / "fires.jsonl"
-    assert env_fires.is_file()
-    assert "catchup-failed:bad-stdin" in env_fires.read_text()
-    after = real_fires.read_text() if real_fires.is_file() else None
-    assert after == before  # real ledger untouched
+    env_db = tmp_path / "hooks" / "telemetry.db"
+    assert env_db.is_file()
+    conn = sqlite3.connect(str(env_db))
+    row = conn.execute(
+        "SELECT verdict FROM telemetry_events WHERE hook = 'catchup'"
+    ).fetchone()
+    conn.close()
+    assert row is not None and "catchup-failed:bad-stdin" in row[0]
+    after_mtime = real_db.stat().st_mtime if real_db.is_file() else None
+    assert after_mtime == before_mtime  # real telemetry.db untouched
 
 
 def test_hook_never_raises_on_corrupt_db(monkeypatch: pytest.MonkeyPatch) -> None:
