@@ -549,6 +549,54 @@ def append_tombstone(src_jsonl: Path, last_record: dict, src_session_dir: Path, 
     return len(records)
 
 
+def sync_sessions_table(
+    src_project_dir: Path,
+    src_basename: str,
+    dst_project_dir: Path,
+    dst_basename: str,
+) -> str:
+    """Re-key the sessions.db `sessions` table to mirror a move/rename.
+
+    The sessions table is keyed by (project_dir, basename) and does NOT follow a
+    filesystem move: before the SQLite migration the .last-opened/.last-active
+    sentinels lived inside cc-sessions/<tag>/ and moved with the directory for
+    free; now they are rows keyed by (project_dir, basename). Without this
+    re-key the old row is stale and no row exists for the destination, so
+    ccr/ccs can no longer enumerate the moved session.
+
+    Copies the source row's last_opened/last_active onto a fresh destination
+    row, then deletes the source row. A pre-migration session may have no source
+    row; in that case we still create the destination row (so it becomes
+    discoverable going forward) and there is nothing to delete.
+
+    Returns a human-readable summary line for the caller to print.
+    """
+    from cc_session_tools.lib import sessions_db
+
+    src_rows = sessions_db.list_sessions(project_dir=src_project_dir)
+    src_row = next((r for r in src_rows if r.basename == src_basename), None)
+
+    sessions_db.ensure_session_row(dst_project_dir, dst_basename)
+    if src_row is None:
+        return (
+            f"sessions.db: no source row for ({src_project_dir}, {src_basename}) "
+            f"(pre-migration session); created destination row "
+            f"({dst_project_dir}, {dst_basename}) for discoverability"
+        )
+    # Re-apply timestamps to the destination. touch_* upserts; the row already
+    # exists from ensure_session_row above, so these are pure updates.
+    if src_row.last_opened:
+        sessions_db.touch_last_opened(dst_project_dir, dst_basename, when=src_row.last_opened)
+    if src_row.last_active:
+        sessions_db.touch_last_active(dst_project_dir, dst_basename, when=src_row.last_active)
+    sessions_db.delete_session_row(src_project_dir, src_basename)
+    return (
+        f"sessions.db: re-keyed row ({src_project_dir}, {src_basename}) -> "
+        f"({dst_project_dir}, {dst_basename}) "
+        f"[last_opened={src_row.last_opened}, last_active={src_row.last_active}]"
+    )
+
+
 def write_tombstone_md(src_session_dir: Path, dst_session_dir: Path, dst_jsonl: Path) -> Path:
     md = src_session_dir / "TOMBSTONE.md"
     md.write_text(
@@ -878,6 +926,18 @@ def main() -> int:
         print(f"  copied task dir ({migrated_count} .json files): {src_task_dir} -> {dst_task_dir}")
     else:
         print(f"  task files: none (no task dir at {src_task_dir} - skipped)")
+
+    # sessions.db re-key: the `sessions` table (used by ccr/ccs to enumerate
+    # sessions) is keyed by (project_dir, basename) and does not follow a
+    # filesystem move. Re-key it here for ALL operation types (MOVE, RENAME,
+    # MOVE+RENAME) so the moved session stays discoverable at its new location.
+    sync_summary = sync_sessions_table(
+        src_project_dir=Path(src_cwd_abs),
+        src_basename=src_tag,
+        dst_project_dir=dst_cwd_path,
+        dst_basename=dst_tag,
+    )
+    print(f"  {sync_summary}")
 
     # Messaging safety: refresh display tags in any pending messages that
     # reference the moved session's uuid, and re-anchor the cursor on a

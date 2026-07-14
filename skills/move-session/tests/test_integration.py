@@ -606,6 +606,112 @@ class TestTagFileDiscovery:
         assert (dst_cwd / "cc-sessions" / "20260601-solo").is_dir()
 
 
+class TestSessionsDbSync:
+    """Regression: move/rename must re-key the sessions.db `sessions` table.
+
+    That table is keyed by (project_dir, basename) and does NOT follow a
+    filesystem move — before the SQLite migration the .last-opened/.last-active
+    sentinels lived inside cc-sessions/<tag>/ and moved with the directory for
+    free. Now they are rows keyed by (project_dir, basename); without an
+    explicit re-key the old row is stale and no destination row exists, so
+    ccr/ccs can no longer enumerate the moved session.
+    """
+
+    def _db_path(self) -> Path:
+        import os as _os
+        return Path(_os.environ["CCST_SESSIONS_DIR"]) / "sessions.db"
+
+    def _row(self, project_dir: Path, basename: str):
+        from cc_session_tools.lib import sessions_db
+        rows = sessions_db.list_sessions(
+            project_dir=project_dir, path=self._db_path())
+        return next((r for r in rows if r.basename == basename), None)
+
+    def test_move_and_rename_rekeys_sessions_row(
+            self, tmp_home, projects_root, roots_file, make_session):
+        """MOVE+RENAME: source row deleted, destination row present with the
+        source's last_opened/last_active timestamps preserved."""
+        from cc_session_tools.lib import sessions_db
+        src_dir, _, uuid = make_session("src-proj", "20260503-source")
+        src_cwd = projects_root / "src-proj"
+        dst_cwd = projects_root / "dst-proj"
+        dst_cwd.mkdir()
+        db_path = self._db_path()
+        sessions_db.touch_last_opened(
+            src_cwd, "20260503-source", path=db_path, when=1000.0)
+        sessions_db.touch_last_active(
+            src_cwd, "20260503-source", path=db_path, when=2000.0)
+
+        rc, out, err = _run(
+            "--src-session", str(src_dir),
+            "--dst-cwd", str(dst_cwd),
+            "--rename-tag", "20260503-renamed",
+            "--uuid", uuid,
+            "--execute",
+            env={"HOME": str(tmp_home)},
+        )
+        assert rc == 0, f"{err}\n{out}"
+
+        assert self._row(src_cwd, "20260503-source") is None, (
+            "stale source row must be deleted after MOVE+RENAME")
+        dst_row = self._row(dst_cwd, "20260503-renamed")
+        assert dst_row is not None, (
+            "destination row must exist so ccr/ccs can enumerate the session")
+        assert dst_row.last_opened == 1000.0
+        assert dst_row.last_active == 2000.0
+
+    def test_rename_only_rekeys_sessions_row(
+            self, tmp_home, projects_root, roots_file, make_session):
+        """RENAME-only (project_dir unchanged, basename changes): row is
+        re-keyed to the new basename."""
+        from cc_session_tools.lib import sessions_db
+        src_dir, _, uuid = make_session("proj", "20260503-old")
+        cwd = projects_root / "proj"
+        db_path = self._db_path()
+        sessions_db.touch_last_active(
+            cwd, "20260503-old", path=db_path, when=3000.0)
+
+        rc, out, err = _run(
+            "--src-session", str(src_dir),
+            "--rename-tag", "20260503-new",
+            "--uuid", uuid,
+            "--execute",
+            env={"HOME": str(tmp_home)},
+        )
+        assert rc == 0, f"{err}\n{out}"
+
+        assert self._row(cwd, "20260503-old") is None
+        dst_row = self._row(cwd, "20260503-new")
+        assert dst_row is not None
+        assert dst_row.last_active == 3000.0
+
+    def test_pre_migration_session_gets_destination_row(
+            self, tmp_home, projects_root, roots_file, make_session):
+        """No source row (pre-migration session whose sentinels were flat
+        files): the move still creates a destination row for discoverability,
+        and there is nothing to delete."""
+        src_dir, _, uuid = make_session("src-proj", "20260503-source")
+        src_cwd = projects_root / "src-proj"
+        dst_cwd = projects_root / "dst-proj"
+        dst_cwd.mkdir()
+        # Deliberately seed NO sessions.db row for the source.
+
+        rc, out, err = _run(
+            "--src-session", str(src_dir),
+            "--dst-cwd", str(dst_cwd),
+            "--rename-tag", "20260503-renamed",
+            "--uuid", uuid,
+            "--execute",
+            env={"HOME": str(tmp_home)},
+        )
+        assert rc == 0, f"{err}\n{out}"
+
+        assert self._row(src_cwd, "20260503-source") is None
+        dst_row = self._row(dst_cwd, "20260503-renamed")
+        assert dst_row is not None, (
+            "destination row must be created even when no source row existed")
+
+
 class TestTombstoneChainWording:
     """Fix B: TOMBSTONE.md and jsonl tombstone notice must include a
     chain-traversal note so users following a double-moved session

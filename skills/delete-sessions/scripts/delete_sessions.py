@@ -8,7 +8,8 @@ For each basename supplied:
   4. Refuse non-empty sessions unless --allow-non-empty.
   5. Print a deletion plan.
   6. In --execute mode: generate an 8-digit confirmation code, prompt for it,
-     then delete (cc-sessions dir + JSONL transcript + .tag file + tasks dir).
+     then delete (cc-sessions dir + JSONL transcript + tasks dir on disk, plus
+     the sessions.db session_tags and sessions rows).
 
 See ~/.claude/skills/delete-sessions/SKILL.md for full usage notes.
 """
