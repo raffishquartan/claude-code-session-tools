@@ -618,6 +618,25 @@ def _cmd_doctor(args: argparse.Namespace) -> int:
         "CLAUDE_SESSION_TOOLS_PROJ_ROOT": os.environ.get("CLAUDE_SESSION_TOOLS_PROJ_ROOT"),
     }
 
+    # The six migrated/new data stores (data-store SQLite uplift). Each accessor
+    # resolves its own env-var override; three already return a full file path,
+    # the two directory accessors get their .db filename appended.
+    from cc_session_tools.lib.scheduler.store import scheduler_dir      # Phase 3 (moved here from .state)
+    from cc_session_tools.lib.messaging.store import store_root         # Phase 2
+    from cc_session_tools.lib.sessions_db import default_db_path as sessions_db_path  # Phase 4 (full .db path)
+    from cc_session_tools.lib import telemetry_store                    # Phase 5 (db_path() -> full .db path)
+    from cccs_hooks.cache import _db_path as command_cache_db_path      # Phase 6 (replaces deleted _DEFAULT_DB)
+    from cc_session_tools.lib.claude_flags import _cache_file as claude_flags_file  # Phase 6 (full .json path)
+
+    store_paths = {
+        "ccmsg": store_root() / "ccmsg.db",
+        "ccsched": scheduler_dir() / "ccsched.db",
+        "sessions": sessions_db_path(),
+        "telemetry": telemetry_store.db_path(),
+        "command-cache": command_cache_db_path(),
+        "claude-flags": claude_flags_file(),
+    }
+
     results = run_all_checks(
         installed_version=__version__,
         settings_path=settings_path,
@@ -626,6 +645,7 @@ def _cmd_doctor(args: argparse.Namespace) -> int:
         skills_target_dir=skills_target_dir,
         env=env_vars,
         skip_pypi=args.no_pypi,
+        store_paths=store_paths,
     )
 
     if args.drift or getattr(args, "mode", None) == "drift":
