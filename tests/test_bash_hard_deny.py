@@ -776,6 +776,33 @@ def test_allows_fires_real_cache_path_with_access_env(
     _assert_allowed(monkeypatch, "cat ~/.cache/claude/logs/fires.jsonl")
 
 
+def test_blocks_sqlite3_cli_read_of_telemetry_db(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("CCCS_FIRES_ACCESS", raising=False)
+    rc, _out, _err = _run_bash(
+        monkeypatch, 'sqlite3 ~/.local/share/claude/telemetry.db "select * from telemetry_events"'
+    )
+    assert rc == 2
+
+
+def test_allows_sqlite3_telemetry_db_with_access_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("CCCS_FIRES_ACCESS", "1")
+    _assert_allowed(
+        monkeypatch, 'sqlite3 ~/.local/share/claude/telemetry.db "select * from telemetry_events"'
+    )
+
+
+def test_blocks_sqlite3_telemetry_db_basename_only(monkeypatch: pytest.MonkeyPatch) -> None:
+    # No path prefix, just the basename — still catchable.
+    monkeypatch.delenv("CCCS_FIRES_ACCESS", raising=False)
+    rc, _out, _err = _run_bash(monkeypatch, "sqlite3 telemetry.db '.dump'")
+    assert rc == 2
+
+
+def test_allows_sqlite3_unrelated_db(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("CCCS_FIRES_ACCESS", raising=False)
+    _assert_allowed(monkeypatch, "sqlite3 /tmp/scratch.db '.tables'")
+
+
 # ---------- main() robustness ----------
 
 
