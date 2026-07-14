@@ -1,8 +1,7 @@
 """Per-session surfacing cursor (§9.3), backed by the `cursors` table in
-ccsched.db. offset = count of catch-up ledger rows already surfaced to this
-session. Per-session by design; cross-session dedup is a non-goal. (The ledger
-itself is still fires.jsonl until Phase 5, so this offset keeps its exact
-current meaning.)"""
+ccsched.db. offset = highest catch-up ledger row id already surfaced to this
+session (a monotonic telemetry.db catchup_events.id, not a row count). Per-
+session by design; cross-session dedup is a non-goal."""
 from __future__ import annotations
 
 from cc_session_tools.lib.scheduler import ledger, store

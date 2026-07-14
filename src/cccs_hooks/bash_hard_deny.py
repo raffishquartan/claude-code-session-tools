@@ -409,11 +409,17 @@ _HD_CURL_DELETE_RE = re.compile(
 
 # Direct reads of the telemetry log. Two eras are covered: the retired
 # fires.jsonl* flat files (basename-based, catches rotated slots too) and
-# the current telemetry.db (any sqlite3 CLI invocation naming it, regardless
-# of the query — a read-only SELECT leaks the same session/hash data a
-# schema dump or full-table read would).
+# the current telemetry.db — both any sqlite3 CLI invocation naming it,
+# regardless of the query (a read-only SELECT leaks the same session/hash
+# data a schema dump or full-table read would), and any binary-dump tool
+# (cat/hexdump/xxd/strings/...) reading the file directly, since the
+# session_id/cwd_short/verdict/input_hash columns are stored as cleartext
+# and a raw byte dump extracts them just as well as SQL would.
 _FIRES_READ_RE = re.compile(r"(cat|head|tail|less|more|hexdump|xxd)\s+.*fires.*\.jsonl")
-_TELEMETRY_DB_READ_RE = re.compile(r"sqlite3\s+.*telemetry\.db")
+_TELEMETRY_DB_READ_RE = re.compile(
+    r"(sqlite3\s+.*telemetry\.db|"
+    r"(cat|head|tail|less|more|hexdump|xxd|strings)\s+.*telemetry\.db)"
+)
 _FIRES_LOG_PATH = _telemetry_db_path().parent / "fires.jsonl"
 _TELEMETRY_DB_PATH = _telemetry_db_path()
 
