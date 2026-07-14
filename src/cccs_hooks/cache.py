@@ -30,6 +30,7 @@ import os
 import sqlite3
 from pathlib import Path
 
+from cc_session_tools.lib.db import connect as _sqlite_connect
 from cc_session_tools.lib.paths import data_home
 
 _STALE_DAYS = 90.0
@@ -99,19 +100,7 @@ def _db_path() -> Path:
 
 
 def _connect() -> sqlite3.Connection:
-    path = _db_path()
-    path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-    conn = sqlite3.connect(str(path), timeout=5.0, check_same_thread=False)
-    if sqlite3.sqlite_version_info < (3, 35, 0):
-        raise RuntimeError(
-            f"SQLite >= 3.35.0 required (got {sqlite3.sqlite_version}); "
-            "'CREATE VIEW IF NOT EXISTS' is not supported on older versions."
-        )
-    conn.execute("PRAGMA journal_mode=WAL")
-    conn.execute("PRAGMA foreign_keys=ON")
-    conn.executescript(_DDL)
-    conn.commit()
-    return conn
+    return _sqlite_connect(_db_path(), ddl=_DDL)
 
 
 def sha256_command(command: str) -> str:
