@@ -11,10 +11,34 @@ data-stores-design-spec.md Section 7.3.
 from __future__ import annotations
 
 import sqlite3
+import time
 from pathlib import Path
 
 _BUSY_TIMEOUT_MS = 5000
 _MIN_SQLITE_VERSION = (3, 35, 0)
+_WAL_SWITCH_RETRY_SLEEP_S = 0.02
+
+
+def _enable_wal(conn: sqlite3.Connection, *, deadline: float) -> None:
+    """Switch a connection into WAL journal mode, retrying on lock.
+
+    SQLite does NOT invoke the busy handler for a journal-mode change: if
+    another connection holds a write lock at the moment WAL is enabled it
+    returns SQLITE_BUSY ("database is locked") immediately, ignoring the
+    busy_timeout that protects every other statement. Under cold-start
+    concurrency (N processes/threads all creating the same fresh .db at once —
+    exactly what a burst of hook fires does) this drops connections. Retry the
+    switch ourselves within the same busy-timeout budget so the WAL switch is
+    as patient as ordinary writes.
+    """
+    while True:
+        try:
+            conn.execute("PRAGMA journal_mode=WAL")
+            return
+        except sqlite3.OperationalError as e:
+            if "locked" not in str(e).lower() or time.monotonic() >= deadline:
+                raise
+            time.sleep(_WAL_SWITCH_RETRY_SLEEP_S)
 
 
 def connect(path: Path, *, ddl: str | None = None, readonly: bool = False) -> sqlite3.Connection:
@@ -44,8 +68,8 @@ def connect(path: Path, *, ddl: str | None = None, readonly: bool = False) -> sq
     else:
         conn = sqlite3.connect(str(path), timeout=_BUSY_TIMEOUT_MS / 1000, check_same_thread=False)
         try:
-            conn.execute("PRAGMA journal_mode=WAL")
             conn.execute(f"PRAGMA busy_timeout={_BUSY_TIMEOUT_MS}")
+            _enable_wal(conn, deadline=time.monotonic() + _BUSY_TIMEOUT_MS / 1000)
             conn.execute("PRAGMA foreign_keys=ON")
             if ddl:
                 conn.executescript(ddl)
