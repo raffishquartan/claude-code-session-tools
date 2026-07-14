@@ -55,21 +55,24 @@ def iter_sessions(sessions_dir: Path) -> Iterator[Path]:
 
 
 def find_matching_sessions(fragment: str, roots: list[Path]) -> list[SessionMatch]:
+    """Substring-match `fragment` against every session basename recorded in
+    sessions.db, scoped to projects whose direct parent is one of `roots`
+    (mirrors the historical filesystem-walk scoping: only projects directly
+    under a configured root are searched)."""
+    from cc_session_tools.lib import sessions_db
+
     out: list[SessionMatch] = []
-    for root in roots:
-        if not root.is_dir():
+    for row in sessions_db.list_sessions():
+        if fragment not in row.basename:
             continue
-        for proj in root.iterdir():
-            if not proj.is_dir():
-                continue
-            cc = proj / "cc-sessions"
-            for sess in iter_sessions(cc):
-                if fragment in sess.name:
-                    out.append(SessionMatch(
-                        basename=sess.name,
-                        project_dir=proj,
-                        session_dir=sess,
-                    ))
+        if row.project_dir.parent not in roots:
+            continue
+        session_dir = row.project_dir / "cc-sessions" / row.basename
+        out.append(SessionMatch(
+            basename=row.basename,
+            project_dir=row.project_dir,
+            session_dir=session_dir,
+        ))
     return out
 
 
