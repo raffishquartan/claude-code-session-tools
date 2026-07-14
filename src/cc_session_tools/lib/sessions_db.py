@@ -120,3 +120,171 @@ def lookup_tags(uuids: list[str], *, path: Path | None = None) -> dict[str, str]
         return {r["uuid"]: r["tag"] for r in rows}
     finally:
         conn.close()
+
+
+# ---------------------------------------------------------------------------
+# sessions
+# ---------------------------------------------------------------------------
+
+@dataclass(frozen=True, slots=True)
+class SessionRow:
+    project_dir: Path
+    basename: str
+    start_date: str
+    last_opened: float
+    last_active: float
+
+
+def _row_to_session(row: sqlite3.Row) -> SessionRow:
+    return SessionRow(
+        project_dir=Path(row["project_dir"]),
+        basename=row["basename"],
+        start_date=row["start_date"],
+        last_opened=row["last_opened"] or 0.0,
+        last_active=row["last_active"] or 0.0,
+    )
+
+
+def ensure_session_row(project_dir: Path, basename: str, *, path: Path | None = None) -> None:
+    """Insert a row for (project_dir, basename) if absent. Never overwrites an
+    existing row's timestamps — this is the safety-net call ccd.py makes right
+    after creating a session directory, in case the SessionStart hook never
+    fires (hooks disabled/broken); the hook's own touch_last_opened() upsert
+    is the normal path and would create the same row moments later regardless."""
+    from cc_session_tools.lib.sessions import session_start_date
+
+    start_date = session_start_date(basename)
+    if start_date is None:
+        return
+    conn = connect(path=path)
+    try:
+        conn.execute(
+            "INSERT INTO sessions (project_dir, basename, start_date, discovered_at) "
+            "VALUES (?, ?, ?, ?) "
+            "ON CONFLICT(project_dir, basename) DO NOTHING",
+            (str(project_dir), basename, start_date, _now_iso()),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def touch_last_opened(
+    project_dir: Path, basename: str, *, path: Path | None = None, when: float | None = None
+) -> None:
+    """Upsert the last_opened timestamp (epoch seconds) for (project_dir, basename)."""
+    from cc_session_tools.lib.sessions import session_start_date
+
+    start_date = session_start_date(basename)
+    if start_date is None:
+        return
+    ts = when if when is not None else time.time()
+    conn = connect(path=path)
+    try:
+        conn.execute(
+            "INSERT INTO sessions (project_dir, basename, start_date, discovered_at, last_opened) "
+            "VALUES (?, ?, ?, ?, ?) "
+            "ON CONFLICT(project_dir, basename) DO UPDATE SET last_opened=excluded.last_opened",
+            (str(project_dir), basename, start_date, _now_iso(), ts),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def touch_last_active(
+    project_dir: Path, basename: str, *, path: Path | None = None, when: float | None = None
+) -> None:
+    """Upsert the last_active timestamp (epoch seconds) for (project_dir, basename)."""
+    from cc_session_tools.lib.sessions import session_start_date
+
+    start_date = session_start_date(basename)
+    if start_date is None:
+        return
+    ts = when if when is not None else time.time()
+    conn = connect(path=path)
+    try:
+        conn.execute(
+            "INSERT INTO sessions (project_dir, basename, start_date, discovered_at, last_active) "
+            "VALUES (?, ?, ?, ?, ?) "
+            "ON CONFLICT(project_dir, basename) DO UPDATE SET last_active=excluded.last_active",
+            (str(project_dir), basename, start_date, _now_iso(), ts),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+_ORDERABLE_COLUMNS = {"last_active", "last_opened"}
+
+
+def list_sessions(
+    *,
+    project_dir: Path | None = None,
+    path: Path | None = None,
+    order_by: str | None = None,
+    limit: int | None = None,
+) -> list[SessionRow]:
+    """Known sessions, optionally scoped to one project_dir.
+
+    order_by/limit ("most recent N") push an indexed `ORDER BY <col> DESC
+    LIMIT ?` into SQL when order_by is a DB-backed column (last_active /
+    last_opened, both indexed - see idx_sessions_last_active/last_opened in
+    the schema) - this is what makes "most recent N sessions" an O(log n)
+    indexed lookup instead of fetching every row and slicing in Python.
+    order_by values that need filesystem/Python-side computation (start,
+    update - see ccs.py's --order-by) are NOT DB columns; callers needing
+    those must pass order_by=None here and sort+slice the full result
+    themselves (this is the documented, accepted exception - see D1 and the
+    2026-07-13 performance requirement's explicit scoping in
+    data-stores-design-spec.md Section 7.2, which only binds the title/tag-
+    lookup path, not update-order's mtime walk).
+
+    Empty list if sessions.db has never been written to, or if limit is
+    given but no rows match.
+    """
+    if order_by is not None and order_by not in _ORDERABLE_COLUMNS:
+        raise ValueError(f"order_by must be one of {_ORDERABLE_COLUMNS} or None, got {order_by!r}")
+    if limit is not None and order_by is None:
+        raise ValueError("limit requires order_by (an unordered LIMIT is meaningless)")
+
+    try:
+        conn = connect(path=path, readonly=True)
+    except sqlite3.OperationalError:
+        return []
+    try:
+        query = "SELECT project_dir, basename, start_date, last_opened, last_active FROM sessions"
+        params: list[object] = []
+        if project_dir is not None:
+            query += " WHERE project_dir = ?"
+            params.append(str(project_dir))
+        if order_by is not None:
+            # order_by is validated against _ORDERABLE_COLUMNS above (not
+            # user-controlled free text) before this f-string runs, so this
+            # is not a SQL-injection risk despite the interpolation.
+            query += f" ORDER BY {order_by} DESC"
+        if limit is not None:
+            query += " LIMIT ?"
+            params.append(limit)
+        rows = conn.execute(query, params).fetchall()
+        return [_row_to_session(r) for r in rows]
+    finally:
+        conn.close()
+
+
+def find_exact(basename: str, *, path: Path | None = None) -> list[SessionRow]:
+    """Every row whose basename equals `basename` exactly (could be >1 if the
+    same basename was created under two different project_dirs)."""
+    try:
+        conn = connect(path=path, readonly=True)
+    except sqlite3.OperationalError:
+        return []
+    try:
+        rows = conn.execute(
+            "SELECT project_dir, basename, start_date, last_opened, last_active "
+            "FROM sessions WHERE basename = ?",
+            (basename,),
+        ).fetchall()
+        return [_row_to_session(r) for r in rows]
+    finally:
+        conn.close()
