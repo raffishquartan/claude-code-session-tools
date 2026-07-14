@@ -17,23 +17,23 @@ from cc_session_tools.lib.sessions import (
 @pytest.fixture
 def synthetic_project(tmp_path, monkeypatch):
     """Synthesise a project with a cc-sessions directory, a transcript dir,
-    and a flat tags dir under a fake HOME so the encoded path matches what
-    the helpers expect."""
+    and a sessions.db under a fake HOME so the encoded path matches what the
+    helpers expect."""
     fake_home = tmp_path / "home"
     fake_home.mkdir()
     monkeypatch.setenv("HOME", str(fake_home))
     monkeypatch.setattr(Path, "home", classmethod(lambda cls: fake_home))
 
-    # Flat tags dir — controlled via env var so sessions.py picks it up.
-    tags_dir = tmp_path / "tags"
-    tags_dir.mkdir()
-    monkeypatch.setenv("CCCS_SESSION_TAGS_DIR", str(tags_dir))
+    # sessions.db location — controlled via env var so sessions.py picks it up.
+    db_dir = tmp_path / "db"
+    db_dir.mkdir()
+    monkeypatch.setenv("CCST_SESSIONS_DIR", str(db_dir))
 
     project = fake_home / "repos" / "demo"
     project.mkdir(parents=True)
     (project / "cc-sessions").mkdir()
 
-    return fake_home, project, tags_dir
+    return fake_home, project, db_dir
 
 
 def _write_jsonl(path: Path, records: list[dict]) -> None:
@@ -43,16 +43,13 @@ def _write_jsonl(path: Path, records: list[dict]) -> None:
             f.write(json.dumps(rec) + "\n")
 
 
-def _write_tag(tags_dir_or_transcript_dir: Path, uuid: str, tag: str) -> None:
-    """Write a .tag file to the flat tags dir.
-
-    The parameter name is kept generic for call-site compatibility, but after
-    the Row 1 migration the canonical location is the flat tags dir passed via
-    CCCS_SESSION_TAGS_DIR — callers should pass that directory, not the
-    transcript dir.
-    """
-    tags_dir_or_transcript_dir.mkdir(parents=True, exist_ok=True)
-    (tags_dir_or_transcript_dir / f"{uuid}.tag").write_text(tag + "\n")
+def _write_tag(tags_dir: Path, uuid: str, tag: str) -> None:
+    """Record uuid -> tag in sessions.db (the `tags_dir` parameter name is
+    kept for call-site compatibility across this file's many pre-existing
+    tests; it now names the sessions.db *directory*, matching what the
+    synthetic_project fixture returns)."""
+    from cc_session_tools.lib import sessions_db
+    sessions_db.write_tag(uuid, tag, path=tags_dir / "sessions.db")
 
 
 # ---------- find_jsonl_for_session ----------

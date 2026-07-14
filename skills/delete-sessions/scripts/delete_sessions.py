@@ -18,6 +18,7 @@ import argparse
 import json
 import os
 import secrets
+import sqlite3
 import sys
 import time
 from pathlib import Path
@@ -26,7 +27,6 @@ from pathlib import Path
 # or present via PYTHONPATH from the worktree src/ directory).
 from cc_session_tools.lib.sessions import (
     SESSION_BASENAME_RE,
-    _session_tags_dir,
     find_jsonl_for_session,
     is_empty_session,
     session_is_empty_safe,
@@ -204,18 +204,13 @@ def _artefacts_for_session(
         ("session folder", session_dir),
     ]
 
-    # JSONL transcript.
+    # JSONL transcript. The session's tag mapping now lives in sessions.db
+    # (session_tags table, keyed by this jsonl's UUID) rather than in a flat
+    # .tag file; it is removed via sessions_db.delete_tag() in the delete loop,
+    # not as a filesystem artefact here.
     jsonl = find_jsonl_for_session(basename, project_dir)
     if jsonl is not None:
         artefacts.append(("JSONL transcript", jsonl))
-        # .tag file: check flat cache dir first (new location), then old
-        # per-project location (backward-compat for pre-migration files).
-        flat_tag = _session_tags_dir() / f"{jsonl.stem}.tag"
-        old_tag = jsonl.with_suffix(".tag")
-        if flat_tag.exists():
-            artefacts.append((".tag file", flat_tag))
-        if old_tag.exists():
-            artefacts.append((".tag file (legacy)", old_tag))
 
     # Tasks directory.
     if include_tasks:
@@ -341,7 +336,10 @@ def main() -> int:
     # ------------------------------------------------------------------
     # Build per-session artefact lists
     # ------------------------------------------------------------------
-    plan: list[tuple[str, list[tuple[str, Path]]]] = []
+    # Each plan entry: (basename, project_dir, transcript_uuid, artefacts).
+    # transcript_uuid (the jsonl stem) is the key for the sessions.db
+    # session_tags row removed in the delete loop; None if no transcript found.
+    plan: list[tuple[str, Path, str | None, list[tuple[str, Path]]]] = []
     for basename, session_dir, project_dir in resolved:
         artefacts = _artefacts_for_session(
             basename,
@@ -349,7 +347,9 @@ def main() -> int:
             project_dir,
             include_tasks=not args.no_tasks,
         )
-        plan.append((basename, artefacts))
+        jsonl = find_jsonl_for_session(basename, project_dir)
+        transcript_uuid = jsonl.stem if jsonl is not None else None
+        plan.append((basename, project_dir, transcript_uuid, artefacts))
 
     # ------------------------------------------------------------------
     # Print plan
@@ -357,11 +357,12 @@ def main() -> int:
     print("=" * 60)
     print("DELETION PLAN")
     print("=" * 60)
-    for basename, artefacts in plan:
+    for basename, project_dir, transcript_uuid, artefacts in plan:
         print(f"\n  Session: {basename}")
         for label, path in artefacts:
             exists_note = "" if path.exists() else "  [already absent]"
             print(f"    {label}: {path}{exists_note}")
+        print("    sessions.db records: sessions row + session_tags row (if present)")
     print()
 
     if not args.execute:
@@ -384,8 +385,10 @@ def main() -> int:
     print("=" * 60)
     print("DELETING")
     print("=" * 60)
+    from cc_session_tools.lib import sessions_db
+
     had_error = False
-    for basename, artefacts in plan:
+    for basename, project_dir, transcript_uuid, artefacts in plan:
         print(f"\n  Session: {basename}")
         for label, path in artefacts:
             if not path.exists():
@@ -401,6 +404,17 @@ def main() -> int:
             except OSError as exc:
                 print(f"    ERROR deleting {label} {path}: {exc}")
                 had_error = True
+
+        # Remove sessions.db records so the deleted session stops appearing in
+        # ccs/ccr enumeration (no automatic GC — see design decision D6).
+        try:
+            sessions_db.delete_session_row(project_dir, basename)
+            if transcript_uuid is not None:
+                sessions_db.delete_tag(transcript_uuid)
+            print("    deleted sessions.db records")
+        except (OSError, sqlite3.Error) as exc:
+            print(f"    ERROR deleting sessions.db records for {basename}: {exc}")
+            had_error = True
 
     print()
     if had_error:

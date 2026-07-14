@@ -14,11 +14,11 @@ from pathlib import Path
 from typing import Literal
 
 from cc_session_tools import __version__
+from cc_session_tools.lib import sessions_db
 from cc_session_tools.lib.roots import RootsConfigError, load_session_roots
 from cc_session_tools.lib.sessions import (
     enumerate_session_files,
     grep_files,
-    iter_sessions,
     session_is_empty_safe,
     session_start_date,
     transcript_dir_for_project,
@@ -117,14 +117,6 @@ def _get_session_update_mtime(session_dir: Path) -> float:
     except OSError:
         pass
     return best
-
-
-def _get_sentinel_mtime(session_dir: Path, filename: str) -> float:
-    """Return mtime of session_dir/filename, or 0.0 if absent/unreadable."""
-    try:
-        return (session_dir / filename).stat().st_mtime
-    except OSError:
-        return 0.0
 
 
 def _format_update_dt(mtime: float) -> str:
@@ -278,6 +270,11 @@ def _build_parser() -> argparse.ArgumentParser:
         ),
     )
     out_grp.add_argument(
+        "-n", "--limit", type=int, default=None, metavar="N",
+        help="show only the N most recent sessions (requires --order-by opened or active; "
+             "pushed down as an indexed SQL LIMIT, not a post-fetch slice)",
+    )
+    out_grp.add_argument(
         "--sort",
         choices=["datetime", "alpha"],
         default="datetime",
@@ -383,28 +380,41 @@ def _sort_results(
     return results
 
 
-def _collect_pairs(do_global: bool) -> list[tuple[Path, Path]]:
-    """Return [(sessions_dir, project_dir), ...] for the search scope."""
-    pairs: list[tuple[Path, Path]] = []
+_SENTINEL_TO_COLUMN = {"opened": "last_opened", "active": "last_active"}
+
+
+def _collect_session_rows(
+    do_global: bool, *, order_by: str | None = None, limit: int | None = None
+) -> list["sessions_db.SessionRow"]:
+    """Return sessions.db rows for the search scope. Replaces the old
+    O(roots x projects x sessions) filesystem walk (_collect_pairs +
+    iter_sessions) with one indexed query.
+
+    order_by/limit push an indexed ORDER BY ... LIMIT into SQL (see
+    sessions_db.list_sessions) when order_by is a DB-backed column - this is
+    what makes "most recent N" an O(log n) lookup, not a fetch-everything-then-
+    slice. For --global, the root filter is applied after the DB query, so with
+    --limit the returned N rows are the N most recent *before* root filtering.
+
+    `order_by` uses ccs's flag vocabulary ("opened"/"active"); it is mapped
+    here to the sessions.db column names ("last_opened"/"last_active").
+    """
+    db_order_by = _SENTINEL_TO_COLUMN.get(order_by) if order_by else None
+    db_limit = limit if db_order_by else None
+
     if do_global:
         try:
             roots = load_session_roots()
         except RootsConfigError as e:
             print(str(e), file=sys.stderr)
             sys.exit(1)
-        for root in roots:
-            for proj in root.iterdir():
-                if proj.is_dir():
-                    cc = proj / "cc-sessions"
-                    if cc.is_dir():
-                        pairs.append((cc, proj))
-    else:
-        cwd = Path.cwd().resolve()
-        cc = cwd / "cc-sessions"
-        if not cc.is_dir():
-            return []
-        pairs.append((cc, cwd))
-    return pairs
+        rows = sessions_db.list_sessions(order_by=db_order_by, limit=db_limit)
+        return [r for r in rows if r.project_dir.parent in roots]
+
+    cwd = Path.cwd().resolve()
+    return sessions_db.list_sessions(
+        project_dir=cwd, order_by=db_order_by, limit=db_limit
+    )
 
 
 def _display_path(p: Path) -> str:
@@ -1033,6 +1043,15 @@ def main(argv: list[str] | None = None) -> int:
     multi_scope = not is_list_mode and len(scope_queries) > 1
     machine_readable = args.json or args.null
 
+    order_by: str | None = args.order_by
+    if args.limit is not None and order_by not in ("opened", "active"):
+        print(
+            "ccs: --limit requires --order-by opened or --order-by active "
+            "(start/update ordering is not database-indexed — see design decision D1)",
+            file=sys.stderr,
+        )
+        return 2
+
     # Validate date filter args eagerly so bad values are caught before any I/O.
     date_filter: tuple[str | None, str | None] | None = None
     if args.since or args.before or args.days:
@@ -1047,21 +1066,29 @@ def main(argv: list[str] | None = None) -> int:
     scope_label = "global" if effective_global else "cwd"
 
     debug(f"scope: {'global' if effective_global else f'cwd={Path.cwd()}'}")
-    pairs = _collect_pairs(effective_global)
-    if not pairs:
+    session_rows = _collect_session_rows(
+        effective_global,
+        order_by=order_by if order_by in ("opened", "active") else None,
+        limit=args.limit,
+    )
+    if not session_rows:
         if effective_global:
             print("ccs: no sessions found in any configured root", file=sys.stderr)
         else:
             print("ccs: no cc-sessions/ in current directory", file=sys.stderr)
         return 1
+    debug(f"sessions found: {len(session_rows)}")
 
-    sessions: list[tuple[Path, Path]] = []
-    for cc, proj in pairs:
-        for sess in iter_sessions(cc):
-            if session_start_date(sess.name) is None:
-                continue
-            sessions.append((sess, proj))
-    debug(f"sessions found: {len(sessions)}")
+    # (session_dir, project_dir) pairs — kept for every downstream code path in
+    # this file that still needs real filesystem access (emptiness/contents/
+    # messages search, --order-by update's rglob walk; see design decision D1).
+    sessions: list[tuple[Path, Path]] = [
+        (row.project_dir / "cc-sessions" / row.basename, row.project_dir)
+        for row in session_rows
+    ]
+    # basename -> SessionRow, for O(1) opened/active lookups with zero
+    # filesystem stat calls (replaces the old per-session _get_sentinel_mtime).
+    row_by_basename = {row.basename: row for row in session_rows}
 
     # Count hooks and empty sessions BEFORE applying those filters (for the footer).
     n_hook_before_filter = sum(1 for s, _ in sessions if _is_hook_session(s.name))
@@ -1126,8 +1153,6 @@ def main(argv: list[str] | None = None) -> int:
 
     # ------ List mode ------
     if is_list_mode:
-        order_by: str | None = args.order_by
-
         if order_by == "update":
             # Compute update mtime for each session (rglob walk — done once).
             sessions_with_mtime = [
@@ -1145,16 +1170,24 @@ def main(argv: list[str] | None = None) -> int:
                 else:
                     print(f"{display_name} ({dt_str})")
         elif order_by in ("opened", "active"):
-            filename = ".last-opened" if order_by == "opened" else ".last-active"
             label = order_by  # "opened" or "active"
-            sessions_with_mtime = [
-                (s, proj, _get_sentinel_mtime(s, filename))
-                for s, proj in sessions
-            ]
-            sessions_sorted_sentinel = sorted(
-                sessions_with_mtime, key=lambda t: t[2], reverse=True
-            )
-            for s, proj, mtime in sessions_sorted_sentinel:
+
+            def _row_mtime(pair: tuple[Path, Path]) -> float:
+                s, _proj = pair
+                row = row_by_basename.get(s.name)
+                if row is None:
+                    return 0.0
+                return row.last_opened if order_by == "opened" else row.last_active
+
+            # When --limit was set, session_rows already arrived pre-sorted and
+            # pre-limited from SQL (see _collect_session_rows), so avoid a second
+            # pointless sort of an already-ordered short list.
+            if args.limit is not None:
+                sessions_sorted_sentinel = sessions
+            else:
+                sessions_sorted_sentinel = sorted(sessions, key=_row_mtime, reverse=True)
+            for s, proj in sessions_sorted_sentinel:
+                mtime = _row_mtime((s, proj))
                 display_name = _maybe_link(s.name, s)
                 dt_str = _format_sentinel_dt(mtime, label)
                 if effective_global:
@@ -1217,7 +1250,6 @@ def main(argv: list[str] | None = None) -> int:
             all_results.extend(scope_results)
 
     # Populate update_mtime when --order-by update was requested.
-    order_by = args.order_by
     if order_by == "update":
         sess_mtime_cache: dict[str, float] = {}
         for r in all_results:
@@ -1227,21 +1259,13 @@ def main(argv: list[str] | None = None) -> int:
                 sess_mtime_cache[key] = _get_session_update_mtime(sess_dir)
             r.update_mtime = sess_mtime_cache[key]
     elif order_by == "opened":
-        sentinel_cache: dict[str, float] = {}
         for r in all_results:
-            key = r.basename
-            if key not in sentinel_cache:
-                sess_dir = r.project_dir / "cc-sessions" / r.basename
-                sentinel_cache[key] = _get_sentinel_mtime(sess_dir, ".last-opened")
-            r.opened_mtime = sentinel_cache[key]
+            row = row_by_basename.get(r.basename)
+            r.opened_mtime = row.last_opened if row is not None else 0.0
     elif order_by == "active":
-        sentinel_cache = {}
         for r in all_results:
-            key = r.basename
-            if key not in sentinel_cache:
-                sess_dir = r.project_dir / "cc-sessions" / r.basename
-                sentinel_cache[key] = _get_sentinel_mtime(sess_dir, ".last-active")
-            r.active_mtime = sentinel_cache[key]
+            row = row_by_basename.get(r.basename)
+            r.active_mtime = row.last_active if row is not None else 0.0
 
     # Sort the combined results.
     all_results = _sort_results(all_results, args.sort, order_by=order_by)

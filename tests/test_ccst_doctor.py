@@ -386,3 +386,69 @@ def test_doctor_drift_positional_not_exit_2() -> None:
     """ccst doctor drift must not exit 2 (argparse error)."""
     result = _run("doctor", "drift", "--no-pypi")
     assert result.returncode != 2
+
+
+# ---------- mute / unmute / list-mutes CLI (net new — zero coverage existed) ----------
+
+def test_mute_writes_and_list_mutes_shows_it(tmp_path: Path) -> None:
+    mutes_file = tmp_path / "sessions.db"
+    r1 = _run("doctor", "--mute", "version:pypi", "--mutes-file", str(mutes_file))
+    assert r1.returncode == 0
+    assert "Muted 'version:pypi'" in r1.stdout
+
+    r2 = _run("doctor", "--list-mutes", "--mutes-file", str(mutes_file))
+    assert r2.returncode == 0
+    assert "version:pypi" in r2.stdout
+
+
+def test_list_mutes_empty_reports_none(tmp_path: Path) -> None:
+    mutes_file = tmp_path / "sessions.db"
+    r = _run("doctor", "--list-mutes", "--mutes-file", str(mutes_file))
+    assert r.returncode == 0
+    assert "No checks are muted" in r.stdout
+
+
+def test_unmute_removes_a_muted_check(tmp_path: Path) -> None:
+    mutes_file = tmp_path / "sessions.db"
+    _run("doctor", "--mute", "hook:foo", "--mutes-file", str(mutes_file))
+    r = _run("doctor", "--unmute", "hook:foo", "--mutes-file", str(mutes_file))
+    assert r.returncode == 0
+    assert "Un-muted 'hook:foo'" in r.stdout
+
+    r2 = _run("doctor", "--list-mutes", "--mutes-file", str(mutes_file))
+    assert "hook:foo" not in r2.stdout
+
+
+def test_unmute_not_muted_returns_1(tmp_path: Path) -> None:
+    mutes_file = tmp_path / "sessions.db"
+    r = _run("doctor", "--unmute", "never-muted", "--mutes-file", str(mutes_file))
+    assert r.returncode == 1
+    assert "was not muted" in r.stdout
+
+
+def test_drift_mode_hides_muted_issues(tmp_path: Path) -> None:
+    mutes_file = tmp_path / "sessions.db"
+    settings = tmp_path / "settings.json"
+    settings.write_text('{"hooks": {}}')
+    # Mute one of the checks that will definitely WARN/FAIL in a clean env.
+    r_first = _run("doctor", "--drift", "--no-pypi", "--settings", str(settings))
+    # Extract a real un-muted check name from the drift output to mute it.
+    lines = [l for l in r_first.stdout.splitlines() if l.strip().startswith("[")]
+    assert lines, "expected at least one un-muted issue to mute in this test"
+    name = lines[0].split("]", 1)[1].split()[0]
+
+    _run("doctor", "--mute", name, "--mutes-file", str(mutes_file))
+    r_after = _run(
+        "doctor", "--drift", "--no-pypi", "--settings", str(settings),
+        "--mutes-file", str(mutes_file),
+    )
+    assert name not in r_after.stdout
+
+
+def test_mutes_file_default_is_sessions_db_not_json(tmp_path: Path, monkeypatch) -> None:
+    """Regression guard for D7: the default mute store is sessions.db, not
+    the old ~/.claude/cc-doctor-mutes.json path."""
+    from cc_session_tools.lib import doctor_mutes, sessions_db
+    monkeypatch.setenv("CCST_SESSIONS_DIR", str(tmp_path))
+    assert doctor_mutes.default_mutes_path() == sessions_db.default_db_path()
+    assert doctor_mutes.default_mutes_path().name == "sessions.db"
