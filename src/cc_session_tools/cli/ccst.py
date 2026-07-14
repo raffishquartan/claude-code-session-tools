@@ -24,7 +24,9 @@ Current subcommands:
                                  deletes old files automatically.
   sessions list                  List all sessions recorded in sessions.db
                                  (debug/inspection; --json for scripting).
-  telemetry trim                 Trim ~/.cache/claude/logs/fires.jsonl by size / age.
+  telemetry trim                 Trim telemetry.db by size / age (see ccst telemetry trim --help).
+  telemetry query                Query recent hook fires from telemetry.db (see
+                                 ccst telemetry query --help).
   gc report                      Report orphaned per-session-uuid entries across the
                                  scheduler, messaging, and session-env stores (never
                                  deletes anything).
@@ -747,6 +749,26 @@ def _cmd_telemetry_trim(args: argparse.Namespace) -> int:
     return trim_main(argv)
 
 
+def _cmd_telemetry_query(args: argparse.Namespace) -> int:
+    from cccs_hooks.telemetry_query import main as query_main
+
+    argv: list[str] = []
+    if args.hook is not None:
+        argv += ["--hook", args.hook]
+    if args.decision is not None:
+        argv += ["--decision", args.decision]
+    if args.verdict is not None:
+        argv += ["--verdict", args.verdict]
+    if args.since is not None:
+        argv += ["--since", args.since]
+    if args.limit != 50:
+        argv += ["--limit", str(args.limit)]
+    if getattr(args, "hooks_dir", None):
+        argv += ["--hooks-dir", args.hooks_dir]
+
+    return query_main(argv)
+
+
 # ---------- gc report ----------
 
 
@@ -1179,19 +1201,19 @@ def _build_parser() -> argparse.ArgumentParser:
 
     telemetry_trim_parser = telemetry_sub.add_parser(
         "trim",
-        help="Trim ~/.cache/claude/logs/fires.jsonl by size and/or age",
+        help="Trim telemetry.db by size and/or age",
     )
     telemetry_trim_parser.add_argument(
         "--max-size",
         type=float,
         metavar="MB",
-        help="Rotate fires.jsonl when it exceeds this size in MB",
+        help="Delete the oldest rows until the DB is under this size in MB (lossy)",
     )
     telemetry_trim_parser.add_argument(
         "--max-age-days",
         type=int,
         metavar="N",
-        help="Drop lines older than N days",
+        help="Delete rows older than N days",
     )
     telemetry_trim_parser.add_argument(
         "--dry-run",
@@ -1202,7 +1224,34 @@ def _build_parser() -> argparse.ArgumentParser:
         "--hooks-dir",
         default=None,
         metavar="DIR",
-        help="Logs directory (default: ~/.cache/claude/logs/)",
+        help="telemetry.db directory (default: CCCS_HOOKS_DIR or ~/.local/share/claude/)",
+    )
+
+    telemetry_query_parser = telemetry_sub.add_parser(
+        "query",
+        help="Query recent hook fires from telemetry.db's telemetry_events table",
+    )
+    telemetry_query_parser.add_argument(
+        "--hook", default=None, metavar="NAME", help="Filter by exact hook name",
+    )
+    telemetry_query_parser.add_argument(
+        "--decision", default=None, choices=["allow", "deny", "annotate"],
+        help="Filter by decision",
+    )
+    telemetry_query_parser.add_argument(
+        "--verdict", default=None, metavar="VERDICT",
+        help="Filter by exact verdict text (e.g. safe, suspicious, dangerous)",
+    )
+    telemetry_query_parser.add_argument(
+        "--since", default=None, metavar="DURATION",
+        help="Only events at or after now-DURATION, e.g. 1h, 30m, 2d, 1w",
+    )
+    telemetry_query_parser.add_argument(
+        "--limit", type=int, default=50, metavar="N", help="Max rows to print (default: 50)",
+    )
+    telemetry_query_parser.add_argument(
+        "--hooks-dir", default=None, metavar="DIR",
+        help="telemetry.db directory (default: CCCS_HOOKS_DIR or ~/.local/share/claude/)",
     )
 
     # ---- gc ----
@@ -1367,6 +1416,8 @@ def main() -> None:
     if args.noun == "telemetry":
         if args.verb == "trim":
             sys.exit(_cmd_telemetry_trim(args))
+        if args.verb == "query":
+            sys.exit(_cmd_telemetry_query(args))
 
     if args.noun == "gc":
         if args.verb == "report":
