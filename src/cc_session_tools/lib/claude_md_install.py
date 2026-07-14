@@ -12,7 +12,13 @@ from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
 
-from cc_session_tools.lib.messaging.message import write_text_atomic
+
+def _write_text_atomic(path: Path, text: str) -> None:
+    """Atomic text write (``.tmp``-swap), mirroring ``hooks_install.write_json_atomic``."""
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp.write_text(text, encoding="utf-8")
+    tmp.replace(path)
+
 
 _SENTINEL_START = "<!-- CCST:messaging START -->"
 _SENTINEL_END = "<!-- CCST:messaging END -->"
@@ -107,7 +113,7 @@ def install_claude_md(path: Path, *, apply: bool = False) -> MarkdownResult:
             return MarkdownResult(path, MarkdownAction.ALREADY_PRESENT, "block already up to date")
         new_content = "".join(lines[:start] + [_BLOCK] + lines[end + 1 :])
         if apply:
-            write_text_atomic(path, new_content)
+            _write_text_atomic(path, new_content)
         return MarkdownResult(
             path, MarkdownAction.REPLACED,
             f"{'replaced' if apply else 'would replace'} existing block",
@@ -117,7 +123,7 @@ def install_claude_md(path: Path, *, apply: bool = False) -> MarkdownResult:
     new_content = content + sep + _BLOCK
     if apply:
         path.parent.mkdir(parents=True, exist_ok=True)
-        write_text_atomic(path, new_content)
+        _write_text_atomic(path, new_content)
     return MarkdownResult(
         path, MarkdownAction.ADDED, f"{'added' if apply else 'would add'} block",
     )
@@ -143,7 +149,7 @@ def uninstall_claude_md(path: Path, *, apply: bool = False) -> MarkdownResult:
     start, end = span
     new_content = "".join(lines[:start] + lines[end + 1 :])
     if apply:
-        write_text_atomic(path, new_content)
+        _write_text_atomic(path, new_content)
     return MarkdownResult(
         path, MarkdownAction.REMOVED, f"{'removed' if apply else 'would remove'} block",
     )
