@@ -5,9 +5,8 @@ from pathlib import Path
 
 import pytest
 
-from cc_session_tools.lib.messaging import service, store
+from cc_session_tools.lib.messaging import service
 from cc_session_tools.lib.messaging.addressing import SessionContext
-from cc_session_tools.lib.messaging.message import parse
 
 
 def _sender() -> service.SendRequest:
@@ -30,10 +29,9 @@ def test_send_writes_message_to_partition_inbox(
 ) -> None:
     monkeypatch.setenv("CCST_MESSAGES_ROOT", str(tmp_path))
     mid = service.send(_sender())
-    files = list((tmp_path / "projects" / "alpha" / "inbox").glob("*.md"))
-    assert len(files) == 1
-    m = parse(files[0].read_text())
-    assert m.id == mid
+    m = service.read_one(mid)
+    assert m is not None
+    assert m.to_location == "projects/alpha"
     assert m.status == "sent"
     assert m.subject == "Hello there"
     assert m.attachments == ["/abs/a.md"]
@@ -85,14 +83,12 @@ def test_list_messages_filters_by_from_uuid(tmp_path: Path, monkeypatch: pytest.
     assert len(rows) == 1
 
 
-def test_list_messages_skips_malformed_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_list_messages_returns_compact_rows(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("CCST_MESSAGES_ROOT", str(tmp_path))
     service.send(_sender())
-    # A stale/hand-edited file in the store must not abort the listing.
-    bad = store.ensure_inbox_dir("projects/alpha") / "20990101T000000Z-bbbb__broken.md"
-    bad.write_text("not a valid message\n", encoding="utf-8")
     rows = service.list_messages()
     assert len(rows) == 1
+    assert rows[0].to_kind == "project" and rows[0].to_value == "alpha"
 
 
 def _ctx(
@@ -169,16 +165,22 @@ def test_deliver_surfaces_description_as_proposal_without_reading(
     assert read.status == "sent"  # candidate, not read
 
 
-def test_deliver_skips_malformed_file_in_swept_partition(
+def test_deliver_project_message_auto_read_by_first_session_only(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setenv("CCST_MESSAGES_ROOT", str(tmp_path))
-    mid = _send_to_session("me-uuid")
-    # A stale/hand-edited file in a swept partition must not abort the sweep.
-    bad = store.ensure_inbox_dir("projects/alpha") / "20990101T000000Z-bbbb__broken.md"
-    bad.write_text("not a valid message\n", encoding="utf-8")
-    digest = service.deliver(_ctx(), mode="full")
-    assert mid in digest
+    mid = service.send(service.SendRequest(
+        from_project="o", from_session="s", from_uuid="sender",
+        to_kind="project", to_value="alpha", to_partition="projects/alpha",
+        subject="team ping", body="b", attachments=[], thread=None,
+    ))
+    a = _ctx(uuid="sess-A", project="alpha", partition="projects/alpha")
+    b = _ctx(uuid="sess-B", project="alpha", partition="projects/alpha")
+    d_a = service.deliver(a, mode="full")
+    d_b = service.deliver(b, mode="full")
+    assert mid in d_a and mid not in d_b          # first reader wins the digest line
+    read = service.read_one(mid)
+    assert read is not None and read.read_by_uuid == "sess-A"
 
 
 def _send_to_session_in_tmp(
@@ -217,7 +219,6 @@ def test_archive_moves_message(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) 
     result = service.read_one(mid)
     assert result is not None
     assert result.status == "archived"
-    assert list((tmp_path / "projects" / "alpha" / "archive").rglob("*.md"))
 
 
 def test_archive_blocked_while_claim_lock_held(

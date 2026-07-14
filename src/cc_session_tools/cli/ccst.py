@@ -18,14 +18,20 @@ Current subcommands:
   shell install                  Add the ccl() wrapper function to ~/.bashrc /
                                  ~/.zshrc between sentinel markers.
   shell uninstall                Remove the ccl() block from shell rc files.
-  tags migrate                   Migrate .tag files from ~/.claude/projects/**/*.tag
-                                 to ~/.cache/claude/session-tags/ (copy only;
-                                 source files not deleted — run the printed
-                                 find ... -delete after review).
-  telemetry trim                 Trim ~/.cache/claude/logs/fires.jsonl by size / age.
+  sessions migrate               One-shot migration of the flat tag cache,
+                                 activity sentinels, and cc-doctor-mutes.json
+                                 into sessions.db. Non-destructive; never
+                                 deletes old files automatically.
+  sessions list                  List all sessions recorded in sessions.db
+                                 (debug/inspection; --json for scripting).
+  telemetry trim                 Trim telemetry.db by size / age (see ccst telemetry trim --help).
+  telemetry query                Query recent hook fires from telemetry.db (see
+                                 ccst telemetry query --help).
   gc report                      Report orphaned per-session-uuid entries across the
                                  scheduler, messaging, and session-env stores (never
                                  deletes anything).
+  migrate ccsched                Migrate ccsched flat-file stores into ccsched.db
+                                 (verify + tar-backup old files before removal).
   claude-md install              Add/update the inter-session-messaging block in
                                  ~/.claude/CLAUDE.md.
   claude-md uninstall            Remove the messaging block from CLAUDE.md.
@@ -64,7 +70,7 @@ HOOK_VERBS: dict[str, str] = {
 
 
 HOOK_DESCRIPTIONS: dict[str, str] = {
-    "bash-hard-deny": "Hard-deny gate for Bash: blocks deletes, delete-by-move, gh/curl mutations, sudo, opentabs self-approval, fires.jsonl reads; auto-allows the rest (PreToolUse, Bash)",
+    "bash-hard-deny": "Hard-deny gate for Bash: blocks deletes, delete-by-move, gh/curl mutations, sudo, opentabs self-approval, telemetry-log reads (telemetry.db/fires.jsonl); auto-allows the rest (PreToolUse, Bash)",
     "bash-security-review": "Reviews shell commands for security risks (tiered: allowlist, heuristics, LLM)",
     "marker-allow": "Auto-approves a bare `touch` of a skill marker under ~/.cache/claude/markers/ (PreToolUse, Bash)",
     "confirm-8digit": "Enforces an 8-digit confirmation gate before risky tool calls",
@@ -743,6 +749,26 @@ def _cmd_telemetry_trim(args: argparse.Namespace) -> int:
     return trim_main(argv)
 
 
+def _cmd_telemetry_query(args: argparse.Namespace) -> int:
+    from cccs_hooks.telemetry_query import main as query_main
+
+    argv: list[str] = []
+    if args.hook is not None:
+        argv += ["--hook", args.hook]
+    if args.decision is not None:
+        argv += ["--decision", args.decision]
+    if args.verdict is not None:
+        argv += ["--verdict", args.verdict]
+    if args.since is not None:
+        argv += ["--since", args.since]
+    if args.limit != 50:
+        argv += ["--limit", str(args.limit)]
+    if getattr(args, "hooks_dir", None):
+        argv += ["--hooks-dir", args.hooks_dir]
+
+    return query_main(argv)
+
+
 # ---------- gc report ----------
 
 
@@ -768,19 +794,85 @@ def _cmd_hooks_run(args: argparse.Namespace) -> int:
     return int(rc) if rc is not None else 0
 
 
-# ---------- tags migrate ----------
+# ---------- sessions migrate / list ----------
 
 
-def _cmd_tags_migrate(args: argparse.Namespace) -> int:
-    from cc_session_tools.cli.migrate_session_tags import main as migrate_main
+def _cmd_sessions_migrate(args: argparse.Namespace) -> int:
+    from cc_session_tools.cli.migrate_sessions_db import DEFAULT_MUTES_FILE, DEFAULT_TAGS_DIR, run_migration
+    from cc_session_tools.lib import sessions_db
+    from cc_session_tools.lib.roots import RootsConfigError, load_session_roots
+
+    db_path = Path(args.sessions_db) if args.sessions_db else sessions_db.default_db_path()
+    tags_dir = Path(args.tags_dir) if args.tags_dir else DEFAULT_TAGS_DIR
+    mutes_file = Path(args.mutes_file) if args.mutes_file else DEFAULT_MUTES_FILE
+
+    try:
+        roots = load_session_roots()
+    except RootsConfigError as e:
+        print(str(e), file=sys.stderr)
+        return 1
+
+    backup_dir = sessions_db.default_db_path().parent / "migration-backups"
+    return run_migration(
+        dry_run=args.dry_run, db_path=db_path, tags_dir=tags_dir,
+        mutes_file=mutes_file, roots=roots, backup_dir=backup_dir,
+    )
+
+
+def _cmd_sessions_list(args: argparse.Namespace) -> int:
+    from cc_session_tools.lib import sessions_db
+
+    db_path = Path(args.sessions_db) if args.sessions_db else None
+    rows = sessions_db.list_sessions(path=db_path)
+    if not rows:
+        print("No sessions recorded in sessions.db.")
+        return 0
+
+    rows = sorted(rows, key=lambda r: r.start_date, reverse=True)
+    if args.json:
+        import json as _json
+        print(_json.dumps([
+            {
+                "basename": r.basename,
+                "project_dir": str(r.project_dir),
+                "start_date": r.start_date,
+                "last_opened": r.last_opened,
+                "last_active": r.last_active,
+            }
+            for r in rows
+        ]))
+        return 0
+
+    name_w = max(len(r.basename) for r in rows)
+    for r in rows:
+        print(
+            f"{r.basename:<{name_w}}  "
+            f"opened={_fmt_ts(r.last_opened)}  active={_fmt_ts(r.last_active)}  "
+            f"{r.project_dir}"
+        )
+    return 0
+
+
+def _fmt_ts(epoch: float) -> str:
+    if not epoch:
+        return "(never)"
+    import datetime as _dt
+    return _dt.datetime.fromtimestamp(epoch).strftime("%Y-%m-%d %H:%M")
+
+
+# ---------- migrate ccsched ----------
+
+
+def _cmd_migrate_ccsched(args: argparse.Namespace) -> int:
+    from cc_session_tools.cli.migrate_ccsched import main as migrate_main
 
     argv: list[str] = []
-    if getattr(args, "dry_run", False):
+    if args.old_dir:
+        argv += ["--old-dir", args.old_dir]
+    if args.backup_dir:
+        argv += ["--backup-dir", args.backup_dir]
+    if args.dry_run:
         argv.append("--dry-run")
-    if getattr(args, "tags_dir", None):
-        argv += ["--tags-dir", args.tags_dir]
-    if getattr(args, "projects_dir", None):
-        argv += ["--projects-dir", args.projects_dir]
     return migrate_main(argv)
 
 
@@ -1054,7 +1146,8 @@ def _build_parser() -> argparse.ArgumentParser:
         "--mutes-file",
         metavar="PATH",
         default=None,
-        help="Mute-store path (default: ~/.claude/cc-doctor-mutes.json)",
+        help="Mute-store sessions.db path (default: ~/.local/share/claude/sessions.db, "
+             "or $CCST_SESSIONS_DIR)",
     )
     doctor_parser.add_argument(
         "mode",
@@ -1108,19 +1201,19 @@ def _build_parser() -> argparse.ArgumentParser:
 
     telemetry_trim_parser = telemetry_sub.add_parser(
         "trim",
-        help="Trim ~/.cache/claude/logs/fires.jsonl by size and/or age",
+        help="Trim telemetry.db by size and/or age",
     )
     telemetry_trim_parser.add_argument(
         "--max-size",
         type=float,
         metavar="MB",
-        help="Rotate fires.jsonl when it exceeds this size in MB",
+        help="Delete the oldest rows until the DB is under this size in MB (lossy)",
     )
     telemetry_trim_parser.add_argument(
         "--max-age-days",
         type=int,
         metavar="N",
-        help="Drop lines older than N days",
+        help="Delete rows older than N days",
     )
     telemetry_trim_parser.add_argument(
         "--dry-run",
@@ -1131,7 +1224,34 @@ def _build_parser() -> argparse.ArgumentParser:
         "--hooks-dir",
         default=None,
         metavar="DIR",
-        help="Logs directory (default: ~/.cache/claude/logs/)",
+        help="telemetry.db directory (default: CCCS_HOOKS_DIR or ~/.local/share/claude/)",
+    )
+
+    telemetry_query_parser = telemetry_sub.add_parser(
+        "query",
+        help="Query recent hook fires from telemetry.db's telemetry_events table",
+    )
+    telemetry_query_parser.add_argument(
+        "--hook", default=None, metavar="NAME", help="Filter by exact hook name",
+    )
+    telemetry_query_parser.add_argument(
+        "--decision", default=None, choices=["allow", "deny", "annotate"],
+        help="Filter by decision",
+    )
+    telemetry_query_parser.add_argument(
+        "--verdict", default=None, metavar="VERDICT",
+        help="Filter by exact verdict text (e.g. safe, suspicious, dangerous)",
+    )
+    telemetry_query_parser.add_argument(
+        "--since", default=None, metavar="DURATION",
+        help="Only events at or after now-DURATION, e.g. 1h, 30m, 2d, 1w",
+    )
+    telemetry_query_parser.add_argument(
+        "--limit", type=int, default=50, metavar="N", help="Max rows to print (default: 50)",
+    )
+    telemetry_query_parser.add_argument(
+        "--hooks-dir", default=None, metavar="DIR",
+        help="telemetry.db directory (default: CCCS_HOOKS_DIR or ~/.local/share/claude/)",
     )
 
     # ---- gc ----
@@ -1172,38 +1292,60 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Session-env directory (default: ~/.claude/session-env/)",
     )
 
-    # ---- tags ----
-    tags_parser = sub.add_parser("tags", help="Tag file management commands")
-    tags_sub = tags_parser.add_subparsers(dest="verb", metavar="<verb>")
-    tags_sub.required = True
+    # ---- sessions ----
+    sessions_parser = sub.add_parser("sessions", help="sessions.db management commands")
+    sessions_sub = sessions_parser.add_subparsers(dest="verb", metavar="<verb>")
+    sessions_sub.required = True
 
-    tags_migrate_parser = tags_sub.add_parser(
+    sessions_migrate_parser = sessions_sub.add_parser(
         "migrate",
         help=(
-            "Migrate .tag files from ~/.claude/projects/**/*.tag to "
-            "~/.cache/claude/session-tags/ (copy only; source files not deleted)"
+            "One-shot migration of the flat tag cache, activity sentinels, and "
+            "cc-doctor-mutes.json into sessions.db. Non-destructive — never "
+            "deletes old files automatically."
         ),
     )
-    tags_migrate_parser.add_argument(
-        "--dry-run",
-        action="store_true",
-        help="Print what would be copied without writing anything.",
+    sessions_migrate_parser.add_argument(
+        "--dry-run", action="store_true",
+        help="Print what would be migrated without writing anything.",
     )
-    tags_migrate_parser.add_argument(
-        "--tags-dir",
-        default=None,
-        metavar="PATH",
-        help=(
-            "Override destination directory "
-            "(default: from CCCS_SESSION_TAGS_DIR or ~/.cache/claude/session-tags/)"
-        ),
+    sessions_migrate_parser.add_argument(
+        "--sessions-db", default=None, metavar="PATH",
+        help="Destination sessions.db path (default: from CCST_SESSIONS_DIR or "
+             "~/.local/share/claude/sessions.db)",
     )
-    tags_migrate_parser.add_argument(
-        "--projects-dir",
-        default=None,
-        metavar="PATH",
-        help="Override source projects directory (default: ~/.claude/projects/)",
+    sessions_migrate_parser.add_argument(
+        "--tags-dir", default=None, metavar="PATH",
+        help="Source flat tags dir (default: ~/.cache/claude/session-tags/)",
     )
+    sessions_migrate_parser.add_argument(
+        "--mutes-file", default=None, metavar="PATH",
+        help="Source doctor-mutes JSON file (default: ~/.claude/cc-doctor-mutes.json)",
+    )
+
+    sessions_list_parser = sessions_sub.add_parser(
+        "list",
+        help="List all sessions recorded in sessions.db (debug/inspection).",
+    )
+    sessions_list_parser.add_argument(
+        "--sessions-db", default=None, metavar="PATH",
+        help="sessions.db path override (default: from CCST_SESSIONS_DIR)",
+    )
+    sessions_list_parser.add_argument(
+        "--json", action="store_true",
+        help="Output as a JSON array instead of a formatted table.",
+    )
+
+    # ---- migrate ----
+    migrate_parser = sub.add_parser("migrate", help="One-shot data-store migrations")
+    migrate_sub = migrate_parser.add_subparsers(dest="verb", metavar="<verb>")
+    migrate_sub.required = True
+    m_ccsched = migrate_sub.add_parser(
+        "ccsched",
+        help="Migrate ccsched flat-file stores into ccsched.db (non-destructive)")
+    m_ccsched.add_argument("--old-dir", default=None, metavar="PATH")
+    m_ccsched.add_argument("--backup-dir", default=None, metavar="PATH")
+    m_ccsched.add_argument("--dry-run", action="store_true")
 
     # ---- claude-md ----
     cmd_parser = sub.add_parser("claude-md", help="Manage the global CLAUDE.md messaging block")
@@ -1274,14 +1416,22 @@ def main() -> None:
     if args.noun == "telemetry":
         if args.verb == "trim":
             sys.exit(_cmd_telemetry_trim(args))
+        if args.verb == "query":
+            sys.exit(_cmd_telemetry_query(args))
 
     if args.noun == "gc":
         if args.verb == "report":
             sys.exit(_cmd_gc_report(args))
 
-    if args.noun == "tags":
+    if args.noun == "sessions":
         if args.verb == "migrate":
-            sys.exit(_cmd_tags_migrate(args))
+            sys.exit(_cmd_sessions_migrate(args))
+        if args.verb == "list":
+            sys.exit(_cmd_sessions_list(args))
+
+    if args.noun == "migrate":
+        if args.verb == "ccsched":
+            sys.exit(_cmd_migrate_ccsched(args))
 
     if args.noun == "claude-md":
         if args.verb == "install":

@@ -1,17 +1,15 @@
 # src/cc_session_tools/lib/messaging/store.py
 """Message store layout: root resolution, partition derivation, id and slug
-generation, and lazy directory creation.
+generation.
 
 Store layout (under ``store_root()``)::
 
-    <root>/projects/<name>/{inbox,archive/YYYY-MM}/
-    <root>/repos/<name>/{inbox,archive/YYYY-MM}/
-    <root>/other-paths/<slug>/{inbox,archive/YYYY-MM}/   # keyed on path slug
-    <root>/_global/{inbox,archive/YYYY-MM}/              # description + broadcast
-    <root>/.cursors/<session-uuid>.json
+    <root>/ccmsg.db
 
-Partition strings are POSIX-style relative paths (``"projects/alpha"``) so they
-are stable cursor keys and store-portable.
+A single WAL-mode SQLite database holds every message row and the per-session
+delivery cursors; ``repository.py`` owns all SQL. Partition strings are
+POSIX-style relative paths (``"projects/alpha"``) kept as the ``to_location``
+routing column and as stable cursor keys.
 """
 from __future__ import annotations
 
@@ -22,6 +20,7 @@ import secrets
 from datetime import datetime, timezone
 from pathlib import Path
 
+from cc_session_tools.lib import paths
 from cc_session_tools.lib.roots import (
     RootsConfigError,
     is_strict_root,
@@ -33,19 +32,23 @@ from cc_session_tools.lib.roots import (
 
 STORE_ROOT_ENV = "CCST_MESSAGES_ROOT"
 GLOBAL_PARTITION = "_global"
-CURSORS_DIRNAME = ".cursors"
+DB_FILENAME = "ccmsg.db"
 
 _SLUG_MAX = 31
 _SLUG_NON_ALNUM = re.compile(r"[^a-z0-9]+")
 
 
 def store_root() -> Path:
-    """Resolve the message-store root. ``CCST_MESSAGES_ROOT`` overrides the
-    default ``~/.claude/cc-messages`` (tests redirect via the env var)."""
+    """Directory holding ``ccmsg.db``. ``CCST_MESSAGES_ROOT`` overrides the
+    default ``paths.data_home()`` (tests redirect via the env var)."""
     raw = os.environ.get(STORE_ROOT_ENV)
     if raw:
         return Path(raw).expanduser()
-    return Path.home() / ".claude" / "cc-messages"
+    return paths.data_home()
+
+
+def db_path() -> Path:
+    return store_root() / DB_FILENAME
 
 
 def generate_id() -> str:
@@ -108,32 +111,3 @@ def partition_for_project(name: str) -> str:
     if rr is not None and (rr / name).is_dir():
         return partition_for_cwd(rr / name)
     return GLOBAL_PARTITION
-
-
-def partition_dir(partition: str) -> Path:
-    """Absolute directory for a partition string under the store root."""
-    return store_root() / partition
-
-
-def ensure_inbox_dir(partition: str) -> Path:
-    inbox = partition_dir(partition) / "inbox"
-    inbox.mkdir(parents=True, exist_ok=True)
-    return inbox
-
-
-def archive_dir(partition: str, when: datetime) -> Path:
-    month = when.strftime("%Y-%m")
-    d = partition_dir(partition) / "archive" / month
-    d.mkdir(parents=True, exist_ok=True)
-    return d
-
-
-def cursors_dir() -> Path:
-    d = store_root() / CURSORS_DIRNAME
-    d.mkdir(parents=True, exist_ok=True)
-    return d
-
-
-def message_filename(message_id: str, subject: str) -> str:
-    """``<sortable-id>__<slug>.md`` — id is the routing key, slug is cosmetic."""
-    return f"{message_id}__{slug_subject(subject)}.md"

@@ -1,148 +1,110 @@
-"""jobs.toml registry I/O. Reads with stdlib tomllib; writes with a small,
-schema-specific serialiser (the registry shape is fully controlled here). Each
-record is validated through jobspec.validate_job_fields on load; duplicate ids
-and malformed TOML raise RegistryError."""
+"""jobs registry, backed by the `jobs` table in ccsched.db. Each mutator is a
+single-row INSERT/UPDATE/DELETE inside its own transaction, so concurrent edits
+to different jobs never silently clobber each other (R1) — unlike the old
+whole-file jobs.toml rewrite. Rows are written already-validated at the CLI
+boundary, so load builds JobSpec directly without re-validating."""
 from __future__ import annotations
 
-import tomllib
-from pathlib import Path
-from typing import cast
+import json
+import sqlite3
 
-from cc_session_tools.lib.scheduler.jobspec import (
-    JobSpec,
-    JobValidationError,
-    validate_job_fields,
-)
-from cc_session_tools.lib.scheduler.state import scheduler_dir
-
-_GENERATED_HEADER = (
-    "# cc-scheduler job registry. Hand-editable; also written by `ccsched`.\n"
-    "# Serialised by cc_session_tools.lib.scheduler.registry.\n"
-)
-_DEFAULTS = {
-    "coalesce": "one",
-    "surface": True,
-    "enabled": True,
-    "catchup_window": "7d",
-    "timeout": "120s",
-}
+from cc_session_tools.lib.scheduler import store
+from cc_session_tools.lib.scheduler.jobspec import CoalesceKind, JobSpec
 
 
 class RegistryError(ValueError):
-    """Raised for unparseable jobs.toml, duplicate ids, or unknown-id mutations."""
+    """Raised for duplicate ids, unknown-id mutations, or an unreadable DB."""
 
 
-def registry_path() -> Path:
-    return scheduler_dir() / "jobs.toml"
-
-
-def _spec_from_table(table: dict[str, object]) -> JobSpec:
-    try:
-        return validate_job_fields(
-            job_id=str(table["id"]),
-            cadence=str(table["cadence"]),
-            coalesce=str(table.get("coalesce", _DEFAULTS["coalesce"])),
-            command=[str(x) for x in cast(list[object], table["command"])],
-            surface=bool(table.get("surface", _DEFAULTS["surface"])),
-            enabled=bool(table.get("enabled", _DEFAULTS["enabled"])),
-            catchup_window=str(table.get("catchup_window", _DEFAULTS["catchup_window"])),
-            timeout=str(table.get("timeout", _DEFAULTS["timeout"])),
-        )
-    except KeyError as exc:
-        raise RegistryError(f"job table missing required field: {exc}") from exc
-    except JobValidationError as exc:
-        raise RegistryError(f"invalid job in jobs.toml: {exc}") from exc
+def _spec_from_row(row: sqlite3.Row) -> JobSpec:
+    return JobSpec(
+        job_id=row["job_id"],
+        cadence=row["cadence"],
+        coalesce=CoalesceKind(row["coalesce_kind"]),
+        command=tuple(json.loads(row["command"])),
+        surface=bool(row["surface"]),
+        enabled=bool(row["enabled"]),
+        catchup_window=row["catchup_window"],
+        timeout=row["timeout"],
+    )
 
 
 def load_registry() -> list[JobSpec]:
-    path = registry_path()
-    if not path.is_file():
-        return []
     try:
-        data = tomllib.loads(path.read_text())
-    except tomllib.TOMLDecodeError as exc:
-        raise RegistryError(f"jobs.toml is not valid TOML: {exc}") from exc
-    specs: list[JobSpec] = []
-    seen: set[str] = set()
-    for table in data.get("job", []):
-        spec = _spec_from_table(table)
-        if spec.job_id in seen:
-            raise RegistryError(f"duplicate job id in jobs.toml: {spec.job_id!r}")
-        seen.add(spec.job_id)
-        specs.append(spec)
-    return specs
-
-
-def _toml_str(value: str) -> str:
-    return '"' + value.replace("\\", "\\\\").replace('"', '\\"') + '"'
-
-
-def _serialise(specs: list[JobSpec]) -> str:
-    blocks: list[str] = [_GENERATED_HEADER]
-    for s in specs:
-        cmd = ", ".join(_toml_str(part) for part in s.command)
-        blocks.append(
-            "[[job]]\n"
-            f"id = {_toml_str(s.job_id)}\n"
-            f"cadence = {_toml_str(s.cadence)}\n"
-            f"coalesce = {_toml_str(s.coalesce.value)}\n"
-            f"command = [{cmd}]\n"
-            f"surface = {str(s.surface).lower()}\n"
-            f"enabled = {str(s.enabled).lower()}\n"
-            f"catchup_window = {_toml_str(s.catchup_window)}\n"
-            f"timeout = {_toml_str(s.timeout)}\n"
-        )
-    return "\n".join(blocks)
-
-
-def _write(specs: list[JobSpec]) -> None:
-    target = scheduler_dir()
-    target.mkdir(parents=True, exist_ok=True)
-    path = registry_path()
-    tmp = path.with_suffix(".toml.tmp")
-    tmp.write_text(_serialise(specs))
-    tmp.replace(path)
+        conn = store.connect()
+        try:
+            rows = conn.execute(
+                "SELECT job_id, cadence, coalesce_kind, command, surface, enabled, "
+                "catchup_window, timeout FROM jobs ORDER BY rowid"
+            ).fetchall()
+        finally:
+            conn.close()
+    except sqlite3.DatabaseError as exc:
+        # A corrupt/unreadable ccsched.db surfaces either at connect() (the WAL
+        # pragma) or at the query; wrap so the reconcile boundary's
+        # `except RegistryError` still degrades the hook to a digest warning
+        # instead of crashing the session.
+        raise RegistryError(f"ccsched.db is unreadable: {exc}") from exc
+    return [_spec_from_row(r) for r in rows]
 
 
 def add_job(spec: JobSpec) -> None:
-    specs = load_registry()
-    if any(s.job_id == spec.job_id for s in specs):
-        raise RegistryError(f"job id already exists: {spec.job_id!r}")
-    specs.append(spec)
-    _write(specs)
+    conn = store.connect()
+    try:
+        conn.execute(
+            "INSERT INTO jobs (job_id, cadence, coalesce_kind, command, surface, "
+            "enabled, catchup_window, timeout) VALUES (?,?,?,?,?,?,?,?)",
+            (
+                spec.job_id, spec.cadence, spec.coalesce.value,
+                json.dumps(list(spec.command)), int(spec.surface), int(spec.enabled),
+                spec.catchup_window, spec.timeout,
+            ),
+        )
+        conn.commit()
+    except sqlite3.IntegrityError as exc:
+        raise RegistryError(f"job id already exists: {spec.job_id!r}") from exc
+    finally:
+        conn.close()
 
 
 def replace_job(spec: JobSpec) -> None:
-    specs = load_registry()
-    if not any(s.job_id == spec.job_id for s in specs):
-        raise RegistryError(f"unknown job id: {spec.job_id!r}")
-    _write([spec if s.job_id == spec.job_id else s for s in specs])
+    conn = store.connect()
+    try:
+        cur = conn.execute(
+            "UPDATE jobs SET cadence=?, coalesce_kind=?, command=?, surface=?, "
+            "enabled=?, catchup_window=?, timeout=? WHERE job_id=?",
+            (
+                spec.cadence, spec.coalesce.value, json.dumps(list(spec.command)),
+                int(spec.surface), int(spec.enabled), spec.catchup_window,
+                spec.timeout, spec.job_id,
+            ),
+        )
+        conn.commit()
+        if cur.rowcount == 0:
+            raise RegistryError(f"unknown job id: {spec.job_id!r}")
+    finally:
+        conn.close()
 
 
 def remove_job(job_id: str) -> None:
-    specs = load_registry()
-    kept = [s for s in specs if s.job_id != job_id]
-    if len(kept) == len(specs):
-        raise RegistryError(f"unknown job id: {job_id!r}")
-    _write(kept)
+    conn = store.connect()
+    try:
+        cur = conn.execute("DELETE FROM jobs WHERE job_id=?", (job_id,))
+        conn.commit()
+        if cur.rowcount == 0:
+            raise RegistryError(f"unknown job id: {job_id!r}")
+    finally:
+        conn.close()
 
 
 def set_enabled(job_id: str, enabled: bool) -> None:
-    specs = load_registry()
-    found = False
-    new: list[JobSpec] = []
-    for s in specs:
-        if s.job_id == job_id:
-            found = True
-            new.append(
-                JobSpec(
-                    job_id=s.job_id, cadence=s.cadence, coalesce=s.coalesce,
-                    command=s.command, surface=s.surface, enabled=enabled,
-                    catchup_window=s.catchup_window, timeout=s.timeout,
-                )
-            )
-        else:
-            new.append(s)
-    if not found:
-        raise RegistryError(f"unknown job id: {job_id!r}")
-    _write(new)
+    conn = store.connect()
+    try:
+        cur = conn.execute(
+            "UPDATE jobs SET enabled=? WHERE job_id=?", (int(enabled), job_id)
+        )
+        conn.commit()
+        if cur.rowcount == 0:
+            raise RegistryError(f"unknown job id: {job_id!r}")
+    finally:
+        conn.close()

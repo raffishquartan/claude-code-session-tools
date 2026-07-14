@@ -37,7 +37,7 @@ def _add_ok(tmp_path: Path, job_id: str = "tesco") -> subprocess.CompletedProces
 def test_add_happy_path(tmp_path: Path) -> None:
     res = _add_ok(tmp_path)
     assert res.returncode == 0, res.stderr
-    assert (tmp_path / "sched" / "jobs.toml").is_file()
+    assert (tmp_path / "sched" / "ccsched.db").is_file()
 
 
 def test_add_rejects_bad_cadence(tmp_path: Path) -> None:
@@ -123,7 +123,7 @@ def test_run_records_ledger(tmp_path: Path) -> None:
     sched, hooks = _dirs(tmp_path)
     res = _run(["run", "tesco"], sched, hooks)
     assert res.returncode == 0
-    assert (hooks / "fires.jsonl").is_file()
+    assert (hooks / "telemetry.db").is_file()
 
 
 def test_status_empty_ok(tmp_path: Path) -> None:
@@ -138,19 +138,19 @@ def test_sweep_runs(tmp_path: Path) -> None:
     assert _run(["sweep"], sched, hooks).returncode == 0
 
 
-def test_run_job_worker_executes_and_records(tmp_path: Path) -> None:
+def test_run_job_worker_executes_and_records(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     # The internal _run-job worker runs the command synchronously in its own
     # process and records to the ledger. `true` exits 0 -> a run/backfill event.
     _add_ok(tmp_path)
     sched, hooks = _dirs(tmp_path)
     res = _run(["_run-job", "tesco", "--instants", "1"], sched, hooks)
     assert res.returncode == 0, res.stderr
-    assert (hooks / "fires.jsonl").is_file()
+    assert (hooks / "telemetry.db").is_file()
     # state advanced (last_success set) and in_flight cleared.
-    import json
-    state = json.loads((sched / "state.json").read_text())
-    assert state["tesco"]["last_success"] is not None
-    assert state["tesco"]["in_flight"] is None
+    monkeypatch.setenv("CC_SCHEDULER_DIR", str(sched))
+    after = st.load_all_state()["tesco"]
+    assert after.last_success is not None
+    assert after.in_flight is None
 
 
 def test_run_job_unknown_id_errors(tmp_path: Path) -> None:

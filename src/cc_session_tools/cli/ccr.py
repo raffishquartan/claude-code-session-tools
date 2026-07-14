@@ -51,26 +51,19 @@ def main(argv: list[str] | None = None) -> int:
     roots = load_session_roots()
 
     # Exact-match fast-path: if fragment looks like a full basename, try a
-    # direct directory lookup before falling back to substring search.  This
+    # direct sessions.db lookup before falling back to substring search. This
     # prevents "20260504-foo" from being treated as ambiguous when
     # "20260504-foo-bar" also exists.
     exact_match: SessionMatch | None = None
     if SESSION_FULL_RE.fullmatch(args.fragment):
-        for root in roots:
-            if not root.is_dir():
-                continue
-            for proj in root.iterdir():
-                if not proj.is_dir():
-                    continue
-                candidate = proj / "cc-sessions" / args.fragment
-                if candidate.is_dir():
-                    exact_match = SessionMatch(
-                        basename=args.fragment,
-                        project_dir=proj,
-                        session_dir=candidate,
-                    )
-                    break
-            if exact_match:
+        from cc_session_tools.lib import sessions_db
+        for row in sessions_db.find_exact(args.fragment):
+            if row.project_dir.parent in roots:
+                exact_match = SessionMatch(
+                    basename=row.basename,
+                    project_dir=row.project_dir,
+                    session_dir=row.project_dir / "cc-sessions" / row.basename,
+                )
                 break
 
     matches = [exact_match] if exact_match else find_matching_sessions(args.fragment, roots)
@@ -120,6 +113,14 @@ def main(argv: list[str] | None = None) -> int:
             f"(orphan transcript only)",
             file=sys.stderr,
         )
+    elif not m.session_dir.is_dir():
+        print(
+            f"ccr: session directory for '{m.basename}' no longer exists on disk "
+            "(stale sessions.db entry). Run 'ccst sessions migrate' to resync, or "
+            "pass --include-orphans if a transcript may still be resumable.",
+            file=sys.stderr,
+        )
+        return 1
 
     tag = session_tag(m.basename)
     if tag is None:
