@@ -190,6 +190,9 @@ def main(argv: list[str] | None = None) -> int:
     (session_dir / "working").mkdir(parents=True, exist_ok=True)
     (session_dir / "out").mkdir(parents=True, exist_ok=True)
 
+    from cc_session_tools.lib import sessions_db
+    sessions_db.ensure_session_row(real_pwd, session_name)
+
     # Build env for the SessionStart hook + task list. Drop any inherited
     # CLAUDE_CODE_TASK_LIST_ID so the new one (or absence of one) is authoritative.
     env = os.environ.copy()
