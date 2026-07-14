@@ -618,6 +618,25 @@ def _cmd_doctor(args: argparse.Namespace) -> int:
         "CLAUDE_SESSION_TOOLS_PROJ_ROOT": os.environ.get("CLAUDE_SESSION_TOOLS_PROJ_ROOT"),
     }
 
+    # The six migrated/new data stores (data-store SQLite uplift). Each accessor
+    # resolves its own env-var override; three already return a full file path,
+    # the two directory accessors get their .db filename appended.
+    from cc_session_tools.lib.scheduler.store import scheduler_dir      # Phase 3 (moved here from .state)
+    from cc_session_tools.lib.messaging.store import store_root         # Phase 2
+    from cc_session_tools.lib.sessions_db import default_db_path as sessions_db_path  # Phase 4 (full .db path)
+    from cc_session_tools.lib import telemetry_store                    # Phase 5 (db_path() -> full .db path)
+    from cccs_hooks.cache import _db_path as command_cache_db_path      # Phase 6 (replaces deleted _DEFAULT_DB)
+    from cc_session_tools.lib.claude_flags import _cache_file as claude_flags_file  # Phase 6 (full .json path)
+
+    store_paths = {
+        "ccmsg": store_root() / "ccmsg.db",
+        "ccsched": scheduler_dir() / "ccsched.db",
+        "sessions": sessions_db_path(),
+        "telemetry": telemetry_store.db_path(),
+        "command-cache": command_cache_db_path(),
+        "claude-flags": claude_flags_file(),
+    }
+
     results = run_all_checks(
         installed_version=__version__,
         settings_path=settings_path,
@@ -626,6 +645,7 @@ def _cmd_doctor(args: argparse.Namespace) -> int:
         skills_target_dir=skills_target_dir,
         env=env_vars,
         skip_pypi=args.no_pypi,
+        store_paths=store_paths,
     )
 
     if args.drift or getattr(args, "mode", None) == "drift":
@@ -780,6 +800,7 @@ def _cmd_gc_report(args: argparse.Namespace) -> int:
         scheduler_dir=Path(args.scheduler_dir) if args.scheduler_dir else None,
         messages_root=Path(args.messages_root) if args.messages_root else None,
         session_env_dir=Path(args.session_env_dir) if args.session_env_dir else None,
+        sessions_dir=Path(args.sessions_dir) if args.sessions_dir else None,
     )
     print(format_report(report))
     return 0
@@ -1263,8 +1284,8 @@ def _build_parser() -> argparse.ArgumentParser:
         "report",
         help=(
             "Report orphaned per-session-uuid entries across the scheduler, "
-            "messaging, and session-env stores. Report-only — never deletes "
-            "or modifies anything."
+            "messaging, session-env, and sessions-index stores. Report-only "
+            "— never deletes or modifies anything."
         ),
     )
     gc_report_parser.add_argument(
@@ -1277,19 +1298,25 @@ def _build_parser() -> argparse.ArgumentParser:
         "--scheduler-dir",
         default=None,
         metavar="PATH",
-        help="Scheduler directory (default: from CC_SCHEDULER_DIR or ~/.claude/cc-scheduler/)",
+        help="Scheduler directory holding ccsched.db (default: from CC_SCHEDULER_DIR or data_home())",
     )
     gc_report_parser.add_argument(
         "--messages-root",
         default=None,
         metavar="PATH",
-        help="Messaging store root (default: from CCST_MESSAGES_ROOT or ~/.claude/cc-messages/)",
+        help="Messaging store directory holding ccmsg.db (default: from CCST_MESSAGES_ROOT or data_home())",
     )
     gc_report_parser.add_argument(
         "--session-env-dir",
         default=None,
         metavar="PATH",
         help="Session-env directory (default: ~/.claude/session-env/)",
+    )
+    gc_report_parser.add_argument(
+        "--sessions-dir",
+        default=None,
+        metavar="PATH",
+        help="Directory holding sessions.db (default: from CCST_SESSIONS_DIR or data_home())",
     )
 
     # ---- sessions ----

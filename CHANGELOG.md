@@ -7,6 +7,68 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.19.0] - 2026-07-14
+
+### Added
+
+- **SQLite data-store migration.** Six flat-file/JSONL/TOML stores moved to
+  SQLite (WAL mode) under the new `~/.local/share/claude/` root, each opened
+  through a shared connection-setup helper (`cc_session_tools.lib.db.connect()`)
+  instead of ad hoc pragma setup per module:
+  - `ccmsg` → `ccmsg.db` — closes a retention/claim race (messages could be
+    archived out from under an in-flight claim).
+  - `ccsched` → `ccsched.db` — closes several registry/state races; per-row
+    transactional writes replace whole-file read-modify-write.
+  - Session-tag cache + `.last-opened`/`.last-active` activity sentinels +
+    doctor-mutes → `sessions.db`. `ccl`/`ccr`/`ccs` session enumeration and
+    "most recent N" matching now run one indexed `ORDER BY ... LIMIT` query
+    instead of an O(roots × projects × sessions) filesystem walk; `ccs`/`ccr`
+    gained a `--limit`/`-n` flag.
+  - `~/.cache/claude/logs/fires.jsonl` (+ rotation) → `telemetry.db`. Fixes a
+    pre-existing rotation/cursor-desync bug by switching the catch-up cursor
+    to a monotonic row id. New `ccst telemetry query` command (filters on
+    hook name, verdict, decision, time range).
+  - `command-cache.db` and `claude-flags.json` relocated under the new root;
+    `claude-flags.json`'s write is now atomic (previously a plain
+    non-atomic write).
+- **`ccst sessions migrate`** replaces the retired `ccst tags migrate`,
+  migrating all three legacy session stores (tag cache, activity sentinels,
+  doctor-mutes) into `sessions.db` in one non-destructive, dry-run-capable
+  pass.
+- **One-shot migration scripts** for each moved store
+  (`scripts/migrate_ccmsg_to_db.py`, `migrate_ccsched.py`,
+  `migrate_sessions_db.py`, `migrate_fires_jsonl_to_telemetry_db.py`), each
+  following write → verify → tar-backup → (manual) delete — no store is
+  auto-deleted by a migration script.
+- **`ccst doctor`** gained a data-stores health check (`check_data_stores`)
+  confirming all six stores can be opened.
+- **`ccst gc report`** extractors for `ccmsg.db`, `ccsched.db`, and
+  `sessions.db` replace the flat-file orphan-detection readers they
+  superseded.
+
+### Changed
+
+- `~/.local/share/claude/<subsystem>.db` (SQLite, WAL mode) is now the
+  standard location and format for any new Chris-added data store in this
+  repo — see `.claude/CLAUDE.md`'s "Data store conventions" section.
+
+### Fixed
+
+- `lib/db.connect()`: the just-opened connection handle is now closed if
+  pragma/DDL setup fails (previously leaked on a corrupt-file open).
+- `lib/db.connect()`: the WAL-mode switch now retries on lock instead of
+  immediately raising `SQLITE_BUSY` — SQLite does not honour `busy_timeout`
+  for a journal-mode change, so cold-start concurrency (many processes
+  creating the same fresh `.db` at once) could previously drop a connection.
+- `lib/db.connect(readonly=True)`: the `file:` URI now URL-encodes the path,
+  so a path containing `#`, `?`, or a space can no longer be misparsed.
+- `bash-hard-deny`'s telemetry-log exfiltration guard now also blocks
+  `cat`/`head`/`tail`/`hexdump`/`xxd`/`strings` reads of `telemetry.db`, not
+  just `sqlite3` CLI reads (the cleartext columns were readable either way).
+- `move-session` now keeps `sessions.db` in sync across a session
+  move/rename (previously left a stale source row and no destination row,
+  making the moved session briefly undiscoverable via `ccr`/`ccs`).
+
 ## [0.18.0] - 2026-07-11
 
 ### Added
