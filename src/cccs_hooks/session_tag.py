@@ -1,19 +1,18 @@
-"""SessionStart hook: write <session_id>.tag and emit ccd/ccr session context.
+"""SessionStart hook: records the session tag + .last-opened activity into
+sessions.db, and emits ccd/ccr session context.
 
 When CLD_SESSION_TAG is set (i.e. the session was started via the `ccd` or
 `ccr` shell wrapper), this hook does two things:
 
-1. Writes a small tag file so that ccusage and other tools can map session
-   UUIDs to the human-readable name tag assigned at session creation.
+1. Records session_id -> tag in sessions.db's session_tags table, so ccs/ccr
+   and other tools can map session UUIDs to the human-readable name tag
+   assigned at session creation.
 
-   File written:  ~/.cache/claude/session-tags/<session_id>.tag
-                  (overrideable via CCCS_SESSION_TAGS_DIR env var)
-   File content:  the session name tag, e.g. "oneshot-add-uuid-for-better-usage-mapping\n"
+2. If CLD_SESSION_DIR is set and shaped like <project_dir>/cc-sessions/<basename>,
+   upserts the sessions table's last_opened timestamp for that row (creating
+   the row if it does not already exist — see sessions_db.touch_last_opened).
 
-   The flat layout (<dir>/<uuid>.tag) is viable because session IDs are
-   globally unique UUIDs — no encoded-cwd subdirectory is needed.
-
-2. Emits `additionalContext` (mode-specific for CLD_SESSION_MODE=new vs
+3. Emits `additionalContext` (mode-specific for CLD_SESSION_MODE=new vs
    resume) telling the assistant the tag/session-dir is already set, so it
    skips asking the user for a session name.
 
@@ -26,20 +25,12 @@ from __future__ import annotations
 import json
 import os
 import re
+import sqlite3
 import sys
 from datetime import date
 from pathlib import Path
 
-DEFAULT_SESSION_TAGS_DIR: Path = Path.home() / ".cache" / "claude" / "session-tags"
-
-
-def _session_tags_dir() -> Path:
-    """Return the directory where .tag files are written.
-
-    Overrideable via CCCS_SESSION_TAGS_DIR for testing and migration.
-    """
-    override = os.environ.get("CCCS_SESSION_TAGS_DIR")
-    return Path(override) if override else DEFAULT_SESSION_TAGS_DIR
+from cc_session_tools.lib import sessions_db
 
 
 def encode_path(path: str) -> str:
@@ -52,10 +43,9 @@ def encode_path(path: str) -> str:
         /mnt/c/Users/alice/repos/myproject
                              -> -mnt-c-Users-alice-repos-myproject
 
-    NOTE: encode_path() is no longer used for tag-file writing (tag files now
-    live in the flat ~/.cache/claude/session-tags/ directory keyed by UUID, not
-    by project cwd). It is kept because its documented contract is tested and
-    removing it is a separate cleanup commit.
+    NOTE: encode_path() is not used for tag recording (tags are now uuid-keyed
+    rows in sessions.db, not cwd-encoded paths). It is kept because its
+    documented contract is tested and removing it is a separate cleanup.
     """
     return re.sub(r"[^a-zA-Z0-9]", "-", path)
 
@@ -101,24 +91,25 @@ def main(argv: list[str] | None = None) -> int:
     if not session_id:
         print(
             f"[session-tag] session_id absent from hook payload for tag {tag!r}; "
-            "tag file not written",
+            "tag not recorded",
             file=sys.stderr,
         )
     else:
         try:
-            tags_dir = _session_tags_dir()
-            tags_dir.mkdir(parents=True, exist_ok=True)
-            tag_file = tags_dir / f"{session_id}.tag"
-            tag_file.write_text(tag + "\n")
-        except OSError as exc:
-            print(f"[session-tag] Failed to write tag file: {exc}", file=sys.stderr)
+            sessions_db.write_tag(session_id, tag)
+        except (OSError, sqlite3.Error) as exc:
+            print(f"[session-tag] Failed to record tag: {exc}", file=sys.stderr)
 
     session_dir_str = os.environ.get("CLD_SESSION_DIR", "")
     if session_dir_str:
-        try:
-            Path(session_dir_str).joinpath(".last-opened").touch()
-        except OSError as exc:
-            print(f"[session-tag] Failed to touch .last-opened: {exc}", file=sys.stderr)
+        session_dir_path = Path(session_dir_str)
+        if session_dir_path.parent.name == "cc-sessions":
+            try:
+                sessions_db.touch_last_opened(
+                    session_dir_path.parent.parent, session_dir_path.name
+                )
+            except (OSError, sqlite3.Error) as exc:
+                print(f"[session-tag] Failed to record .last-opened: {exc}", file=sys.stderr)
 
     session_dir = session_dir_str or f"cc-sessions/{date.today():%Y%m%d}-{tag}"
     mode = os.environ.get("CLD_SESSION_MODE", "new")

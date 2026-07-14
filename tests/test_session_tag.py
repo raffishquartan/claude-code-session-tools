@@ -1,12 +1,22 @@
-"""Tests for cccs_hooks.session_tag — SessionStart hook that writes <session_id>.tag files."""
+"""Tests for cccs_hooks.session_tag — SessionStart hook that records tags and
+.last-opened activity into sessions.db."""
 from __future__ import annotations
 
 import json
-from pathlib import Path
 
 import pytest
 
 from cccs_hooks import session_tag
+from cc_session_tools.lib import sessions_db
+
+
+@pytest.fixture(autouse=True)
+def _clear_cld_env(monkeypatch):
+    """Hermeticity: this suite may run inside a real ccd/ccr session whose
+    CLD_SESSION_* env vars would otherwise leak into tests that assume them
+    unset. In CI these are already unset, so this is a no-op there."""
+    for var in ("CLD_SESSION_TAG", "CLD_SESSION_DIR", "CLD_SESSION_MODE"):
+        monkeypatch.delenv(var, raising=False)
 
 
 # ---------------------------------------------------------------------------
@@ -18,7 +28,6 @@ def test_encode_path_replaces_slashes_with_dashes():
 
 
 def test_encode_path_replaces_dots_with_dashes():
-    # /home/alice/.claude -> -home-alice--claude (each non-alnum char → -)
     assert session_tag.encode_path("/home/alice/.claude") == "-home-alice--claude"
 
 
@@ -38,103 +47,42 @@ def test_encode_path_preserves_alphanumeric():
 def test_no_tag_env_returns_zero_and_writes_nothing(tmp_path, monkeypatch):
     monkeypatch.delenv("CLD_SESSION_TAG", raising=False)
     monkeypatch.setattr("sys.stdin", _stdin("{}"))
-    monkeypatch.setenv("CCCS_SESSION_TAGS_DIR", str(tmp_path))
+    monkeypatch.setenv("CCST_SESSIONS_DIR", str(tmp_path))
 
     rc = session_tag.main()
 
     assert rc == 0
-    assert list(tmp_path.rglob("*.tag")) == []
+    assert not (tmp_path / "sessions.db").exists()
 
 
 # ---------------------------------------------------------------------------
 # main() — happy path: session_id present in stdin JSON
 # ---------------------------------------------------------------------------
 
-def test_writes_tag_file_to_tags_dir(tmp_path, monkeypatch):
-    cwd = "/mnt/c/Users/alice/OneDrive/claude/oneshot"
-    payload = json.dumps({"session_id": "abc-123", "cwd": cwd})
+def test_records_tag_in_sessions_db(tmp_path, monkeypatch):
+    payload = json.dumps({"session_id": "abc-123", "cwd": "/some/project"})
     monkeypatch.setenv("CLD_SESSION_TAG", "my-feature")
     monkeypatch.setattr("sys.stdin", _stdin(payload))
-    monkeypatch.setenv("CCCS_SESSION_TAGS_DIR", str(tmp_path))
+    monkeypatch.setenv("CCST_SESSIONS_DIR", str(tmp_path))
 
     rc = session_tag.main()
 
     assert rc == 0
-    # Flat layout: <tags_dir>/<uuid>.tag (no cwd encoding)
-    tag_file = tmp_path / "abc-123.tag"
-    assert tag_file.exists()
-    assert tag_file.read_text() == "my-feature\n"
+    db_path = tmp_path / "sessions.db"
+    assert sessions_db.lookup_tags(["abc-123"], path=db_path) == {"abc-123": "my-feature"}
 
 
-def test_creates_tags_dir_if_absent(tmp_path, monkeypatch):
-    cwd = "/some/new/project"
-    payload = json.dumps({"session_id": "uuid-xyz", "cwd": cwd})
+def test_creates_sessions_db_if_absent(tmp_path, monkeypatch):
+    payload = json.dumps({"session_id": "uuid-xyz", "cwd": "/some/new/project"})
     monkeypatch.setenv("CLD_SESSION_TAG", "cool-tag")
     monkeypatch.setattr("sys.stdin", _stdin(payload))
-    new_tags_dir = tmp_path / "new-tags-dir"
-    monkeypatch.setenv("CCCS_SESSION_TAGS_DIR", str(new_tags_dir))
+    new_dir = tmp_path / "new-sessions-dir"
+    monkeypatch.setenv("CCST_SESSIONS_DIR", str(new_dir))
 
     rc = session_tag.main()
 
     assert rc == 0
-    assert new_tags_dir.is_dir()
-    assert (new_tags_dir / "uuid-xyz.tag").read_text() == "cool-tag\n"
-
-
-def test_tag_file_contains_tag_with_trailing_newline(tmp_path, monkeypatch):
-    cwd = "/my/project"
-    payload = json.dumps({"session_id": "sid-1", "cwd": cwd})
-    monkeypatch.setenv("CLD_SESSION_TAG", "oneshot-my-task")
-    monkeypatch.setattr("sys.stdin", _stdin(payload))
-    monkeypatch.setenv("CCCS_SESSION_TAGS_DIR", str(tmp_path))
-
-    session_tag.main()
-
-    tag_file = tmp_path / "sid-1.tag"
-    content = tag_file.read_text()
-    assert content == "oneshot-my-task\n"
-
-
-# ---------------------------------------------------------------------------
-# main() — cwd fallback via CLAUDE_PROJECT_DIR env var
-# ---------------------------------------------------------------------------
-
-def test_falls_back_to_claude_project_dir_env_when_no_cwd_in_stdin(tmp_path, monkeypatch):
-    """When stdin JSON has no 'cwd', use CLAUDE_PROJECT_DIR env var.
-
-    With the flat layout, the tag file location is keyed by UUID only —
-    the cwd is not used to build the file path. This test still verifies the
-    hook writes the file successfully when cwd comes from the env fallback.
-    """
-    cwd = "/env/project/path"
-    payload = json.dumps({"session_id": "env-fallback-uuid"})
-    monkeypatch.setenv("CLD_SESSION_TAG", "fallback-tag")
-    monkeypatch.setenv("CLAUDE_PROJECT_DIR", cwd)
-    monkeypatch.setattr("sys.stdin", _stdin(payload))
-    monkeypatch.setenv("CCCS_SESSION_TAGS_DIR", str(tmp_path))
-
-    rc = session_tag.main()
-
-    assert rc == 0
-    # Flat layout: just uuid.tag
-    tag_file = tmp_path / "env-fallback-uuid.tag"
-    assert tag_file.exists()
-
-
-def test_claude_project_dir_not_used_when_cwd_in_stdin(tmp_path, monkeypatch):
-    """stdin cwd and env cwd both result in the same flat file (uuid-keyed)."""
-    stdin_cwd = "/stdin/cwd"
-    env_cwd = "/env/cwd"
-    payload = json.dumps({"session_id": "prio-test", "cwd": stdin_cwd})
-    monkeypatch.setenv("CLD_SESSION_TAG", "prio-tag")
-    monkeypatch.setenv("CLAUDE_PROJECT_DIR", env_cwd)
-    monkeypatch.setattr("sys.stdin", _stdin(payload))
-    monkeypatch.setenv("CCCS_SESSION_TAGS_DIR", str(tmp_path))
-
-    session_tag.main()
-
-    # Flat layout: tag file is always at <tags_dir>/<uuid>.tag
-    assert (tmp_path / "prio-test.tag").exists()
+    assert (new_dir / "sessions.db").exists()
 
 
 # ---------------------------------------------------------------------------
@@ -145,12 +93,12 @@ def test_missing_session_id_returns_zero_and_logs(tmp_path, monkeypatch, capsys)
     payload = json.dumps({"cwd": "/some/path"})
     monkeypatch.setenv("CLD_SESSION_TAG", "some-tag")
     monkeypatch.setattr("sys.stdin", _stdin(payload))
-    monkeypatch.setenv("CCCS_SESSION_TAGS_DIR", str(tmp_path))
+    monkeypatch.setenv("CCST_SESSIONS_DIR", str(tmp_path))
 
     rc = session_tag.main()
 
     assert rc == 0
-    assert list(tmp_path.rglob("*.tag")) == []
+    assert not (tmp_path / "sessions.db").exists()
     err = capsys.readouterr().err
     assert "[session-tag]" in err
 
@@ -162,7 +110,7 @@ def test_missing_session_id_returns_zero_and_logs(tmp_path, monkeypatch, capsys)
 def test_invalid_json_on_stdin_returns_zero_and_logs(tmp_path, monkeypatch, capsys):
     monkeypatch.setenv("CLD_SESSION_TAG", "some-tag")
     monkeypatch.setattr("sys.stdin", _stdin("NOT JSON"))
-    monkeypatch.setenv("CCCS_SESSION_TAGS_DIR", str(tmp_path))
+    monkeypatch.setenv("CCST_SESSIONS_DIR", str(tmp_path))
 
     rc = session_tag.main()
 
@@ -176,15 +124,14 @@ def test_invalid_json_on_stdin_returns_zero_and_logs(tmp_path, monkeypatch, caps
 # ---------------------------------------------------------------------------
 
 def test_write_failure_returns_zero_and_logs(tmp_path, monkeypatch, capsys):
-    cwd = "/write/fail/path"
-    payload = json.dumps({"session_id": "bad-write", "cwd": cwd})
+    payload = json.dumps({"session_id": "bad-write", "cwd": "/write/fail/path"})
     monkeypatch.setenv("CLD_SESSION_TAG", "fail-tag")
     monkeypatch.setattr("sys.stdin", _stdin(payload))
 
-    # Point CCCS_SESSION_TAGS_DIR to a FILE (not a dir) so mkdir fails with OSError
+    # Point CCST_SESSIONS_DIR at a FILE (not a dir) so mkdir fails with OSError.
     blocker = tmp_path / "blocker"
     blocker.write_text("block")
-    monkeypatch.setenv("CCCS_SESSION_TAGS_DIR", str(blocker))
+    monkeypatch.setenv("CCST_SESSIONS_DIR", str(blocker))
 
     rc = session_tag.main()
 
@@ -194,75 +141,83 @@ def test_write_failure_returns_zero_and_logs(tmp_path, monkeypatch, capsys):
 
 
 # ---------------------------------------------------------------------------
-# main() — .last-opened sentinel file
+# main() — .last-opened -> sessions.db row
 # ---------------------------------------------------------------------------
 
-def test_last_opened_created_when_cld_session_dir_set(tmp_path, monkeypatch):
-    """CLD_SESSION_DIR set and dir exists: .last-opened is created."""
-    sess_dir = tmp_path / "sess"
-    sess_dir.mkdir()
-    cwd = "/some/project"
-    payload = json.dumps({"session_id": "open-test", "cwd": cwd})
-    monkeypatch.setenv("CLD_SESSION_TAG", "open-tag")
+def test_last_opened_recorded_when_cld_session_dir_set(tmp_path, monkeypatch):
+    """CLD_SESSION_DIR shaped like <project>/cc-sessions/<basename>: a row is
+    upserted with a fresh last_opened timestamp."""
+    project = tmp_path / "myproj"
+    sess_dir = project / "cc-sessions" / "20260711-my-feature"
+    sess_dir.mkdir(parents=True)
+    payload = json.dumps({"session_id": "open-test", "cwd": str(project)})
+    monkeypatch.setenv("CLD_SESSION_TAG", "my-feature")
     monkeypatch.setenv("CLD_SESSION_DIR", str(sess_dir))
     monkeypatch.setattr("sys.stdin", _stdin(payload))
-    tags_dir = tmp_path / "tags"
-    tags_dir.mkdir()
-    monkeypatch.setenv("CCCS_SESSION_TAGS_DIR", str(tags_dir))
+    db_dir = tmp_path / "db"
+    monkeypatch.setenv("CCST_SESSIONS_DIR", str(db_dir))
 
     rc = session_tag.main()
 
     assert rc == 0
-    assert (sess_dir / ".last-opened").exists()
+    rows = sessions_db.list_sessions(path=db_dir / "sessions.db")
+    assert len(rows) == 1
+    assert rows[0].basename == "20260711-my-feature"
+    assert rows[0].project_dir == project
+    assert rows[0].last_opened > 0.0
 
 
-def test_last_opened_mtime_updated_when_already_exists(tmp_path, monkeypatch):
-    """CLD_SESSION_DIR set, .last-opened already exists: mtime is updated."""
-    import os, time
-    sess_dir = tmp_path / "sess"
-    sess_dir.mkdir()
-    sentinel = sess_dir / ".last-opened"
-    sentinel.touch()
-    old_time = time.time() - 3600
-    os.utime(sentinel, (old_time, old_time))
-    old_mtime = sentinel.stat().st_mtime
+def test_last_opened_mtime_updated_when_row_already_exists(tmp_path, monkeypatch):
+    project = tmp_path / "myproj"
+    sess_dir = project / "cc-sessions" / "20260711-my-feature"
+    sess_dir.mkdir(parents=True)
+    db_path = tmp_path / "db" / "sessions.db"
+    monkeypatch.setenv("CCST_SESSIONS_DIR", str(db_path.parent))
+    sessions_db.touch_last_opened(project, "20260711-my-feature", path=db_path, when=100.0)
 
-    cwd = "/some/project"
-    payload = json.dumps({"session_id": "open-test2", "cwd": cwd})
-    monkeypatch.setenv("CLD_SESSION_TAG", "open-tag2")
+    payload = json.dumps({"session_id": "open-test2", "cwd": str(project)})
+    monkeypatch.setenv("CLD_SESSION_TAG", "my-feature")
     monkeypatch.setenv("CLD_SESSION_DIR", str(sess_dir))
     monkeypatch.setattr("sys.stdin", _stdin(payload))
-    tags_dir = tmp_path / "tags"
-    tags_dir.mkdir()
-    monkeypatch.setenv("CCCS_SESSION_TAGS_DIR", str(tags_dir))
 
     session_tag.main()
 
-    new_mtime = sentinel.stat().st_mtime
-    assert new_mtime > old_mtime
+    rows = sessions_db.list_sessions(path=db_path)
+    assert rows[0].last_opened > 100.0
 
 
-def test_last_opened_not_written_when_no_cld_session_dir(tmp_path, monkeypatch):
-    """CLD_SESSION_DIR not set: no .last-opened written, no exception raised."""
-    cwd = "/some/project"
-    payload = json.dumps({"session_id": "no-dir", "cwd": cwd})
+def test_last_opened_not_recorded_when_no_cld_session_dir(tmp_path, monkeypatch):
+    payload = json.dumps({"session_id": "no-dir", "cwd": "/some/project"})
     monkeypatch.setenv("CLD_SESSION_TAG", "no-dir-tag")
     monkeypatch.delenv("CLD_SESSION_DIR", raising=False)
     monkeypatch.setattr("sys.stdin", _stdin(payload))
-    tags_dir = tmp_path / "tags"
-    tags_dir.mkdir()
-    monkeypatch.setenv("CCCS_SESSION_TAGS_DIR", str(tags_dir))
+    monkeypatch.setenv("CCST_SESSIONS_DIR", str(tmp_path))
 
     rc = session_tag.main()
 
     assert rc == 0
-    # No .last-opened anywhere in tmp_path
-    sentinels = list(tmp_path.rglob(".last-opened"))
-    assert sentinels == []
+    assert sessions_db.list_sessions(path=tmp_path / "sessions.db") == []
+
+
+def test_last_opened_not_recorded_when_dir_not_shaped_like_cc_sessions(tmp_path, monkeypatch):
+    """CLD_SESSION_DIR not under a cc-sessions/ parent: no row written, no error."""
+    sess_dir = tmp_path / "sess"
+    sess_dir.mkdir()
+    payload = json.dumps({"session_id": "shape-test", "cwd": "/some/project"})
+    monkeypatch.setenv("CLD_SESSION_TAG", "shape-tag")
+    monkeypatch.setenv("CLD_SESSION_DIR", str(sess_dir))
+    monkeypatch.setattr("sys.stdin", _stdin(payload))
+    db_dir = tmp_path / "db"
+    monkeypatch.setenv("CCST_SESSIONS_DIR", str(db_dir))
+
+    rc = session_tag.main()
+
+    assert rc == 0
+    assert sessions_db.list_sessions(path=db_dir / "sessions.db") == []
 
 
 # ---------------------------------------------------------------------------
-# main() — additionalContext emission
+# main() — additionalContext emission (unaffected by the storage rewrite)
 # ---------------------------------------------------------------------------
 
 def test_no_tag_emits_no_additional_context(monkeypatch, capsys):
@@ -281,7 +236,7 @@ def test_new_mode_additional_context(tmp_path, monkeypatch, capsys):
     monkeypatch.setenv("CLD_SESSION_DIR", str(sess_dir))
     monkeypatch.setenv("CLD_SESSION_MODE", "new")
     monkeypatch.setattr("sys.stdin", _stdin(payload))
-    monkeypatch.setenv("CCCS_SESSION_TAGS_DIR", str(tmp_path / "tags"))
+    monkeypatch.setenv("CCST_SESSIONS_DIR", str(tmp_path / "db"))
 
     rc = session_tag.main()
     out = json.loads(capsys.readouterr().out)
@@ -302,7 +257,7 @@ def test_resume_mode_additional_context(tmp_path, monkeypatch, capsys):
     monkeypatch.setenv("CLD_SESSION_DIR", str(sess_dir))
     monkeypatch.setenv("CLD_SESSION_MODE", "resume")
     monkeypatch.setattr("sys.stdin", _stdin(payload))
-    monkeypatch.setenv("CCCS_SESSION_TAGS_DIR", str(tmp_path / "tags"))
+    monkeypatch.setenv("CCST_SESSIONS_DIR", str(tmp_path / "db"))
 
     rc = session_tag.main()
     out = json.loads(capsys.readouterr().out)
@@ -320,7 +275,7 @@ def test_defaults_to_new_mode_when_cld_session_mode_unset(tmp_path, monkeypatch,
     monkeypatch.setenv("CLD_SESSION_DIR", str(tmp_path / "sess"))
     monkeypatch.delenv("CLD_SESSION_MODE", raising=False)
     monkeypatch.setattr("sys.stdin", _stdin(payload))
-    monkeypatch.setenv("CCCS_SESSION_TAGS_DIR", str(tmp_path / "tags"))
+    monkeypatch.setenv("CCST_SESSIONS_DIR", str(tmp_path / "db"))
 
     session_tag.main()
     out = json.loads(capsys.readouterr().out)
@@ -329,12 +284,11 @@ def test_defaults_to_new_mode_when_cld_session_mode_unset(tmp_path, monkeypatch,
 
 
 def test_additional_context_emitted_even_when_session_id_missing(tmp_path, monkeypatch, capsys):
-    """Tag-file write can fail (no session_id) but additionalContext still emits."""
     payload = json.dumps({"cwd": "/some/project"})
     monkeypatch.setenv("CLD_SESSION_TAG", "my-feature")
     monkeypatch.setenv("CLD_SESSION_DIR", str(tmp_path / "sess"))
     monkeypatch.setattr("sys.stdin", _stdin(payload))
-    monkeypatch.setenv("CCCS_SESSION_TAGS_DIR", str(tmp_path / "tags"))
+    monkeypatch.setenv("CCST_SESSIONS_DIR", str(tmp_path / "db"))
 
     rc = session_tag.main()
     err = capsys.readouterr()
@@ -350,7 +304,7 @@ def test_session_dir_falls_back_to_date_tag_when_cld_session_dir_unset(tmp_path,
     monkeypatch.setenv("CLD_SESSION_TAG", "my-feature")
     monkeypatch.delenv("CLD_SESSION_DIR", raising=False)
     monkeypatch.setattr("sys.stdin", _stdin(payload))
-    monkeypatch.setenv("CCCS_SESSION_TAGS_DIR", str(tmp_path / "tags"))
+    monkeypatch.setenv("CCST_SESSIONS_DIR", str(tmp_path / "db"))
 
     session_tag.main()
     out = json.loads(capsys.readouterr().out)
@@ -358,26 +312,6 @@ def test_session_dir_falls_back_to_date_tag_when_cld_session_dir_unset(tmp_path,
     msg = out["hookSpecificOutput"]["additionalContext"]
     assert "cc-sessions/" in msg
     assert "-my-feature/" in msg
-
-
-def test_last_opened_oserror_logs_to_stderr_no_exception(tmp_path, monkeypatch, capsys):
-    """.touch() raises OSError: error printed to stderr (contains [session-tag]), no exception propagated."""
-    # Point CLD_SESSION_DIR at a non-existent nested path so .touch() raises
-    missing_dir = tmp_path / "does" / "not" / "exist"
-    cwd = "/some/project"
-    payload = json.dumps({"session_id": "oserr-test", "cwd": cwd})
-    monkeypatch.setenv("CLD_SESSION_TAG", "oserr-tag")
-    monkeypatch.setenv("CLD_SESSION_DIR", str(missing_dir))
-    monkeypatch.setattr("sys.stdin", _stdin(payload))
-    tags_dir = tmp_path / "tags"
-    tags_dir.mkdir()
-    monkeypatch.setenv("CCCS_SESSION_TAGS_DIR", str(tags_dir))
-
-    rc = session_tag.main()
-
-    assert rc == 0
-    err = capsys.readouterr().err
-    assert "[session-tag]" in err
 
 
 # ---------------------------------------------------------------------------
