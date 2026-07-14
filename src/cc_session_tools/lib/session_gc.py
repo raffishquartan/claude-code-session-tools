@@ -25,7 +25,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from cc_session_tools.lib.messaging.store import store_root as _default_messages_root
-from cc_session_tools.lib.scheduler.state import scheduler_dir as _default_scheduler_dir
+from cc_session_tools.lib.scheduler.store import scheduler_dir as _default_scheduler_dir
 
 DEFAULT_PROJECTS_DIR = Path.home() / ".claude" / "projects"
 DEFAULT_SESSION_ENV_DIR = Path.home() / ".claude" / "session-env"
