@@ -272,6 +272,36 @@ def list_sessions(
         conn.close()
 
 
+def delete_session_row(project_dir: Path, basename: str, *, path: Path | None = None) -> bool:
+    """Remove the sessions-table row for (project_dir, basename). Returns True
+    if a row was deleted. Used by the delete-sessions skill so a deleted
+    session stops appearing in ccs/ccr enumeration (there is no automatic GC —
+    see D6)."""
+    conn = connect(path=path)
+    try:
+        cur = conn.execute(
+            "DELETE FROM sessions WHERE project_dir = ? AND basename = ?",
+            (str(project_dir), basename),
+        )
+        conn.commit()
+        return cur.rowcount > 0
+    finally:
+        conn.close()
+
+
+def delete_tag(uuid: str, *, path: Path | None = None) -> bool:
+    """Remove the session_tags row for a uuid. Returns True if a row was
+    deleted. Used by the delete-sessions skill to drop the tag mapping for a
+    deleted session's transcript."""
+    conn = connect(path=path)
+    try:
+        cur = conn.execute("DELETE FROM session_tags WHERE uuid = ?", (uuid,))
+        conn.commit()
+        return cur.rowcount > 0
+    finally:
+        conn.close()
+
+
 def find_exact(basename: str, *, path: Path | None = None) -> list[SessionRow]:
     """Every row whose basename equals `basename` exactly (could be >1 if the
     same basename was created under two different project_dirs)."""

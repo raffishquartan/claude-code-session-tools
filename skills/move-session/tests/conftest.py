@@ -42,9 +42,9 @@ def tmp_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     CLAUDE_SESSION_TOOLS_*_ROOT env vars so individual tests can opt into
     specific roots without inheriting the developer's shell config.
 
-    Also sets CCCS_SESSION_TAGS_DIR to a flat tags dir inside tmp_path so
-    tag file reads/writes go to an isolated location (not ~/.cache/claude/).
-    The env var is propagated to subprocesses via the `env=` dict in _run().
+    Also sets CCST_SESSIONS_DIR to an isolated dir inside tmp_path so
+    sessions.db reads/writes go there (not ~/.local/share/claude/). The env
+    var is inherited by subprocesses via os.environ.copy() in _run().
     """
     home = tmp_path / "home"
     home.mkdir()
@@ -52,10 +52,8 @@ def tmp_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     monkeypatch.setenv("HOME", str(home))
     monkeypatch.delenv("CLAUDE_SESSION_TOOLS_REPO_ROOT", raising=False)
     monkeypatch.delenv("CLAUDE_SESSION_TOOLS_PROJ_ROOT", raising=False)
-    # Flat tags dir for test isolation.
-    tags_dir = tmp_path / "session-tags"
-    tags_dir.mkdir()
-    monkeypatch.setenv("CCCS_SESSION_TAGS_DIR", str(tags_dir))
+    # Isolated sessions.db location for test isolation.
+    monkeypatch.setenv("CCST_SESSIONS_DIR", str(tmp_path / "db"))
     return home
 
 

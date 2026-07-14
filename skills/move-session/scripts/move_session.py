@@ -46,7 +46,6 @@ from pathlib import Path
 # Import-* re-exports keep the existing test_validators.py module-attribute
 # access (`ms.validate_new_tag`, `ms.matched_session_root`, ...) working without
 # changes.
-from cc_session_tools.lib.sessions import _session_tags_dir
 from cc_session_rules import (  # noqa: F401  (re-exported for tests)
     DATE_PREFIX_RE,
     PROJECT_NAME_STRICT_RE,
@@ -346,30 +345,19 @@ def discover_session_jsonl(src_key_dir: Path, src_session_dir: Path, uuid_hint: 
         return by_title[0]
     if by_title:
         candidates = by_title  # narrow before next discriminator
-    # Step 4: .tag file lookup. After a RENAME the script writes <uuid>.tag with the
-    # new tag suffix so that ccr <new-name> can resolve the jsonl before /rename
-    # updates custom_titles. Use the same file here to resolve MOVE/MOVE+RENAME that
-    # follow a RENAME without an intervening /rename in CC.
-    # Tag files are now in the flat ~/.cache/claude/session-tags/ dir (keyed by UUID).
-    # Backward-compat: also check the old per-project location for tag files written
-    # before the migration ran.
+    # Step 4: sessions.db tag lookup. After a RENAME the script records the new
+    # tag suffix in sessions.db (session_tags table) so that ccr <new-name> can
+    # resolve the jsonl before /rename updates custom_titles. Query the same store
+    # here to resolve MOVE/MOVE+RENAME that follow a RENAME without an intervening
+    # /rename in CC.
+    from cc_session_tools.lib import sessions_db
+
     dm = DATE_PREFIX_RE.match(tag)
     tag_suffix = dm.group(2) if dm else tag
-    tags_dir = _session_tags_dir()
-    by_tag_file: list[dict] = []
-    for c in candidates:
-        uuid_stem = c["path"].stem
-        # New flat location
-        tag_file = tags_dir / f"{uuid_stem}.tag"
-        if not tag_file.exists():
-            # Backward-compat: old per-project location
-            tag_file = src_key_dir / f"{uuid_stem}.tag"
-        if tag_file.exists():
-            try:
-                if tag_file.read_text().strip() == tag_suffix:
-                    by_tag_file.append(c)
-            except OSError:
-                pass
+    tag_map = sessions_db.lookup_tags([c["path"].stem for c in candidates])
+    by_tag_file: list[dict] = [
+        c for c in candidates if tag_map.get(c["path"].stem) == tag_suffix
+    ]
     if len(by_tag_file) == 1:
         return by_tag_file[0]
     if by_tag_file:
@@ -924,23 +912,20 @@ def main() -> int:
         )
         print(f"  wrote pending-rename marker: {marker}")
 
-        # Write/update the .tag file in the destination transcript directory so
-        # that find_jsonl_for_session(dst_tag) resolves immediately. Without
-        # this, ccr <new-name> finds the cc-sessions directory on disk but
-        # claude --resume <new-name> falls back to the picker because the jsonl
-        # custom-title still has the old name (RENAME-only never modifies the
-        # jsonl, and /rename hasn't run yet). The .tag file gives find_jsonl_for_session
-        # an alternative lookup path that works before the title is updated.
-        # For RENAME-only dst_key_dir == src_key_dir; this overwrites any stale
-        # .tag file with the new suffix. For MOVE+RENAME it creates the file in
-        # the new project key dir.
+        # Record the new tag suffix in sessions.db (session_tags table) so that
+        # find_jsonl_for_session(dst_tag) resolves immediately. Without this, ccr
+        # <new-name> finds the cc-sessions directory on disk but claude --resume
+        # <new-name> falls back to the picker because the jsonl custom-title still
+        # has the old name (RENAME-only never modifies the jsonl, and /rename hasn't
+        # run yet). The sessions.db tag row gives find_jsonl_for_session an
+        # alternative lookup path that works before the title is updated. write_tag
+        # upserts, so this overwrites any stale row for this uuid with the new suffix.
+        from cc_session_tools.lib import sessions_db
+
         dst_tag_m = DATE_PREFIX_RE.match(dst_tag)
         dst_tag_suffix = dst_tag_m.group(2) if dst_tag_m else dst_tag
-        flat_tags_dir = _session_tags_dir()
-        flat_tags_dir.mkdir(parents=True, exist_ok=True)
-        tag_file = flat_tags_dir / f"{session_uuid}.tag"
-        tag_file.write_text(dst_tag_suffix + "\n")
-        print(f"  wrote/updated .tag file: {tag_file}")
+        sessions_db.write_tag(session_uuid, dst_tag_suffix)
+        print(f"  recorded tag in sessions.db: {session_uuid} -> {dst_tag_suffix}")
 
     # Cleanup script generation: the user can't easily delete the source via
     # `rm -rf` because the bash-hard-deny hook blocks local-file deletion. We

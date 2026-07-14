@@ -209,3 +209,30 @@ def test_find_exact_no_match_returns_empty_list(db_path):
 def test_find_exact_on_nonexistent_db_returns_empty_list(db_path):
     assert not db_path.exists()
     assert sessions_db.find_exact("20260713-a", path=db_path) == []
+
+
+# ---------- delete_session_row / delete_tag ----------
+
+def test_delete_session_row_removes_matching_row(db_path):
+    proj = Path("/repos/myproj")
+    sessions_db.ensure_session_row(proj, "20260713-gone", path=db_path)
+    sessions_db.ensure_session_row(proj, "20260713-stays", path=db_path)
+    assert sessions_db.delete_session_row(proj, "20260713-gone", path=db_path) is True
+    assert [r.basename for r in sessions_db.list_sessions(path=db_path)] == ["20260713-stays"]
+
+
+def test_delete_session_row_returns_false_when_absent(db_path):
+    proj = Path("/repos/myproj")
+    sessions_db.ensure_session_row(proj, "20260713-only", path=db_path)
+    assert sessions_db.delete_session_row(proj, "20260713-nope", path=db_path) is False
+
+
+def test_delete_tag_removes_tag(db_path):
+    sessions_db.write_tag("uuid-1", "feature", path=db_path)
+    assert sessions_db.delete_tag("uuid-1", path=db_path) is True
+    assert sessions_db.lookup_tags(["uuid-1"], path=db_path) == {}
+
+
+def test_delete_tag_returns_false_when_absent(db_path):
+    sessions_db.write_tag("uuid-1", "feature", path=db_path)
+    assert sessions_db.delete_tag("uuid-missing", path=db_path) is False
