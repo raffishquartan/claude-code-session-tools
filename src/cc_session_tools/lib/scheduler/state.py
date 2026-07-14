@@ -194,3 +194,53 @@ def next_failure_count(
     new_consecutive = consecutive_failures + 1
     newly_suspended = not suspended and new_consecutive >= threshold
     return new_consecutive, suspended or newly_suspended, newly_suspended
+
+
+def record_failure(
+    job_id: str, *, attempt_ts: str, threshold: int = DEFAULT_SUSPEND_THRESHOLD
+) -> tuple[int, bool, bool]:
+    """Read-modify-write the failure counter under BEGIN IMMEDIATE. Returns
+    (new_consecutive_failures, new_suspended, newly_suspended). last_success is
+    left untouched (a failure never advances it). BEGIN IMMEDIATE takes the write
+    lock up front so two concurrent failure records on the same job block-and-retry
+    (busy_timeout) rather than deadlocking on a shared-read-lock upgrade (R2)."""
+    conn = store.connect()
+    conn.isolation_level = None  # manual transaction control
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        row = conn.execute(
+            "SELECT consecutive_failures, suspended FROM job_state WHERE job_id=?",
+            (job_id,),
+        ).fetchone()
+        cur_failures = int(row["consecutive_failures"])
+        cur_suspended = bool(row["suspended"])
+        new_c, new_s, newly = next_failure_count(
+            cur_failures, suspended=cur_suspended, threshold=threshold
+        )
+        conn.execute(
+            "UPDATE job_state SET consecutive_failures=?, suspended=?, last_attempt=? "
+            "WHERE job_id=?",
+            (new_c, int(new_s), attempt_ts, job_id),
+        )
+        conn.execute("COMMIT")
+    finally:
+        conn.close()
+    return new_c, new_s, newly
+
+
+def record_manual_failure(job_id: str, *, attempt_ts: str) -> int:
+    """Increment consecutive_failures WITHOUT applying the suspend threshold —
+    the behaviour of `ccsched run` (manual foreground run never auto-suspends).
+    Returns the new count for the ledger line. Single-statement write, so no
+    BEGIN IMMEDIATE needed."""
+    conn = store.connect()
+    try:
+        cur = conn.execute(
+            "UPDATE job_state SET consecutive_failures=consecutive_failures+1, "
+            "last_attempt=? WHERE job_id=? RETURNING consecutive_failures",
+            (attempt_ts, job_id),
+        ).fetchone()
+        conn.commit()
+    finally:
+        conn.close()
+    return int(cur["consecutive_failures"])
