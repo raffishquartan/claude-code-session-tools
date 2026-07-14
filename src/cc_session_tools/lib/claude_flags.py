@@ -1,14 +1,25 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import shutil
 import subprocess
 from pathlib import Path
 
+from cc_session_tools.hooks_install import write_json_atomic
+from cc_session_tools.lib.paths import data_home
 
-_CACHE_DIR: Path = Path.home() / ".cache" / "cc-session-tools"
-_CACHE_FILE: Path = _CACHE_DIR / "claude-flags.json"
+_CLAUDE_FLAGS_DIR_ENV = "CCST_CLAUDE_FLAGS_DIR"
+
+
+def _cache_dir() -> Path:
+    env = os.environ.get(_CLAUDE_FLAGS_DIR_ENV, "").strip()
+    return Path(env) if env else data_home()
+
+
+def _cache_file() -> Path:
+    return _cache_dir() / "claude-flags.json"
 
 
 def get_claude_flags() -> set[str]:
@@ -26,9 +37,10 @@ def get_claude_flags() -> set[str]:
     except OSError:
         return set()
 
-    if _CACHE_FILE.exists():
+    cache_file = _cache_file()
+    if cache_file.exists():
         try:
-            cached = json.loads(_CACHE_FILE.read_text())
+            cached = json.loads(cache_file.read_text())
             if cached.get("mtime") == mtime and cached.get("path") == claude:
                 return set(cached["flags"])
         except (json.JSONDecodeError, KeyError, OSError):
@@ -49,9 +61,10 @@ def get_claude_flags() -> set[str]:
     flags = set(re.findall(r"(?<!\w)(--[\w-]+)", text))
 
     try:
-        _CACHE_DIR.mkdir(parents=True, exist_ok=True)
-        _CACHE_FILE.write_text(
-            json.dumps({"mtime": mtime, "path": claude, "flags": sorted(flags)})
+        _cache_dir().mkdir(parents=True, exist_ok=True)
+        write_json_atomic(
+            cache_file,
+            {"mtime": mtime, "path": claude, "flags": sorted(flags)},
         )
     except OSError:
         pass
