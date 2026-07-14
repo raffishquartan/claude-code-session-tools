@@ -26,6 +26,8 @@ Current subcommands:
   gc report                      Report orphaned per-session-uuid entries across the
                                  scheduler, messaging, and session-env stores (never
                                  deletes anything).
+  migrate ccsched                Migrate ccsched flat-file stores into ccsched.db
+                                 (verify + tar-backup old files before removal).
   claude-md install              Add/update the inter-session-messaging block in
                                  ~/.claude/CLAUDE.md.
   claude-md uninstall            Remove the messaging block from CLAUDE.md.
@@ -784,6 +786,22 @@ def _cmd_tags_migrate(args: argparse.Namespace) -> int:
     return migrate_main(argv)
 
 
+# ---------- migrate ccsched ----------
+
+
+def _cmd_migrate_ccsched(args: argparse.Namespace) -> int:
+    from cc_session_tools.cli.migrate_ccsched import main as migrate_main
+
+    argv: list[str] = []
+    if args.old_dir:
+        argv += ["--old-dir", args.old_dir]
+    if args.backup_dir:
+        argv += ["--backup-dir", args.backup_dir]
+    if args.dry_run:
+        argv.append("--dry-run")
+    return migrate_main(argv)
+
+
 # ---------- install-everything ----------
 
 
@@ -1205,6 +1223,17 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Override source projects directory (default: ~/.claude/projects/)",
     )
 
+    # ---- migrate ----
+    migrate_parser = sub.add_parser("migrate", help="One-shot data-store migrations")
+    migrate_sub = migrate_parser.add_subparsers(dest="verb", metavar="<verb>")
+    migrate_sub.required = True
+    m_ccsched = migrate_sub.add_parser(
+        "ccsched",
+        help="Migrate ccsched flat-file stores into ccsched.db (non-destructive)")
+    m_ccsched.add_argument("--old-dir", default=None, metavar="PATH")
+    m_ccsched.add_argument("--backup-dir", default=None, metavar="PATH")
+    m_ccsched.add_argument("--dry-run", action="store_true")
+
     # ---- claude-md ----
     cmd_parser = sub.add_parser("claude-md", help="Manage the global CLAUDE.md messaging block")
     cmd_sub = cmd_parser.add_subparsers(dest="verb", metavar="<verb>")
@@ -1282,6 +1311,10 @@ def main() -> None:
     if args.noun == "tags":
         if args.verb == "migrate":
             sys.exit(_cmd_tags_migrate(args))
+
+    if args.noun == "migrate":
+        if args.verb == "ccsched":
+            sys.exit(_cmd_migrate_ccsched(args))
 
     if args.noun == "claude-md":
         if args.verb == "install":
