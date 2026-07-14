@@ -69,6 +69,30 @@ def test_connect_readonly_missing_file_raises(tmp_path):
         db.connect(tmp_path / "missing.db", readonly=True)
 
 
+def test_connect_readonly_path_with_hash_does_not_misparse(tmp_path):
+    """A path containing '#' must not be misinterpreted by the file: URI parser.
+
+    Regression test: connect(readonly=True) built a bare f"file:{path}?mode=ro"
+    without URL-encoding. SQLite's URI parser treats an unescaped '#' as the start
+    of a URI fragment, silently truncating everything after it from the path —
+    the connection would then open (or fail to find) the wrong file instead of
+    the real one. A directory name containing '#' proves the encoding actually
+    round-trips through open() correctly.
+    """
+    target = tmp_path / "dir#with#hash" / "store.db"
+    setup = db.connect(target, ddl=_DDL)
+    setup.execute("INSERT INTO widgets (name) VALUES ('x')")
+    setup.commit()
+    setup.close()
+
+    conn = db.connect(target, readonly=True)
+    try:
+        row = conn.execute("SELECT name FROM widgets").fetchone()
+    finally:
+        conn.close()
+    assert row["name"] == "x"
+
+
 def test_connect_rejects_old_sqlite(tmp_path, monkeypatch):
     monkeypatch.setattr(sqlite3, "sqlite_version_info", (3, 30, 0))
     with pytest.raises(RuntimeError, match="too old"):

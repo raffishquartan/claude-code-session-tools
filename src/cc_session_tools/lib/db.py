@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import sqlite3
 import time
+import urllib.parse
 from pathlib import Path
 
 _BUSY_TIMEOUT_MS = 5000
@@ -63,7 +64,8 @@ def connect(path: Path, *, ddl: str | None = None, readonly: bool = False) -> sq
     if readonly:
         if ddl is not None:
             raise ValueError("ddl is not supported with readonly=True")
-        uri = f"file:{path}?mode=ro"
+        encoded = urllib.parse.quote(str(path), safe="/:")
+        uri = f"file:{encoded}?mode=ro"
         conn = sqlite3.connect(uri, uri=True, timeout=_BUSY_TIMEOUT_MS / 1000, check_same_thread=False)
     else:
         conn = sqlite3.connect(str(path), timeout=_BUSY_TIMEOUT_MS / 1000, check_same_thread=False)
