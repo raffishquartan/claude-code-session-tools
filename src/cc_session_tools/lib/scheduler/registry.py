@@ -30,19 +30,21 @@ def _spec_from_row(row: sqlite3.Row) -> JobSpec:
 
 
 def load_registry() -> list[JobSpec]:
-    conn = store.connect()
     try:
-        rows = conn.execute(
-            "SELECT job_id, cadence, coalesce_kind, command, surface, enabled, "
-            "catchup_window, timeout FROM jobs ORDER BY rowid"
-        ).fetchall()
+        conn = store.connect()
+        try:
+            rows = conn.execute(
+                "SELECT job_id, cadence, coalesce_kind, command, surface, enabled, "
+                "catchup_window, timeout FROM jobs ORDER BY rowid"
+            ).fetchall()
+        finally:
+            conn.close()
     except sqlite3.DatabaseError as exc:
-        # A corrupt/unreadable ccsched.db surfaces here; wrap so the reconcile
-        # boundary's `except RegistryError` still degrades the hook to a digest
-        # warning instead of crashing the session.
+        # A corrupt/unreadable ccsched.db surfaces either at connect() (the WAL
+        # pragma) or at the query; wrap so the reconcile boundary's
+        # `except RegistryError` still degrades the hook to a digest warning
+        # instead of crashing the session.
         raise RegistryError(f"ccsched.db is unreadable: {exc}") from exc
-    finally:
-        conn.close()
     return [_spec_from_row(r) for r in rows]
 
 
