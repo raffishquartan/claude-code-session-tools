@@ -125,3 +125,16 @@ def test_checkpoint_does_not_error_on_fresh_connection(tmp_path):
     conn = db.connect(tmp_path / "store.db", ddl=_DDL)
     db.checkpoint(conn)  # must not raise
     conn.close()
+
+
+def test_connect_closes_handle_when_pragma_setup_fails_on_corrupt_file(tmp_path):
+    target = tmp_path / "corrupt.db"
+    target.write_bytes(b"not a sqlite file")
+
+    with pytest.raises(sqlite3.DatabaseError):
+        db.connect(target, ddl=_DDL)
+
+    # No leaked connection: SQLite's rollback journal / lock files must not
+    # remain open, and re-opening the same path must not hang or conflict.
+    with pytest.raises(sqlite3.DatabaseError):
+        db.connect(target, ddl=_DDL)

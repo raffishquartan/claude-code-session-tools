@@ -43,12 +43,16 @@ def connect(path: Path, *, ddl: str | None = None, readonly: bool = False) -> sq
         conn = sqlite3.connect(uri, uri=True, timeout=_BUSY_TIMEOUT_MS / 1000, check_same_thread=False)
     else:
         conn = sqlite3.connect(str(path), timeout=_BUSY_TIMEOUT_MS / 1000, check_same_thread=False)
-        conn.execute("PRAGMA journal_mode=WAL")
-        conn.execute(f"PRAGMA busy_timeout={_BUSY_TIMEOUT_MS}")
-        conn.execute("PRAGMA foreign_keys=ON")
-        if ddl:
-            conn.executescript(ddl)
-            conn.commit()
+        try:
+            conn.execute("PRAGMA journal_mode=WAL")
+            conn.execute(f"PRAGMA busy_timeout={_BUSY_TIMEOUT_MS}")
+            conn.execute("PRAGMA foreign_keys=ON")
+            if ddl:
+                conn.executescript(ddl)
+                conn.commit()
+        except BaseException:
+            conn.close()
+            raise
 
     conn.row_factory = sqlite3.Row
     return conn
