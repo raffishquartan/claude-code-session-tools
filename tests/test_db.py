@@ -138,3 +138,40 @@ def test_connect_closes_handle_when_pragma_setup_fails_on_corrupt_file(tmp_path)
     # remain open, and re-opening the same path must not hang or conflict.
     with pytest.raises(sqlite3.DatabaseError):
         db.connect(target, ddl=_DDL)
+
+
+def test_cold_start_concurrent_connect_no_lost_wal_switch(tmp_path):
+    """20 threads all create the same fresh .db at once and each insert a row.
+
+    The WAL-mode switch that runs on every connect must not drop a connection
+    with SQLITE_BUSY under cold-start contention — SQLite ignores busy_timeout
+    for a journal-mode change, so connect() retries it itself. Every write must
+    land: no silently-lost rows.
+    """
+    target = tmp_path / "race" / "store.db"
+    errors: list[Exception] = []
+
+    def worker() -> None:
+        try:
+            conn = db.connect(target, ddl=_DDL)
+            try:
+                conn.execute("INSERT INTO widgets (name) VALUES ('w')")
+                conn.commit()
+            finally:
+                conn.close()
+        except Exception as exc:  # noqa: BLE001 - captured for assertion
+            errors.append(exc)
+
+    threads = [threading.Thread(target=worker) for _ in range(20)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    assert errors == []
+    conn = db.connect(target, ddl=_DDL)
+    try:
+        count = conn.execute("SELECT COUNT(*) FROM widgets").fetchone()[0]
+    finally:
+        conn.close()
+    assert count == 20

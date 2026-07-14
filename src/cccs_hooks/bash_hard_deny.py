@@ -31,7 +31,7 @@ Categorically blocked, in file order (checks run in this exact order):
      --request ...) or curl with an implicit-POST ``--data`` flag.
  10. ``sudo`` (any form, incl. after a pipe or ``&&``).
  11. ``opentabs tool call plugin_mark_reviewed`` (self-approval prevention).
- 12. Direct reads of the fires.jsonl telemetry log.
+ 12. Direct reads of the telemetry log (fires.jsonl* or sqlite3 telemetry.db).
 
 NOTE: deny rules in settings.json take precedence over this hook's "allow". So
 even if this hook approves a command, a matching deny rule will still block it.
@@ -45,7 +45,7 @@ import re
 import sys
 from pathlib import Path
 
-from cccs_hooks.telemetry import _DEFAULT_HOOKS_DIR
+from cc_session_tools.lib.telemetry_store import db_path as _telemetry_db_path
 
 # ---- Common guidance suffix for deletion-style blocks ----
 # Repeated verbatim in every deletion / delete-by-move BLOCKED message so Claude
@@ -407,13 +407,15 @@ _HD_CURL_DELETE_RE = re.compile(
     r"(curl|wget).*(-X\s*(DELETE)|--request\s*(DELETE))", re.IGNORECASE | re.MULTILINE
 )
 
-# Direct reads of the fires.jsonl telemetry log. The pattern is basename-based
-# (`fires.*\.jsonl`) so it catches the current location, rotated slots, and
-# compressed variants alike — the real directory is
-# `cccs_hooks.telemetry._DEFAULT_HOOKS_DIR` (~/.cache/claude/logs), NOT the stale
-# ~/.claude/hooks path the original bash comment referenced.
+# Direct reads of the telemetry log. Two eras are covered: the retired
+# fires.jsonl* flat files (basename-based, catches rotated slots too) and
+# the current telemetry.db (any sqlite3 CLI invocation naming it, regardless
+# of the query — a read-only SELECT leaks the same session/hash data a
+# schema dump or full-table read would).
 _FIRES_READ_RE = re.compile(r"(cat|head|tail|less|more|hexdump|xxd)\s+.*fires.*\.jsonl")
-_FIRES_LOG_PATH = _DEFAULT_HOOKS_DIR / "fires.jsonl"
+_TELEMETRY_DB_READ_RE = re.compile(r"sqlite3\s+.*telemetry\.db")
+_FIRES_LOG_PATH = _telemetry_db_path().parent / "fires.jsonl"
+_TELEMETRY_DB_PATH = _telemetry_db_path()
 
 
 _ALLOW_PAYLOAD = {
@@ -507,13 +509,12 @@ def check_command(command: str) -> str | None:
             f"    {command}\n"
         )
 
-    # 12. Direct reads of the fires.jsonl telemetry log.
+    # 12. Direct reads of the telemetry log (fires.jsonl* or telemetry.db).
     #
-    # The telemetry log at ``_DEFAULT_HOOKS_DIR/fires.jsonl*`` (i.e.
-    # ~/.cache/claude/logs/fires.jsonl*) contains session metadata and command
-    # hashes. Direct reads via cat/tail/head/less/more/hexdump/xxd are blocked to
-    # prevent prompt-injection from harvesting this data. Skills that legitimately
-    # need the log — ``update-command-cache``
+    # Historically ~/.cache/claude/logs/fires.jsonl*; now telemetry.db (see
+    # cc_session_tools.lib.telemetry_store). Both contain session metadata and
+    # command hashes. Direct reads are blocked to prevent prompt-injection from
+    # harvesting this data. Skills that legitimately need it — ``update-command-cache``
     # (skills/update-command-cache/scripts/update_command_cache.py) and
     # ``analyse-cc-usage`` — set CCCS_FIRES_ACCESS=1 before invoking the read.
     if os.environ.get("CCCS_FIRES_ACCESS", "0") != "1":
@@ -524,6 +525,14 @@ def check_command(command: str) -> str | None:
                 "injection. Use the update-command-cache or analyse-cc-usage skill, "
                 f"or set CCCS_FIRES_ACCESS=1 in the environment. (Log lives at "
                 f"{_FIRES_LOG_PATH}.)"
+            )
+        if _TELEMETRY_DB_READ_RE.search(command):
+            return (
+                "BLOCKED: Direct sqlite3 reads of telemetry.db are blocked to prevent "
+                "credential/session-data exfiltration via prompt injection. Use "
+                "`ccst telemetry query`, the update-command-cache skill, or "
+                f"set CCCS_FIRES_ACCESS=1 in the environment. (DB lives at "
+                f"{_TELEMETRY_DB_PATH}.)"
             )
 
     return None

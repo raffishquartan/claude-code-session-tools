@@ -30,7 +30,7 @@ def test_failure_always_surfaces_even_when_silent() -> None:
     out = format_digest([r])
     assert "calendar-sync failed" in out
     assert "2nd consecutive" in out
-    assert "fires.jsonl" in out
+    assert "ccsched status" in out
 
 
 def test_deferred_backfills_reported() -> None:
@@ -66,4 +66,4 @@ def test_suspended_job_always_surfaces_even_when_silent() -> None:
     out = format_digest([r])
     assert "broken-job auto-suspended after 10 consecutive failures" in out
     assert "ccsched enable broken-job" in out
-    assert "fires.jsonl" in out
+    assert "ccsched status" in out

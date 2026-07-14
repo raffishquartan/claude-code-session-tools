@@ -50,14 +50,15 @@ def _line(report: JobReport) -> str | None:
         age_suffix = f", {report.age}" if report.age else ""
         return (
             f"⛔ {report.job_id} auto-suspended after "
-            f"{report.consecutive_failures} consecutive failures{age_suffix} — see fires.jsonl / "
-            f"run `ccsched enable {report.job_id}` after fixing"
+            f"{report.consecutive_failures} consecutive failures{age_suffix} — see "
+            f"`ccsched status {report.job_id}` / run `ccsched enable {report.job_id}` after fixing"
         )
     if report.outcome is Outcome.FAILED:
         age_suffix = f", {report.age}" if report.age else ""
         return (
             f"✗ {report.job_id} failed "
-            f"({_ordinal(report.consecutive_failures)} consecutive{age_suffix}) — see fires.jsonl"
+            f"({_ordinal(report.consecutive_failures)} consecutive{age_suffix}) — see "
+            f"`ccsched status {report.job_id}`"
         )
     if not report.surface:
         return None
