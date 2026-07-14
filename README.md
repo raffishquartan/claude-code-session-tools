@@ -819,7 +819,7 @@ Query `telemetry.db` directly instead of opening it with a raw `sqlite3` shell.
 
 ```sh
 ccst telemetry query --hook bash-security-review --verdict suspicious --since 7d
-ccst telemetry query --decision block --limit 20
+ccst telemetry query --decision deny --limit 20
 ```
 
 Filters on hook name (`--hook`), verdict (`--verdict`), decision (`--decision`),

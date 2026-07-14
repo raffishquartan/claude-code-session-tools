@@ -36,8 +36,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   doctor-mutes) into `sessions.db` in one non-destructive, dry-run-capable
   pass.
 - **One-shot migration scripts** for each moved store
-  (`scripts/migrate_ccmsg_to_db.py`, `migrate_ccsched.py`,
-  `migrate_sessions_db.py`, `migrate_fires_jsonl_to_telemetry_db.py`), each
+  (`scripts/migrate_ccmsg_to_db.py`, `scripts/migrate_fires_jsonl_to_telemetry_db.py`,
+  `cc_session_tools.cli.migrate_ccsched`, `cc_session_tools.cli.migrate_sessions_db`), each
   following write → verify → tar-backup → (manual) delete — no store is
   auto-deleted by a migration script.
 - **`ccst doctor`** gained a data-stores health check (`check_data_stores`)
