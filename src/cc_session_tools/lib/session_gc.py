@@ -1,13 +1,17 @@
-"""Correctness-keyed garbage-collection report for the four per-session-uuid
-data stores that accumulate one file/directory per session forever, with no
-existing cleanup code:
+"""Correctness-keyed garbage-collection report for the per-session-uuid data
+stores that accumulate one row/directory per session forever, with no existing
+cleanup code:
 
-  ~/.claude/cc-scheduler/.reconcile.<uuid>.ts        (reconcile throttle marker)
-  ~/.claude/cc-scheduler/.cursors/<uuid>.json         (scheduler digest cursor)
-  ~/.claude/cc-messages/.cursors/<uuid>.json          (messaging delivery cursor)
-  ~/.claude/session-env/<uuid>/                       (harness-created, not by
+  ccsched.db  reconcile_throttle(session_uuid, ...)  (reconcile throttle marker)
+  ccsched.db  cursors(session_uuid, offset)           (scheduler catch-up cursor)
+  ccmsg.db    cursors(session_uuid, partition, ...)   (messaging delivery cursor;
+                                                        N rows per session, one
+                                                        per partition)
+  sessions.db session_tags(uuid, tag, updated_at)     (session-tag index)
+  ~/.claude/session-env/<uuid>/                        (harness-created, not by
                                                         this repo, but same rule
-                                                        applies)
+                                                        applies — still a flat
+                                                        directory, not migrated)
 
 An entry is orphaned iff its uuid has no matching transcript at
 ``~/.claude/projects/*/<uuid>.jsonl`` — i.e. the owning session is provably
@@ -24,19 +28,26 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
+from cc_session_tools.lib import db as _db
 from cc_session_tools.lib.messaging.store import store_root as _default_messages_root
-from cc_session_tools.lib.scheduler.state import scheduler_dir as _default_scheduler_dir
+from cc_session_tools.lib.scheduler.store import scheduler_dir as _default_scheduler_dir
+from cc_session_tools.lib.sessions_db import default_db_path as _default_sessions_db_path
 
 DEFAULT_PROJECTS_DIR = Path.home() / ".claude" / "projects"
 DEFAULT_SESSION_ENV_DIR = Path.home() / ".claude" / "session-env"
 
-_RECONCILE_PREFIX = ".reconcile."
-_RECONCILE_SUFFIX = ".ts"
+# Verified table/uuid-column names (Phase 2/3/4 merged source — see the data-store
+# uplift Phase 7 plan, Task 3). ccsched.db keeps reconcile-throttle and catch-up
+# cursor as TWO SEPARATE tables.
+_SCHEDULER_CURSORS_TABLE = "cursors"               # ccsched.db (Phase 3)
+_SCHEDULER_RECONCILE_TABLE = "reconcile_throttle"  # ccsched.db (Phase 3)
+_MESSAGES_CURSOR_TABLE = "cursors"                 # ccmsg.db, composite PK (session_uuid, partition) (Phase 2)
+_SESSION_TAGS_TABLE = "session_tags"               # sessions.db, uuid-keyed (Phase 4)
 
 
 @dataclass(frozen=True, slots=True)
 class StoreReport:
-    """Orphan count for one of the four uuid-keyed stores."""
+    """Orphan count for one uuid-keyed store."""
 
     name: str
     total: int
@@ -49,7 +60,7 @@ class StoreReport:
 
 @dataclass(frozen=True, slots=True)
 class GcReport:
-    """Full report across all four stores."""
+    """Full report across all uuid-keyed stores."""
 
     known_uuid_count: int
     stores: tuple[StoreReport, ...]
@@ -65,35 +76,83 @@ class GcReport:
 
 def known_session_uuids(projects_dir: Path) -> set[str]:
     """Return every session uuid with a transcript under
-    ``<projects_dir>/*/<uuid>.jsonl``."""
+    ``<projects_dir>/*/<uuid>.jsonl``.
+
+    Still a filesystem walk, not a sessions.db query, even though sessions.db
+    (Phase 4) now indexes most of the same uuids — left as a directory walk
+    in Phase 7 deliberately (out of scope to change here); a good follow-up
+    candidate once sessions.db is confirmed authoritative for "which session
+    uuids exist," since a transcript being deleted by hand would otherwise
+    silently desync the two.
+    """
     if not projects_dir.is_dir():
         return set()
     return {p.stem for p in projects_dir.glob("*/*.jsonl")}
 
 
-def _reconcile_marker_uuids(scheduler_dir: Path) -> dict[str, Path]:
-    """``<scheduler_dir>/.reconcile.<uuid>.ts``"""
-    out: dict[str, Path] = {}
-    if not scheduler_dir.is_dir():
-        return out
-    for p in scheduler_dir.glob(f"{_RECONCILE_PREFIX}*{_RECONCILE_SUFFIX}"):
-        if not p.is_file():
-            continue
-        uuid = p.name[len(_RECONCILE_PREFIX) : -len(_RECONCILE_SUFFIX)]
-        out[uuid] = p
-    return out
+def _scheduler_cursor_uuids_db(ccsched_db_path: Path) -> dict[str, Path]:
+    """Session uuids with a catch-up-cursor row in ccsched.db (Phase 3's
+    ``cursors`` table — row presence is the dimension)."""
+    if not ccsched_db_path.exists():
+        return {}
+    conn = _db.connect(ccsched_db_path, readonly=True)
+    try:
+        rows = conn.execute(
+            f"SELECT session_uuid FROM {_SCHEDULER_CURSORS_TABLE}"
+        ).fetchall()
+    finally:
+        conn.close()
+    return {row["session_uuid"]: ccsched_db_path for row in rows}
 
 
-def _cursor_uuids(cursors_dir: Path) -> dict[str, Path]:
-    """``<cursors_dir>/<uuid>.json`` — shared shape used by both the
-    scheduler's and the messaging store's cursor directories."""
-    out: dict[str, Path] = {}
-    if not cursors_dir.is_dir():
-        return out
-    for p in cursors_dir.glob("*.json"):
-        if p.is_file():
-            out[p.stem] = p
-    return out
+def _scheduler_reconcile_uuids_db(ccsched_db_path: Path) -> dict[str, Path]:
+    """Session uuids with a reconcile-throttle row in ccsched.db (Phase 3's
+    ``reconcile_throttle`` table — a table kept SEPARATE from ``cursors``, so
+    this is an independent dimension: a session can have a cursor but no
+    throttle marker, and vice versa)."""
+    if not ccsched_db_path.exists():
+        return {}
+    conn = _db.connect(ccsched_db_path, readonly=True)
+    try:
+        rows = conn.execute(
+            f"SELECT session_uuid FROM {_SCHEDULER_RECONCILE_TABLE}"
+        ).fetchall()
+    finally:
+        conn.close()
+    return {row["session_uuid"]: ccsched_db_path for row in rows}
+
+
+def _messages_cursor_uuids_db(ccmsg_db_path: Path) -> dict[str, Path]:
+    """Distinct session uuids with a cursor row in ccmsg.db. The ``cursors``
+    table is composite-keyed ``(session_uuid, partition)`` (Phase 2), so one
+    session yields N rows (one per partition); SELECT DISTINCT collapses them
+    to one entry so ``store.total`` counts distinct sessions, not raw rows."""
+    if not ccmsg_db_path.exists():
+        return {}
+    conn = _db.connect(ccmsg_db_path, readonly=True)
+    try:
+        rows = conn.execute(
+            f"SELECT DISTINCT session_uuid FROM {_MESSAGES_CURSOR_TABLE}"
+        ).fetchall()
+    finally:
+        conn.close()
+    return {row["session_uuid"]: ccmsg_db_path for row in rows}
+
+
+def _sessions_db_uuids(sessions_db_path: Path) -> dict[str, Path]:
+    """Session uuids with a row in sessions.db's ``session_tags`` table
+    (Phase 4). NOT the ``sessions`` table — that is keyed by
+    ``(project_dir, basename)`` and has no uuid column; uuids live only in
+    ``session_tags(uuid, tag, updated_at)``. Note the column is ``uuid``,
+    not ``session_uuid``."""
+    if not sessions_db_path.exists():
+        return {}
+    conn = _db.connect(sessions_db_path, readonly=True)
+    try:
+        rows = conn.execute(f"SELECT uuid FROM {_SESSION_TAGS_TABLE}").fetchall()
+    finally:
+        conn.close()
+    return {row["uuid"]: sessions_db_path for row in rows}
 
 
 def _session_env_uuids(session_env_dir: Path) -> dict[str, Path]:
@@ -118,14 +177,16 @@ def build_report(
     scheduler_dir: Path | None = None,
     messages_root: Path | None = None,
     session_env_dir: Path | None = None,
+    sessions_dir: Path | None = None,
 ) -> GcReport:
-    """Enumerate known session uuids and all four stores, and compute the
-    orphan set per store. Read-only: never deletes or modifies anything.
+    """Enumerate known session uuids and every uuid-keyed store, and compute
+    the orphan set per store. Read-only: never deletes or modifies anything.
 
     Each directory can be overridden explicitly (used by tests and by the
     CLI's override flags); when omitted, each store resolves its own default
     the same way its owning module does (respecting that module's env-var
-    override, e.g. ``CC_SCHEDULER_DIR`` / ``CCST_MESSAGES_ROOT``).
+    override, e.g. ``CC_SCHEDULER_DIR`` / ``CCST_MESSAGES_ROOT`` /
+    ``CCST_SESSIONS_DIR``).
     """
     projects_dir = projects_dir if projects_dir is not None else DEFAULT_PROJECTS_DIR
     scheduler_dir = scheduler_dir if scheduler_dir is not None else _default_scheduler_dir()
@@ -133,28 +194,36 @@ def build_report(
     session_env_dir = (
         session_env_dir if session_env_dir is not None else DEFAULT_SESSION_ENV_DIR
     )
+    # default_db_path() returns the full sessions.db path; take its parent so
+    # `sessions_dir` stays a directory, consistent with the --sessions-dir CLI flag.
+    sessions_dir = sessions_dir if sessions_dir is not None else _default_sessions_db_path().parent
 
     known = known_session_uuids(projects_dir)
 
     stores = (
         _store_report(
             "scheduler-reconcile-markers",
-            _reconcile_marker_uuids(scheduler_dir),
+            _scheduler_reconcile_uuids_db(scheduler_dir / "ccsched.db"),
             known,
         ),
         _store_report(
             "scheduler-cursors",
-            _cursor_uuids(scheduler_dir / ".cursors"),
+            _scheduler_cursor_uuids_db(scheduler_dir / "ccsched.db"),
             known,
         ),
         _store_report(
             "messages-cursors",
-            _cursor_uuids(messages_root / ".cursors"),
+            _messages_cursor_uuids_db(messages_root / "ccmsg.db"),
             known,
         ),
         _store_report(
             "session-env",
             _session_env_uuids(session_env_dir),
+            known,
+        ),
+        _store_report(
+            "sessions-index",
+            _sessions_db_uuids(sessions_dir / "sessions.db"),
             known,
         ),
     )

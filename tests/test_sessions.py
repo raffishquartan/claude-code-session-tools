@@ -54,12 +54,17 @@ def test_iter_sessions_yields_only_session_dirs(tmp_path):
     assert names == ["20260502-baz", "20260503-bar", "20260504-foo"]
 
 
-def test_find_matching_sessions_substring_match(tmp_path):
+def test_find_matching_sessions_substring_match(tmp_path, monkeypatch):
+    from cc_session_tools.lib import sessions_db
+
+    monkeypatch.setenv("CCST_SESSIONS_DIR", str(tmp_path / "db"))
     root = tmp_path / "myroot"
     proj = root / "myproject"
     cc = proj / "cc-sessions"
     (cc / "20260504-foo-bar").mkdir(parents=True)
     (cc / "20260503-baz").mkdir()
+    sessions_db.ensure_session_row(proj, "20260504-foo-bar")
+    sessions_db.ensure_session_row(proj, "20260503-baz")
 
     matches = sessions.find_matching_sessions("foo", roots=[root])
     assert len(matches) == 1
@@ -67,13 +72,30 @@ def test_find_matching_sessions_substring_match(tmp_path):
     assert matches[0].project_dir == proj
 
 
-def test_find_matching_sessions_returns_empty_for_no_match(tmp_path):
+def test_find_matching_sessions_returns_empty_for_no_match(tmp_path, monkeypatch):
+    from cc_session_tools.lib import sessions_db
+
+    monkeypatch.setenv("CCST_SESSIONS_DIR", str(tmp_path / "db"))
     root = tmp_path / "myroot"
     proj = root / "myproject"
     cc = proj / "cc-sessions"
     (cc / "20260504-foo").mkdir(parents=True)
+    sessions_db.ensure_session_row(proj, "20260504-foo")
 
     assert sessions.find_matching_sessions("nope", roots=[root]) == []
+
+
+def test_find_matching_sessions_excludes_projects_outside_roots(tmp_path, monkeypatch):
+    """A row whose project_dir is not directly under any given root must not match."""
+    from cc_session_tools.lib import sessions_db
+
+    monkeypatch.setenv("CCST_SESSIONS_DIR", str(tmp_path / "db"))
+    other_root = tmp_path / "other-root"
+    proj = other_root / "myproject"
+    sessions_db.ensure_session_row(proj, "20260504-foo")
+
+    configured_root = tmp_path / "configured-root"
+    assert sessions.find_matching_sessions("foo", roots=[configured_root]) == []
 
 
 def test_grep_session_returns_match_with_one_line_context(tmp_path):

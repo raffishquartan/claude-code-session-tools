@@ -8,6 +8,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import sqlite3
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -180,7 +181,7 @@ def _cmd_send(args: argparse.Namespace) -> int:
 def _cmd_read(args: argparse.Namespace) -> int:
     try:
         message = service.read_one(args.id)
-    except (ValueError, OSError) as exc:
+    except (ValueError, OSError, sqlite3.Error) as exc:
         print(f"ccmsg: message {args.id} is unreadable: {exc}", file=sys.stderr)
         return 1
     if message is None:

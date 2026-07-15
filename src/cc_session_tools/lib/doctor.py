@@ -10,12 +10,16 @@ from __future__ import annotations
 
 import importlib.metadata
 import json
+import os
 import shutil
+import sqlite3
 import subprocess
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
 from typing import Any
+
+from cc_session_tools.lib.db import connect as _db_connect
 
 
 class Status(str, Enum):
@@ -225,6 +229,88 @@ def _version_tuple(v: str) -> tuple[int, ...]:
     return tuple(parts)
 
 
+# ---------- data-store health check ----------
+
+
+def _nearest_existing_ancestor(path: Path) -> Path:
+    """Walk up from ``path`` to the first directory that actually exists."""
+    current = path
+    while not current.exists():
+        parent = current.parent
+        if parent == current:  # reached filesystem root without finding one
+            return current
+        current = parent
+    return current
+
+
+def check_data_stores(store_paths: dict[str, Path]) -> list[CheckResult]:
+    """Attempt to open each per-subsystem data store under ``data_home()``.
+
+    ``store_paths`` maps a short store name (e.g. ``"ccmsg"``) to its resolved
+    file path (e.g. ``data_home() / "ccmsg.db"``, already accounting for that
+    subsystem's own env-var override) — this function never resolves paths
+    itself, matching every other check in this module ("all filesystem paths
+    are passed in").
+
+    For a path ending in ``.db``: if it exists, opens it read-only via
+    :func:`cc_session_tools.lib.db.connect` — a FAIL means the file is
+    present but not a valid/openable SQLite database (corruption,
+    permissions, wrong schema version). If it does not exist yet, this is
+    expected before first use — every store creates its own schema on first
+    real ``connect(path, ddl=...)`` call (data-store-uplift overview, binding
+    decision 8) — so this WARNs rather than FAILs, unless the nearest
+    existing ancestor directory is not writable, in which case first use
+    would also fail, so this FAILs instead.
+
+    For a path not ending in ``.db`` (``claude-flags.json`` is a flat JSON
+    file, not a SQLite store — see Phase 6): the same
+    exists/invalid-is-FAIL, missing/WARN-unless-unwritable-ancestor
+    treatment applies, but "invalid" is checked via ``json.load`` instead of
+    ``db.connect``.
+    """
+    results: list[CheckResult] = []
+    for store_name, path in store_paths.items():
+        name = f"data-store:{store_name}"
+        if path.exists():
+            try:
+                if path.suffix == ".db":
+                    conn = _db_connect(path, readonly=True)
+                    conn.execute("PRAGMA schema_version").fetchone()
+                    conn.close()
+                else:
+                    with path.open() as f:
+                        json.load(f)
+                results.append(CheckResult(name=name, status=Status.OK, reason=str(path)))
+            except (sqlite3.DatabaseError, sqlite3.OperationalError, json.JSONDecodeError, OSError) as e:
+                results.append(
+                    CheckResult(
+                        name=name,
+                        status=Status.FAIL,
+                        reason=f"{path} exists but failed to open: {e}",
+                    )
+                )
+            continue
+
+        ancestor = _nearest_existing_ancestor(path)
+        if os.access(ancestor, os.W_OK):
+            results.append(
+                CheckResult(
+                    name=name,
+                    status=Status.WARN,
+                    reason=f"not yet created; will be created at {path} on first use",
+                )
+            )
+        else:
+            results.append(
+                CheckResult(
+                    name=name,
+                    status=Status.FAIL,
+                    reason=f"not yet created and {ancestor} is not writable",
+                )
+            )
+    return results
+
+
 # ---------- high-level runner ----------
 
 
@@ -237,6 +323,7 @@ def run_all_checks(
     skills_target_dir: Path,
     env: dict[str, str | None],
     skip_pypi: bool = False,
+    store_paths: dict[str, Path] | None = None,
 ) -> list[CheckResult]:
     """Run the full doctor suite and return results.
 
@@ -256,6 +343,10 @@ def run_all_checks(
         Dict with relevant env var names → values (or None).
     skip_pypi:
         If True, skip the PyPI version check.
+    store_paths:
+        Dict mapping short store name -> resolved file path; when None,
+        data-store checks are skipped (used by callers/tests that don't care
+        about them).
     """
     results: list[CheckResult] = []
 
@@ -298,6 +389,10 @@ def run_all_checks(
                 reason="bundled skills/ directory not found; skill checks skipped",
             )
         )
+
+    # Data stores
+    if store_paths is not None:
+        results.extend(check_data_stores(store_paths))
 
     # PyPI version check
     if not skip_pypi:

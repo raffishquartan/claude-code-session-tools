@@ -1,15 +1,30 @@
-"""Adapter over cccs_hooks.telemetry: write one fires.jsonl line per sweep
-action (hook='catchup'), and read recent catchup lines back for ``ccsched
-status``. Reuses the shared telemetry ledger; does not create a new stream."""
+"""Typed catch-up event store over telemetry.db's catchup_events table:
+write one row per sweep action, and read recent/since-cursor rows back for
+`ccsched status` and the surfacing pass (surface.py).
+
+Catch-up rows are typed columns (job_id, event, owed, ran, exit_code,
+duration_ms, error, consecutive_failures) in their own table — never a
+nested-JSON blob — so this module's own SQL does the filtering instead of
+parsing JSON on every read.
+
+The cursor this module hands back is catchup_events.id: an AUTOINCREMENT
+monotonic row id that is never reused, including across DELETE-based trims
+(ccst telemetry trim). This closes the old rotation/cursor-desync bug: the
+old cursor was a row-count index into a sequence re-derived by re-filtering
+the flat file on every read, so a rotation could make a stale stored count
+silently swallow genuinely-new post-rotation rows. `WHERE id > ?` against a
+column whose values are never reused cannot desync this way regardless of
+what a trim deletes underneath it.
+"""
 from __future__ import annotations
 
-import json
-import os
+import sqlite3
+import sys
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
 
-from cccs_hooks.telemetry import _DEFAULT_HOOKS_DIR, TelemetryEntry, log_event
+from cc_session_tools.lib import telemetry_store
 
 
 class LedgerEvent(str, Enum):
@@ -35,91 +50,75 @@ class LedgerEntry:
 
 
 def _hooks_dir() -> Path:
-    """The telemetry log directory: the CCCS_HOOKS_DIR override when set,
-    else the telemetry module's default. Single source of truth so the read
-    path (``_all_catchup_rows``) and the write path (``log_event``) can never
-    point at different directories."""
-    raw = os.environ.get("CCCS_HOOKS_DIR")
-    return Path(raw) if raw else _DEFAULT_HOOKS_DIR
+    """The telemetry.db directory: the CCCS_HOOKS_DIR override when set,
+    else telemetry_store's default. Kept as a thin wrapper so catchup.py's
+    existing ``ledger._hooks_dir()`` call keeps working unchanged."""
+    return telemetry_store.hooks_dir()
 
 
 def record(entry: LedgerEntry) -> None:
-    """Append one catchup event line to fires.jsonl. Never raises."""
-    verdict = json.dumps(
-        {
-            "job_id": entry.job_id,
-            "event": entry.event.value,
-            "owed": entry.owed,
-            "ran": entry.ran,
-            "exit_code": entry.exit_code,
-            "duration_ms": entry.duration_ms,
-            "error": entry.error,
-            "consecutive_failures": entry.consecutive_failures,
-        },
-        separators=(",", ":"),
-    )
-    log_event(
-        TelemetryEntry(
-            hook="catchup",
-            event="",
-            tool="",
-            session_id="",
-            cwd_short="",
-            decision="annotate",
-            cache="none",
-            verdict=verdict,
-            input_hash="",
-        ),
-        hooks_dir=_hooks_dir(),
-    )
-
-
-def _all_catchup_rows() -> list[dict[str, object]]:
-    """Every catch-up entry in fires.jsonl, oldest-first, with verdict unpacked."""
-    fires = _hooks_dir() / "fires.jsonl"
-    if not fires.is_file():
-        return []
-    rows: list[dict[str, object]] = []
-    for raw in fires.read_text().splitlines():
+    """Insert one catchup_events row. Never raises."""
+    try:
+        conn = telemetry_store.connect()
         try:
-            line: dict[str, object] = json.loads(raw)
-        except json.JSONDecodeError:
-            continue
-        if line.get("hook") != "catchup":
-            continue
-        try:
-            detail: dict[str, object] = json.loads(str(line.get("verdict", "{}")))
-        except json.JSONDecodeError:
-            detail = {}
-        rows.append({"ts": line.get("ts"), "hook": "catchup", **detail})
-    return rows
+            conn.execute(
+                "INSERT INTO catchup_events "
+                "(ts, job_id, event, owed, ran, exit_code, duration_ms, error, consecutive_failures) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    telemetry_store.now_iso(), entry.job_id, entry.event.value,
+                    entry.owed, entry.ran, entry.exit_code, entry.duration_ms,
+                    entry.error, entry.consecutive_failures,
+                ),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+    except (OSError, sqlite3.Error) as e:
+        print(f"[telemetry-warn] ledger write failed: {e}", file=sys.stderr)
 
 
 def read_recent(job_id: str | None = None, *, limit: int = 50) -> list[dict[str, object]]:
-    """Return up to ``limit`` recent catchup rows, optionally filtered by job_id."""
-    rows = _all_catchup_rows()
-    if job_id is not None:
-        rows = [r for r in rows if r.get("job_id") == job_id]
-    return rows[-limit:]
+    """Return up to ``limit`` recent catch-up rows, oldest-first within that
+    slice, optionally filtered by job_id."""
+    conn = telemetry_store.connect()
+    try:
+        if job_id is not None:
+            rows = conn.execute(
+                "SELECT * FROM catchup_events WHERE job_id = ? ORDER BY id DESC LIMIT ?",
+                (job_id, limit),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT * FROM catchup_events ORDER BY id DESC LIMIT ?", (limit,)
+            ).fetchall()
+        return [dict(r) for r in reversed(rows)]
+    finally:
+        conn.close()
 
 
 def read_since(offset: int) -> tuple[list[dict[str, object]], int]:
-    """Catch-up entries after the integer line-count ``offset`` (count of
-    catch-up entries previously surfaced), plus the new offset.
-
-    Used by the surface/reap phase (§9.3). Filters to catch-up entries first,
-    so unrelated hook lines in the shared ledger never shift the offset. A
-    stale ``offset`` beyond the current row count (e.g. after a future ledger
-    rotation/shrink) is clamped rather than allowed to produce a negative
-    slice or otherwise misbehave — it just returns nothing new.
-    """
-    rows = _all_catchup_rows()
-    offset = min(offset, len(rows))
-    return rows[offset:], len(rows)
+    """Catch-up rows with id > offset, oldest-first, plus the new offset
+    (the highest id seen, or the unchanged offset if nothing is new). Used by
+    the surface/reap phase (§9.3)."""
+    conn = telemetry_store.connect()
+    try:
+        rows = conn.execute(
+            "SELECT * FROM catchup_events WHERE id > ? ORDER BY id", (offset,)
+        ).fetchall()
+        new_offset = rows[-1]["id"] if rows else offset
+        return [dict(r) for r in rows], new_offset
+    finally:
+        conn.close()
 
 
 def current_offset() -> int:
-    """The line-count offset of the current end of the catch-up ledger. Used to
-    seed a brand-new session's cursor (§9.3) so its first digest reflects only
+    """The current max catchup_events id (0 if empty). Used to seed a
+    brand-new session's cursor (§9.3) so its first digest reflects only
     activity from this point forward, not pre-existing history."""
-    return len(_all_catchup_rows())
+    conn = telemetry_store.connect()
+    try:
+        row = conn.execute("SELECT COALESCE(MAX(id), 0) AS m FROM catchup_events").fetchone()
+        return int(row["m"])
+    finally:
+        conn.close()

@@ -1,11 +1,17 @@
 """CLI for explicit telemetry pruning: ccst telemetry trim.
 
-Trims ~/.cache/claude/logs/fires.jsonl by:
-  --max-size <MB>      Rotate (gzip) any entries when the file exceeds this size.
-  --max-age-days <N>   Drop JSONL lines older than N days from fires.jsonl.
+Trims telemetry.db (see cc_session_tools.lib.telemetry_store) by:
+  --max-age-days <N>   Delete rows older than N days from both
+                        telemetry_events and catchup_events.
+  --max-size <MB>       Delete the oldest rows (split across both tables)
+                        until the on-disk file is at/under this size.
+                        LOSSY — unlike the old JSONL scheme (which rotated
+                        into up to 3 kept backup slots), a SQL DELETE is
+                        permanent. Acceptable because this is observability
+                        data, not irreplaceable content.
 
 Both flags are optional and can be combined. Without any flags, no pruning is
-done and the tool prints the current file size.
+done and the tool prints the current file size and row counts.
 
 Designed to be invoked via ``ccst telemetry trim``; can also run directly as
 ``python -m cccs_hooks.telemetry_trim``.
@@ -14,82 +20,74 @@ from __future__ import annotations
 
 import argparse
 import datetime
-import gzip
-import json
-import shutil
+import sqlite3
 import sys
 from pathlib import Path
 
-_DEFAULT_HOOKS_DIR = Path.home() / ".cache" / "claude" / "logs"
+from cc_session_tools.lib import telemetry_store
+
+_TS_FMT = "%Y-%m-%dT%H:%M:%SZ"
+_MAX_SIZE_ITERATIONS = 20
 
 
-def _fires_path(hooks_dir: Path | None = None) -> Path:
-    return (hooks_dir or _DEFAULT_HOOKS_DIR) / "fires.jsonl"
+def _row_counts(conn: sqlite3.Connection) -> tuple[int, int]:
+    events = conn.execute("SELECT COUNT(*) FROM telemetry_events").fetchone()[0]
+    catchup = conn.execute("SELECT COUNT(*) FROM catchup_events").fetchone()[0]
+    return events, catchup
 
 
-def trim_by_age(fires: Path, max_age_days: int) -> tuple[int, int]:
-    """Remove lines older than max_age_days from fires.
-
-    Returns (kept, removed).
-    """
-    if not fires.exists():
-        return 0, 0
-
-    cutoff = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(days=max_age_days)
-    kept_lines: list[str] = []
-    removed = 0
-
-    with fires.open() as f:
-        for raw in f:
-            raw = raw.rstrip("\n")
-            if not raw:
-                continue
-            try:
-                data = json.loads(raw)
-                ts_str = data.get("ts", "")
-                if ts_str:
-                    ts = datetime.datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
-                    if ts < cutoff:
-                        removed += 1
-                        continue
-            except (json.JSONDecodeError, ValueError):
-                pass  # keep malformed lines — don't silently destroy data
-            kept_lines.append(raw)
-
-    fires.write_text("\n".join(kept_lines) + ("\n" if kept_lines else ""))
-    return len(kept_lines), removed
+def trim_by_age(conn: sqlite3.Connection, max_age_days: int) -> tuple[int, int]:
+    """Delete rows older than max_age_days from both tables. Returns (kept, removed)."""
+    cutoff = (
+        datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(days=max_age_days)
+    ).strftime(_TS_FMT)
+    before_events, before_catchup = _row_counts(conn)
+    conn.execute("DELETE FROM telemetry_events WHERE ts < ?", (cutoff,))
+    conn.execute("DELETE FROM catchup_events WHERE ts < ?", (cutoff,))
+    conn.commit()
+    after_events, after_catchup = _row_counts(conn)
+    removed = (before_events - after_events) + (before_catchup - after_catchup)
+    kept = after_events + after_catchup
+    return kept, removed
 
 
-def rotate_by_size(fires: Path, max_size_mb: float, keep: int = 3) -> bool:
-    """Rotate fires.jsonl if it exceeds max_size_mb.
-
-    Rotates: fires.jsonl → fires.jsonl.1, fires.jsonl.1 → fires.jsonl.2, ...
-    Drops anything older than fires.jsonl.<keep>.
-    Returns True if rotation occurred.
-    """
-    if not fires.exists():
-        return False
+def enforce_max_size(
+    conn: sqlite3.Connection, db_path: Path, max_size_mb: float,
+    *, max_iterations: int = _MAX_SIZE_ITERATIONS,
+) -> int:
+    """Delete the oldest rows (by ts, id tie-break) — a quarter of the
+    currently-remaining rows per iteration, split proportionally between
+    telemetry_events and catchup_events — until the on-disk file size is
+    at/under max_size_mb or there is nothing left to delete. Returns the
+    total number of rows deleted."""
     max_bytes = max_size_mb * 1024 * 1024
-    if fires.stat().st_size <= max_bytes:
-        return False
-
-    # Drop oldest rotation slot
-    oldest = fires.parent / f"{fires.name}.{keep}"
-    if oldest.exists():
-        oldest.unlink()
-
-    # Shift .N-1 → .N down to .1 → .2
-    for i in range(keep - 1, 0, -1):
-        src = fires.parent / f"{fires.name}.{i}"
-        dst = fires.parent / f"{fires.name}.{i + 1}"
-        if src.exists():
-            src.rename(dst)
-
-    # Rotate current → .1
-    rotated = fires.parent / f"{fires.name}.1"
-    shutil.copy2(str(fires), str(rotated))
-    fires.unlink()
-    return True
+    total_removed = 0
+    for _ in range(max_iterations):
+        telemetry_store.checkpoint_and_vacuum(conn)
+        if not db_path.exists() or db_path.stat().st_size <= max_bytes:
+            break
+        events, catchup = _row_counts(conn)
+        if events == 0 and catchup == 0:
+            break
+        events_batch = max(1, events // 4) if events else 0
+        catchup_batch = max(1, catchup // 4) if catchup else 0
+        if events_batch:
+            conn.execute(
+                "DELETE FROM telemetry_events WHERE id IN "
+                "(SELECT id FROM telemetry_events ORDER BY ts, id LIMIT ?)",
+                (events_batch,),
+            )
+            total_removed += events_batch
+        if catchup_batch:
+            conn.execute(
+                "DELETE FROM catchup_events WHERE id IN "
+                "(SELECT id FROM catchup_events ORDER BY ts, id LIMIT ?)",
+                (catchup_batch,),
+            )
+            total_removed += catchup_batch
+        conn.commit()
+    telemetry_store.checkpoint_and_vacuum(conn)
+    return total_removed
 
 
 def trim(
@@ -100,78 +98,69 @@ def trim(
     dry_run: bool = False,
 ) -> dict[str, object]:
     """Run the trim operation. Returns a summary dict."""
-    fires = _fires_path(hooks_dir)
-    summary: dict[str, object] = {
-        "path": str(fires),
-        "exists": fires.exists(),
-        "size_bytes": fires.stat().st_size if fires.exists() else 0,
-        "rotated": False,
-        "lines_kept": None,
-        "lines_removed": None,
-    }
+    db_path = telemetry_store.db_path(hooks_dir)
+    conn = telemetry_store.connect(hooks_dir)
+    try:
+        summary: dict[str, object] = {
+            "path": str(db_path),
+            "size_bytes": db_path.stat().st_size if db_path.exists() else 0,
+            "rows_removed_by_age": 0,
+            "rows_kept_after_age": None,
+            "rows_removed_by_size": 0,
+        }
 
-    if not fires.exists():
-        return summary
+        if dry_run:
+            if max_age_days is not None:
+                cutoff = (
+                    datetime.datetime.now(datetime.timezone.utc)
+                    - datetime.timedelta(days=max_age_days)
+                ).strftime(_TS_FMT)
+                would_remove = (
+                    conn.execute(
+                        "SELECT COUNT(*) FROM telemetry_events WHERE ts < ?", (cutoff,)
+                    ).fetchone()[0]
+                    + conn.execute(
+                        "SELECT COUNT(*) FROM catchup_events WHERE ts < ?", (cutoff,)
+                    ).fetchone()[0]
+                )
+                summary["would_remove_by_age"] = would_remove
+            if max_size_mb is not None:
+                summary["would_trim_by_size"] = (
+                    db_path.exists() and db_path.stat().st_size > max_size_mb * 1024 * 1024
+                )
+            return summary
 
-    if dry_run:
-        # Just report what would happen
-        if max_size_mb is not None:
-            summary["would_rotate"] = fires.stat().st_size > max_size_mb * 1024 * 1024
         if max_age_days is not None:
-            cutoff = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(
-                days=max_age_days
-            )
-            would_remove = 0
-            with fires.open() as f:
-                for raw in f:
-                    raw = raw.rstrip("\n")
-                    if not raw:
-                        continue
-                    try:
-                        data = json.loads(raw)
-                        ts_str = data.get("ts", "")
-                        if ts_str:
-                            ts = datetime.datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
-                            if ts < cutoff:
-                                would_remove += 1
-                    except (json.JSONDecodeError, ValueError):
-                        pass
-            summary["would_remove_lines"] = would_remove
+            kept, removed = trim_by_age(conn, max_age_days)
+            summary["rows_kept_after_age"] = kept
+            summary["rows_removed_by_age"] = removed
+
+        if max_size_mb is not None:
+            summary["rows_removed_by_size"] = enforce_max_size(conn, db_path, max_size_mb)
+
+        summary["size_bytes"] = db_path.stat().st_size if db_path.exists() else 0
         return summary
-
-    # Age trim first (keeps file smaller before rotation check)
-    if max_age_days is not None:
-        kept, removed = trim_by_age(fires, max_age_days)
-        summary["lines_kept"] = kept
-        summary["lines_removed"] = removed
-
-    # Then size-based rotation
-    if max_size_mb is not None:
-        rotated = rotate_by_size(fires, max_size_mb)
-        summary["rotated"] = rotated
-
-    # Refresh size after operations
-    summary["size_bytes"] = fires.stat().st_size if fires.exists() else 0
-    return summary
+    finally:
+        conn.close()
 
 
 def main(argv: list[str] | None = None) -> int:
     """Entry point for ``ccst telemetry trim``."""
     p = argparse.ArgumentParser(
         prog="ccst telemetry trim",
-        description="Trim ~/.cache/claude/logs/fires.jsonl by size and/or age.",
+        description="Trim telemetry.db by size and/or age.",
     )
     p.add_argument(
         "--max-size",
         type=float,
         metavar="MB",
-        help="Rotate fires.jsonl when it exceeds this size in MB (e.g. 5 for 5 MB)",
+        help="Delete the oldest rows until the DB is under this size in MB (lossy — see module docstring)",
     )
     p.add_argument(
         "--max-age-days",
         type=int,
         metavar="N",
-        help="Drop lines older than N days from fires.jsonl",
+        help="Delete rows older than N days",
     )
     p.add_argument(
         "--dry-run",
@@ -182,20 +171,17 @@ def main(argv: list[str] | None = None) -> int:
         "--hooks-dir",
         default=None,
         metavar="DIR",
-        help="Logs directory (default: ~/.cache/claude/logs/)",
+        help="telemetry.db directory (default: CCCS_HOOKS_DIR or ~/.local/share/claude/)",
     )
     args = p.parse_args(argv)
 
     hooks_dir = Path(args.hooks_dir) if args.hooks_dir else None
-    fires = _fires_path(hooks_dir)
+    db_path = telemetry_store.db_path(hooks_dir)
 
-    if not fires.exists():
-        print(f"No telemetry file found at {fires}")
-        return 0
-
-    size_bytes = fires.stat().st_size
-    print(f"Telemetry file: {fires}")
-    print(f"Current size:   {size_bytes:,} bytes ({size_bytes / 1024:.1f} KB)")
+    print(f"Telemetry DB: {db_path}")
+    if db_path.exists():
+        size_bytes = db_path.stat().st_size
+        print(f"Current size: {size_bytes:,} bytes ({size_bytes / 1024:.1f} KB)")
 
     if args.max_size is None and args.max_age_days is None:
         print("No trim flags specified. Use --max-size and/or --max-age-days.")
@@ -210,25 +196,22 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.dry_run:
         print("Dry run — no changes made.")
-        if "would_rotate" in result:
-            flag = result["would_rotate"]
-            print(f"  Would rotate: {'yes' if flag else 'no (below size threshold)'}")
-        if "would_remove_lines" in result:
-            n = result["would_remove_lines"]
-            print(f"  Would remove: {n} line(s) older than {args.max_age_days} day(s)")
+        if "would_remove_by_age" in result:
+            print(f"  Would remove: {result['would_remove_by_age']} row(s) older than {args.max_age_days} day(s)")
+        if "would_trim_by_size" in result:
+            flag = result["would_trim_by_size"]
+            print(f"  Would trim by size: {'yes' if flag else 'no (below threshold)'}")
     else:
-        if result.get("lines_removed") is not None:
+        if args.max_age_days is not None:
             print(
-                f"  Age trim: kept {result['lines_kept']} line(s), "
-                f"removed {result['lines_removed']} line(s)"
+                f"  Age trim: kept {result['rows_kept_after_age']} row(s), "
+                f"removed {result['rows_removed_by_age']} row(s)"
             )
-        if result.get("rotated"):
-            print("  Rotated: fires.jsonl → fires.jsonl.1")
-        new_size = result.get("size_bytes", 0)
-        if fires.exists():
-            print(f"  New size: {new_size:,} bytes ({new_size / 1024:.1f} KB)")  # type: ignore[arg-type]
-        else:
-            print("  File was rotated away — fires.jsonl no longer exists.")
+        if args.max_size is not None:
+            print(f"  Size trim: removed {result['rows_removed_by_size']} row(s)")
+        raw_size = result.get("size_bytes", 0)
+        new_size = raw_size if isinstance(raw_size, int) else 0
+        print(f"  New size: {new_size:,} bytes ({new_size / 1024:.1f} KB)")
 
     return 0
 

@@ -50,7 +50,7 @@ The repo ships seven CLIs, one shell helper, nine bundled skills, and nine bundl
 | **`confirm-8digit`** (PreToolUse) | Blocks a configurable set of high-stakes tool calls unless the user repeats back an 8-digit confirmation code. |
 | **`after-response`** (Stop) | Touches a `.last-active` sentinel so `ccs --order-by active` can sort sessions by recency of Claude activity. |
 | **`worklog-guard`** (PreCompact, matcher: `manual`) | Blocks manual `/compact` if the session's WORKLOG.md is stale, so progress isn't lost to compaction unrecorded. |
-| **`messaging-deliver`** (SessionStart + UserPromptSubmit) | Sweeps `~/.claude/cc-messages/` for messages addressed to this session and injects a compact digest as additional context. Handles auto-read, read-receipts, first-claim-wins claims, and 14-day archival without prompting. |
+| **`messaging-deliver`** (SessionStart + UserPromptSubmit) | Sweeps `ccmsg.db` (under `~/.local/share/claude/`, overridable via `CCST_MESSAGES_ROOT`) for messages addressed to this session and injects a compact digest as additional context. Handles auto-read, read-receipts, first-claim-wins claims, and 14-day archival without prompting. |
 | **`catchup`** (SessionStart) | Reconciles the scheduled-job registry, launches owed jobs as detached workers, and surfaces previously-completed runs as a digest. |
 | **`catchup`** (UserPromptSubmit) | Surfaces (reaps) completed scheduled runs on a throttle (60 s), so a job launched at session start surfaces at the next prompt in the same session. |
 
@@ -412,7 +412,7 @@ See `docs/design.md` for the full design and CLI contract.
 
 ## Inter-session messaging
 
-`ccmsg` lets Claude Code sessions send durable, addressed messages to one another. Messages are stored as markdown-with-frontmatter files under `~/.claude/cc-messages/` — on-disk, human-readable, and auditable. Each message carries a recipient (session tag, project name, or free-text description), a sender, a timestamp, and an optional list of attachment paths.
+`ccmsg` lets Claude Code sessions send durable, addressed messages to one another. Messages are stored as rows (the body itself as a TEXT column) in `ccmsg.db`, a SQLite (WAL mode) database under `~/.local/share/claude/` — overridable via `CCST_MESSAGES_ROOT` — auditable via `ccmsg list`/`ccmsg read` or any SQLite client. Each message carries a recipient (session tag, project name, or free-text description), a sender, a timestamp, and an optional list of attachment paths.
 
 ### `ccmsg` subcommands
 
@@ -448,7 +448,8 @@ The `install-everything.sh` script runs `ccst claude-md install --apply` automat
 
 ## Scheduled-task catch-up
 
-`ccsched` registers local recurring jobs in `~/.claude/cc-scheduler/jobs.toml`
+`ccsched` registers local recurring jobs in `ccsched.db` (SQLite, WAL mode,
+under `~/.local/share/claude/`, overridable via `CC_SCHEDULER_DIR`)
 and reconciles them on Claude Code session activity. Jobs run on a declared
 cadence and are back-filled when missed (e.g. while the laptop was off), with
 coalescing controlled per-job.
@@ -505,8 +506,9 @@ Two hooks drive scheduled catch-up without extra steps:
 Both hooks are included in the standard bundle and installed by
 `ccst hooks install --apply`. Surfacing is per-session (per-session cursor), so
 each session sees each completed run exactly once. Failures never block the
-session; every action is recorded to the shared `~/.cache/claude/logs/fires.jsonl`
-telemetry ledger.
+session; every action is recorded to the shared `telemetry.db` (SQLite, under
+`~/.local/share/claude/`, overridable via `CCCS_HOOKS_DIR`) telemetry ledger —
+query it with `ccst telemetry query`.
 
 ### `manage-recurring-cc-jobs-using-ccsched` skill
 
@@ -520,8 +522,9 @@ validated `ccsched add` calls and disambiguates between:
 
 ### Registry
 
-The registry lives at `~/.claude/cc-scheduler/jobs.toml` — plain TOML,
-hand-editable, created lazily on first `ccsched add`. Every job declares a
+The registry lives in `ccsched.db` — created lazily on first `ccsched add`;
+inspect it with `ccsched list`/`ccsched status` or any SQLite client (no longer
+hand-editable TOML). Every job declares a
 `cadence`, `command` (argv), `coalesce` (`one`/`each`), optional `surface`
 (whether to include in the digest), and optional `catchup_window` (how far back
 to back-fill; default 7 days).
@@ -536,18 +539,18 @@ to make the hook library available. Hooks are invoked through `ccst hooks run <n
 
 | Module | Hook event | What it does |
 |---|---|---|
-| `cccs_hooks.telemetry` | — | Writes structured JSONL to `~/.cache/claude/logs/fires.jsonl`; used by other modules. Rotates at 10 MB (numbered slots: `fires.jsonl.1`, `.2`, `.3`). |
+| `cccs_hooks.telemetry` | — | Writes rows to `telemetry.db` (SQLite, WAL mode, under `~/.local/share/claude/`); used by other modules. Query via `ccst telemetry query`. |
 | `cccs_hooks.transcript` | — | Walks parent session transcript JSONL; shared by `confirm_8digit`. |
 | `cccs_hooks.confirm_8digit` | PreToolUse | 8-digit confirmation guard for gated tools. |
-| `cccs_hooks.cache` | — | SHA-256 command cache (CSV); used by `bash_security_review`. |
+| `cccs_hooks.cache` | — | SHA-256 command cache (SQLite, `command-cache.db` under `~/.local/share/claude/`); used by `bash_security_review`. |
 | `cccs_hooks.bash_security_review` | PreToolUse | Tiered Bash security review with cache. |
 | `cccs_hooks.marker_allow` | PreToolUse | Auto-approves a bare `touch` of a skill marker under `~/.cache/claude/markers/`; silent otherwise. |
 | `cccs_hooks.markers` | — | Single source of truth for the skill-marker directory; shared by `confirm_8digit` and `marker_allow`. |
 | `cccs_hooks.after_response` | Stop | `.last-active` sentinel for `ccs --order-by active`. |
 | `cccs_hooks.worklog_guard` | PreCompact (manual) | Blocks `/compact` if the session's WORKLOG.md is stale (see [Worklog guard hook](#worklog-guard-hook)). |
-| `cccs_hooks.session_tag` | **SessionStart** | Writes `<uuid>.tag` so `claude-code-usage` can map session UUIDs to `ccd` name tags (see [Session tag hook](#session-tag-hook)). |
+| `cccs_hooks.session_tag` | **SessionStart** | Writes a `session_tags` row in `sessions.db` so `claude-code-usage` can map session UUIDs to `ccd` name tags (see [Session tag hook](#session-tag-hook)). |
 | `cccs_hooks.last_screenshot` | UserPromptSubmit | Resolves the newest screenshot for the `>lss` token and injects its path (see [Last screenshot hook](#last-screenshot-hook)). |
-| `cccs_hooks.messaging_deliver` | SessionStart + UserPromptSubmit | Sweeps `~/.claude/cc-messages/` for messages addressed to this session and injects a compact digest as additional context (see [Inter-session messaging](#inter-session-messaging)). |
+| `cccs_hooks.messaging_deliver` | SessionStart + UserPromptSubmit | Sweeps `ccmsg.db` for messages addressed to this session and injects a compact digest as additional context (see [Inter-session messaging](#inter-session-messaging)). |
 | `cccs_hooks.catchup` | SessionStart + UserPromptSubmit | Reconciles + launches scheduled jobs detached, then surfaces completed runs as a digest (see [Scheduled-task catch-up](#scheduled-task-catch-up)). |
 
 ### Running hooks via `ccst hooks run <name>`
@@ -580,15 +583,15 @@ The dispatcher reads the event payload from stdin, calls the matching module's
 
 ### Session tag hook
 
-`cccs_hooks.session_tag` is a **SessionStart** hook that writes a small tag file when a session is created via `ccd <tag>`:
+`cccs_hooks.session_tag` is a **SessionStart** hook that records a session's tag when it is created via `ccd <tag>`:
 
-- File written: `~/.cache/claude/session-tags/<session_id>.tag` (flat layout keyed by UUID; overrideable via `CCCS_SESSION_TAGS_DIR`)
-- File content: the `ccd` name tag (e.g. `oneshot-add-uuid-for-better-usage-mapping`)
+- Row written: a `session_tags` entry keyed by session UUID in `sessions.db` (SQLite, under `~/.local/share/claude/`, overridable via `CCST_SESSIONS_DIR`)
+- Row content: the `ccd` name tag (e.g. `oneshot-add-uuid-for-better-usage-mapping`)
 - If `CLD_SESSION_TAG` is not set (i.e. the session was not started by `ccd`), the hook exits silently.
 
-Claude Code stores each session as `~/.claude/projects/<encoded-cwd>/<uuid>.jsonl`. The display name (set by `ccd` via `claude -n`) survives only in ephemeral PID files that disappear when the process exits. The `.tag` file gives `claude-code-usage` and other tools a persistent, stable mapping from UUID to human name - so `--session-format name` shows `oneshot-add-uuid-for-better-usage-mapping` instead of `sess-8f3a2c1d`.
+Claude Code stores each session as `~/.claude/projects/<encoded-cwd>/<uuid>.jsonl`. The display name (set by `ccd` via `claude -n`) survives only in ephemeral PID files that disappear when the process exits. The `session_tags` row gives `claude-code-usage` and other tools a persistent, stable mapping from UUID to human name - so `--session-format name` shows `oneshot-add-uuid-for-better-usage-mapping` instead of `sess-8f3a2c1d`.
 
-To migrate existing `.tag` files from the old `~/.claude/projects/` location to the new flat cache dir, run `ccst tags migrate` (see the `tags migrate` subcommand).
+To migrate a legacy `.tag`/`.last-opened`/`.last-active`/doctor-mutes layout into `sessions.db`, run `ccst sessions migrate` (see the `sessions migrate` subcommand).
 
 ### Last screenshot hook
 
@@ -795,18 +798,33 @@ Exit `0` if all checks are OK. Exit `1` if any check is WARN or FAIL.
 
 ### `ccst telemetry trim`
 
-Prune old hook telemetry data from `~/.cache/claude/logs/fires.jsonl`.
+Prune old hook telemetry rows from `telemetry.db` (SQLite, under
+`~/.local/share/claude/`).
 
 ```sh
-# Remove entries older than 30 days, or if the file exceeds 5 MB
+# Remove rows older than 30 days, then delete the oldest until under 5 MB
 ccst telemetry trim --max-age-days 30 --max-size 5
 ```
 
-Telemetry is also rotated automatically at 10 MB (numbered slots `fires.jsonl.1/.2/.3`).
+Trimming is a SQL `DELETE` over the `telemetry_events`/`catchup_events` tables
+(no byte-size file rotation — that concept does not apply to a SQLite table).
 
 Also runs automatically on a `telemetry-trim-weekly` `ccsched` job (`every:7d`,
 `--max-size 10 --max-age-days 90`) — manual invocation is for tighter
 one-off pruning, not required for routine upkeep.
+
+### `ccst telemetry query`
+
+Query `telemetry.db` directly instead of opening it with a raw `sqlite3` shell.
+
+```sh
+ccst telemetry query --hook bash-security-review --verdict suspicious --since 7d
+ccst telemetry query --decision block --limit 20
+```
+
+Filters on hook name (`--hook`), verdict (`--verdict`), decision (`--decision`),
+and time range (`--since`), at minimum; `--limit` caps the row count. `--verdict`
+and `--decision` are distinct columns and can be combined.
 
 ## How it interacts with Claude Code's task lists
 

@@ -1,45 +1,46 @@
-"""Per-session surfacing cursor (§9.3): the last-surfaced position in the
-catch-up ledger for one session uuid. Stored at <scheduler-dir>/.cursors/
-<uuid>.json via atomic .tmp-swap. Per-session by design; cross-session dedup is
-a non-goal."""
+"""Per-session surfacing cursor (§9.3), backed by the `cursors` table in
+ccsched.db. offset = highest catch-up ledger row id already surfaced to this
+session (a monotonic telemetry.db catchup_events.id, not a row count). Per-
+session by design; cross-session dedup is a non-goal."""
 from __future__ import annotations
 
-import json
-from pathlib import Path
-
-from cc_session_tools.lib.scheduler import ledger
-from cc_session_tools.lib.scheduler.state import scheduler_dir
-
-
-def _cursor_dir() -> Path:
-    return scheduler_dir() / ".cursors"
-
-
-def _cursor_path(uuid: str) -> Path:
-    return _cursor_dir() / f"{uuid}.json"
+from cc_session_tools.lib.scheduler import ledger, store
 
 
 def read_cursor(uuid: str) -> int:
-    path = _cursor_path(uuid)
-    if not path.is_file():
-        return 0
-    return int(json.loads(path.read_text())["offset"])
+    conn = store.connect()
+    try:
+        row = conn.execute(
+            "SELECT offset FROM cursors WHERE session_uuid=?", (uuid,)
+        ).fetchone()
+    finally:
+        conn.close()
+    return int(row["offset"]) if row is not None else 0
 
 
 def write_cursor(uuid: str, offset: int) -> None:
-    target = _cursor_dir()
-    target.mkdir(parents=True, exist_ok=True)
-    path = _cursor_path(uuid)
-    tmp = path.with_suffix(".json.tmp")
-    tmp.write_text(json.dumps({"offset": offset}) + "\n")
-    tmp.replace(path)
+    conn = store.connect()
+    try:
+        conn.execute(
+            "INSERT INTO cursors (session_uuid, offset) VALUES (?, ?) "
+            "ON CONFLICT(session_uuid) DO UPDATE SET offset=excluded.offset",
+            (uuid, offset),
+        )
+        conn.commit()
+    finally:
+        conn.close()
 
 
 def seed_new_session(uuid: str) -> None:
-    """If this session_id has no cursor yet, seed one at the current end of the
-    ledger, so its first catchup digest reflects only activity from this point
-    forward - not the entire pre-existing ledger history. No-op if a cursor
-    already exists (idempotent; safe to call on every hook invocation)."""
-    if _cursor_path(uuid).is_file():
-        return
-    write_cursor(uuid, ledger.current_offset())
+    """Seed this session's cursor at the current end of the ledger if it has none
+    yet, so its first digest reflects only activity from this point forward — not
+    the entire pre-existing ledger. INSERT OR IGNORE makes it idempotent."""
+    conn = store.connect()
+    try:
+        conn.execute(
+            "INSERT OR IGNORE INTO cursors (session_uuid, offset) VALUES (?, ?)",
+            (uuid, ledger.current_offset()),
+        )
+        conn.commit()
+    finally:
+        conn.close()

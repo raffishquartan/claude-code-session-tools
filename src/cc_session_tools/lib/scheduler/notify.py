@@ -91,7 +91,7 @@ def suspended(job_id: str, consecutive_failures: int, *, post: Poster = _default
     """The one-time push fired when a job crosses the auto-suspend threshold."""
     message = (
         f"[cc-scheduler] {job_id} auto-suspended after {consecutive_failures} "
-        f"consecutive failures — see fires.jsonl / run "
+        f"consecutive failures — see `ccsched status {job_id}` / run "
         f"`ccsched enable {job_id}` after fixing"
     )
     return send_telegram(message, post=post)

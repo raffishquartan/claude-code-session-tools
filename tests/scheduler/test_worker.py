@@ -10,6 +10,7 @@ import pytest
 from cc_session_tools.lib.scheduler import ledger as ld
 from cc_session_tools.lib.scheduler import registry as reg
 from cc_session_tools.lib.scheduler import state as st
+from cc_session_tools.lib.scheduler import store
 from cc_session_tools.lib.scheduler import worker as wk
 from cc_session_tools.lib.scheduler.jobspec import validate_job_fields
 from cc_session_tools.lib.scheduler.runner import RunOutcome
@@ -190,9 +191,9 @@ def test_success_preserves_existing_suspended_flag(monkeypatch: pytest.MonkeyPat
 def test_second_worker_exits_when_lock_held_by_live_pid(monkeypatch: pytest.MonkeyPatch) -> None:
     _add("busy")
     _seed("busy")
-    st.scheduler_dir().mkdir(parents=True, exist_ok=True)
+    store.scheduler_dir().mkdir(parents=True, exist_ok=True)
     import json
-    (st.scheduler_dir() / ".run.busy.lock").write_text(
+    (store.scheduler_dir() / ".run.busy.lock").write_text(
         json.dumps({"pid": os.getpid(), "started": "x"}))  # held by us (alive)
     ran = {"n": 0}
 
@@ -204,3 +205,18 @@ def test_second_worker_exits_when_lock_held_by_live_pid(monkeypatch: pytest.Monk
     wk.run_job("busy", instants=1, now=now, runner=runner)
     assert ran["n"] == 0  # lock held by a live holder → worker exited without running
     assert st.load_all_state()["busy"].last_success is None
+
+
+def test_lock_wraps_sql_state_mutations_r3(monkeypatch: pytest.MonkeyPatch) -> None:
+    """R3: the file-based in-flight lock still wraps the (now SQL) state writes.
+    A live lock holder means the worker exits without touching state at all."""
+    _add("wrapped")
+    store.scheduler_dir().mkdir(parents=True, exist_ok=True)
+    import json as _json
+    (store.scheduler_dir() / ".run.wrapped.lock").write_text(
+        _json.dumps({"pid": os.getpid(), "started": "x"}))  # held by us (alive)
+    now = datetime(2026, 6, 20, 10, 0, tzinfo=UTC)
+    wk.run_job("wrapped", instants=1, now=now, runner=_ok_runner)
+    # No state row was even created — the worker returned at the lock, before
+    # ensure_registered_db.
+    assert st.get_state("wrapped") is None

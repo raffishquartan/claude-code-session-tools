@@ -5,9 +5,8 @@ from pathlib import Path
 
 import pytest
 
+from cc_session_tools.lib import telemetry_store
 from cc_session_tools.lib.scheduler import ledger
-from cc_session_tools.lib.scheduler.digest import Outcome
-from cccs_hooks import telemetry
 
 
 def test_record_then_read_recent(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -25,34 +24,41 @@ def test_record_then_read_recent(tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 def test_record_then_read_uses_default_dir_when_env_unset(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    # Production default: CCCS_HOOKS_DIR is unset, so both the write path
-    # (log_event) and the read path (_all_catchup_rows) must resolve to the
-    # telemetry module default dir. Point that default at tmp_path so the test
-    # never touches the real ledger, then assert read and write agree.
+    # Production default: CCCS_HOOKS_DIR is unset, so the write path
+    # (ledger.record) and the read path (ledger.read_recent) must both
+    # resolve through telemetry_store's single default. Point that default
+    # at tmp_path so the test never touches the real telemetry.db.
     monkeypatch.delenv("CCCS_HOOKS_DIR", raising=False)
-    monkeypatch.setattr(telemetry, "_DEFAULT_HOOKS_DIR", tmp_path)
-    monkeypatch.setattr(ledger, "_DEFAULT_HOOKS_DIR", tmp_path)
+    monkeypatch.setattr(telemetry_store, "_DEFAULT_HOOKS_DIR", tmp_path)
     ledger.record(ledger.LedgerEntry(
         job_id="tesco", event=ledger.LedgerEvent.RUN, owed=1, ran=1,
         exit_code=0, duration_ms=42, error=None,
     ))
-    assert (tmp_path / "fires.jsonl").is_file()
+    assert (tmp_path / "telemetry.db").is_file()
     rows = ledger.read_recent(job_id="tesco")
     assert len(rows) == 1
     assert rows[0]["job_id"] == "tesco"
-    assert rows[0]["event"] == "run"
 
 
-def test_read_recent_filters_other_hooks(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_read_recent_only_sees_catchup_events_table(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     monkeypatch.setenv("CCCS_HOOKS_DIR", str(tmp_path))
-    (tmp_path).mkdir(parents=True, exist_ok=True)
-    (tmp_path / "fires.jsonl").write_text('{"hook":"bash-security-review","verdict":"safe"}\n')
+    # A generic telemetry_events row (e.g. bash-security-review) must never
+    # leak into catch-up reads — proven structurally, not by a filter, since
+    # the two are now separate tables.
+    from cccs_hooks.telemetry import TelemetryEntry, log_event
+    log_event(TelemetryEntry(
+        hook="bash-security-review", event="PreToolUse", tool="Bash",
+        session_id="s", cwd_short="x", decision="allow", cache="none",
+        verdict="safe", input_hash="sha256:00",
+    ))
     ledger.record(ledger.LedgerEntry(
         job_id="cal", event=ledger.LedgerEvent.FAIL, owed=1, ran=0,
         exit_code=2, duration_ms=10, error="boom",
     ))
     rows = ledger.read_recent()
-    assert all(r["hook"] == "catchup" for r in rows)
+    assert len(rows) == 1
     assert rows[0]["job_id"] == "cal"
 
 
@@ -77,24 +83,27 @@ def test_suspend_event_round_trips(tmp_path: Path, monkeypatch: pytest.MonkeyPat
     assert row["consecutive_failures"] == 10
 
 
-def test_read_since_advances_offset_and_ignores_other_hooks(
+def test_read_since_advances_offset_and_ignores_generic_events(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setenv("CCCS_HOOKS_DIR", str(tmp_path))
-    (tmp_path).mkdir(parents=True, exist_ok=True)
-    # Interleave a non-catchup line; read_since must not count it.
-    (tmp_path / "fires.jsonl").write_text('{"hook":"bash-security-review","verdict":"safe"}\n')
+    from cccs_hooks.telemetry import TelemetryEntry, log_event
+    log_event(TelemetryEntry(
+        hook="bash-security-review", event="PreToolUse", tool="Bash",
+        session_id="s", cwd_short="x", decision="allow", cache="none",
+        verdict="safe", input_hash="sha256:00",
+    ))
     ledger.record(ledger.LedgerEntry(
         job_id="a", event=ledger.LedgerEvent.RUN, owed=1, ran=1,
         exit_code=0, duration_ms=1, error=None,
     ))
     first, offset = ledger.read_since(0)
     assert [r["job_id"] for r in first] == ["a"]
-    assert offset == 1
+    assert offset == first[0]["id"]
     # Nothing new since the cursor → empty, offset unchanged.
     again, offset2 = ledger.read_since(offset)
     assert again == []
-    assert offset2 == 1
+    assert offset2 == offset
     # A new catch-up entry is surfaced exactly once.
     ledger.record(ledger.LedgerEntry(
         job_id="b", event=ledger.LedgerEvent.FAIL, owed=1, ran=0,
@@ -102,19 +111,79 @@ def test_read_since_advances_offset_and_ignores_other_hooks(
     ))
     third, offset3 = ledger.read_since(offset2)
     assert [r["job_id"] for r in third] == ["b"]
-    assert offset3 == 2
+    assert offset3 > offset2
 
 
-def test_read_since_clamps_stale_offset_beyond_row_count(
+def test_read_since_clamps_offset_beyond_current_max_id(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A stale offset past the current row count (e.g. after a future ledger
-    rotation/shrink) must be clamped, not raise or slice negatively."""
+    """A stale offset past the current max id must return nothing new, not
+    raise or slice negatively."""
     monkeypatch.setenv("CCCS_HOOKS_DIR", str(tmp_path))
     ledger.record(ledger.LedgerEntry(
         job_id="a", event=ledger.LedgerEvent.RUN, owed=1, ran=1,
         exit_code=0, duration_ms=1, error=None,
     ))
-    rows, offset = ledger.read_since(999)
+    rows, offset = ledger.read_since(999_999)
     assert rows == []
-    assert offset == 1
+    assert offset == 999_999
+
+
+def test_read_since_survives_a_trim_style_delete_no_silent_gaps(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Regression for the old JSONL rotation/cursor-desync bug: a stale
+    row-count offset re-derived from a re-filtered file could silently
+    swallow genuinely-new post-rotation rows once the row count climbed back
+    past the stored offset. The id-based cursor must not reproduce this:
+    deleting old rows (as ccst telemetry trim does) must never make
+    read_since() skip rows it has not surfaced yet, no matter what got
+    deleted underneath it."""
+    monkeypatch.setenv("CCCS_HOOKS_DIR", str(tmp_path))
+    for i in range(5):
+        ledger.record(ledger.LedgerEntry(
+            job_id=f"job{i}", event=ledger.LedgerEvent.RUN, owed=1, ran=1,
+            exit_code=0, duration_ms=1, error=None,
+        ))
+    first_batch, _ = ledger.read_since(0)
+    # Cursor parks after the 3rd of 5 rows (job0, job1, job2 seen).
+    partial_offset = first_batch[2]["id"]
+
+    # A trim-style delete removes the OLD (already-surfaced) rows — exactly the
+    # rows an age-based `ccst telemetry trim` would drop first, since lower ids
+    # are older. job3/job4 (unsurfaced) and the AUTOINCREMENT high-water mark
+    # survive. This reproduces the old desync bug's shape: after the delete the
+    # live row count is smaller than the stored offset, which is precisely what
+    # used to make a row-count cursor silently swallow the unsurfaced rows.
+    conn = telemetry_store.connect(tmp_path)
+    conn.execute("DELETE FROM catchup_events WHERE id <= ?", (partial_offset,))
+    conn.commit()
+    conn.close()
+
+    for i in range(5, 8):
+        ledger.record(ledger.LedgerEntry(
+            job_id=f"job{i}", event=ledger.LedgerEvent.RUN, owed=1, ran=1,
+            exit_code=0, duration_ms=1, error=None,
+        ))
+
+    surfaced, _ = ledger.read_since(partial_offset)
+    # job3, job4 (unseen before the trim) plus job5, job6, job7 (post-trim) —
+    # nothing silently swallowed by the underlying delete.
+    assert [r["job_id"] for r in surfaced] == ["job3", "job4", "job5", "job6", "job7"]
+
+
+def test_current_offset_is_zero_on_empty_ledger(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("CCCS_HOOKS_DIR", str(tmp_path))
+    assert ledger.current_offset() == 0
+
+
+def test_current_offset_is_max_id(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("CCCS_HOOKS_DIR", str(tmp_path))
+    ledger.record(ledger.LedgerEntry(
+        job_id="a", event=ledger.LedgerEvent.RUN, owed=1, ran=1,
+        exit_code=0, duration_ms=1, error=None,
+    ))
+    rows, _ = ledger.read_since(0)
+    assert ledger.current_offset() == rows[0]["id"]

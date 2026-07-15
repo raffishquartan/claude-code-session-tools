@@ -3,15 +3,12 @@ from __future__ import annotations
 
 import time
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 
 from cc_session_tools.cli import ccs
-from cc_session_tools.cli.ccs import (
-    _Result,
-    _get_sentinel_mtime,
-    _sort_results,
-)
+from cc_session_tools.cli.ccs import _Result, _sort_results
 
 
 # ---------------------------------------------------------------------------
@@ -23,6 +20,7 @@ def fake_home(tmp_path, monkeypatch):
     home = tmp_path / "home"
     (home / ".claude").mkdir(parents=True)
     monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("CCST_SESSIONS_DIR", str(tmp_path / "db"))
     return home
 
 
@@ -35,33 +33,11 @@ def fake_repos(fake_home, tmp_path, monkeypatch):
 
 
 def _make_session(repos: Path, project: str, basename: str) -> Path:
+    from cc_session_tools.lib import sessions_db
     sess = repos / project / "cc-sessions" / basename
     (sess / "working").mkdir(parents=True)
+    sessions_db.ensure_session_row(repos / project, basename)
     return sess
-
-
-# ---------------------------------------------------------------------------
-# _get_sentinel_mtime
-# ---------------------------------------------------------------------------
-
-class TestGetSentinelMtime:
-    def test_returns_mtime_when_file_exists(self, tmp_path):
-        sentinel = tmp_path / ".last-opened"
-        sentinel.touch()
-        result = _get_sentinel_mtime(tmp_path, ".last-opened")
-        assert result > 0.0
-        assert abs(result - sentinel.stat().st_mtime) < 1.0
-
-    def test_returns_zero_when_file_absent(self, tmp_path):
-        result = _get_sentinel_mtime(tmp_path, ".last-opened")
-        assert result == 0.0
-
-    def test_returns_zero_on_oserror(self, tmp_path):
-        # Pass a file as the directory — stat on file/.last-opened will fail
-        not_a_dir = tmp_path / "not_a_dir"
-        not_a_dir.write_text("content")
-        result = _get_sentinel_mtime(not_a_dir, ".last-opened")
-        assert result == 0.0
 
 
 # ---------------------------------------------------------------------------
@@ -132,10 +108,10 @@ class TestSortResultsSentinel:
 
 class TestListModeSentinelOutput:
     def test_list_mode_opened_includes_label_and_timestamp(self, fake_repos, monkeypatch, capsys):
+        from cc_session_tools.lib import sessions_db
         proj = fake_repos / "myproj"
-        sess = _make_session(fake_repos, "myproj", "20260612-a-sess")
-        # Create the sentinel
-        (sess / ".last-opened").touch()
+        _make_session(fake_repos, "myproj", "20260612-a-sess")
+        sessions_db.touch_last_opened(proj, "20260612-a-sess")
         monkeypatch.chdir(proj)
 
         rc = ccs.main(["--order-by", "opened"])
@@ -155,9 +131,10 @@ class TestListModeSentinelOutput:
         assert "(never)" in out
 
     def test_list_mode_active_includes_label_and_timestamp(self, fake_repos, monkeypatch, capsys):
+        from cc_session_tools.lib import sessions_db
         proj = fake_repos / "myproj"
-        sess = _make_session(fake_repos, "myproj", "20260612-b-sess")
-        (sess / ".last-active").touch()
+        _make_session(fake_repos, "myproj", "20260612-b-sess")
+        sessions_db.touch_last_active(proj, "20260612-b-sess")
         monkeypatch.chdir(proj)
 
         rc = ccs.main(["--order-by", "active"])
@@ -193,8 +170,9 @@ class TestListModeSentinelOutput:
         assert rc == 0
 
     def test_list_mode_opened_global_includes_proj_path(self, fake_repos, monkeypatch, capsys):
-        sess = _make_session(fake_repos, "alpha", "20260612-alpha-sess")
-        (sess / ".last-opened").touch()
+        from cc_session_tools.lib import sessions_db
+        _make_session(fake_repos, "alpha", "20260612-alpha-sess")
+        sessions_db.touch_last_opened(fake_repos / "alpha", "20260612-alpha-sess")
         monkeypatch.chdir(fake_repos)
 
         rc = ccs.main(["--global", "--order-by", "opened"])
@@ -210,9 +188,10 @@ class TestListModeSentinelOutput:
 
 class TestSearchModeSentinelOutput:
     def test_search_mode_opened_includes_label(self, fake_repos, monkeypatch, capsys):
+        from cc_session_tools.lib import sessions_db
         proj = fake_repos / "myproj"
-        sess = _make_session(fake_repos, "myproj", "20260612-search-opened")
-        (sess / ".last-opened").touch()
+        _make_session(fake_repos, "myproj", "20260612-search-opened")
+        sessions_db.touch_last_opened(proj, "20260612-search-opened")
         monkeypatch.chdir(proj)
 
         rc = ccs.main(["search-opened", "--order-by", "opened"])
@@ -221,9 +200,10 @@ class TestSearchModeSentinelOutput:
         assert "opened:" in out
 
     def test_search_mode_active_includes_label(self, fake_repos, monkeypatch, capsys):
+        from cc_session_tools.lib import sessions_db
         proj = fake_repos / "myproj"
-        sess = _make_session(fake_repos, "myproj", "20260612-search-active")
-        (sess / ".last-active").touch()
+        _make_session(fake_repos, "myproj", "20260612-search-active")
+        sessions_db.touch_last_active(proj, "20260612-search-active")
         monkeypatch.chdir(proj)
 
         rc = ccs.main(["search-active", "--order-by", "active"])
@@ -240,3 +220,132 @@ class TestSearchModeSentinelOutput:
         assert rc == 0
         out = capsys.readouterr().out
         assert "(never)" in out
+
+
+# ---------------------------------------------------------------------------
+# Session-count scaling regression (the 2026-07-13 performance requirement)
+# ---------------------------------------------------------------------------
+
+class TestSessionEnumerationScaling:
+    """Regression test for the 2026-07-13 design-spec performance requirement: ccl/ccr/ccs
+    session-title/tag lookup must be an indexed sessions.db query making zero per-session
+    filesystem stat() calls, not an O(n) directory walk that merely happens to run fast on a
+    given machine. Scoped to titles/tags/metadata only — NOT session content search
+    (--order-by update, which is unchanged by design and DOES still stat files - see D1)."""
+
+    def _seed_sessions(self, fake_repos, count: int, start_at: int = 0) -> Path:
+        from cc_session_tools.lib import sessions_db
+
+        proj = fake_repos / "scaleproj"
+        proj.mkdir(parents=True, exist_ok=True)
+        (proj / "cc-sessions").mkdir(exist_ok=True)
+        for i in range(start_at, start_at + count):
+            name = f"20260101-session-{i:05d}"
+            (proj / "cc-sessions" / name).mkdir()
+            sessions_db.touch_last_opened(proj, name)
+        return proj
+
+    def test_order_by_active_makes_no_per_session_stat_calls_regardless_of_count(
+        self, fake_home, fake_repos, monkeypatch
+    ):
+        """The opened/active list-mode branch (Task 10 Step 3) reads mtimes from
+        row_by_basename (an in-memory dict built from one sessions.db query), not from
+        Path.stat() on each session's sentinel file — assert that directly by counting real
+        Path.stat() invocations against the in-scope mechanism, which must stay flat as N
+        grows from 50 to 2000.
+
+        Scope note: the performance requirement (overview.md Section 8, design-spec
+        Section 7.2) binds the session enumeration + title/tag/timestamp-metadata lookup
+        path only, and EXPLICITLY excludes session-content inspection. `ccs`'s footer
+        "(X empty)" count reads each session's transcript to decide emptiness — a
+        pre-existing O(n) content-inspection cost, unchanged by this phase (plan Task 10
+        Step 2), and out of scope. Those stats land on ~/.claude/projects/<encoded>/
+        transcript dirs. The mechanism this test guards — the per-session sentinel/enumeration
+        walk that was removed — lives under cc-sessions/, so we count only stats on
+        cc-sessions/ paths. A future regression that reintroduced a per-session sentinel
+        stat (cc-sessions/<basename>/.last-active) or a per-session directory walk would
+        still be caught here; the out-of-scope transcript-content is_dir is not."""
+        proj = self._seed_sessions(fake_repos, 50)
+        monkeypatch.chdir(proj)
+
+        stat_calls = []
+        real_stat = Path.stat
+
+        def _counting_stat(self, *a, **kw):
+            # Count only stats against the session-enumeration/sentinel mechanism
+            # (cc-sessions/), not out-of-scope transcript-content inspection
+            # (~/.claude/projects/) — see the scope note in this test's docstring.
+            if "cc-sessions" in self.parts:
+                stat_calls.append(self)
+            return real_stat(self, *a, **kw)
+
+        with patch.object(Path, "stat", _counting_stat):
+            rc_small = ccs.main(["--order-by", "active"])
+            small_count = len(stat_calls)
+        assert rc_small == 0
+
+        self._seed_sessions(fake_repos, 1950, start_at=50)  # -> 2000 total
+        stat_calls.clear()
+        with patch.object(Path, "stat", _counting_stat):
+            rc_large = ccs.main(["--order-by", "active"])
+            large_count = len(stat_calls)
+        assert rc_large == 0
+
+        # A 40x growth in session count (50 -> 2000) must not grow the stat() call count at
+        # all for the mtime-lookup path itself — any per-session stat call here is a direct
+        # regression to the pre-migration _get_sentinel_mtime walk. Allow a small constant
+        # slack (<=5) for incidental stats unrelated to sentinel lookup (e.g. cwd resolution),
+        # never a count that scales with N.
+        assert large_count <= small_count + 5, (
+            f"stat() call count grew with session count ({small_count} -> {large_count} for "
+            f"50 -> 2000 sessions) — this is the exact O(n) filesystem-walk regression this "
+            f"test exists to catch."
+        )
+
+    def test_global_enumeration_under_absolute_time_bound_at_2000_sessions(
+        self, fake_home, fake_repos, monkeypatch
+    ):
+        """Secondary sanity check, not the primary regression guard (see design note above) —
+        a single indexed query + formatting 2000 rows should still complete quickly in absolute
+        terms. Kept as a coarse smoke test; the stat-call-count test above is what actually
+        proves the mechanism."""
+        import time as _time
+
+        self._seed_sessions(fake_repos, 2000)
+        start = _time.perf_counter()
+        rc = ccs.main(["--global"])
+        elapsed = _time.perf_counter() - start
+        assert rc == 0
+        assert elapsed < 1.0
+
+
+# ---------------------------------------------------------------------------
+# --limit / -n
+# ---------------------------------------------------------------------------
+
+class TestLimitFlag:
+    def test_limit_returns_only_n_most_recent_by_active(self, fake_home, fake_repos, monkeypatch, capsys):
+        from cc_session_tools.lib import sessions_db
+        proj = fake_repos / "myproj"
+        proj.mkdir(parents=True)
+        (proj / "cc-sessions").mkdir()
+        for i in range(10):
+            name = f"20260101-sess-{i:02d}"
+            (proj / "cc-sessions" / name).mkdir()
+            sessions_db.ensure_session_row(proj, name)
+            sessions_db.touch_last_active(proj, name, when=float(i))
+        monkeypatch.chdir(proj)
+
+        rc = ccs.main(["--order-by", "active", "--limit", "3"])
+        assert rc == 0
+        out = capsys.readouterr().out
+        session_lines = [ln for ln in out.splitlines() if "20260101-sess-" in ln]
+        assert len(session_lines) == 3
+        assert "20260101-sess-09" in session_lines[0]
+        assert "20260101-sess-08" in session_lines[1]
+        assert "20260101-sess-07" in session_lines[2]
+
+    def test_limit_without_compatible_order_by_errors(self, fake_home, fake_repos, monkeypatch, capsys):
+        rc = ccs.main(["--order-by", "start", "--limit", "3"])
+        assert rc == 2
+        assert "requires --order-by opened or --order-by active" in capsys.readouterr().err

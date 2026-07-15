@@ -7,6 +7,7 @@ logged via the CCST telemetry channel."""
 from __future__ import annotations
 
 import json
+import sqlite3
 import sys
 from pathlib import Path
 
@@ -59,7 +60,7 @@ def main(argv: list[str] | None = None) -> int:
         project = partition.split("/", 1)[-1]
         ctx = SessionContext(uuid=uuid, project=project, partition=partition)
         digest = service.deliver(ctx, mode=mode)
-    except (OSError, ValueError) as exc:
+    except (OSError, ValueError, sqlite3.Error) as exc:
         _log_failure(type(exc).__name__)
         _emit("", event)
         return 0

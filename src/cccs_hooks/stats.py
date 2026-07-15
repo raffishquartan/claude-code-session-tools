@@ -9,21 +9,14 @@ from __future__ import annotations
 
 import argparse
 import sqlite3
-import urllib.parse
-from pathlib import Path
 
 from cccs_hooks.cache import _db_path
+from cc_session_tools.lib.db import connect as _sqlite_connect
 
 
 def _connect_readonly() -> sqlite3.Connection | None:
-    path = _db_path()
-    if not path.exists():
-        return None
     try:
-        encoded = urllib.parse.quote(str(path), safe="/:")
-        conn = sqlite3.connect(f"file:{encoded}?mode=ro", uri=True, timeout=3.0)
-        conn.row_factory = sqlite3.Row
-        return conn
+        return _sqlite_connect(_db_path(), readonly=True)
     except sqlite3.Error:
         return None
 
