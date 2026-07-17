@@ -90,10 +90,13 @@ def migrate(*, old_root: Path, backup_dir: Path, dry_run: bool) -> int:
         if isinstance(hw, dict):
             repository.save_cursor(cf.stem, {str(k): str(v) for k, v in hw.items()})
 
-    # 2. Verify before any deletion.
+    # 2. Verify before any deletion. Uses >= rather than exact equality so a
+    # re-run (after a prior success, or after a delete interrupted mid-loop)
+    # doesn't false-abort just because parsed count dropped or DB count is
+    # already ahead — matches migrate_ccsched.py / migrate_sessions_db.py.
     db_count = len(repository.list_rows())
-    if db_count != len(parsed):
-        print(f"ABORT: DB row count {db_count} != parsed message count {len(parsed)}; "
+    if db_count < len(parsed):
+        print(f"ABORT: DB row count {db_count} < parsed message count {len(parsed)}; "
               "old files left intact.", file=sys.stderr)
         return 2
     for sample in parsed[:5]:
