@@ -14,11 +14,21 @@ All under `~/.local/share/claude/migration-backups/`:
 |---|---|---|---|
 | 2 | `ccmsg` | `ccmsg-<date>.tar.gz` | `~/.claude/cc-messages/` |
 | 3 | `ccsched` | `ccsched-<date>.tar.gz` | `~/.claude/cc-scheduler/` (`jobs.toml`, `state.json`, `.cursors/`, `.reconcile.*.ts`) |
-| 4 | `sessions.db` | `sessions-<date>.tar.gz` | `~/.cache/claude/session-tags/*.tag`, `~/.claude/projects/**/.last-active`, `.last-opened` |
+| 4 | `sessions.db` | `sessions-<date>.tar.gz` | `~/.cache/claude/session-tags/*.tag`, `~/.claude/cc-doctor-mutes.json` |
 | 5 | `telemetry.db` | `telemetry-<date>.tar.gz` | `~/.cache/claude/logs/fires.jsonl` and rotated slots |
 
 Phase 6 (`command-cache.db`, `claude-flags.json`) is a path move only — no data transformation, no
 backup script, per §8.1 of the design spec ("path move only").
+
+**Correction (2026-07-17):** the original text of this row claimed
+`~/.claude/projects/**/.last-active`/`.last-opened` were part of the `sessions-<date>.tar.gz`
+backup. That is wrong on two counts, found during a post-migration exhaustive review: (1) the
+sentinel files actually live at `<project-root>/cc-sessions/<basename>/.last-opened` and
+`.last-active` (each session's own working directory, via `$CLD_SESSION_DIR` — not under
+`~/.claude/projects/`), and (2) `migrate_sessions_db.py` deliberately never deletes them (see its
+own docstring and `docs/data-store-migration-steps.md`), so they were never part of the tar
+backup or the "confirm gone" check below in the first place. Nothing to restore for them; this
+table row is corrected above.
 
 ## Audit steps (run once, after all of Phases 2-6 have landed and been used at least once)
 
