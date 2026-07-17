@@ -38,60 +38,82 @@ DEFAULT_MUTES_FILE = Path.home() / ".claude" / "cc-doctor-mutes.json"
 
 
 def _migrate_tags(tags_dir: Path, *, db_path: Path, dry_run: bool) -> tuple[int, int]:
-    """Return (source_count, migrated_count)."""
+    """Return (source_count, migrated_count).
+
+    Writes through one shared connection/transaction rather than one
+    connect()+DDL+commit+close per tag — at real-world scale (tens of
+    thousands of .tag files) a fresh connection per row measured ~30
+    rows/sec; one shared connection is orders of magnitude faster and this
+    is a one-shot batch, not the hook's single-tag-per-call hot path."""
     tag_files = sorted(tags_dir.glob("*.tag")) if tags_dir.is_dir() else []
     migrated = 0
-    for f in tag_files:
-        uuid = f.stem
-        try:
-            tag = f.read_text().strip()
-        except OSError as exc:
-            print(f"  ERROR reading {f}: {exc}", file=sys.stderr)
-            continue
-        if not tag:
-            continue
-        if dry_run:
-            print(f"  would migrate tag: {uuid} -> {tag!r}")
-        else:
-            sessions_db.write_tag(uuid, tag, path=db_path)
-        migrated += 1
+    conn = None if dry_run else sessions_db.connect(path=db_path)
+    try:
+        for f in tag_files:
+            uuid = f.stem
+            try:
+                tag = f.read_text().strip()
+            except OSError as exc:
+                print(f"  ERROR reading {f}: {exc}", file=sys.stderr)
+                continue
+            if not tag:
+                continue
+            if dry_run:
+                print(f"  would migrate tag: {uuid} -> {tag!r}")
+            else:
+                sessions_db.write_tag(uuid, tag, conn=conn)
+            migrated += 1
+        if conn is not None:
+            conn.commit()
+    finally:
+        if conn is not None:
+            conn.close()
     return len(tag_files), migrated
 
 
 def _migrate_activity(roots: list[Path], *, db_path: Path, dry_run: bool) -> tuple[int, int]:
     """Walk cc-sessions/<basename>/ dirs under each root's projects and copy
     .last-opened / .last-active sentinel mtimes into the sessions table.
-    Returns (source_session_dir_count, migrated_count)."""
+    Returns (source_session_dir_count, migrated_count).
+
+    Writes through one shared connection/transaction — see _migrate_tags."""
     source_count = 0
     migrated = 0
-    for root in roots:
-        if not root.is_dir():
-            continue
-        for proj in root.iterdir():
-            if not proj.is_dir():
+    conn = None if dry_run else sessions_db.connect(path=db_path)
+    try:
+        for root in roots:
+            if not root.is_dir():
                 continue
-            cc = proj / "cc-sessions"
-            for sess in iter_sessions(cc):
-                basename = sess.name
-                if session_start_date(basename) is None:
+            for proj in root.iterdir():
+                if not proj.is_dir():
                     continue
-                source_count += 1
-                opened_file = sess / ".last-opened"
-                active_file = sess / ".last-active"
-                opened_mtime = opened_file.stat().st_mtime if opened_file.is_file() else None
-                active_mtime = active_file.stat().st_mtime if active_file.is_file() else None
-                if dry_run:
-                    print(
-                        f"  would migrate session: {proj / 'cc-sessions' / basename} "
-                        f"(opened={opened_mtime}, active={active_mtime})"
-                    )
-                else:
-                    sessions_db.ensure_session_row(proj, basename, path=db_path)
-                    if opened_mtime is not None:
-                        sessions_db.touch_last_opened(proj, basename, path=db_path, when=opened_mtime)
-                    if active_mtime is not None:
-                        sessions_db.touch_last_active(proj, basename, path=db_path, when=active_mtime)
-                migrated += 1
+                cc = proj / "cc-sessions"
+                for sess in iter_sessions(cc):
+                    basename = sess.name
+                    if session_start_date(basename) is None:
+                        continue
+                    source_count += 1
+                    opened_file = sess / ".last-opened"
+                    active_file = sess / ".last-active"
+                    opened_mtime = opened_file.stat().st_mtime if opened_file.is_file() else None
+                    active_mtime = active_file.stat().st_mtime if active_file.is_file() else None
+                    if dry_run:
+                        print(
+                            f"  would migrate session: {proj / 'cc-sessions' / basename} "
+                            f"(opened={opened_mtime}, active={active_mtime})"
+                        )
+                    else:
+                        sessions_db.ensure_session_row(proj, basename, conn=conn)
+                        if opened_mtime is not None:
+                            sessions_db.touch_last_opened(proj, basename, when=opened_mtime, conn=conn)
+                        if active_mtime is not None:
+                            sessions_db.touch_last_active(proj, basename, when=active_mtime, conn=conn)
+                    migrated += 1
+        if conn is not None:
+            conn.commit()
+    finally:
+        if conn is not None:
+            conn.close()
     return source_count, migrated
 
 

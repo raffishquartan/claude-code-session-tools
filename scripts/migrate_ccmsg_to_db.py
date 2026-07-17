@@ -84,11 +84,13 @@ def migrate(*, old_root: Path, backup_dir: Path, dry_run: bool) -> int:
     # 1. Write DB (no old files touched).
     for msg in parsed:
         _insert_ignore(msg)
+    cursor_rows_written = 0
     for cf in cursor_files:
         data = json.loads(cf.read_text(encoding="utf-8"))
         hw = data.get("high_water") if isinstance(data, dict) else None
-        if isinstance(hw, dict):
+        if isinstance(hw, dict) and hw:
             repository.save_cursor(cf.stem, {str(k): str(v) for k, v in hw.items()})
+            cursor_rows_written += len(hw)
 
     # 2. Verify before any deletion. Uses >= rather than exact equality so a
     # re-run (after a prior success, or after a delete interrupted mid-loop)
@@ -98,6 +100,15 @@ def migrate(*, old_root: Path, backup_dir: Path, dry_run: bool) -> int:
     if db_count < len(parsed):
         print(f"ABORT: DB row count {db_count} < parsed message count {len(parsed)}; "
               "old files left intact.", file=sys.stderr)
+        return 2
+    conn = repository.connect()
+    try:
+        db_cursor_count = conn.execute("SELECT COUNT(*) AS n FROM cursors").fetchone()["n"]
+    finally:
+        conn.close()
+    if db_cursor_count < cursor_rows_written:
+        print(f"ABORT: DB cursor row count {db_cursor_count} < {cursor_rows_written} "
+              "written this run; old files left intact.", file=sys.stderr)
         return 2
     for sample in parsed[:5]:
         got = repository.get_by_id(sample.id)
@@ -128,8 +139,8 @@ def migrate(*, old_root: Path, backup_dir: Path, dry_run: bool) -> int:
         except OSError:
             pass
 
-    print(f"Migration complete: {len(parsed)} message(s), {len(cursor_files)} cursor(s). "
-          f"DB: {store.db_path()}")
+    print(f"Migration complete: {len(parsed)} message(s), {cursor_rows_written} cursor row(s) "
+          f"(from {len(cursor_files)} cursor file(s)). DB: {store.db_path()}")
     if locks:
         print(f"{len(locks)} orphaned lock(s) left in {old_root / '.locks'} for manual review.")
     return 0

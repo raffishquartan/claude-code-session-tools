@@ -87,18 +87,29 @@ def _now_iso() -> str:
 # session_tags
 # ---------------------------------------------------------------------------
 
-def write_tag(uuid: str, tag: str, *, path: Path | None = None) -> None:
-    """Record (or update) the tag for a session uuid."""
-    conn = connect(path=path)
+def write_tag(
+    uuid: str, tag: str, *, path: Path | None = None, conn: sqlite3.Connection | None = None
+) -> None:
+    """Record (or update) the tag for a session uuid.
+
+    conn, if given, is reused as-is (caller owns commit/close) instead of opening
+    a fresh connection — lets a bulk caller like migrate_sessions_db.py write
+    thousands of rows in one connection/transaction instead of one connect() +
+    DDL re-run + commit + close per row.
+    """
+    owns_conn = conn is None
+    c = conn if conn is not None else connect(path=path)
     try:
-        conn.execute(
+        c.execute(
             "INSERT INTO session_tags (uuid, tag, updated_at) VALUES (?, ?, ?) "
             "ON CONFLICT(uuid) DO UPDATE SET tag=excluded.tag, updated_at=excluded.updated_at",
             (uuid, tag, _now_iso()),
         )
-        conn.commit()
+        if owns_conn:
+            c.commit()
     finally:
-        conn.close()
+        if owns_conn:
+            c.close()
 
 
 def lookup_tags(uuids: list[str], *, path: Path | None = None) -> dict[str, str]:
@@ -145,74 +156,105 @@ def _row_to_session(row: sqlite3.Row) -> SessionRow:
     )
 
 
-def ensure_session_row(project_dir: Path, basename: str, *, path: Path | None = None) -> None:
+def ensure_session_row(
+    project_dir: Path,
+    basename: str,
+    *,
+    path: Path | None = None,
+    conn: sqlite3.Connection | None = None,
+) -> None:
     """Insert a row for (project_dir, basename) if absent. Never overwrites an
     existing row's timestamps — this is the safety-net call ccd.py makes right
     after creating a session directory, in case the SessionStart hook never
     fires (hooks disabled/broken); the hook's own touch_last_opened() upsert
-    is the normal path and would create the same row moments later regardless."""
+    is the normal path and would create the same row moments later regardless.
+
+    conn, if given, is reused as-is (caller owns commit/close) — see write_tag."""
     from cc_session_tools.lib.sessions import session_start_date
 
     start_date = session_start_date(basename)
     if start_date is None:
         return
-    conn = connect(path=path)
+    owns_conn = conn is None
+    c = conn if conn is not None else connect(path=path)
     try:
-        conn.execute(
+        c.execute(
             "INSERT INTO sessions (project_dir, basename, start_date, discovered_at) "
             "VALUES (?, ?, ?, ?) "
             "ON CONFLICT(project_dir, basename) DO NOTHING",
             (str(project_dir), basename, start_date, _now_iso()),
         )
-        conn.commit()
+        if owns_conn:
+            c.commit()
     finally:
-        conn.close()
+        if owns_conn:
+            c.close()
 
 
 def touch_last_opened(
-    project_dir: Path, basename: str, *, path: Path | None = None, when: float | None = None
+    project_dir: Path,
+    basename: str,
+    *,
+    path: Path | None = None,
+    when: float | None = None,
+    conn: sqlite3.Connection | None = None,
 ) -> None:
-    """Upsert the last_opened timestamp (epoch seconds) for (project_dir, basename)."""
+    """Upsert the last_opened timestamp (epoch seconds) for (project_dir, basename).
+
+    conn, if given, is reused as-is (caller owns commit/close) — see write_tag."""
     from cc_session_tools.lib.sessions import session_start_date
 
     start_date = session_start_date(basename)
     if start_date is None:
         return
     ts = when if when is not None else time.time()
-    conn = connect(path=path)
+    owns_conn = conn is None
+    c = conn if conn is not None else connect(path=path)
     try:
-        conn.execute(
+        c.execute(
             "INSERT INTO sessions (project_dir, basename, start_date, discovered_at, last_opened) "
             "VALUES (?, ?, ?, ?, ?) "
             "ON CONFLICT(project_dir, basename) DO UPDATE SET last_opened=excluded.last_opened",
             (str(project_dir), basename, start_date, _now_iso(), ts),
         )
-        conn.commit()
+        if owns_conn:
+            c.commit()
     finally:
-        conn.close()
+        if owns_conn:
+            c.close()
 
 
 def touch_last_active(
-    project_dir: Path, basename: str, *, path: Path | None = None, when: float | None = None
+    project_dir: Path,
+    basename: str,
+    *,
+    path: Path | None = None,
+    when: float | None = None,
+    conn: sqlite3.Connection | None = None,
 ) -> None:
-    """Upsert the last_active timestamp (epoch seconds) for (project_dir, basename)."""
+    """Upsert the last_active timestamp (epoch seconds) for (project_dir, basename).
+
+    conn, if given, is reused as-is (caller owns commit/close) — see write_tag."""
     from cc_session_tools.lib.sessions import session_start_date
 
     start_date = session_start_date(basename)
     if start_date is None:
         return
     ts = when if when is not None else time.time()
-    conn = connect(path=path)
+    owns_conn = conn is None
+    c = conn if conn is not None else connect(path=path)
     try:
-        conn.execute(
+        c.execute(
             "INSERT INTO sessions (project_dir, basename, start_date, discovered_at, last_active) "
             "VALUES (?, ?, ?, ?, ?) "
             "ON CONFLICT(project_dir, basename) DO UPDATE SET last_active=excluded.last_active",
             (str(project_dir), basename, start_date, _now_iso(), ts),
         )
-        conn.commit()
+        if owns_conn:
+            c.commit()
     finally:
-        conn.close()
+        if owns_conn:
+            c.close()
 
 
 _ORDERABLE_COLUMNS = {"last_active", "last_opened"}
