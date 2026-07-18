@@ -166,6 +166,51 @@ All four should return data that looks like your pre-migration history, not empt
 Follow `docs/data-store-migration-backups.md`'s checklist. Keep both the standalone Step 2
 tarball and each script's own `migration-backups/*.tar.gz` for 30 days, then delete.
 
+## Rollback — unwinding the migration
+
+Only the flat-file *reads* stop once you reinstall 0.19.0 — nothing old is deleted until each
+migration script's own verify+backup steps pass, and even then the new `.db` files never
+overwrite the old ones in place. So rolling back is: restore the old flat files, then reinstall
+the old binary.
+
+**1. Restore the old flat files from the Step 2 tarball** (or, per-store, from
+`~/.local/share/claude/migration-backups/*.tar.gz` if you'd rather restore one store at a time):
+
+```sh
+mkdir -p /tmp/ccst-restore
+tar xzf ~/claude-data-store-migration-backup-<timestamp>.tar.gz -C /tmp/ccst-restore
+
+cp -a /tmp/ccst-restore/ccmsg/cc-messages ~/.claude/
+cp -a /tmp/ccst-restore/ccsched/cc-scheduler ~/.claude/
+cp -a /tmp/ccst-restore/sessions/session-tags ~/.cache/claude/
+[ -e /tmp/ccst-restore/sessions/cc-doctor-mutes.json ] && \
+  cp -a /tmp/ccst-restore/sessions/cc-doctor-mutes.json ~/.claude/
+cp -a /tmp/ccst-restore/telemetry/fires.jsonl* ~/.cache/claude/logs/
+cp -a /tmp/ccst-restore/command-cache/command-cache.db ~/.cache/claude/logs/
+mkdir -p ~/.cache/cc-session-tools
+cp -a /tmp/ccst-restore/claude-flags/claude-flags.json ~/.cache/cc-session-tools/
+```
+
+(`cp -a` rather than `mv`/overwrite-in-place, so if any of these already exist — e.g. you
+migrated, used the new tools for a while, then decided to roll back — you keep whatever
+accumulated there since migrating rather than silently losing it. Check for conflicts first with
+`diff -r` if that matters to you.)
+
+**2. Reinstall the pre-migration binary:**
+
+```sh
+cd ~/repos/claude-code-session-tools
+git checkout main   # or the pre-migration commit if main has since been fast-forwarded past it
+uv tool install --reinstall ~/repos/claude-code-session-tools
+ccst --version   # should print 0.18.0 again
+```
+
+**3. Optional cleanup** — the new `.db` files are harmless left in place (0.18.0 never reads
+`~/.local/share/claude/`), but if you want a clean rollback, delete them yourself from a plain
+terminal (not from inside a Claude Code session — this is a plain `rm`, no script involved, but
+keep the same discipline): `~/.local/share/claude/{ccmsg,ccsched,sessions,telemetry,command-cache}.db`
+and `~/.local/share/claude/claude-flags.json`.
+
 ---
 
 ## Summary of what testing found and fixed before this doc was finalized (2026-07-17)
