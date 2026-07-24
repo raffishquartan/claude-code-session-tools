@@ -27,6 +27,24 @@ fails at any point, the script aborts and the old files are untouched. The one e
 activity sentinels row above — those are copied, never deleted, by design (harmless once
 `sessions.db` is authoritative), so there's nothing to back up or restore for them.
 
+## Script paths (quick reference)
+
+All commands below assume `cd ~/repos/claude-code-session-tools` first; full absolute paths
+given here so this section stands alone if you ever need it without that context:
+
+| Step | What it does | Full path |
+|---|---|---|
+| 2 | standalone pre-migration backup | `/home/chris/repos/claude-code-session-tools/scripts/backup_pre_migration.sh` |
+| 3/4 | migrate `ccmsg` | `/home/chris/repos/claude-code-session-tools/scripts/migrate_ccmsg_to_db.py` |
+| 3/4 | migrate telemetry | `/home/chris/repos/claude-code-session-tools/scripts/migrate_fires_jsonl_to_telemetry_db.py` |
+| 3/4 | migrate `ccsched` | `/home/chris/repos/claude-code-session-tools/src/cc_session_tools/cli/migrate_ccsched.py` (run as a module: `uv run python -m cc_session_tools.cli.migrate_ccsched`, not invoked by file path directly) |
+| 3/4 | migrate sessions (tags/activity/mutes) | `/home/chris/repos/claude-code-session-tools/src/cc_session_tools/cli/migrate_sessions_db.py` (run as a module: `uv run python -m cc_session_tools.cli.migrate_sessions_db`, not invoked by file path directly) |
+
+The `ccmsg`/telemetry scripts live under `scripts/` and are run directly by file path; the
+`ccsched`/sessions ones live under `src/cc_session_tools/cli/` and are proper CLI modules (also
+reachable as `ccst migrate ccsched` / `ccst sessions migrate` once you've reinstalled — see
+Step 5) — this split is why the commands in Steps 3-4 below don't all look the same shape.
+
 ## Step 0 — run everything from a plain terminal, not from inside Claude Code
 
 **Important, found during real-data testing:** the `bash-hard-deny` PreToolUse hook statically
