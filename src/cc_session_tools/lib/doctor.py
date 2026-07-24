@@ -311,6 +311,161 @@ def check_data_stores(store_paths: dict[str, Path]) -> list[CheckResult]:
     return results
 
 
+# ---------- pending data-store migration check ----------
+
+
+@dataclass(frozen=True)
+class LegacyMigrationPaths:
+    """Old on-disk locations for the four stores that gained a one-shot
+    migration script in the 1.0.0 data-store restructure, plus the new
+    ``data_home`` root their SQLite replacements live under."""
+
+    ccmsg_old_root: Path
+    ccsched_old_dir: Path
+    tags_dir: Path
+    mutes_file: Path
+    telemetry_old_dir: Path
+    data_home: Path
+
+
+def _count_legacy_ccmsg(old_root: Path) -> int:
+    if not old_root.is_dir():
+        return 0
+    return sum(1 for p in old_root.rglob("*.md") if p.is_file() and ".locks" not in p.parts)
+
+
+def _count_legacy_ccsched(old_dir: Path) -> int:
+    if not old_dir.is_dir():
+        return 0
+    return sum(1 for p in old_dir.rglob("*") if p.is_file())
+
+
+def _count_legacy_sessions(tags_dir: Path, mutes_file: Path) -> int:
+    count = len(list(tags_dir.glob("*.tag"))) if tags_dir.is_dir() else 0
+    if mutes_file.is_file():
+        try:
+            data = json.loads(mutes_file.read_text())
+        except (OSError, json.JSONDecodeError):
+            data = None
+        if isinstance(data, dict):
+            count += len(data)
+    return count
+
+
+def _count_legacy_telemetry(log_dir: Path) -> int:
+    if not log_dir.is_dir():
+        return 0
+    return sum(
+        1 for n in ("fires.jsonl", "fires.jsonl.1", "fires.jsonl.2", "fires.jsonl.3")
+        if (log_dir / n).is_file()
+    )
+
+
+def _count_new_store_rows(db_path: Path, tables: tuple[str, ...]) -> int:
+    """Total row count across ``tables`` in ``db_path``.
+
+    Returns 0 (rather than raising) if the DB doesn't exist or can't be
+    opened — from this check's point of view that's indistinguishable from
+    "migration hasn't written anything yet".
+    """
+    if not db_path.exists():
+        return 0
+    try:
+        conn = _db_connect(db_path, readonly=True)
+    except (sqlite3.DatabaseError, sqlite3.OperationalError, OSError):
+        return 0
+    try:
+        total = 0
+        for table in tables:
+            try:
+                total += int(conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0])
+            except sqlite3.OperationalError:
+                continue
+        return total
+    finally:
+        conn.close()
+
+
+def check_pending_data_store_migration(paths: LegacyMigrationPaths) -> list[CheckResult]:
+    """Detect legacy flat-file data left over from a pre-1.0.0 install.
+
+    :func:`check_data_stores` can't distinguish a fresh install (nothing to
+    migrate) from an upgrade that hasn't run the one-shot migration yet
+    (legacy data present, new store empty) — both read as "not yet created,
+    expected before first use". This check makes that distinction explicit:
+
+    - No legacy data found -> OK (fresh install or already cleaned up).
+    - Legacy data found, new store empty/missing -> FAIL: the upgrade is
+      silently sitting on unmigrated data until ``ccst migrate all`` is run.
+    - Legacy data found, new store already has rows -> WARN: the migration
+      already ran but the old files weren't deleted (or deletion failed
+      partway); no data is at risk, just uncommitted cleanup.
+    """
+    sources: dict[str, tuple[tuple[Path, ...], int, Path, tuple[str, ...]]] = {
+        "ccmsg": (
+            (paths.ccmsg_old_root,),
+            _count_legacy_ccmsg(paths.ccmsg_old_root),
+            paths.data_home / "ccmsg.db",
+            ("messages",),
+        ),
+        "ccsched": (
+            (paths.ccsched_old_dir,),
+            _count_legacy_ccsched(paths.ccsched_old_dir),
+            paths.data_home / "ccsched.db",
+            ("jobs", "job_state", "cursors", "reconcile_throttle"),
+        ),
+        "sessions": (
+            (paths.tags_dir, paths.mutes_file),
+            _count_legacy_sessions(paths.tags_dir, paths.mutes_file),
+            paths.data_home / "sessions.db",
+            ("session_tags", "doctor_mutes"),
+        ),
+        "telemetry": (
+            (paths.telemetry_old_dir,),
+            _count_legacy_telemetry(paths.telemetry_old_dir),
+            paths.data_home / "telemetry.db",
+            ("telemetry_events", "catchup_events"),
+        ),
+    }
+
+    results: list[CheckResult] = []
+    for store_name, (old_paths, legacy_count, new_db_path, tables) in sources.items():
+        name = f"migration:{store_name}"
+        if legacy_count == 0:
+            results.append(
+                CheckResult(name=name, status=Status.OK, reason="no legacy data found — nothing to migrate")
+            )
+            continue
+
+        existing = ", ".join(str(p) for p in old_paths if p.exists())
+        new_count = _count_new_store_rows(new_db_path, tables)
+        if new_count == 0:
+            results.append(
+                CheckResult(
+                    name=name,
+                    status=Status.FAIL,
+                    reason=(
+                        f"{legacy_count} unmigrated item(s) at {existing}; run "
+                        "`ccst migrate all` from a plain terminal (NOT inside a Claude Code "
+                        "session — the delete step is blocked by bash-hard-deny) to migrate "
+                        f"into {new_db_path}"
+                    ),
+                )
+            )
+        else:
+            results.append(
+                CheckResult(
+                    name=name,
+                    status=Status.WARN,
+                    reason=(
+                        f"migration already ran ({new_count} row(s) in {new_db_path.name}) but "
+                        f"old files remain at {existing} — safe to remove once verified"
+                    ),
+                )
+            )
+    return results
+
+
 # ---------- high-level runner ----------
 
 
@@ -324,6 +479,7 @@ def run_all_checks(
     env: dict[str, str | None],
     skip_pypi: bool = False,
     store_paths: dict[str, Path] | None = None,
+    legacy_migration_paths: LegacyMigrationPaths | None = None,
 ) -> list[CheckResult]:
     """Run the full doctor suite and return results.
 
@@ -347,6 +503,9 @@ def run_all_checks(
         Dict mapping short store name -> resolved file path; when None,
         data-store checks are skipped (used by callers/tests that don't care
         about them).
+    legacy_migration_paths:
+        Old on-disk locations for the pre-1.0.0 flat-file stores; when None,
+        the pending-migration check is skipped.
     """
     results: list[CheckResult] = []
 
@@ -393,6 +552,10 @@ def run_all_checks(
     # Data stores
     if store_paths is not None:
         results.extend(check_data_stores(store_paths))
+
+    # Pending legacy-data migration
+    if legacy_migration_paths is not None:
+        results.extend(check_pending_data_store_migration(legacy_migration_paths))
 
     # PyPI version check
     if not skip_pypi:

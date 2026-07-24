@@ -1,4 +1,4 @@
-# tests/test_migrate_ccmsg_to_db.py
+# tests/test_migrate_ccmsg.py
 from __future__ import annotations
 
 import json
@@ -6,8 +6,8 @@ from pathlib import Path
 
 import pytest
 
+from cc_session_tools.cli.migrate_ccmsg import migrate
 from cc_session_tools.lib.messaging import message, repository, store
-from scripts.migrate_ccmsg_to_db import migrate
 
 
 def _old_message_file(old_root: Path, partition: str, mid: str, subject: str) -> None:

@@ -20,6 +20,12 @@
             "command": "ccst hooks run catchup",
             "timeout": 10,
             "statusMessage": "Reconciling scheduled-task catch-up..."
+          },
+          {
+            "type": "command",
+            "command": "ccst hooks run pending-migration",
+            "timeout": 5,
+            "statusMessage": "Checking for unmigrated legacy data stores..."
           }
         ]
       }

@@ -1,18 +1,14 @@
+# tests/test_migrate_telemetry.py
 from __future__ import annotations
 
 import json
 import sqlite3
-import sys
 import tarfile
 from pathlib import Path
 
 import pytest
 
-_SCRIPTS_DIR = Path(__file__).resolve().parents[1] / "scripts"
-if str(_SCRIPTS_DIR) not in sys.path:
-    sys.path.insert(0, str(_SCRIPTS_DIR))
-
-import migrate_fires_jsonl_to_telemetry_db as mig  # noqa: E402
+from cc_session_tools.cli import migrate_telemetry as mig
 
 
 def _generic_line(ts: str, hook: str = "bash-security-review") -> str:
