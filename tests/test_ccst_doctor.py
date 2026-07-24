@@ -13,6 +13,7 @@ from cc_session_tools.lib.doctor import (
     CheckResult,
     Status,
     check_cli_on_path,
+    check_data_stores,
     check_env_dir,
     check_hook_registered,
     check_pypi_version,
@@ -23,6 +24,7 @@ from cc_session_tools.lib.doctor import (
     _extract_bundle_hook_names,
     _version_tuple,
 )
+from cc_session_tools.lib import db as _db
 
 
 def _run(*args: str) -> subprocess.CompletedProcess[str]:
@@ -386,3 +388,194 @@ def test_doctor_drift_positional_not_exit_2() -> None:
     """ccst doctor drift must not exit 2 (argparse error)."""
     result = _run("doctor", "drift", "--no-pypi")
     assert result.returncode != 2
+
+
+# ---------- mute / unmute / list-mutes CLI (net new — zero coverage existed) ----------
+
+def test_mute_writes_and_list_mutes_shows_it(tmp_path: Path) -> None:
+    mutes_file = tmp_path / "sessions.db"
+    r1 = _run("doctor", "--mute", "version:pypi", "--mutes-file", str(mutes_file))
+    assert r1.returncode == 0
+    assert "Muted 'version:pypi'" in r1.stdout
+
+    r2 = _run("doctor", "--list-mutes", "--mutes-file", str(mutes_file))
+    assert r2.returncode == 0
+    assert "version:pypi" in r2.stdout
+
+
+def test_list_mutes_empty_reports_none(tmp_path: Path) -> None:
+    mutes_file = tmp_path / "sessions.db"
+    r = _run("doctor", "--list-mutes", "--mutes-file", str(mutes_file))
+    assert r.returncode == 0
+    assert "No checks are muted" in r.stdout
+
+
+def test_unmute_removes_a_muted_check(tmp_path: Path) -> None:
+    mutes_file = tmp_path / "sessions.db"
+    _run("doctor", "--mute", "hook:foo", "--mutes-file", str(mutes_file))
+    r = _run("doctor", "--unmute", "hook:foo", "--mutes-file", str(mutes_file))
+    assert r.returncode == 0
+    assert "Un-muted 'hook:foo'" in r.stdout
+
+    r2 = _run("doctor", "--list-mutes", "--mutes-file", str(mutes_file))
+    assert "hook:foo" not in r2.stdout
+
+
+def test_unmute_not_muted_returns_1(tmp_path: Path) -> None:
+    mutes_file = tmp_path / "sessions.db"
+    r = _run("doctor", "--unmute", "never-muted", "--mutes-file", str(mutes_file))
+    assert r.returncode == 1
+    assert "was not muted" in r.stdout
+
+
+def test_drift_mode_hides_muted_issues(tmp_path: Path) -> None:
+    mutes_file = tmp_path / "sessions.db"
+    settings = tmp_path / "settings.json"
+    settings.write_text('{"hooks": {}}')
+    # Mute one of the checks that will definitely WARN/FAIL in a clean env.
+    r_first = _run("doctor", "--drift", "--no-pypi", "--settings", str(settings))
+    # Extract a real un-muted check name from the drift output to mute it.
+    lines = [l for l in r_first.stdout.splitlines() if l.strip().startswith("[")]
+    assert lines, "expected at least one un-muted issue to mute in this test"
+    name = lines[0].split("]", 1)[1].split()[0]
+
+    _run("doctor", "--mute", name, "--mutes-file", str(mutes_file))
+    r_after = _run(
+        "doctor", "--drift", "--no-pypi", "--settings", str(settings),
+        "--mutes-file", str(mutes_file),
+    )
+    assert name not in r_after.stdout
+
+
+def test_mutes_file_default_is_sessions_db_not_json(tmp_path: Path, monkeypatch) -> None:
+    """Regression guard for D7: the default mute store is sessions.db, not
+    the old ~/.claude/cc-doctor-mutes.json path."""
+    from cc_session_tools.lib import doctor_mutes, sessions_db
+    monkeypatch.setenv("CCST_SESSIONS_DIR", str(tmp_path))
+    assert doctor_mutes.default_mutes_path() == sessions_db.default_db_path()
+    assert doctor_mutes.default_mutes_path().name == "sessions.db"
+
+
+# ---------- check_data_stores ----------
+
+_DDL = "CREATE TABLE IF NOT EXISTS widgets (id INTEGER PRIMARY KEY);"
+
+
+def test_check_data_stores_ok_for_valid_existing_db(tmp_path: Path) -> None:
+    target = tmp_path / "ccmsg.db"
+    _db.connect(target, ddl=_DDL).close()
+
+    results = check_data_stores({"ccmsg": target})
+
+    assert len(results) == 1
+    assert results[0].name == "data-store:ccmsg"
+    assert results[0].status == Status.OK
+
+
+def test_check_data_stores_ok_for_valid_existing_json(tmp_path: Path) -> None:
+    target = tmp_path / "claude-flags.json"
+    target.write_text('{"mtime": 1.0, "path": "/x", "flags": []}')
+
+    results = check_data_stores({"claude-flags": target})
+
+    assert results[0].status == Status.OK
+
+
+def test_check_data_stores_fail_for_corrupt_db(tmp_path: Path) -> None:
+    target = tmp_path / "ccsched.db"
+    target.write_bytes(b"not a sqlite file at all")
+
+    results = check_data_stores({"ccsched": target})
+
+    assert results[0].status == Status.FAIL
+    assert "ccsched.db" in results[0].reason
+
+
+def test_check_data_stores_fail_for_corrupt_json(tmp_path: Path) -> None:
+    target = tmp_path / "claude-flags.json"
+    target.write_text("{not valid json")
+
+    results = check_data_stores({"claude-flags": target})
+
+    assert results[0].status == Status.FAIL
+
+
+def test_check_data_stores_warn_when_missing_but_parent_writable(tmp_path: Path) -> None:
+    target = tmp_path / "not-created-yet" / "sessions.db"
+
+    results = check_data_stores({"sessions": target})
+
+    assert results[0].status == Status.WARN
+    assert "will be created" in results[0].reason
+
+
+def test_check_data_stores_fail_when_missing_and_ancestor_unwritable(tmp_path: Path) -> None:
+    readonly_root = tmp_path / "readonly"
+    readonly_root.mkdir()
+    readonly_root.chmod(0o500)
+    target = readonly_root / "telemetry.db"
+    try:
+        results = check_data_stores({"telemetry": target})
+        assert results[0].status == Status.FAIL
+    finally:
+        readonly_root.chmod(0o700)  # allow tmp_path cleanup
+
+
+def test_check_data_stores_handles_multiple_stores_independently(tmp_path: Path) -> None:
+    good = tmp_path / "ccmsg.db"
+    _db.connect(good, ddl=_DDL).close()
+    bad = tmp_path / "ccsched.db"
+    bad.write_bytes(b"garbage")
+
+    results = check_data_stores({"ccmsg": good, "ccsched": bad})
+
+    by_name = {r.name: r for r in results}
+    assert by_name["data-store:ccmsg"].status == Status.OK
+    assert by_name["data-store:ccsched"].status == Status.FAIL
+
+
+# ---------- run_all_checks wiring ----------
+
+def test_run_all_checks_includes_data_store_checks_when_store_paths_given(tmp_path: Path) -> None:
+    settings = tmp_path / "settings.json"
+    settings.write_text('{"hooks": {}}')
+    bundle = Path(__file__).parent.parent / "config" / "hooks-bundle.json"
+    store = tmp_path / "ccmsg.db"
+    _db.connect(store, ddl=_DDL).close()
+
+    results = run_all_checks(
+        installed_version="0.11.0",
+        settings_path=settings,
+        bundle_path=bundle,
+        skills_source_dir=None,
+        skills_target_dir=tmp_path / "skills",
+        env={"CLAUDE_SESSION_TOOLS_REPO_ROOT": None, "CLAUDE_SESSION_TOOLS_PROJ_ROOT": None},
+        skip_pypi=True,
+        store_paths={"ccmsg": store},
+    )
+
+    assert any(r.name == "data-store:ccmsg" for r in results)
+
+
+def test_run_all_checks_skips_data_store_checks_when_omitted(tmp_path: Path) -> None:
+    """store_paths defaults to None — existing callers that don't pass it are unaffected."""
+    settings = tmp_path / "settings.json"
+    settings.write_text('{"hooks": {}}')
+    bundle = Path(__file__).parent.parent / "config" / "hooks-bundle.json"
+
+    results = run_all_checks(
+        installed_version="0.11.0",
+        settings_path=settings,
+        bundle_path=bundle,
+        skills_source_dir=None,
+        skills_target_dir=tmp_path / "skills",
+        env={"CLAUDE_SESSION_TOOLS_REPO_ROOT": None, "CLAUDE_SESSION_TOOLS_PROJ_ROOT": None},
+        skip_pypi=True,
+    )
+
+    assert not any(r.name.startswith("data-store:") for r in results)
+
+
+def test_doctor_output_includes_data_store_checks() -> None:
+    result = _run("doctor", "--no-pypi")
+    assert "data-store:" in result.stdout

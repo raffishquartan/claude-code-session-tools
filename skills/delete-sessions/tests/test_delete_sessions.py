@@ -21,20 +21,17 @@ sys.path.insert(0, str(SCRIPTS_DIR))
 
 import delete_sessions as ds  # noqa: E402  (sys.path mutation first)
 
-from cc_session_tools.lib.sessions import (  # noqa: E402
-    _session_tags_dir,
-    transcript_dir_for_project,
-)
+from cc_session_tools.lib import sessions_db  # noqa: E402
+from cc_session_tools.lib.sessions import transcript_dir_for_project  # noqa: E402
 
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _write_tag(tags_dir: Path, uuid: str, tag: str) -> None:
-    """Write a .tag file to the flat tags dir."""
-    tags_dir.mkdir(parents=True, exist_ok=True)
-    (tags_dir / f"{uuid}.tag").write_text(tag + "\n")
+def _write_tag(uuid: str, tag: str) -> None:
+    """Record uuid -> tag in sessions.db (session_tags table)."""
+    sessions_db.write_tag(uuid, tag)
 
 
 def _write_jsonl(path: Path, records: list[dict]) -> None:
@@ -59,8 +56,10 @@ def _make_empty_session(
     tag = basename.split("-", 1)[1]
     td = transcript_dir_for_project(project)
     td.mkdir(parents=True, exist_ok=True)
-    # Write tag to the flat tags dir (respects CCCS_SESSION_TAGS_DIR).
-    _write_tag(_session_tags_dir(), uuid, tag)
+    # Record the tag in sessions.db and register the session row so the
+    # delete loop's sessions.db cleanup has records to remove.
+    _write_tag(uuid, tag)
+    sessions_db.ensure_session_row(project, basename)
     jsonl = td / f"{uuid}.jsonl"
     _write_jsonl(jsonl, [
         {"type": "user", "isMeta": True, "message": {"content": "hook output"}},
@@ -83,8 +82,10 @@ def _make_nonempty_session(
     tag = basename.split("-", 1)[1]
     td = transcript_dir_for_project(project)
     td.mkdir(parents=True, exist_ok=True)
-    # Write tag to the flat tags dir (respects CCCS_SESSION_TAGS_DIR).
-    _write_tag(_session_tags_dir(), uuid, tag)
+    # Record the tag in sessions.db and register the session row so the
+    # delete loop's sessions.db cleanup has records to remove.
+    _write_tag(uuid, tag)
+    sessions_db.ensure_session_row(project, basename)
     jsonl = td / f"{uuid}.jsonl"
     _write_jsonl(jsonl, [
         {"type": "user", "isMeta": True, "message": {"content": "hook"}},
@@ -137,10 +138,8 @@ def fake_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     (home / ".claude").mkdir()
     monkeypatch.setenv("HOME", str(home))
     monkeypatch.setattr(Path, "home", classmethod(lambda cls: home))
-    # Flat tags dir for the new .tag file location.
-    tags_dir = tmp_path / "session-tags"
-    tags_dir.mkdir()
-    monkeypatch.setenv("CCCS_SESSION_TAGS_DIR", str(tags_dir))
+    # Isolated sessions.db for tag + session-row storage.
+    monkeypatch.setenv("CCST_SESSIONS_DIR", str(tmp_path / "db"))
     return home
 
 
@@ -319,16 +318,19 @@ class TestDryRunVsExecute:
         assert "DELETION PLAN" in out
         assert "DRY-RUN" in out
 
-    def test_execute_deletes_tag_file_too(self, fake_home, project, monkeypatch):
-        """The .tag file is also removed during --execute."""
+    def test_execute_removes_sessions_db_records_too(self, fake_home, project, monkeypatch):
+        """The session's sessions.db records (session_tags row + sessions row)
+        are also removed during --execute."""
         monkeypatch.delenv("CLAUDECODE", raising=False)
         monkeypatch.delenv("CLAUDE_PROJECT_DIR", raising=False)
         session_dir, jsonl = _make_empty_session(
             fake_home, project, "20260516-tag-test", uuid="tag-uuid"
         )
-        # Tag file is now in the flat tags dir, keyed by UUID.
-        tag_file = _session_tags_dir() / "tag-uuid.tag"
-        assert tag_file.exists()
+        # Tag + session row are recorded in sessions.db, keyed by UUID / (proj, basename).
+        assert sessions_db.lookup_tags(["tag-uuid"]) == {"tag-uuid": "tag-test"}
+        assert any(
+            r.basename == "20260516-tag-test" for r in sessions_db.list_sessions()
+        )
         code = "87654321"
         with mock.patch.object(ds, "_generate_code", return_value=code):
             rc, out, err = _run_main(
@@ -338,7 +340,10 @@ class TestDryRunVsExecute:
                 stdin_text=code,
             )
         assert rc == 0
-        assert not tag_file.exists(), ".tag file should have been deleted"
+        assert sessions_db.lookup_tags(["tag-uuid"]) == {}, "tag row should be gone"
+        assert not any(
+            r.basename == "20260516-tag-test" for r in sessions_db.list_sessions()
+        ), "sessions row should be gone"
 
 
 # ---------------------------------------------------------------------------

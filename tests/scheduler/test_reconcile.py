@@ -115,12 +115,62 @@ def test_launch_cap_defers_overflow(monkeypatch: pytest.MonkeyPatch) -> None:
     assert len(deferred) == 1
 
 
-def test_parse_error_surfaces_and_launches_nothing(monkeypatch: pytest.MonkeyPatch) -> None:
-    st.scheduler_dir().mkdir(parents=True, exist_ok=True)
-    reg.registry_path().write_text("[[job]\nbroken")
+def test_registry_load_failure_surfaces_and_launches_nothing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from cc_session_tools.lib.scheduler import store
+    monkeypatch.setenv("CC_SCHEDULER_DIR", str(tmp_path / "sched"))
+    monkeypatch.setenv("CCCS_HOOKS_DIR", str(tmp_path / "hooks"))
+    store.scheduler_dir().mkdir(parents=True, exist_ok=True)
+    # A non-SQLite file at the DB path makes registry.load_registry() raise; the
+    # reconcile boundary must convert that to parse_error, not crash.
+    store.db_path().write_bytes(b"this is not a sqlite database file")
     spawn = _Spawn()
     now = datetime(2026, 6, 20, 10, 0, tzinfo=UTC)
     result = rc.reconcile_and_launch(now=now, spawn=spawn)
     assert result.parse_error is not None
     assert result.launched == []
     assert spawn.calls == []
+
+
+def test_reconcile_concurrent_with_worker_setinflight_no_loss_r4(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """R4: a reconcile sweep (ensure_registered for several jobs) running
+    concurrently with a worker stamping in_flight on a DIFFERENT job must not
+    drop the worker's update. With per-row writes this is automatic."""
+    import threading
+    from cc_session_tools.lib.scheduler import state as st
+    monkeypatch.setenv("CC_SCHEDULER_DIR", str(tmp_path / "sched"))
+    monkeypatch.setenv("CCCS_HOOKS_DIR", str(tmp_path / "hooks"))
+    # Several never-seen jobs for reconcile to register, plus one job the
+    # "worker" stamps in_flight on.
+    for i in range(8):
+        _add(f"job-{i}")
+    _add("worker-job")
+    st.save_all_state({"worker-job": st.JobState(
+        registered_at="2026-06-20T09:00:00Z", last_success="2026-06-20T09:00:00Z",
+        last_attempt=None, consecutive_failures=0, in_flight=None)})
+
+    spawn = _Spawn()
+    now = datetime(2026, 6, 20, 10, 0, tzinfo=UTC)
+    barrier = threading.Barrier(2)
+
+    def do_reconcile() -> None:
+        barrier.wait()
+        rc.reconcile_and_launch(now=now, spawn=spawn)
+
+    def do_worker_stamp() -> None:
+        barrier.wait()
+        st.set_in_flight("worker-job", pid=4242, started_at="2026-06-20T10:00:00Z", instants=1)
+
+    t1 = threading.Thread(target=do_reconcile)
+    t2 = threading.Thread(target=do_worker_stamp)
+    t1.start(); t2.start(); t1.join(); t2.join()
+
+    # The worker's in_flight stamp survived the concurrent reconcile.
+    assert st.get_state("worker-job").in_flight == st.InFlight(
+        pid=4242, started_at="2026-06-20T10:00:00Z", instants=1)
+    # And reconcile registered the never-seen jobs.
+    after = st.load_all_state()
+    assert all(f"job-{i}" in after for i in range(8))

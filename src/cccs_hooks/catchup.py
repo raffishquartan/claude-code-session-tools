@@ -11,11 +11,11 @@ from __future__ import annotations
 
 import json
 import logging
+import sqlite3
 import sys
 from datetime import datetime, timedelta, timezone
-from pathlib import Path
 
-from cc_session_tools.lib.scheduler import cursor, ledger, reconcile, state, surface
+from cc_session_tools.lib.scheduler import cursor, ledger, reconcile, surface, throttle
 from cc_session_tools.lib.scheduler.digest import format_digest
 from cccs_hooks.telemetry import TelemetryEntry, log_event
 
@@ -50,27 +50,17 @@ def _log_failure(reason: str) -> None:
     )
 
 
-def _throttle_path(uuid: str) -> Path:
-    return state.scheduler_dir() / f".reconcile.{uuid}.ts"
-
-
 def _should_reconcile(event: str, uuid: str, now: datetime) -> bool:
     """SessionStart always reconciles; UserPromptSubmit reconciles at most once
-    per throttle window per session (so long sessions still fire sub-daily
-    cadences without re-reconciling on every keypress — §13)."""
+    per throttle window per session (§13)."""
     if event == "SessionStart":
         return True
-    path = _throttle_path(uuid)
-    if path.is_file():
-        last = state.parse_ts_or_none(path.read_text().strip())
-        if last is not None and now - last < _RECONCILE_THROTTLE:
-            return False
-    return True
+    last = throttle.read_last_reconciled(uuid)
+    return last is None or now - last >= _RECONCILE_THROTTLE
 
 
 def _stamp_reconcile(uuid: str, now: datetime) -> None:
-    state.scheduler_dir().mkdir(parents=True, exist_ok=True)
-    _throttle_path(uuid).write_text(state.format_ts(now))
+    throttle.stamp_reconciled(uuid, now)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -100,7 +90,7 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         surfaced = surface.surface(session_uuid=uuid, now=now)
         digest = format_digest(surfaced.reports, parse_error=None)
-    except (OSError, ValueError) as exc:
+    except (OSError, ValueError, sqlite3.Error) as exc:
         _log_failure(type(exc).__name__)
         _emit("", event)
         return 0

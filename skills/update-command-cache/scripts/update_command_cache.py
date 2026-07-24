@@ -4,58 +4,50 @@
 
 """Curate the bash-security-review command cache.
 
-Reads ~/.cache/claude/logs/fires.jsonl, surfaces safe-verdict commands not yet
-in the cache, prompts for approval, and records approved ones.
+Reads telemetry.db's telemetry_events table (hook='bash-security-review'),
+surfaces safe-verdict commands not yet in the cache, prompts for approval,
+and records approved ones.
 
 Usage:
     CCCS_FIRES_ACCESS=1 python3 update_command_cache.py [--list]
     python3 update_command_cache.py --remove <sha>
     python3 update_command_cache.py --flip <sha> <verdict>
 
-The CCCS_FIRES_ACCESS=1 env var is required to read fires.jsonl through the
+The CCCS_FIRES_ACCESS=1 env var is required to read telemetry.db through the
 bash-hard-deny hook's allowlist.
 """
 from __future__ import annotations
 
 import argparse
-import json
 import os
 import sys
 from collections import Counter
 from pathlib import Path
 
-# Make the cccs_hooks package importable when running from the skill dir.
+# Make cccs_hooks / cc_session_tools importable when running from the skill dir.
 _REPO_ROOT = Path(__file__).resolve().parents[3]
-if str(_REPO_ROOT) not in sys.path:
-    sys.path.insert(0, str(_REPO_ROOT))
+if str(_REPO_ROOT / "src") not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT / "src"))
 
 from cccs_hooks.cache import (  # noqa: E402
     _connect,
     cache_lookup,
     cache_record,
 )
-from cccs_hooks.telemetry import _DEFAULT_HOOKS_DIR  # noqa: E402
+from cc_session_tools.lib import telemetry_store  # noqa: E402
 
-_FIRES_PATH = _DEFAULT_HOOKS_DIR / "fires.jsonl"
 _DEFAULT_PREVIEW_LIMIT = 200
 
 
-def _read_fires(path: Path) -> list[dict[str, object]]:
-    if not path.exists():
-        return []
-    out: list[dict[str, object]] = []
-    with path.open("r", encoding="utf-8") as f:
-        for line in f:
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                obj = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            if isinstance(obj, dict):
-                out.append(obj)
-    return out
+def read_telemetry_events(hooks_dir: Path | None = None) -> list[dict[str, object]]:
+    conn = telemetry_store.connect(hooks_dir)
+    try:
+        rows = conn.execute(
+            "SELECT * FROM telemetry_events WHERE hook = 'bash-security-review' ORDER BY id"
+        ).fetchall()
+        return [dict(r) for r in rows]
+    finally:
+        conn.close()
 
 
 def _strip_sha_prefix(input_hash: str) -> str:
@@ -82,8 +74,8 @@ def collect_candidates(fires: list[dict[str, object]]) -> list[dict[str, object]
     last_seen: dict[str, str] = {}
     sample_session: dict[str, str] = {}
     for entry in fires:
-        if entry.get("hook") != "bash-security-review":
-            continue
+        # read_telemetry_events() already filters to hook='bash-security-review'
+        # in SQL, so no hook check here (validate once, trust afterwards).
         if entry.get("verdict") != "safe":
             continue
         if entry.get("cache") == "hit":
@@ -114,12 +106,12 @@ def collect_candidates(fires: list[dict[str, object]]) -> list[dict[str, object]
 def cmd_list(args: argparse.Namespace) -> int:
     if os.environ.get("CCCS_FIRES_ACCESS") != "1":
         sys.stderr.write(
-            "Refusing to read fires.jsonl without CCCS_FIRES_ACCESS=1.\n"
+            "Refusing to read telemetry.db without CCCS_FIRES_ACCESS=1.\n"
             "Re-run as: CCCS_FIRES_ACCESS=1 python3 update_command_cache.py\n"
         )
         return 2
-    fires = _read_fires(_FIRES_PATH)
-    candidates = collect_candidates(fires)
+    rows = read_telemetry_events()
+    candidates = collect_candidates(rows)
     if not candidates:
         print("No safe-verdict fires waiting to be promoted to the cache.")
         return 0
@@ -131,7 +123,7 @@ def cmd_list(args: argparse.Namespace) -> int:
         )
     print(
         "\nNote: this script does not yet have the original commands in plain "
-        "text - the fires log only stores hashes. The Claude Code skill consumer "
+        "text - telemetry.db only stores hashes. The Claude Code skill consumer "
         "of this script is expected to walk this list, retrieve the originals "
         "from session transcripts, and call cache_record() for each approved "
         "entry."

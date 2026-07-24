@@ -40,6 +40,23 @@ and silently skips the build, leaving the old binary in place.
 This rebuilds the wheel from the current `main` and updates all four shims
 (ccd, ccr, ccs, claude-code-usage).
 
+## Data store conventions
+
+Any new Chris-added data store in this repo (or moved here from elsewhere) must:
+
+- Use SQLite (WAL mode) under `~/.local/share/claude/<subsystem>.db`, one file per subsystem —
+  not flat files, not hand-rolled locks. Open every connection through the shared
+  connection-setup helper (WAL pragma + busy-timeout) rather than repeating the pragma setup ad
+  hoc per module.
+- Ship a corresponding `ccmsg`/`ccsched`/`ccst` query subcommand for its common read
+  operations before being considered done — mirrors the existing per-concern-subcommand pattern
+  (`hooks`, `skills`, `doctor`, `telemetry`, `gc`, `tags`). A store nobody can query except by
+  opening it with a raw `sqlite3` shell isn't finished.
+
+Rationale and full design: `data-stores-design-spec.md` and
+`ccst-migration-and-cli-update-spec.md`, in the `claude` project's session
+`cc-sessions/20260712-claude-finalise-common-extra-claude-data-store-requirements/out/`.
+
 ## Version policy
 
 - **Minor bump** (0.x.0): changes to install interface, CLI flags, or configuration

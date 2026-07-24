@@ -1,9 +1,9 @@
 """The detached worker (§9.2) behind `ccsched _run-job <id> --instants k`.
 
-Acquires the per-job in-flight lock (sole overlap guarantee), stamps in_flight,
-runs the command with a per-instant timeout, advances state on success, records
-the outcome to the ledger, and ALWAYS clears in_flight + releases the lock. The
-``now`` and ``runner`` are injected for testability."""
+Acquires the per-job in-flight lock (sole overlap guarantee — unchanged from the
+flat-file era, R3), stamps in_flight, runs the command with a per-instant
+timeout, advances state on success via targeted single-row writes, records the
+outcome to the ledger, and ALWAYS clears in_flight + releases the lock."""
 from __future__ import annotations
 
 import logging
@@ -19,7 +19,7 @@ from cc_session_tools.lib.scheduler.jobspec import CoalesceKind, JobSpec
 from cc_session_tools.lib.scheduler.ledger import LedgerEntry, LedgerEvent
 from cc_session_tools.lib.scheduler.lock import InFlightLockHeld, in_flight_lock
 from cc_session_tools.lib.scheduler.runner import RunOutcome, run_command
-from cc_session_tools.lib.scheduler.state import JobState
+from cc_session_tools.lib.scheduler.state import DEFAULT_SUSPEND_THRESHOLD
 
 logger = logging.getLogger(__name__)
 
@@ -56,8 +56,8 @@ def _run_body(
     timeout = parse_duration(spec.timeout)
     cadence = parse_cadence(spec.cadence)
     window = parse_duration(spec.catchup_window)
-    states = state.load_all_state()
-    js = state.ensure_registered(states, spec.job_id, now)
+    js = state.get_state(spec.job_id)
+    assert js is not None  # ensure_registered_db ran in run_job before the lock body
     baseline = state.parse_ts_or_none(js.last_success) or state.parse_ts_or_none(js.registered_at)
     assert baseline is not None
     result = owed(cadence, baseline, now, catchup_window=window)
@@ -74,21 +74,11 @@ def _run_body(
 
     failed = last_outcome is None or last_outcome.timed_out or last_outcome.exit_code != 0
     attempt_ts = state.format_ts(now)
-    states = state.load_all_state()  # reload to layer onto the in_flight stamp
-    cur = states[spec.job_id]
 
     if failed:
-        # Discard any j-1 successful instants from this run — intentional and
-        # safe because jobs are idempotent-by-contract (re-running them is harmless).
-        new_consecutive, new_suspended, newly_suspended = state.next_failure_count(
-            cur.consecutive_failures, suspended=cur.suspended,
+        new_consecutive, _new_suspended, newly_suspended = state.record_failure(
+            spec.job_id, attempt_ts=attempt_ts, threshold=DEFAULT_SUSPEND_THRESHOLD,
         )
-        states[spec.job_id] = JobState(
-            registered_at=cur.registered_at, last_success=cur.last_success,
-            last_attempt=attempt_ts, consecutive_failures=new_consecutive,
-            in_flight=cur.in_flight, suspended=new_suspended,
-        )
-        state.save_all_state(states)
         _record(spec, LedgerEvent.FAIL, owed_n, 0, last_outcome,
                 (last_outcome.stderr.strip()[:200] if last_outcome else None)
                 or ("timed out" if last_outcome and last_outcome.timed_out else None),
@@ -103,13 +93,7 @@ def _run_body(
         new_success = state.format_ts(now)
     else:
         new_success = state.format_ts(result.instants[succeeded - 1])
-    states[spec.job_id] = JobState(
-        registered_at=cur.registered_at, last_success=new_success,
-        last_attempt=attempt_ts, consecutive_failures=0, in_flight=cur.in_flight,
-        suspended=cur.suspended,
-    )
-    state.save_all_state(states)
-    # RUN only for a single on-time instant; BACKFILL when >1 owed or coalesced.
+    state.record_success(spec.job_id, new_success=new_success, attempt_ts=attempt_ts)
     event = LedgerEvent.RUN if owed_n <= 1 and succeeded == 1 else LedgerEvent.BACKFILL
     _record(spec, event, owed_n, succeeded, last_outcome, None)
 
@@ -122,12 +106,9 @@ def run_job(
     try:
         with in_flight_lock(job_id):
             try:
-                # Ensure the job is registered in state.json before stamping
-                # in_flight; a job added via `ccsched add` writes only to
-                # jobs.toml. set_in_flight would KeyError without this guard.
-                _states = state.load_all_state()
-                state.ensure_registered(_states, job_id, now)
-                state.save_all_state(_states)
+                # Register the state row before stamping in_flight; a job added
+                # via `ccsched add` has a jobs row but no job_state row yet.
+                state.ensure_registered_db(job_id, now)
                 state.set_in_flight(
                     job_id, pid=os.getpid(), started_at=state.format_ts(now), instants=instants
                 )

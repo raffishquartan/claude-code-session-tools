@@ -20,11 +20,7 @@ def fake_home(tmp_path, monkeypatch):
     home = tmp_path / "home"
     (home / ".claude").mkdir(parents=True)
     monkeypatch.setenv("HOME", str(home))
-    # Point CCCS_SESSION_TAGS_DIR to a flat tags dir so _session_tags_dir()
-    # resolves here rather than ~/.cache/claude/session-tags/.
-    tags_dir = tmp_path / "session-tags"
-    tags_dir.mkdir()
-    monkeypatch.setenv("CCCS_SESSION_TAGS_DIR", str(tags_dir))
+    monkeypatch.setenv("CCST_SESSIONS_DIR", str(tmp_path / "db"))
     return home
 
 
@@ -37,25 +33,24 @@ def fake_repos(fake_home, tmp_path, monkeypatch):
 
 
 def _make_session(repos: Path, project: str, basename: str, *, contents: str | None = None) -> Path:
+    from cc_session_tools.lib import sessions_db
     sess = repos / project / "cc-sessions" / basename
     (sess / "working").mkdir(parents=True)
     if contents is not None:
         (sess / "working" / "WORKLOG.md").write_text(contents)
+    sessions_db.ensure_session_row(repos / project, basename)
     return sess
 
 
 def _write_jsonl_with_user_message(fake_home: Path, proj: Path, basename: str, message: str) -> Path:
     """Write a JSONL transcript for basename with one real user message."""
-    import os
-    from cc_session_tools.lib.sessions import session_tag, _session_tags_dir
+    from cc_session_tools.lib import sessions_db
+    from cc_session_tools.lib.sessions import session_tag
     tag = session_tag(basename)
     t_dir = transcript_dir_for_project(proj)
     t_dir.mkdir(parents=True, exist_ok=True)
     stem = "abc-user-msg"
-    # Write tag file to the flat tags dir (respects CCCS_SESSION_TAGS_DIR).
-    tags_dir = _session_tags_dir()
-    tags_dir.mkdir(parents=True, exist_ok=True)
-    (tags_dir / f"{stem}.tag").write_text(tag or basename)
+    sessions_db.write_tag(stem, tag or basename)
     jsonl = t_dir / f"{stem}.jsonl"
     record = json_mod.dumps({
         "type": "user",
@@ -67,15 +62,13 @@ def _write_jsonl_with_user_message(fake_home: Path, proj: Path, basename: str, m
 
 def _write_jsonl_empty(fake_home: Path, proj: Path, basename: str) -> Path:
     """Write a JSONL transcript for basename with NO real user messages (only hook output)."""
-    from cc_session_tools.lib.sessions import session_tag, _session_tags_dir
+    from cc_session_tools.lib import sessions_db
+    from cc_session_tools.lib.sessions import session_tag
     tag = session_tag(basename)
     t_dir = transcript_dir_for_project(proj)
     t_dir.mkdir(parents=True, exist_ok=True)
     stem = "abc-empty"
-    # Write tag file to the flat tags dir (respects CCCS_SESSION_TAGS_DIR).
-    tags_dir = _session_tags_dir()
-    tags_dir.mkdir(parents=True, exist_ok=True)
-    (tags_dir / f"{stem}.tag").write_text(tag or basename)
+    sessions_db.write_tag(stem, tag or basename)
     jsonl = t_dir / f"{stem}.jsonl"
     # Only a SessionStart hook message (isMeta=True) — no user typed content.
     record = json_mod.dumps({

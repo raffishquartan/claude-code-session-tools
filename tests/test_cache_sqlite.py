@@ -220,6 +220,23 @@ def test_stats_main_no_crash(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, ca
     assert "Verdict breakdown" in out
 
 
+def test_default_db_path_uses_data_home(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.delenv("CCCS_CACHE_DB", raising=False)
+    monkeypatch.setenv("CCST_DATA_HOME", str(tmp_path))
+    from cccs_hooks.cache import _db_path
+    assert _db_path() == tmp_path / "command-cache.db"
+
+
+def test_stats_main_no_db_found(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys) -> None:
+    """cccs-stats prints a friendly message (not a traceback) when the DB file doesn't exist."""
+    monkeypatch.setenv("CCCS_CACHE_DB", str(tmp_path / "does-not-exist.db"))
+    monkeypatch.delenv("CCCS_CACHE_PATH", raising=False)
+    from cccs_hooks import stats as stats_mod
+    stats_mod.main([])
+    out = capsys.readouterr().out
+    assert "No hook DB found" in out
+
+
 def test_cache_efficiency_view(db: Path) -> None:
     # Seed: 2 trivial exits + 1 cache hit + 1 claude call (500ms)
     for _ in range(2):

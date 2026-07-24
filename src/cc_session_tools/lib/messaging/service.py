@@ -4,38 +4,29 @@
 This module holds business logic; argparse validation stays in the CLI."""
 from __future__ import annotations
 
-import logging
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from pathlib import Path
 from typing import Literal
 
 from cc_session_tools.lib.messaging import cursor as cursor_mod
+from cc_session_tools.lib.messaging import repository
 from cc_session_tools.lib.messaging import retention
 from cc_session_tools.lib.messaging.addressing import (
     MatchKind,
     SessionContext,
     targets,
 )
-from cc_session_tools.lib.messaging.lock import AlreadyClaimedError, claim_lock
+from cc_session_tools.lib.messaging.lock import claim_lock
 from cc_session_tools.lib.messaging.message import (
     Message,
     Status,
     ToKind,
-    parse,
-    safe_parse,
-    write_atomic,
 )
+from cc_session_tools.lib.messaging.repository import MessageNotFoundError
 from cc_session_tools.lib.messaging.store import (
     GLOBAL_PARTITION,
-    archive_dir,
-    ensure_inbox_dir,
     generate_id,
-    message_filename,
-    store_root,
 )
-
-logger = logging.getLogger(__name__)
 
 DeliverMode = Literal["full", "incremental"]
 
@@ -83,8 +74,7 @@ def send(request: SendRequest) -> str:
         attachments=list(request.attachments),
         body=request.body,
     )
-    inbox = ensure_inbox_dir(request.to_partition)
-    write_atomic(inbox / message_filename(message_id, request.subject), message)
+    repository.insert(message)
     return message_id
 
 
@@ -94,83 +84,28 @@ class Claimer:
     session: str
 
 
-class MessageNotFoundError(Exception):
-    """Raised when a message id resolves to no file."""
-
-
-def _iter_message_files() -> list[Path]:
-    root = store_root()
-    if not root.is_dir():
-        return []
-    return sorted(p for p in root.rglob("*.md") if p.is_file())
-
-
-def find_by_id(message_id: str) -> Path | None:
-    """Scan inbox and archive across all partitions for a message by id."""
-    for path in _iter_message_files():
-        if path.name.startswith(f"{message_id}__"):
-            return path
-    return None
+def find_by_id(message_id: str) -> Message | None:
+    """Single indexed primary-key lookup (was a full rglob scan)."""
+    return repository.get_by_id(message_id)
 
 
 def claim(message_id: str, claimer: Claimer) -> Message:
-    """First-claim-wins: atomically flip the message to status=claimed.
-
-    Raises ``MessageNotFoundError`` if the id is unknown, or
-    ``AlreadyClaimedError`` if the lock is already held (concurrent claim)
-    or the message is already in a claimed/read state."""
-    path = find_by_id(message_id)
-    if path is None:
-        raise MessageNotFoundError(message_id)
-    now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    """First-claim-wins. The file-based claim_lock (R4, kept outside the DB) is
+    the coarse envelope; repository.claim provides the atomic state transition."""
+    now = _now_iso()
     with claim_lock(message_id):
-        try:
-            message = parse(path.read_text(encoding="utf-8"))
-        except FileNotFoundError as exc:
-            # The file was archived/removed between find_by_id and the lock.
-            raise MessageNotFoundError(message_id) from exc
-        if message.status in ("claimed", "read", "archived"):
-            raise AlreadyClaimedError(message_id)
-        message.status = "claimed"
-        message.claimed_at = now
-        message.read_at = message.read_at or now
-        message.read_by_uuid = claimer.uuid
-        message.read_by_session = claimer.session
-        write_atomic(path, message)
-        return message
+        return repository.claim(message_id, claimer.uuid, claimer.session, now)
 
 
-def archive(message_id: str, now: datetime) -> Message:
-    """Move a message file into the archive/YYYY-MM/ sub-directory and flip
-    its status to archived.
-
-    Acquires the per-message claim lock so a manual archive cannot race a
-    concurrent ``claim`` and silently drop its metadata. Raises
-    ``MessageNotFoundError`` if the id is unknown, or ``AlreadyClaimedError``
-    if a claim is in flight for the same id."""
-    path = find_by_id(message_id)
-    if path is None:
-        raise MessageNotFoundError(message_id)
+def archive(message_id: str, now: datetime) -> Message:  # noqa: ARG001 - kept for CLI signature stability
+    """Manual archive. Acquires claim_lock so it cannot race a concurrent claim
+    (R4), then flips status atomically."""
     with claim_lock(message_id):
-        try:
-            message = parse(path.read_text(encoding="utf-8"))
-        except FileNotFoundError as exc:
-            raise MessageNotFoundError(message_id) from exc
-        message.status = "archived"
-        dest = archive_dir(message.to_location, now) / path.name
-        write_atomic(dest, message)
-        if dest != path:
-            path.unlink()
-        return message
+        return repository.archive_one(message_id)
 
 
 def read_one(message_id: str) -> Message | None:
-    """Return the parsed ``Message`` for *message_id*, or ``None`` if not found.
-
-    A found-but-corrupt file raises ``ValueError`` (from ``parse``) so the caller
-    can report that specific id as unreadable rather than silently "not found"."""
-    path = find_by_id(message_id)
-    return parse(path.read_text(encoding="utf-8")) if path is not None else None
+    return repository.get_by_id(message_id)
 
 
 @dataclass(frozen=True)
@@ -190,26 +125,13 @@ def list_messages(
     from_uuid: str | None = None,
 ) -> list[MessageRow]:
     """Return compact rows, optionally filtered by status, partition, or sender uuid."""
-    rows: list[MessageRow] = []
-    for path in _iter_message_files():
-        m = safe_parse(path)
-        if m is None:
-            continue
-        if status is not None and m.status != status:
-            continue
-        if partition is not None and m.to_location != partition:
-            continue
-        if from_uuid is not None and m.from_uuid != from_uuid:
-            continue
-        rows.append(MessageRow(
-            id=m.id,
-            status=m.status,
-            to_kind=m.to_kind,
-            to_value=m.to_value,
-            from_session=m.from_session,
-            subject=m.subject,
-        ))
-    return rows
+    return [
+        MessageRow(
+            id=m.id, status=m.status, to_kind=m.to_kind, to_value=m.to_value,
+            from_session=m.from_session, subject=m.subject,
+        )
+        for m in repository.list_rows(status=status, partition=partition, from_uuid=from_uuid)
+    ]
 
 
 def _relative_age(sent_at: str, now: datetime) -> str:
@@ -245,69 +167,56 @@ def deliver(ctx: SessionContext, *, mode: DeliverMode) -> str:
     return a compact digest (empty if nothing to show). ``mode`` is advisory
     (``full`` vs ``incremental``); the cursor bounds both identically."""
     now = datetime.now(timezone.utc)
+    now_iso = now.strftime("%Y-%m-%dT%H:%M:%SZ")
     cur = cursor_mod.load(ctx.uuid)
     inbound: list[str] = []
     proposals: list[str] = []
 
-    for partition in _swept_partitions(ctx):
-        inbox = ensure_inbox_dir(partition)
-        for path in sorted(inbox.glob("*.md")):
-            message = safe_parse(path)
-            if message is None:
-                continue
-            if not cursor_mod.is_new(message, cur):
-                continue
-            kind = targets(message, ctx)
-            if kind is MatchKind.RECIPIENT:
-                message.status = "read"
-                message.read_at = now.strftime("%Y-%m-%dT%H:%M:%SZ")
-                message.read_by_uuid = ctx.uuid
-                # SessionContext carries no display tag (the SessionStart/
-                # UserPromptSubmit stdin does not include one), so auto-read
-                # stamps the project label here. The sender's receipt will
-                # therefore read "by <project>" for auto-read and "by
-                # <session-tag>" for an explicit claim. This is intentional —
-                # do NOT "fix" it by inventing a tag. If a true session tag is
-                # ever wanted in receipts, add a ``session_tag`` field to
-                # SessionContext threaded from the hook stdin.
-                message.read_by_session = ctx.project
-                write_atomic(path, message)
+    partitions = _swept_partitions(ctx)
+    for message in repository.sweep_new(partitions, cur.high_water):
+        kind = targets(message, ctx)
+        if kind is MatchKind.RECIPIENT:
+            # First-writer-wins (R2): only the session that actually flips
+            # sent->read surfaces the line and back-fills read_by_session.
+            # SessionContext carries no display tag (the SessionStart/
+            # UserPromptSubmit stdin does not include one), so auto-read stamps
+            # the project label (ctx.project). The sender's receipt therefore
+            # reads "by <project>" for auto-read and "by <session-tag>" for an
+            # explicit claim. This is intentional — do NOT "fix" it by inventing
+            # a tag. If a true session tag is ever wanted in receipts, add a
+            # ``session_tag`` field to SessionContext threaded from the hook stdin.
+            if repository.mark_read(message.id, ctx.uuid, now_iso, ctx.project):
                 inbound.append(_digest_line(message, now))
-                cur = cursor_mod.advance(cur, message)
-            elif kind is MatchKind.CANDIDATE:
-                # A description proposal is surfaced to this session once, then
-                # the cursor advances so it is not re-nudged every prompt. Other
-                # sessions still see it (their own cursors are independent), so
-                # first-claim-wins is unaffected.
-                proposals.append(_digest_line(message, now))
-                cur = cursor_mod.advance(cur, message)
+            cur = cursor_mod.advance(cur, message)
+        elif kind is MatchKind.CANDIDATE:
+            # A description proposal is surfaced to this session once, then the
+            # cursor advances so it is not re-nudged every prompt. Other sessions
+            # still see it (their own cursors are independent), so first-claim-
+            # wins is unaffected.
+            proposals.append(_digest_line(message, now))
+            cur = cursor_mod.advance(cur, message)
+
+    # Retention runs once per swept partition (opportunistic, atomic per R1).
+    for partition in partitions:
         retention.archive_old(partition, now)
 
     cursor_mod.save(ctx.uuid, cur)
     receipts = _collect_receipts(ctx, now)
-
     return _format_digest(inbound, proposals, receipts)
 
 
 def _collect_receipts(ctx: SessionContext, now: datetime) -> list[str]:
+    pending = repository.pending_receipts(ctx.uuid)
     lines: list[str] = []
-    for path in _iter_message_files():
-        message = safe_parse(path)
-        if message is None:
-            continue
-        if message.from_uuid != ctx.uuid:
-            continue
-        if message.status not in ("read", "claimed"):
-            continue
-        if message.receipt_shown:
-            continue
+    shown: list[str] = []
+    for message in pending:
         who = message.read_by_session or "a session"
         lines.append(
             f'✓ read: "{message.subject}" by {who} '
             f"({_relative_age(message.sent_at, now)}) [{message.id}]"
         )
-        message.receipt_shown = True
-        write_atomic(path, message)
+        shown.append(message.id)
+    repository.mark_receipts_shown(shown)
     return lines
 
 

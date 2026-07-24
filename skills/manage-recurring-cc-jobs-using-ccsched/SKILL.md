@@ -75,6 +75,6 @@ the old hook is removed. Migrate in this order: (1) add the registry entry,
 ## Inspecting
 
 - `ccsched list` - cadence, enabled, last_success, next_due.
-- `ccsched status [<id>]` - recent ledger outcomes from fires.jsonl.
+- `ccsched status [<id>]` - recent ledger outcomes from telemetry.db.
 - `ccsched run <id> --force` - run now (for testing the command).
 - `ccsched sweep` - run the reconcile sweep manually.

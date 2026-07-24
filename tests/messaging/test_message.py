@@ -1,16 +1,12 @@
 # tests/messaging/test_message.py
 from __future__ import annotations
 
-from pathlib import Path
-
 import pytest
 
 from cc_session_tools.lib.messaging.message import (
     Message,
     parse,
     serialise,
-    write_atomic,
-    write_text_atomic,
 )
 
 
@@ -73,17 +69,3 @@ def test_parse_rejects_invalid_to_kind() -> None:
 def test_parse_rejects_invalid_status() -> None:
     with pytest.raises(ValueError, match="invalid status"):
         parse("---\nto_kind: session\nstatus: bogus\n---\n\nbody\n")
-
-
-def test_write_text_atomic_round_trips(tmp_path: Path) -> None:
-    path = tmp_path / "note.md"
-    write_text_atomic(path, "hello\n")
-    assert not (tmp_path / "note.md.tmp").exists()
-    assert path.read_text(encoding="utf-8") == "hello\n"
-
-
-def test_write_atomic_round_trips_via_disk(tmp_path: Path) -> None:
-    path = tmp_path / "m.md"
-    write_atomic(path, _sample())
-    assert not (tmp_path / "m.md.tmp").exists()
-    assert parse(path.read_text()) == _sample()

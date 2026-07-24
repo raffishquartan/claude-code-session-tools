@@ -7,11 +7,8 @@ from pathlib import Path
 import pytest
 
 from cc_session_tools.cli import ccd
-from cc_session_tools.lib.sessions import (
-    _session_tags_dir,
-    session_tag,
-    transcript_dir_for_project,
-)
+from cc_session_tools.lib import sessions_db
+from cc_session_tools.lib.sessions import session_tag, transcript_dir_for_project
 
 
 @pytest.fixture
@@ -31,9 +28,9 @@ def fake_home(tmp_path, monkeypatch):
     home = tmp_path / "home"
     (home / ".claude").mkdir(parents=True)
     monkeypatch.setenv("HOME", str(home))
-    # Redirect the flat session-tags dir so transcript lookup is hermetic and
-    # never reads the developer's real ~/.cache/claude/session-tags.
-    monkeypatch.setenv("CCCS_SESSION_TAGS_DIR", str(tmp_path / "session-tags"))
+    # Redirect sessions.db so transcript lookup is hermetic and never reads
+    # the developer's real ~/.local/share/claude/sessions.db.
+    monkeypatch.setenv("CCST_SESSIONS_DIR", str(tmp_path / "db"))
     return home
 
 
@@ -46,9 +43,7 @@ def _write_transcript(proj: Path, basename: str, *, user_typed: bool) -> Path:
     t_dir = transcript_dir_for_project(proj)
     t_dir.mkdir(parents=True, exist_ok=True)
     stem = f"uuid-{basename}"
-    tags_dir = _session_tags_dir()
-    tags_dir.mkdir(parents=True, exist_ok=True)
-    (tags_dir / f"{stem}.tag").write_text(session_tag(basename) or basename)
+    sessions_db.write_tag(stem, session_tag(basename) or basename)
     if user_typed:
         rec = {"type": "user", "message": {"content": "do the thing"}}
     else:
@@ -300,3 +295,22 @@ def test_cld_session_dir_is_absolute(fake_home, tmp_path, monkeypatch, captured_
     ccd.main(["mytag"])
     env = captured_launch["env"]
     assert Path(env["CLD_SESSION_DIR"]).is_absolute()
+
+
+def test_ccd_inserts_sessions_db_row(fake_home, tmp_path, monkeypatch, captured_launch):
+    repos = tmp_path / "repos"
+    proj = repos / "myproj"
+    proj.mkdir(parents=True)
+    _set_repo_root(monkeypatch, repos)
+    monkeypatch.chdir(proj)
+
+    rc = ccd.main(["ccd-db-test"])
+
+    assert rc == 0
+    assert "cmd" in captured_launch  # ccd launched claude
+    today = datetime.now().strftime("%Y%m%d")
+    rows = sessions_db.list_sessions(path=tmp_path / "db" / "sessions.db")
+    assert any(
+        r.basename == f"{today}-ccd-db-test" and r.project_dir == proj.resolve()
+        for r in rows
+    )

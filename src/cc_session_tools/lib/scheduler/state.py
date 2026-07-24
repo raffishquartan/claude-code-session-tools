@@ -1,30 +1,19 @@
-"""Per-job state store: registered_at / last_success / last_attempt /
-consecutive_failures / in_flight, persisted to ``<scheduler-dir>/state.json``
-via atomic .tmp-swap. The scheduler dir defaults to ~/.claude/cc-scheduler and
-is env-overridable via CC_SCHEDULER_DIR (tests redirect through it)."""
+"""Per-job run state, backed by the `job_state` table in ccsched.db. Pure
+helpers (timestamp formatting, next_failure_count) are unchanged; the storage
+ops are now targeted single-row reads/writes instead of a whole-file state.json
+read-modify-write — the fix for R2 (and the biggest efficiency win in this
+phase: a single worker run went from 5 full loads + 4 full saves of every job's
+state to a handful of single-row statements touching only its own job)."""
 from __future__ import annotations
 
-import json
-import os
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from pathlib import Path
 
-SCHEDULER_DIR_ENV = "CC_SCHEDULER_DIR"
+from cc_session_tools.lib.scheduler import store
+
 _TS_FMT = "%Y-%m-%dT%H:%M:%SZ"
 _UTC = timezone.utc
 DEFAULT_SUSPEND_THRESHOLD = 10
-
-
-def scheduler_dir() -> Path:
-    raw = os.environ.get(SCHEDULER_DIR_ENV)
-    if raw:
-        return Path(raw).expanduser()
-    return Path.home() / ".claude" / "cc-scheduler"
-
-
-def state_path() -> Path:
-    return scheduler_dir() / "state.json"
 
 
 def format_ts(dt: datetime) -> str:
@@ -54,122 +43,204 @@ class JobState:
     suspended: bool = False
 
 
-def _in_flight_from(raw: object) -> InFlight | None:
-    if not isinstance(raw, dict):
-        return None
-    return InFlight(
-        pid=int(raw["pid"]),
-        started_at=str(raw["started_at"]),
-        instants=int(raw["instants"]),
+def _row_to_state(row) -> JobState:
+    in_flight = (
+        None if row["in_flight_pid"] is None
+        else InFlight(
+            pid=int(row["in_flight_pid"]),
+            started_at=row["in_flight_started_at"],
+            instants=int(row["in_flight_instants"]),
+        )
+    )
+    return JobState(
+        registered_at=row["registered_at"],
+        last_success=row["last_success"],
+        last_attempt=row["last_attempt"],
+        consecutive_failures=int(row["consecutive_failures"]),
+        in_flight=in_flight,
+        suspended=bool(row["suspended"]),
     )
 
 
 def load_all_state() -> dict[str, JobState]:
-    path = state_path()
-    if not path.is_file():
-        return {}
-    data = json.loads(path.read_text())
-    out: dict[str, JobState] = {}
-    for job_id, fields in data.items():
-        out[job_id] = JobState(
-            registered_at=str(fields["registered_at"]),
-            last_success=fields.get("last_success"),
-            last_attempt=fields.get("last_attempt"),
-            consecutive_failures=int(fields.get("consecutive_failures", 0)),
-            in_flight=_in_flight_from(fields.get("in_flight")),
-            suspended=bool(fields.get("suspended", False)),
-        )
-    return out
+    """Every job's state. Bulk read for `ccsched list` and reconcile's iteration;
+    per-job mutators below never load the whole table."""
+    conn = store.connect()
+    try:
+        rows = conn.execute("SELECT * FROM job_state").fetchall()
+    finally:
+        conn.close()
+    return {r["job_id"]: _row_to_state(r) for r in rows}
+
+
+def get_state(job_id: str) -> JobState | None:
+    conn = store.connect()
+    try:
+        row = conn.execute("SELECT * FROM job_state WHERE job_id=?", (job_id,)).fetchone()
+    finally:
+        conn.close()
+    return _row_to_state(row) if row is not None else None
 
 
 def save_all_state(states: dict[str, JobState]) -> None:
-    target = scheduler_dir()
-    target.mkdir(parents=True, exist_ok=True)
-    payload = {
-        job_id: {
-            "registered_at": js.registered_at,
-            "last_success": js.last_success,
-            "last_attempt": js.last_attempt,
-            "consecutive_failures": js.consecutive_failures,
-            "suspended": js.suspended,
-            "in_flight": (
-                None if js.in_flight is None
-                else {
-                    "pid": js.in_flight.pid,
-                    "started_at": js.in_flight.started_at,
-                    "instants": js.in_flight.instants,
-                }
-            ),
-        }
-        for job_id, js in states.items()
-    }
-    path = state_path()
-    tmp = path.with_suffix(".json.tmp")
-    tmp.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")
-    tmp.replace(path)
+    """Per-row UPSERT of every supplied job's state in one transaction. Used for
+    test seeding and the migration script (single-writer contexts). Production
+    code paths use the targeted single-row ops below, never this."""
+    conn = store.connect()
+    try:
+        for job_id, js in states.items():
+            conn.execute(
+                "INSERT INTO job_state (job_id, registered_at, last_success, "
+                "last_attempt, consecutive_failures, suspended, in_flight_pid, "
+                "in_flight_started_at, in_flight_instants) "
+                "VALUES (?,?,?,?,?,?,?,?,?) "
+                "ON CONFLICT(job_id) DO UPDATE SET "
+                "registered_at=excluded.registered_at, "
+                "last_success=excluded.last_success, "
+                "last_attempt=excluded.last_attempt, "
+                "consecutive_failures=excluded.consecutive_failures, "
+                "suspended=excluded.suspended, "
+                "in_flight_pid=excluded.in_flight_pid, "
+                "in_flight_started_at=excluded.in_flight_started_at, "
+                "in_flight_instants=excluded.in_flight_instants",
+                (
+                    job_id, js.registered_at, js.last_success, js.last_attempt,
+                    js.consecutive_failures, int(js.suspended),
+                    None if js.in_flight is None else js.in_flight.pid,
+                    None if js.in_flight is None else js.in_flight.started_at,
+                    None if js.in_flight is None else js.in_flight.instants,
+                ),
+            )
+        conn.commit()
+    finally:
+        conn.close()
 
 
-def ensure_registered(
-    states: dict[str, JobState], job_id: str, now: datetime
-) -> JobState:
-    """Return the job's state, stamping ``registered_at = now`` if absent so a
-    hand-added job does not back-fill from epoch (§9.1). Mutates ``states``."""
-    if job_id not in states:
-        states[job_id] = JobState(
-            registered_at=format_ts(now),
-            last_success=None,
-            last_attempt=None,
-            consecutive_failures=0,
-            in_flight=None,
-            suspended=False,
+def ensure_registered_db(job_id: str, now: datetime) -> JobState:
+    """Stamp registered_at=now for a never-seen job, then return its current
+    state. INSERT OR IGNORE is a single write; a hand-added job (registry only)
+    thus gets a state row on first sight without back-filling from epoch (§9.1).
+    Replaces the old load-mutate-save-everything dance."""
+    conn = store.connect()
+    try:
+        conn.execute(
+            "INSERT OR IGNORE INTO job_state (job_id, registered_at, last_success, "
+            "last_attempt, consecutive_failures, suspended) VALUES (?,?,NULL,NULL,0,0)",
+            (job_id, format_ts(now)),
         )
-    return states[job_id]
+        conn.commit()
+        row = conn.execute("SELECT * FROM job_state WHERE job_id=?", (job_id,)).fetchone()
+    finally:
+        conn.close()
+    return _row_to_state(row)
 
 
-def _replace(js: JobState, *, in_flight: InFlight | None) -> JobState:
-    return JobState(
-        registered_at=js.registered_at, last_success=js.last_success,
-        last_attempt=js.last_attempt, consecutive_failures=js.consecutive_failures,
-        in_flight=in_flight, suspended=js.suspended,
-    )
+def set_in_flight(job_id: str, *, pid: int, started_at: str, instants: int) -> None:
+    conn = store.connect()
+    try:
+        conn.execute(
+            "UPDATE job_state SET in_flight_pid=?, in_flight_started_at=?, "
+            "in_flight_instants=? WHERE job_id=?",
+            (pid, started_at, instants, job_id),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def clear_in_flight(job_id: str) -> None:
+    conn = store.connect()
+    try:
+        conn.execute(
+            "UPDATE job_state SET in_flight_pid=NULL, in_flight_started_at=NULL, "
+            "in_flight_instants=NULL WHERE job_id=?",
+            (job_id,),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def clear_suspended(job_id: str) -> None:
+    """Clear one job's suspended flag. No-op if the job has no state yet."""
+    conn = store.connect()
+    try:
+        conn.execute("UPDATE job_state SET suspended=0 WHERE job_id=?", (job_id,))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def record_success(job_id: str, *, new_success: str, attempt_ts: str) -> None:
+    """Advance last_success/last_attempt and reset the failure streak, preserving
+    suspended and in_flight. Single-statement write."""
+    conn = store.connect()
+    try:
+        conn.execute(
+            "UPDATE job_state SET last_success=?, last_attempt=?, "
+            "consecutive_failures=0 WHERE job_id=?",
+            (new_success, attempt_ts, job_id),
+        )
+        conn.commit()
+    finally:
+        conn.close()
 
 
 def next_failure_count(
     consecutive_failures: int, *, suspended: bool, threshold: int = DEFAULT_SUSPEND_THRESHOLD
 ) -> tuple[int, bool, bool]:
-    """Pure: given the current consecutive_failures/suspended, return
-    (new_consecutive_failures, new_suspended, newly_suspended). ``newly_suspended``
-    is True only the instant the threshold is first crossed, so callers notify
-    exactly once per suspend event rather than on every failure after."""
+    """Pure: (new_consecutive_failures, new_suspended, newly_suspended).
+    newly_suspended is True only the instant the threshold is first crossed."""
     new_consecutive = consecutive_failures + 1
     newly_suspended = not suspended and new_consecutive >= threshold
     return new_consecutive, suspended or newly_suspended, newly_suspended
 
 
-def clear_suspended(job_id: str) -> None:
-    """Atomic read-modify-write clearing one job's suspended flag (mirrors
-    clear_in_flight). A no-op if the job has no state yet."""
-    states = load_all_state()
-    if job_id in states:
-        js = states[job_id]
-        states[job_id] = JobState(
-            registered_at=js.registered_at, last_success=js.last_success,
-            last_attempt=js.last_attempt, consecutive_failures=js.consecutive_failures,
-            in_flight=js.in_flight, suspended=False,
+def record_failure(
+    job_id: str, *, attempt_ts: str, threshold: int = DEFAULT_SUSPEND_THRESHOLD
+) -> tuple[int, bool, bool]:
+    """Read-modify-write the failure counter under BEGIN IMMEDIATE. Returns
+    (new_consecutive_failures, new_suspended, newly_suspended). last_success is
+    left untouched (a failure never advances it). BEGIN IMMEDIATE takes the write
+    lock up front so two concurrent failure records on the same job block-and-retry
+    (busy_timeout) rather than deadlocking on a shared-read-lock upgrade (R2)."""
+    conn = store.connect()
+    conn.isolation_level = None  # manual transaction control
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        row = conn.execute(
+            "SELECT consecutive_failures, suspended FROM job_state WHERE job_id=?",
+            (job_id,),
+        ).fetchone()
+        cur_failures = int(row["consecutive_failures"])
+        cur_suspended = bool(row["suspended"])
+        new_c, new_s, newly = next_failure_count(
+            cur_failures, suspended=cur_suspended, threshold=threshold
         )
-        save_all_state(states)
+        conn.execute(
+            "UPDATE job_state SET consecutive_failures=?, suspended=?, last_attempt=? "
+            "WHERE job_id=?",
+            (new_c, int(new_s), attempt_ts, job_id),
+        )
+        conn.execute("COMMIT")
+    finally:
+        conn.close()
+    return new_c, new_s, newly
 
 
-def set_in_flight(job_id: str, *, pid: int, started_at: str, instants: int) -> None:
-    """Atomic read-modify-write of one job's in_flight marker (§9.2)."""
-    states = load_all_state()
-    states[job_id] = _replace(states[job_id], in_flight=InFlight(pid, started_at, instants))
-    save_all_state(states)
-
-
-def clear_in_flight(job_id: str) -> None:
-    """Atomic read-modify-write clearing one job's in_flight marker (§9.2)."""
-    states = load_all_state()
-    if job_id in states:
-        states[job_id] = _replace(states[job_id], in_flight=None)
-        save_all_state(states)
+def record_manual_failure(job_id: str, *, attempt_ts: str) -> int:
+    """Increment consecutive_failures WITHOUT applying the suspend threshold —
+    the behaviour of `ccsched run` (manual foreground run never auto-suspends).
+    Returns the new count for the ledger line. Single-statement write, so no
+    BEGIN IMMEDIATE needed."""
+    conn = store.connect()
+    try:
+        cur = conn.execute(
+            "UPDATE job_state SET consecutive_failures=consecutive_failures+1, "
+            "last_attempt=? WHERE job_id=? RETURNING consecutive_failures",
+            (attempt_ts, job_id),
+        ).fetchone()
+        conn.commit()
+    finally:
+        conn.close()
+    return int(cur["consecutive_failures"])

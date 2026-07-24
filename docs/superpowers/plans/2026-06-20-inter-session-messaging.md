@@ -2,6 +2,11 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
+> **Update (2026-07-13):** the message store described below has since moved to `ccmsg.db`
+> (SQLite) under `~/.local/share/claude/` — see
+> `2026-07-13-data-store-uplift-00-overview.md` and `2026-07-13-data-store-uplift-02-ccmsg.md`
+> for the current layout. This document is left as-written for historical accuracy.
+
 **Goal:** Let one Claude Code session leave a durable, addressed, auditable message for another session (a specific session, a whole project, or "whoever is working on X"), delivered without the user prompting, with read-receipts, claims, and rename/move safety — all shipped inside CCST.
 
 **Architecture:** A markdown-with-frontmatter message store under `~/.claude/cc-messages/`, partitioned by the recipient's working-directory location (project / repo / other-path / global). A new `ccmsg` CLI does all read/write/filter logic; two delivery hooks (`SessionStart` full sweep, `UserPromptSubmit` incremental sweep) call a single shared `deliver()` and inject a compact digest as `additionalContext`. A new `send-session-message` skill guides composition/addressing, a new `ccst claude-md` primitive maintains a managed block in the global CLAUDE.md, and the existing `move-session` skill gains rename/move safety for messages.

@@ -1,0 +1,380 @@
+# src/cc_session_tools/lib/messaging/repository.py
+"""SQLite data-access layer for the inter-session message store (ccmsg.db).
+
+The single home of all SQL. Every mutation runs inside a BEGIN IMMEDIATE
+transaction so concurrent writers serialise under WAL: this is what closes the
+old retention-vs-claim double-unlink race (R1) and makes auto-read attribution
+first-writer-wins (R2) without any file-based coordination. Rows map 1:1 to the
+Message dataclass; the body lives in a TEXT column (attachments stay as
+absolute-path references, JSON-encoded, never embedded)."""
+from __future__ import annotations
+
+import json
+import sqlite3
+from collections.abc import Iterator
+from contextlib import contextmanager
+
+from cc_session_tools.lib import db
+from cc_session_tools.lib.messaging import store
+from cc_session_tools.lib.messaging.lock import AlreadyClaimedError
+from cc_session_tools.lib.messaging.message import Message
+
+_DDL = """
+CREATE TABLE IF NOT EXISTS messages (
+    id              TEXT PRIMARY KEY,
+    "schema"        INTEGER NOT NULL,
+    from_project    TEXT NOT NULL,
+    from_session    TEXT NOT NULL,
+    from_uuid       TEXT NOT NULL,
+    to_kind         TEXT NOT NULL CHECK (to_kind IN ('session','project','description')),
+    to_value        TEXT NOT NULL,
+    to_location     TEXT NOT NULL,
+    subject         TEXT NOT NULL,
+    sent_at         TEXT NOT NULL,
+    status          TEXT NOT NULL CHECK (status IN ('sent','read','claimed','archived')),
+    read_at         TEXT,
+    read_by_uuid    TEXT,
+    read_by_session TEXT,
+    claimed_at      TEXT,
+    receipt_shown   INTEGER NOT NULL DEFAULT 0 CHECK (receipt_shown IN (0,1)),
+    thread          TEXT,
+    attachments     TEXT NOT NULL DEFAULT '[]',
+    body            TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS idx_messages_sweep    ON messages(to_location, id);
+CREATE INDEX IF NOT EXISTS idx_messages_status   ON messages(to_location, status);
+CREATE INDEX IF NOT EXISTS idx_messages_receipts ON messages(from_uuid, receipt_shown);
+
+CREATE TABLE IF NOT EXISTS cursors (
+    session_uuid          TEXT NOT NULL,
+    partition             TEXT NOT NULL,
+    high_water_message_id TEXT NOT NULL,
+    PRIMARY KEY (session_uuid, partition)
+);
+"""
+
+
+class MessageNotFoundError(Exception):
+    """Raised when a message id resolves to no row."""
+
+
+def connect() -> sqlite3.Connection:
+    """Open ccmsg.db through the shared helper, in explicit-transaction mode.
+
+    isolation_level=None turns off sqlite3's implicit BEGIN so every mutation
+    can issue its own BEGIN IMMEDIATE (see _immediate)."""
+    conn = db.connect(store.db_path(), ddl=_DDL)
+    conn.isolation_level = None
+    return conn
+
+
+@contextmanager
+def _immediate(conn: sqlite3.Connection) -> Iterator[None]:
+    """Run the body inside a BEGIN IMMEDIATE / COMMIT, rolling back on error."""
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        yield
+    except BaseException:
+        conn.execute("ROLLBACK")
+        raise
+    else:
+        conn.execute("COMMIT")
+
+
+def _row_to_message(row: sqlite3.Row) -> Message:
+    return Message(
+        id=row["id"],
+        schema=row["schema"],
+        from_project=row["from_project"],
+        from_session=row["from_session"],
+        from_uuid=row["from_uuid"],
+        to_kind=row["to_kind"],
+        to_value=row["to_value"],
+        to_location=row["to_location"],
+        subject=row["subject"],
+        sent_at=row["sent_at"],
+        status=row["status"],
+        read_at=row["read_at"],
+        read_by_uuid=row["read_by_uuid"],
+        read_by_session=row["read_by_session"],
+        claimed_at=row["claimed_at"],
+        receipt_shown=bool(row["receipt_shown"]),
+        thread=row["thread"],
+        attachments=list(json.loads(row["attachments"])),
+        body=row["body"],
+    )
+
+
+_COLUMNS = (
+    'id', '"schema"', 'from_project', 'from_session', 'from_uuid', 'to_kind',
+    'to_value', 'to_location', 'subject', 'sent_at', 'status', 'read_at',
+    'read_by_uuid', 'read_by_session', 'claimed_at', 'receipt_shown', 'thread',
+    'attachments', 'body',
+)
+
+
+def _insert_params(message: Message) -> tuple[object, ...]:
+    return (
+        message.id, message.schema, message.from_project, message.from_session,
+        message.from_uuid, message.to_kind, message.to_value, message.to_location,
+        message.subject, message.sent_at, message.status, message.read_at,
+        message.read_by_uuid, message.read_by_session, message.claimed_at,
+        int(message.receipt_shown), message.thread,
+        json.dumps(list(message.attachments)), message.body,
+    )
+
+
+def insert(message: Message) -> None:
+    placeholders = ", ".join("?" for _ in _COLUMNS)
+    sql = f"INSERT INTO messages ({', '.join(_COLUMNS)}) VALUES ({placeholders})"
+    conn = connect()
+    try:
+        with _immediate(conn):
+            conn.execute(sql, _insert_params(message))
+    finally:
+        conn.close()
+
+
+def get_by_id(message_id: str) -> Message | None:
+    conn = connect()
+    try:
+        row = conn.execute("SELECT * FROM messages WHERE id=?", (message_id,)).fetchone()
+    finally:
+        conn.close()
+    return _row_to_message(row) if row is not None else None
+
+
+def list_rows(
+    *,
+    status: str | None = None,
+    partition: str | None = None,
+    from_uuid: str | None = None,
+) -> list[Message]:
+    clauses: list[str] = []
+    params: list[object] = []
+    if status is not None:
+        clauses.append("status=?")
+        params.append(status)
+    if partition is not None:
+        clauses.append("to_location=?")
+        params.append(partition)
+    if from_uuid is not None:
+        clauses.append("from_uuid=?")
+        params.append(from_uuid)
+    where = f" WHERE {' AND '.join(clauses)}" if clauses else ""
+    conn = connect()
+    try:
+        rows = conn.execute(
+            f"SELECT * FROM messages{where} ORDER BY id", params
+        ).fetchall()
+    finally:
+        conn.close()
+    return [_row_to_message(r) for r in rows]
+
+
+def sweep_new(partitions: list[str], high_water: dict[str, str]) -> list[Message]:
+    """All messages in ``partitions`` newer (by id) than the caller's per-
+    partition high-water, ordered by (input-partition order, id). Ordering
+    follows the caller's partition list — not lexical to_location — so the
+    result matches the pre-SQL deliver sweep, which iterated
+    ``_swept_partitions`` (ctx partition first, then _global) and sorted by id
+    within each. Terminal-status filtering is left to addressing.targets so
+    cursor advancement matches the pre-SQL behaviour exactly."""
+    if not partitions:
+        return []
+    placeholders = ", ".join("?" for _ in partitions)
+    conn = connect()
+    try:
+        rows = conn.execute(
+            f"SELECT * FROM messages WHERE to_location IN ({placeholders}) "
+            "ORDER BY id",
+            partitions,
+        ).fetchall()
+    finally:
+        conn.close()
+    order = {p: i for i, p in enumerate(partitions)}
+    out: list[Message] = []
+    for r in rows:
+        hw = high_water.get(r["to_location"])
+        if hw is None or r["id"] > hw:
+            out.append(_row_to_message(r))
+    out.sort(key=lambda m: (order.get(m.to_location, len(order)), m.id))
+    return out
+
+
+def mark_read(message_id: str, uuid: str, now_iso: str, session_label: str) -> bool:
+    """Atomically flip a 'sent' message to 'read', stamping the reader. Returns
+    True iff this call was the writer (first-writer-wins under WAL); False if the
+    message was already non-'sent'."""
+    conn = connect()
+    try:
+        with _immediate(conn):
+            cur = conn.execute(
+                "UPDATE messages SET status='read', read_at=?, read_by_uuid=?, "
+                "read_by_session=? WHERE id=? AND status='sent'",
+                (now_iso, uuid, session_label, message_id),
+            )
+            return cur.rowcount == 1
+    finally:
+        conn.close()
+
+
+def claim(message_id: str, uuid: str, session: str, now_iso: str) -> Message:
+    """First-claim-wins: inside one BEGIN IMMEDIATE, verify the message is
+    claimable and flip it to 'claimed'. Raises MessageNotFoundError for an
+    unknown id, AlreadyClaimedError if already read/claimed/archived.
+
+    Correctness comes from BEGIN IMMEDIATE serialising concurrent claimers; the
+    SELECT and UPDATE see one consistent snapshot."""
+    conn = connect()
+    try:
+        with _immediate(conn):
+            row = conn.execute(
+                "SELECT status FROM messages WHERE id=?", (message_id,)
+            ).fetchone()
+            if row is None:
+                raise MessageNotFoundError(message_id)
+            if row["status"] in ("claimed", "read", "archived"):
+                raise AlreadyClaimedError(message_id)
+            conn.execute(
+                "UPDATE messages SET status='claimed', claimed_at=?, "
+                "read_at=COALESCE(read_at, ?), read_by_uuid=?, read_by_session=? "
+                "WHERE id=?",
+                (now_iso, now_iso, uuid, session, message_id),
+            )
+            updated = conn.execute(
+                "SELECT * FROM messages WHERE id=?", (message_id,)
+            ).fetchone()
+        return _row_to_message(updated)
+    finally:
+        conn.close()
+
+
+def archive_one(message_id: str) -> Message:
+    """Manually archive a message (status flip). Raises MessageNotFoundError for
+    an unknown id. Idempotent on an already-archived row."""
+    conn = connect()
+    try:
+        with _immediate(conn):
+            row = conn.execute(
+                "SELECT id FROM messages WHERE id=?", (message_id,)
+            ).fetchone()
+            if row is None:
+                raise MessageNotFoundError(message_id)
+            conn.execute(
+                "UPDATE messages SET status='archived' WHERE id=?", (message_id,)
+            )
+            updated = conn.execute(
+                "SELECT * FROM messages WHERE id=?", (message_id,)
+            ).fetchone()
+        return _row_to_message(updated)
+    finally:
+        conn.close()
+
+
+def archive_aged(partition: str, cutoff_iso: str) -> list[str]:
+    """Archive every read/claimed message in ``partition`` whose settle time
+    (claimed_at, else read_at) is at or before ``cutoff_iso``, in one atomic
+    statement. Returns the archived ids (sorted).
+
+    R1: a second concurrent sweep runs the identical UPDATE, matches 0 rows
+    (those messages are already 'archived'), and neither crashes nor double-
+    archives. Because this is a status flip, a claim that landed first keeps its
+    claimed_at / read_by_uuid. Timestamps are fixed-width ISO-8601 Z strings, so
+    lexical <= is chronological <=."""
+    conn = connect()
+    try:
+        with _immediate(conn):
+            cur = conn.execute(
+                "UPDATE messages SET status='archived' "
+                "WHERE to_location=? AND status IN ('read','claimed') "
+                "AND COALESCE(claimed_at, read_at) IS NOT NULL "
+                "AND COALESCE(claimed_at, read_at) <= ? "
+                "RETURNING id",
+                (partition, cutoff_iso),
+            )
+            ids = sorted(r["id"] for r in cur.fetchall())
+        return ids
+    finally:
+        conn.close()
+
+
+def pending_receipts(from_uuid: str) -> list[Message]:
+    """Messages this uuid sent that have been read/claimed but whose receipt has
+    not yet been surfaced. An indexed lookup (idx_messages_receipts) replacing
+    the old full-store filesystem scan on every hook fire."""
+    conn = connect()
+    try:
+        rows = conn.execute(
+            "SELECT * FROM messages WHERE from_uuid=? AND status IN ('read','claimed') "
+            "AND receipt_shown=0 ORDER BY id",
+            (from_uuid,),
+        ).fetchall()
+    finally:
+        conn.close()
+    return [_row_to_message(r) for r in rows]
+
+
+def mark_receipts_shown(ids: list[str]) -> None:
+    if not ids:
+        return
+    conn = connect()
+    try:
+        with _immediate(conn):
+            conn.executemany(
+                "UPDATE messages SET receipt_shown=1 WHERE id=?",
+                [(mid,) for mid in ids],
+            )
+    finally:
+        conn.close()
+
+
+def load_cursor(session_uuid: str) -> dict[str, str]:
+    conn = connect()
+    try:
+        rows = conn.execute(
+            "SELECT partition, high_water_message_id FROM cursors WHERE session_uuid=?",
+            (session_uuid,),
+        ).fetchall()
+    finally:
+        conn.close()
+    return {r["partition"]: r["high_water_message_id"] for r in rows}
+
+
+def save_cursor(session_uuid: str, high_water: dict[str, str]) -> None:
+    if not high_water:
+        return
+    conn = connect()
+    try:
+        with _immediate(conn):
+            conn.executemany(
+                "INSERT INTO cursors (session_uuid, partition, high_water_message_id) "
+                "VALUES (?,?,?) ON CONFLICT(session_uuid, partition) "
+                "DO UPDATE SET high_water_message_id=excluded.high_water_message_id",
+                [(session_uuid, p, hw) for p, hw in high_water.items()],
+            )
+    finally:
+        conn.close()
+
+
+def refresh_display_tags(uuid: str, new_tag: str) -> int:
+    """Re-stamp from_session / read_by_session for non-archived messages
+    referencing ``uuid``, in one targeted UPDATE. Returns the count changed."""
+    conn = connect()
+    try:
+        with _immediate(conn):
+            cur = conn.execute(
+                "UPDATE messages SET "
+                "from_session = CASE WHEN from_uuid=:u AND from_session<>:t "
+                "THEN :t ELSE from_session END, "
+                "read_by_session = CASE WHEN read_by_uuid=:u AND read_by_session<>:t "
+                "THEN :t ELSE read_by_session END "
+                "WHERE status<>'archived' AND "
+                "((from_uuid=:u AND from_session<>:t) OR "
+                " (read_by_uuid=:u AND read_by_session<>:t)) "
+                "RETURNING id",
+                {"u": uuid, "t": new_tag},
+            )
+            return len(cur.fetchall())
+    finally:
+        conn.close()

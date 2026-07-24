@@ -24,9 +24,11 @@ from cc_session_tools.lib.sessions import SessionMatch
 # ---------------------------------------------------------------------------
 
 def _make_session(repos: Path, project: str, basename: str) -> Path:
+    from cc_session_tools.lib import sessions_db
     sess = repos / project / "cc-sessions" / basename
     (sess / "working").mkdir(parents=True)
     (sess / "out").mkdir()
+    sessions_db.ensure_session_row(repos / project, basename)
     return sess
 
 
@@ -69,6 +71,7 @@ def fake_home(tmp_path, monkeypatch):
     home = tmp_path / "home"
     (home / ".claude").mkdir(parents=True)
     monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("CCST_SESSIONS_DIR", str(tmp_path / "db"))
     return home
 
 
@@ -301,3 +304,26 @@ def test_selecting_orphan_prints_warning_to_stderr(
     assert rc == 0
     err = capsys.readouterr().err
     assert "orphan" in err.lower() or "no on-disk" in err.lower()
+
+
+# ---------------------------------------------------------------------------
+# D6: a stale sessions.db row (on-disk dir deleted) fails cleanly, not a crash
+# ---------------------------------------------------------------------------
+
+def test_stale_sessions_db_row_reports_error_not_crash(
+    fake_repos, claude_projects, captured_launch, capsys
+):
+    """A sessions.db row whose on-disk directory was deleted must produce a
+    clean error, not a broken exec into a nonexistent directory (D6)."""
+    import shutil
+
+    proj = fake_repos / "myproj"
+    sess = _make_session(fake_repos, "myproj", "20260504-deleted-after")
+    shutil.rmtree(sess)  # directory gone; sessions.db row still present
+
+    rc = ccr.main(["deleted-after"])
+
+    assert rc == 1
+    assert "cmd" not in captured_launch
+    err = capsys.readouterr().err
+    assert "stale" in err.lower()

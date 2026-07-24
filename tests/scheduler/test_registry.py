@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import threading
 from pathlib import Path
 
 import pytest
@@ -29,6 +30,10 @@ def test_add_then_load_round_trips(tmp_path: Path, monkeypatch: pytest.MonkeyPat
     assert loaded[0].job_id == "tesco-shop-check"
     assert loaded[0].command == ("ccst", "hooks", "run", "check-tesco-due")
     assert loaded[0].coalesce is CoalesceKind.ONE
+    assert loaded[0].surface is True
+    assert loaded[0].enabled is True
+    assert loaded[0].catchup_window == "7d"
+    assert loaded[0].timeout == "60s"
 
 
 def test_add_duplicate_id_rejected(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -38,26 +43,23 @@ def test_add_duplicate_id_rejected(tmp_path: Path, monkeypatch: pytest.MonkeyPat
         reg.add_job(_spec())
 
 
-def test_defaults_applied_for_omitted_fields(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_load_preserves_insertion_order(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("CC_SCHEDULER_DIR", str(tmp_path))
-    (tmp_path).mkdir(parents=True, exist_ok=True)
-    (tmp_path / "jobs.toml").write_text(
-        '[[job]]\nid = "minimal"\ncadence = "every:6h"\ncommand = ["echo", "hi"]\n'
-    )
-    loaded = reg.load_registry()
-    assert loaded[0].coalesce is CoalesceKind.ONE
-    assert loaded[0].surface is True
-    assert loaded[0].enabled is True
-    assert loaded[0].catchup_window == "7d"
-    assert loaded[0].timeout == "120s"
+    for jid in ("c", "a", "b"):
+        reg.add_job(_spec(jid))
+    assert [s.job_id for s in reg.load_registry()] == ["c", "a", "b"]
+    # An edit keeps position; a remove+re-add moves to the end.
+    reg.replace_job(_spec("a"))
+    assert [s.job_id for s in reg.load_registry()] == ["c", "a", "b"]
+    reg.remove_job("a")
+    reg.add_job(_spec("a"))
+    assert [s.job_id for s in reg.load_registry()] == ["c", "b", "a"]
 
 
-def test_malformed_toml_raises(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_replace_unknown_id_raises(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("CC_SCHEDULER_DIR", str(tmp_path))
-    (tmp_path).mkdir(parents=True, exist_ok=True)
-    (tmp_path / "jobs.toml").write_text("[[job]\nid = broken")
     with pytest.raises(reg.RegistryError):
-        reg.load_registry()
+        reg.replace_job(_spec("ghost"))
 
 
 def test_remove_and_set_enabled(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -74,3 +76,38 @@ def test_remove_unknown_id_raises(tmp_path: Path, monkeypatch: pytest.MonkeyPatc
     monkeypatch.setenv("CC_SCHEDULER_DIR", str(tmp_path))
     with pytest.raises(reg.RegistryError):
         reg.remove_job("ghost")
+
+
+def test_set_enabled_unknown_id_raises(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("CC_SCHEDULER_DIR", str(tmp_path))
+    with pytest.raises(reg.RegistryError):
+        reg.set_enabled("ghost", False)
+
+
+def test_concurrent_edits_to_different_jobs_all_land(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """R1: N threads each editing a DIFFERENT job must all persist — no silent
+    last-write-wins loss (the whole-file jobs.toml RMW would drop most of these)."""
+    monkeypatch.setenv("CC_SCHEDULER_DIR", str(tmp_path))
+    ids = [f"job-{i}" for i in range(16)]
+    for jid in ids:
+        reg.add_job(_spec(jid))
+
+    errors: list[Exception] = []
+
+    def flip(jid: str) -> None:
+        try:
+            reg.set_enabled(jid, False)
+        except Exception as exc:  # noqa: BLE001 - captured for assertion
+            errors.append(exc)
+
+    threads = [threading.Thread(target=flip, args=(jid,)) for jid in ids]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    assert errors == []
+    disabled = {s.job_id: s.enabled for s in reg.load_registry()}
+    assert all(disabled[jid] is False for jid in ids)  # every edit landed

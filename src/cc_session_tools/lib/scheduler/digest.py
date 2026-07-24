@@ -50,14 +50,15 @@ def _line(report: JobReport) -> str | None:
         age_suffix = f", {report.age}" if report.age else ""
         return (
             f"⛔ {report.job_id} auto-suspended after "
-            f"{report.consecutive_failures} consecutive failures{age_suffix} — see fires.jsonl / "
-            f"run `ccsched enable {report.job_id}` after fixing"
+            f"{report.consecutive_failures} consecutive failures{age_suffix} — see "
+            f"`ccsched status {report.job_id}` / run `ccsched enable {report.job_id}` after fixing"
         )
     if report.outcome is Outcome.FAILED:
         age_suffix = f", {report.age}" if report.age else ""
         return (
             f"✗ {report.job_id} failed "
-            f"({_ordinal(report.consecutive_failures)} consecutive{age_suffix}) — see fires.jsonl"
+            f"({_ordinal(report.consecutive_failures)} consecutive{age_suffix}) — see "
+            f"`ccsched status {report.job_id}`"
         )
     if not report.surface:
         return None
@@ -74,7 +75,7 @@ def _line(report: JobReport) -> str | None:
 
 def format_digest(reports: list[JobReport], *, parse_error: str | None = None) -> str:
     if parse_error is not None:
-        return f"[cc-scheduler] jobs.toml failed to parse — no jobs ran: {parse_error}"
+        return f"[cc-scheduler] job registry failed to load — no jobs ran: {parse_error}"
     lines = [line for line in (_line(r) for r in reports) if line is not None]
     if not lines:
         return ""

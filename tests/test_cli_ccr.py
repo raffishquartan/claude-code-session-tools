@@ -35,6 +35,7 @@ def fake_home(tmp_path, monkeypatch):
     home = tmp_path / "home"
     (home / ".claude").mkdir(parents=True)
     monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("CCST_SESSIONS_DIR", str(tmp_path / "db"))
     return home
 
 
@@ -47,9 +48,11 @@ def fake_repos(fake_home, tmp_path, monkeypatch):
 
 
 def _make_session(repos: Path, project: str, basename: str) -> Path:
+    from cc_session_tools.lib import sessions_db
     sess = repos / project / "cc-sessions" / basename
     (sess / "working").mkdir(parents=True)
     (sess / "out").mkdir()
+    sessions_db.ensure_session_row(repos / project, basename)
     return sess
 
 

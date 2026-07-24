@@ -173,24 +173,21 @@ def _cmd_run(args: argparse.Namespace) -> int:
         return _err(f"unknown job id: {args.id!r}")
     outcome = run_command(spec.command, parse_duration(spec.timeout))
     now = datetime.now(timezone.utc)
-    states = state.load_all_state()
-    js = state.ensure_registered(states, spec.job_id, now)
+    attempt_ts = state.format_ts(now)
+    state.ensure_registered_db(spec.job_id, now)
     failed = outcome.timed_out or outcome.exit_code != 0
-    states[spec.job_id] = state.JobState(
-        registered_at=js.registered_at,
-        last_success=js.last_success if failed else state.format_ts(now),
-        last_attempt=state.format_ts(now),
-        consecutive_failures=js.consecutive_failures + 1 if failed else 0,
-        suspended=js.suspended,
-    )
-    state.save_all_state(states)
+    if failed:
+        new_consecutive = state.record_manual_failure(spec.job_id, attempt_ts=attempt_ts)
+    else:
+        state.record_success(spec.job_id, new_success=attempt_ts, attempt_ts=attempt_ts)
+        new_consecutive = 0
     ledger.record(ledger.LedgerEntry(
         job_id=spec.job_id,
         event=ledger.LedgerEvent.FAIL if failed else ledger.LedgerEvent.RUN,
         owed=1, ran=0 if failed else 1, exit_code=outcome.exit_code,
         duration_ms=outcome.duration_ms,
         error=(outcome.stderr.strip()[:200] or None) if failed else None,
-        consecutive_failures=states[spec.job_id].consecutive_failures if failed else 0,
+        consecutive_failures=new_consecutive if failed else 0,
     ))
     print(f"{'failed' if failed else 'ran'} {spec.job_id} (exit={outcome.exit_code})")
     return 1 if failed else 0

@@ -111,6 +111,23 @@ def test_hook_degrades_when_deliver_raises(
     assert reasons == ["OSError"]
 
 
+def test_hook_fails_open_on_sqlite_operational_error(monkeypatch, capsys):
+    import sqlite3
+    from cccs_hooks import messaging_deliver
+
+    def _raise_locked(*a, **kw):
+        raise sqlite3.OperationalError("database is locked")
+
+    monkeypatch.setattr(messaging_deliver.service, "deliver", _raise_locked)
+    monkeypatch.setattr("sys.stdin", io.StringIO(json.dumps({
+        "session_id": "s1", "cwd": "/tmp/x", "hook_event_name": "UserPromptSubmit",
+    })))
+    rc = messaging_deliver.main()
+    assert rc == 0  # never blocks a session, even on a SQLite lock-contention error
+    out = json.loads(capsys.readouterr().out)
+    assert out["hookSpecificOutput"]["additionalContext"] == ""
+
+
 def test_hook_does_not_resurface_after_first_sweep(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

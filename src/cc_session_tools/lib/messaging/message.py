@@ -1,17 +1,15 @@
 # src/cc_session_tools/lib/messaging/message.py
-"""Message file format: a typed dataclass, YAML-frontmatter round-trip, and
-atomic writes. The frontmatter is the single source of truth for routing and
-state; the body is free-form markdown."""
+"""Message format: a typed dataclass and a YAML-frontmatter round-trip
+(``serialise``/``parse``). The frontmatter is the single source of truth for
+routing and state; the body is free-form markdown. ``parse`` is retained as the
+reader used by the one-shot flat-file migration script; live storage is
+``repository.py`` (ccmsg.db)."""
 from __future__ import annotations
 
-import logging
 from dataclasses import asdict, dataclass, field
-from pathlib import Path
 from typing import Literal, get_args
 
 import yaml
-
-logger = logging.getLogger(__name__)
 
 ToKind = Literal["session", "project", "description"]
 Status = Literal["sent", "read", "claimed", "archived"]
@@ -102,26 +100,3 @@ def parse(text: str) -> Message:
         )
     except KeyError as exc:
         raise ValueError(f"missing required frontmatter field: {exc}") from exc
-
-
-def write_text_atomic(path: Path, text: str) -> None:
-    """Generalised atomic text write (``.tmp``-swap), mirroring
-    ``hooks_install.write_json_atomic``."""
-    tmp = path.with_suffix(path.suffix + ".tmp")
-    tmp.write_text(text, encoding="utf-8")
-    tmp.replace(path)
-
-
-def write_atomic(path: Path, message: Message) -> None:
-    write_text_atomic(path, serialise(message))
-
-
-def safe_parse(path: Path) -> Message | None:
-    """Parse a store file, returning ``None`` (and logging) for a malformed or
-    unreadable one. The single source of truth for sweep operations so that one
-    stale/hand-edited file never aborts a whole listing, delivery, or rename."""
-    try:
-        return parse(path.read_text(encoding="utf-8"))
-    except (ValueError, OSError):
-        logger.warning("skipping unreadable message file: %s", path)
-        return None

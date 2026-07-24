@@ -7,6 +7,10 @@ _REPO_ROOT = Path(__file__).resolve().parents[1]
 _SRC = _REPO_ROOT / "src"
 if str(_SRC) not in sys.path:
     sys.path.insert(0, str(_SRC))
+# Repo root on the path so one-shot migration scripts under scripts/ are
+# importable by their tests (e.g. `from scripts.migrate_ccmsg_to_db import ...`).
+if str(_REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT))
 
 
 @pytest.fixture

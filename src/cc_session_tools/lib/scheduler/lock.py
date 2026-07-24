@@ -21,7 +21,7 @@ from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 
-from cc_session_tools.lib.scheduler.state import scheduler_dir
+from cc_session_tools.lib.scheduler.store import scheduler_dir
 
 # Per-job threading locks close the stale-reclaim TOCTOU window within a single
 # process. Inter-process exclusion is still provided by O_CREAT|O_EXCL.

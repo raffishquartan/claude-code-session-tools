@@ -3,12 +3,13 @@ from __future__ import annotations
 import datetime
 import json
 import os
-import stat
+import sqlite3
 import threading
 from pathlib import Path
 
 import pytest
 
+from cc_session_tools.lib import telemetry_store
 from cccs_hooks.telemetry import TelemetryEntry, log_event
 
 
@@ -30,74 +31,63 @@ def _make_entry(**overrides: object) -> TelemetryEntry:
     return TelemetryEntry(**base)  # type: ignore[arg-type]
 
 
-# ---------- TelemetryEntry schema ----------
-
-def test_telemetry_entry_round_trips_to_json() -> None:
-    entry = TelemetryEntry(
-        hook="bash-security-review",
-        event="PreToolUse",
-        tool="Bash",
-        session_id="abc-123",
-        cwd_short="repos/cccs",
-        decision="allow",
-        cache="miss",
-        verdict="safe",
-        input_hash="sha256:aabbcc",
-    )
-    j = entry.to_json_line()
-    assert '"hook":"bash-security-review"' in j
-    assert '"v":1' in j
-    assert j.endswith("\n")
+def _rows(hooks_dir: Path) -> list[sqlite3.Row]:
+    conn = telemetry_store.connect(hooks_dir)
+    try:
+        return conn.execute("SELECT * FROM telemetry_events ORDER BY id").fetchall()
+    finally:
+        conn.close()
 
 
-def test_telemetry_entry_ts_is_utc_iso8601() -> None:
-    entry = _make_entry()
-    j = entry.to_json_line()
-    data = json.loads(j)
-    ts = data["ts"]
+# ---------- log_event: row creation ----------
+
+def test_log_event_creates_db_and_inserts_row(tmp_hooks_dir: Path) -> None:
+    log_event(_make_entry(), hooks_dir=tmp_hooks_dir)
+    assert (tmp_hooks_dir / "telemetry.db").exists()
+    rows = _rows(tmp_hooks_dir)
+    assert len(rows) == 1
+    assert rows[0]["hook"] == "test-hook"
+    assert rows[0]["verdict"] == "safe"
+
+
+def test_log_event_ts_is_utc_iso8601(tmp_hooks_dir: Path) -> None:
+    log_event(_make_entry(), hooks_dir=tmp_hooks_dir)
+    ts = _rows(tmp_hooks_dir)[0]["ts"]
     assert ts.endswith("Z")
     datetime.datetime.fromisoformat(ts.replace("Z", "+00:00"))
 
 
-# ---------- log_event: file creation and mode ----------
-
-def test_log_event_creates_file(tmp_hooks_dir: Path) -> None:
-    log_event(_make_entry(), hooks_dir=tmp_hooks_dir)
-    assert (tmp_hooks_dir / "fires.jsonl").exists()
-
-
-def test_log_event_file_mode_0600(tmp_hooks_dir: Path) -> None:
-    log_event(_make_entry(), hooks_dir=tmp_hooks_dir)
-    fires = tmp_hooks_dir / "fires.jsonl"
-    mode = stat.S_IMODE(fires.stat().st_mode)
-    assert mode == 0o600, f"expected 0600 got {oct(mode)}"
-
-
-def test_log_event_appends_valid_jsonl(tmp_hooks_dir: Path) -> None:
+def test_log_event_twice_inserts_two_rows(tmp_hooks_dir: Path) -> None:
     entry = _make_entry()
     log_event(entry, hooks_dir=tmp_hooks_dir)
     log_event(entry, hooks_dir=tmp_hooks_dir)
-    fires = tmp_hooks_dir / "fires.jsonl"
-    lines = [line for line in fires.read_text().splitlines() if line]
-    assert len(lines) == 2
-    for line in lines:
-        data = json.loads(line)
-        assert data["v"] == 1
+    assert len(_rows(tmp_hooks_dir)) == 2
 
 
-# ---------- log_event: disk-full does not raise ----------
+def test_log_event_preserves_shortened_cwd(tmp_hooks_dir: Path) -> None:
+    log_event(_make_entry(cwd_short="repos/cccs"), hooks_dir=tmp_hooks_dir)
+    assert _rows(tmp_hooks_dir)[0]["cwd_short"] == "repos/cccs"
 
-def test_log_event_disk_full_does_not_raise(
+
+# ---------- log_event: never raises ----------
+
+def test_log_event_sqlite_error_does_not_raise(
     tmp_hooks_dir: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    original_open = os.open
+    def fail_connect(explicit_dir: Path | None = None) -> sqlite3.Connection:
+        raise sqlite3.OperationalError("disk I/O error")
 
-    def fail_open(path: str, flags: int, mode: int = 0o666) -> int:
-        if "fires.jsonl" in str(path):
-            raise OSError("No space left on device")
-        return original_open(path, flags, mode)
+    monkeypatch.setattr(telemetry_store, "connect", fail_connect)
+    log_event(_make_entry(), hooks_dir=tmp_hooks_dir)  # must not raise
 
-    monkeypatch.setattr(os, "open", fail_open)
+
+def test_log_event_os_error_does_not_raise(
+    tmp_hooks_dir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def fail_connect(explicit_dir: Path | None = None) -> sqlite3.Connection:
+        raise OSError("No space left on device")
+
+    monkeypatch.setattr(telemetry_store, "connect", fail_connect)
     log_event(_make_entry(), hooks_dir=tmp_hooks_dir)  # must not raise
 
 
@@ -110,7 +100,7 @@ def test_log_event_concurrent_writes_no_corruption(tmp_hooks_dir: Path) -> None:
     def write_one(e: TelemetryEntry) -> None:
         try:
             log_event(e, hooks_dir=tmp_hooks_dir)
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 - captured for assertion, not swallowed
             errors.append(exc)
 
     threads = [threading.Thread(target=write_one, args=(e,)) for e in entries]
@@ -120,40 +110,7 @@ def test_log_event_concurrent_writes_no_corruption(tmp_hooks_dir: Path) -> None:
         t.join()
 
     assert not errors
-    fires = tmp_hooks_dir / "fires.jsonl"
-    lines = [line for line in fires.read_text().splitlines() if line]
-    assert len(lines) == 20
-    for line in lines:
-        json.loads(line)
-
-
-# ---------- log_event: rotation ----------
-# Rotation threshold is 10 MB (see telemetry._ROTATION_BYTES).
-# Rotation scheme: fires.jsonl → fires.jsonl.1 (numbered slots, no gzip).
-
-def test_log_event_rotates_when_over_size_limit(tmp_hooks_dir: Path) -> None:
-    from cccs_hooks.telemetry import _ROTATION_BYTES
-    fires = tmp_hooks_dir / "fires.jsonl"
-    fires.write_text("x" * (_ROTATION_BYTES + 1))
-    fires.chmod(0o600)
-    log_event(_make_entry(), hooks_dir=tmp_hooks_dir)
-    rotated = tmp_hooks_dir / "fires.jsonl.1"
-    assert rotated.exists(), f"expected fires.jsonl.1, got {list(tmp_hooks_dir.iterdir())}"
-    # New fires.jsonl should contain just the one appended entry
-    new_lines = [line for line in fires.read_text().splitlines() if line]
-    assert len(new_lines) == 1
-
-
-def test_rotation_slot_contains_original_content(tmp_hooks_dir: Path) -> None:
-    from cccs_hooks.telemetry import _ROTATION_BYTES
-    fires = tmp_hooks_dir / "fires.jsonl"
-    original_content = "x" * (_ROTATION_BYTES + 1)
-    fires.write_text(original_content)
-    fires.chmod(0o600)
-    log_event(_make_entry(), hooks_dir=tmp_hooks_dir)
-    rotated = tmp_hooks_dir / "fires.jsonl.1"
-    assert rotated.exists()
-    assert rotated.read_text() == original_content
+    assert len(_rows(tmp_hooks_dir)) == 20
 
 
 # ---------- CLI entry point ----------
@@ -186,9 +143,8 @@ def test_telemetry_cli_log_subcommand(tmp_hooks_dir: Path) -> None:
         cwd=str(Path(__file__).parent.parent),
     )
     assert result.returncode == 0, result.stderr
-    fires = tmp_hooks_dir / "fires.jsonl"
-    assert fires.exists()
-    data = json.loads(fires.read_text().strip())
-    assert data["hook"] == "bash-security-review"
-    assert data["session_id"] == "sess-1"
-    assert data["cwd"] == "repos/foo"
+    rows = _rows(tmp_hooks_dir)
+    assert len(rows) == 1
+    assert rows[0]["hook"] == "bash-security-review"
+    assert rows[0]["session_id"] == "sess-1"
+    assert rows[0]["cwd_short"] == "repos/foo"

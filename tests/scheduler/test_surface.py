@@ -1,11 +1,11 @@
 from __future__ import annotations
 
-import json
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
 
+from cc_session_tools.lib import telemetry_store
 from cc_session_tools.lib.scheduler import cursor
 from cc_session_tools.lib.scheduler import ledger as ld
 from cc_session_tools.lib.scheduler import registry as reg
@@ -34,34 +34,24 @@ def _run_event(job_id: str) -> None:
                              ran=1, exit_code=0, duration_ms=1, error=None))
 
 
-def _raw_catchup_line(*, ts: str, job_id: str, event: str, **extra: object) -> str:
-    """A hand-crafted fires.jsonl line with a caller-chosen ``ts``, matching the
-    shape ``cccs_hooks.telemetry.TelemetryEntry.to_json_line`` writes plus the
-    catchup-specific verdict payload ``ledger.record`` packs in. Lets tests pin
-    the age of a ledger row without depending on the real wall clock."""
-    verdict = json.dumps({
-        "job_id": job_id,
-        "event": event,
-        "owed": extra.get("owed", 1),
-        "ran": extra.get("ran", 0),
-        "exit_code": extra.get("exit_code"),
-        "duration_ms": extra.get("duration_ms", 1),
-        "error": extra.get("error"),
-        "consecutive_failures": extra.get("consecutive_failures", 0),
-    })
-    return json.dumps({
-        "v": 1, "ts": ts, "hook": "catchup", "event": "", "tool": "",
-        "session_id": "", "cwd": "", "decision": "annotate", "cache": "none",
-        "verdict": verdict, "input_hash": "",
-    })
-
-
-def _write_raw_lines(tmp_path: Path, lines: list[str]) -> None:
-    hooks_dir = tmp_path / "hooks"
-    hooks_dir.mkdir(parents=True, exist_ok=True)
-    fires = hooks_dir / "fires.jsonl"
-    existing = fires.read_text() if fires.is_file() else ""
-    fires.write_text(existing + "\n".join(lines) + "\n")
+def _insert_catchup_row(tmp_path: Path, *, ts: str, job_id: str, event: str, **extra: object) -> None:
+    """Insert one catchup_events row with a caller-chosen ts, bypassing
+    ledger.record()'s now()-stamping so staleness/backlog-age tests can pin
+    exact ages without depending on the real wall clock."""
+    conn = telemetry_store.connect(tmp_path / "hooks")
+    conn.execute(
+        "INSERT INTO catchup_events "
+        "(ts, job_id, event, owed, ran, exit_code, duration_ms, error, consecutive_failures) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        (
+            ts, job_id, event,
+            extra.get("owed", 1), extra.get("ran", 0), extra.get("exit_code"),
+            extra.get("duration_ms", 1), extra.get("error"),
+            extra.get("consecutive_failures", 0),
+        ),
+    )
+    conn.commit()
+    conn.close()
 
 
 def test_fresh_session_surfaces_all(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -181,12 +171,10 @@ def test_stale_failed_entry_replays_in_full_with_age_suffix(
     entries, must be shown in full with an age suffix — never folded into a
     summary, regardless of how old it is."""
     old_ts = (_NOW - timedelta(days=20)).strftime("%Y-%m-%dT%H:%M:%SZ")
-    _write_raw_lines(tmp_path, [
-        _raw_catchup_line(
-            ts=old_ts, job_id="cal", event="fail", ran=0, exit_code=1,
-            error="boom", consecutive_failures=1,
-        ),
-    ])
+    _insert_catchup_row(
+        tmp_path, ts=old_ts, job_id="cal", event="fail", ran=0, exit_code=1,
+        error="boom", consecutive_failures=1,
+    )
     result = sf.surface(session_uuid="s1", now=_NOW)
     fail_reports = [r for r in result.reports if r.outcome is Outcome.FAILED]
     assert len(fail_reports) == 1
@@ -203,15 +191,12 @@ def test_many_stale_routine_entries_and_one_recent_failure_coexist(
     backlog) still replays individually with its own age suffix."""
     old_ts = (_NOW - timedelta(days=10)).strftime("%Y-%m-%dT%H:%M:%SZ")
     recent_ts = (_NOW - timedelta(hours=1)).strftime("%Y-%m-%dT%H:%M:%SZ")
-    lines = [
-        _raw_catchup_line(ts=old_ts, job_id="tesco", event="run", ran=1)
-        for _ in range(150)
-    ]
-    lines.append(_raw_catchup_line(
-        ts=recent_ts, job_id="cal", event="fail", ran=0, exit_code=1,
+    for _ in range(150):
+        _insert_catchup_row(tmp_path, ts=old_ts, job_id="tesco", event="run", ran=1)
+    _insert_catchup_row(
+        tmp_path, ts=recent_ts, job_id="cal", event="fail", ran=0, exit_code=1,
         error="boom", consecutive_failures=1,
-    ))
-    _write_raw_lines(tmp_path, lines)
+    )
     result = sf.surface(session_uuid="s1", now=_NOW)
     summary_reports = [r for r in result.reports if r.outcome is Outcome.SUMMARY]
     fail_reports = [r for r in result.reports if r.outcome is Outcome.FAILED]

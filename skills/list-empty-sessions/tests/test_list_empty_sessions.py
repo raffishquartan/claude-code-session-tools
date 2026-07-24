@@ -20,16 +20,12 @@ SCRIPTS_DIR = SKILL_ROOT / "scripts"
 _REPO_SRC = str(Path(__file__).resolve().parents[3] / "src")
 sys.path.insert(0, _REPO_SRC)
 
+from cc_session_tools.lib import sessions_db  # noqa: E402
+
 
 # ---------------------------------------------------------------------------
 # Helpers shared by all tests
 # ---------------------------------------------------------------------------
-
-def _write_tag(tags_dir: Path, uuid: str, tag: str) -> None:
-    """Write a .tag file to the flat tags dir."""
-    tags_dir.mkdir(parents=True, exist_ok=True)
-    (tags_dir / f"{uuid}.tag").write_text(tag + "\n")
-
 
 def _write_jsonl(path: Path, records: list[dict]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -43,14 +39,6 @@ def _transcript_dir(fake_home: Path, project: Path) -> Path:
     return fake_home / ".claude" / "projects" / encoded
 
 
-def _tags_dir_from_env() -> Path:
-    """Return the flat tags dir from CCCS_SESSION_TAGS_DIR env (set by fake_home fixture)."""
-    import os
-    override = os.environ.get("CCCS_SESSION_TAGS_DIR")
-    assert override, "CCCS_SESSION_TAGS_DIR must be set by the fake_home fixture"
-    return Path(override)
-
-
 def _make_empty_session(
     fake_home: Path,
     project: Path,
@@ -58,7 +46,8 @@ def _make_empty_session(
     *,
     uuid: str = "uuid-empty-1",
 ) -> Path:
-    """Build a cc-sessions/<basename>/ dir + JSONL with only hook metadata."""
+    """Build a cc-sessions/<basename>/ dir + JSONL with only hook metadata,
+    plus its sessions.db tag + session row so ccs enumerates it."""
     session_dir = project / "cc-sessions" / basename
     (session_dir / "working").mkdir(parents=True, exist_ok=True)
     (session_dir / "out").mkdir(exist_ok=True)
@@ -66,8 +55,8 @@ def _make_empty_session(
     tag = basename.split("-", 1)[1]  # strip YYYYMMDD- prefix
     td = _transcript_dir(fake_home, project)
     td.mkdir(parents=True, exist_ok=True)
-    # Write tag to the flat tags dir (new location, picked up via env var).
-    _write_tag(_tags_dir_from_env(), uuid, tag)
+    sessions_db.write_tag(uuid, tag)
+    sessions_db.ensure_session_row(project, basename)
     _write_jsonl(td / f"{uuid}.jsonl", [
         {"type": "user", "isMeta": True, "message": {"content": "hook output"}},
     ])
@@ -81,7 +70,8 @@ def _make_nonempty_session(
     *,
     uuid: str = "uuid-nonempty-1",
 ) -> Path:
-    """Build a cc-sessions/<basename>/ dir + JSONL with a real user message."""
+    """Build a cc-sessions/<basename>/ dir + JSONL with a real user message,
+    plus its sessions.db tag + session row so ccs enumerates it."""
     session_dir = project / "cc-sessions" / basename
     (session_dir / "working").mkdir(parents=True, exist_ok=True)
     (session_dir / "out").mkdir(exist_ok=True)
@@ -89,8 +79,8 @@ def _make_nonempty_session(
     tag = basename.split("-", 1)[1]
     td = _transcript_dir(fake_home, project)
     td.mkdir(parents=True, exist_ok=True)
-    # Write tag to the flat tags dir (new location, picked up via env var).
-    _write_tag(_tags_dir_from_env(), uuid, tag)
+    sessions_db.write_tag(uuid, tag)
+    sessions_db.ensure_session_row(project, basename)
     _write_jsonl(td / f"{uuid}.jsonl", [
         {"type": "user", "isMeta": True, "message": {"content": "hook"}},
         {"type": "user", "message": {"content": "please help me"}},
@@ -109,11 +99,9 @@ def fake_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     (home / ".claude").mkdir()
     monkeypatch.setenv("HOME", str(home))
     monkeypatch.setattr(Path, "home", classmethod(lambda cls: home))
-    # Flat tags dir — set in env so the subprocess and in-process code
-    # both resolve to the same test-controlled location.
-    tags_dir = tmp_path / "session-tags"
-    tags_dir.mkdir()
-    monkeypatch.setenv("CCCS_SESSION_TAGS_DIR", str(tags_dir))
+    # Isolated sessions.db — set in env so the in-process seeding here and the
+    # ccs subprocess both resolve to the same test-controlled store.
+    monkeypatch.setenv("CCST_SESSIONS_DIR", str(tmp_path / "db"))
     return home
 
 

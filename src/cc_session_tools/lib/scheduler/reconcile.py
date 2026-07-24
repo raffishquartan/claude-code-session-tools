@@ -45,12 +45,11 @@ def reconcile_and_launch(
     except registry.RegistryError as exc:
         return ReconcileResult(launched=[], parse_error=str(exc))
 
-    states = state.load_all_state()
     launched: list[str] = []
     for spec in specs:
         if not spec.enabled:
             continue
-        js = state.ensure_registered(states, spec.job_id, now)
+        js = state.ensure_registered_db(spec.job_id, now)  # per-row; closes R4
         if js.suspended:
             continue  # auto-suspended after repeated failures; ccsched enable to resume
         if js.in_flight is not None and pid_alive(js.in_flight.pid):
@@ -87,6 +86,4 @@ def reconcile_and_launch(
         ))
         launched.append(spec.job_id)
 
-    # ensure_registered may have stamped registered_at for never-seen jobs.
-    state.save_all_state(states)
     return ReconcileResult(launched=launched, parse_error=None)
