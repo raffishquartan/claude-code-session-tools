@@ -45,6 +45,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`ccst gc report`** extractors for `ccmsg.db`, `ccsched.db`, and
   `sessions.db` replace the flat-file orphan-detection readers they
   superseded.
+- **`select-agent-model` bundled skill.** Checked before every `Agent` tool
+  dispatch to decide Sonnet-tier vs Opus-tier: Sonnet by default, Opus only
+  for substantial design/ambiguity/cross-cutting reasoning or tricky-domain
+  code work. The chosen tier is stated in the agent prompt's first line for
+  an audit trail.
+- **`do-executor-critic-assessor-loop` bundled skill.** A four-role
+  orchestrator/executor/critic/assessor pattern for iterating a single
+  candidate (document, design, code) through structured critique-and-revise
+  rounds via sequential `Agent()` calls, for non-trivial work where quality
+  matters more than speed. Documents the decision gate against the two
+  other iteration options (single-shot dispatch; the `Workflow` tool's
+  judge-panel pattern, which needs explicit user opt-in).
 
 ### Changed
 
