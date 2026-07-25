@@ -8,11 +8,15 @@
 > and a real-data migration test (both against `f/claude-data-store-uplift`, 80 commits over
 > `main`) — every finding from both is folded into the steps below, not left as a separate list.
 > Updated 2026-07-24 for the 1.0.0 release: the original 0.19.0 tag shipped this restructure as a
-> minor bump with no way to detect an unmigrated upgrade (see `ccst doctor`'s `migration:*` checks,
+> minor bump with no way to detect an unmigrated upgrade (see `ccst doctor`'s `migration-to-1.0.0:*` checks,
 > added in 1.0.0) and two of the four migration scripts weren't part of the installed package at
 > all (`scripts/migrate_ccmsg_to_db.py`, `scripts/migrate_fires_jsonl_to_telemetry_db.py` — only
 > reachable from a source checkout, not `pip`/`uv tool install`). 0.19.0 was yanked from PyPI;
 > 1.0.0 supersedes it and ships all four migrations as `ccst migrate <store>` subcommands.
+> Reordered 2026-07-25: Steps 3/4 (dry-run/migrate) previously came *before* Step 5 (reinstall),
+> but `ccst migrate <store>` / `ccst sessions migrate` don't exist until 1.0.0 is installed —
+> following the old order failed at the dry-run step with `invalid choice: 'migrate'`. Reinstall
+> now runs first.
 
 ## What's changing on disk
 
@@ -21,7 +25,7 @@
 | `ccmsg` | `~/.claude/cc-messages/` | `~/.local/share/claude/ccmsg.db` |
 | `ccsched` | `~/.claude/cc-scheduler/` (`jobs.toml`, `state.json`, `.cursors/`, `.reconcile.*.ts`) | `~/.local/share/claude/ccsched.db` |
 | session tags / doctor-mutes | `~/.cache/claude/session-tags/*.tag`, `~/.claude/cc-doctor-mutes.json` | `~/.local/share/claude/sessions.db` |
-| session activity sentinels | `<project-root>/cc-sessions/<basename>/.last-opened`/`.last-active` (one pair per session, scattered across every project) | `~/.local/share/claude/sessions.db` — **mtimes copied in, originals left in place, never deleted** (see Step 3) |
+| session activity sentinels | `<project-root>/cc-sessions/<basename>/.last-opened`/`.last-active` (one pair per session, scattered across every project) | `~/.local/share/claude/sessions.db` — **mtimes copied in, originals left in place, never deleted** (see Step 4) |
 | telemetry | `~/.cache/claude/logs/fires.jsonl` (+ `.1`/`.2`/`.3` rotation) | `~/.local/share/claude/telemetry.db` |
 | command cache | `~/.cache/claude/logs/command-cache.db` | `~/.local/share/claude/command-cache.db` (path move only, same SQLite format) |
 | claude-flags cache | `~/.cache/cc-session-tools/claude-flags.json` | `~/.local/share/claude/claude-flags.json` (path move + atomic-write fix, still flat JSON) |
@@ -41,22 +45,26 @@ package — no source checkout required on the machine being migrated:
 | Step | What it does | Command |
 |---|---|---|
 | 2 | standalone pre-migration backup | `bash ~/repos/claude-code-session-tools/scripts/backup_pre_migration.sh` (source checkout only — not packaged, since it's a belt-and-suspenders extra on top of each migration's own backup, not required) |
-| 3/4 | migrate `ccmsg` | `ccst migrate ccmsg` |
-| 3/4 | migrate `ccsched` | `ccst migrate ccsched` |
-| 3/4 | migrate sessions (tags/activity/mutes) | `ccst sessions migrate` |
-| 3/4 | migrate telemetry | `ccst migrate telemetry` |
-| 3/4 | all four in one go | `ccst migrate all` |
+| 3 | reinstall to get the `ccst migrate`/`ccst sessions` subcommands | `uv tool install --reinstall ~/repos/claude-code-session-tools` |
+| 4/5 | migrate `ccmsg` | `ccst migrate ccmsg` |
+| 4/5 | migrate `ccsched` | `ccst migrate ccsched` |
+| 4/5 | migrate sessions (tags/activity/mutes) | `ccst sessions migrate` |
+| 4/5 | migrate telemetry | `ccst migrate telemetry` |
+| 4/5 | all four in one go | `ccst migrate all` |
 
-These subcommands only exist once 1.0.0 is installed. Prior to 1.0.0, `ccmsg`/`telemetry`
-migration wasn't reachable at all outside a source checkout — only `ccst migrate ccsched` /
-`ccst sessions migrate` existed as installed subcommands. As with the original 0.19.0 rollout
-(Step 0 below), reinstalling before migrating means the new binary's hooks start writing fresh
-activity into the new stores before the old data has been merged in; each migration script's
-INSERT-OR-IGNORE writes tolerate that (a subsequent migrate run merges old data in alongside
-whatever the new binary already wrote), but migrating in the same sitting you reinstall — rather
-than leaving old data sitting unmigrated for a while — avoids the transient digest/cursor blip
-described in Step 5. `ccst doctor` will FAIL on `migration:<store>` for anything still unmigrated,
-so you won't lose track of it either way.
+These subcommands only exist once 1.0.0 is installed — on this machine, checked directly, the
+previously-installed `ccst 0.18.0` has neither a `migrate` nor a `sessions` noun at all (`ccst
+migrate --help` → `invalid choice: 'migrate'`). That's why Step 3 (reinstall) has to happen before
+Steps 4/5, not after — running `ccst migrate ...`/`ccst sessions migrate` against the old binary
+fails outright, it doesn't silently no-op.
+
+Reinstalling ahead of migrating has one consequence worth knowing about: the new binary's hooks
+start writing fresh activity into the new stores immediately, before the old data has been merged
+in by the migration scripts. Each migration script's `INSERT OR IGNORE` writes tolerate that gap (a
+subsequent `migrate` run merges old data in alongside whatever the new binary already wrote), but
+doing Steps 2-6 in one sitting — rather than reinstalling and then leaving the migration for later —
+avoids the transient digest/cursor blip described in Step 6. `ccst doctor` will FAIL on
+`migration-to-1.0.0:<store>` for anything still unmigrated, so you won't lose track of it either way.
 
 ## Step 0 — run everything from a plain terminal, not from inside Claude Code
 
@@ -65,8 +73,9 @@ scans any script named on a `python`/`python3` command line, including with `--d
 blocks it if the script's source contains a destructive-file-operation token
 (`.unlink(`/`shutil.rmtree(`/etc.). Three of the four migration scripts legitimately call these
 (on their own already-backed-up-and-verified old files) as their last step, so **every command in
-Steps 2 and 3 below will be blocked if you ask a Claude Code session to run them** — there is no
-bypass env var for this particular check. Run them from a regular terminal window instead. This
+Steps 4 and 5 below will be blocked if you ask a Claude Code session to run them** — the block is a
+static source scan, so it fires on the dry-run invocation too, not just the real one — and there is
+no bypass env var for this particular check. Run them from a regular terminal window instead. This
 also sidesteps Step 0's original close-other-sessions concern for the migration commands
 themselves (though you should still close other sessions before migrating — see below).
 
@@ -76,7 +85,9 @@ The four flat-file stores with pre-existing data (`ccmsg`, `ccsched`, sessions, 
 actively written to by any Claude Code session that's currently open. **Close other Claude Code
 sessions/windows before migrating** so nothing writes to a flat file mid-migration (a message sent
 or job that fires between the migration script's read and its old-file delete would be silently
-lost — the script can't see writes that happen after it already read the source).
+lost — the script can't see writes that happen after it already read the source). Keep them closed
+through Step 3 (reinstall) as well, not just Steps 4/5 — see the reinstall-ahead-of-migrating note
+above; a session left open across the reinstall is exactly what triggers that blip.
 
 ## Step 2 — full pre-migration backup (belt-and-suspenders, independent of each script's own backup)
 
@@ -95,7 +106,27 @@ of them actually exist on this machine — the activity sentinels are deliberate
 table's note). Read-only — touches nothing under `~/.claude/`, `~/.cache/claude/`, or
 `~/.local/share/claude/`. Safe to run any number of times.
 
-## Step 3 — dry-run every migration script
+## Step 3 — reinstall the CLI tools
+
+```sh
+uv tool install --reinstall ~/repos/claude-code-session-tools
+```
+
+`--reinstall` is required — without it `uv` sees the version number changed but may still skip
+rebuilding in some cache states; this repo's own `.claude/CLAUDE.md` calls this out explicitly.
+This rebuilds the wheel from `main` and updates all six shims (`ccd`, `ccr`, `ccs`,
+`claude-code-usage`, `ccst`, `ccmsg`).
+
+Confirm:
+
+```sh
+ccst --version   # should print 1.0.0
+ccst doctor      # migration-to-1.0.0:<store> checks should now FAIL for ccmsg/ccsched/sessions/telemetry —
+                  # that's expected here, since nothing has been migrated yet; it confirms the new
+                  # checks are live. They turn OK after Steps 4/5 and the verify in Step 6.
+```
+
+## Step 4 — dry-run every migration script
 
 ```sh
 ccst migrate all --dry-run
@@ -112,7 +143,7 @@ isn't necessarily a problem (both scripts treat this as observability data, not 
 content — one real-world example seen during testing: a single 2290-byte run of NUL bytes from a
 torn write, correctly skipped and counted) but is worth a glance before proceeding.
 
-## Step 4 — run each migration for real, one at a time
+## Step 5 — run each migration for real, one at a time
 
 ```sh
 ccst migrate all
@@ -145,27 +176,22 @@ testing (now ~8500+ rows/sec), but if you're running an older checkout that pred
 large corpus taking several minutes is a known slow-not-hung condition, not a bug.
 
 Command-cache and claude-flags need **no migration script** — they're path moves only, picked up
-automatically the first time the new binary runs (Step 5). The old files at their pre-1.0.0
+automatically the first time the new binary runs (Step 3). The old files at their pre-1.0.0
 locations are not touched or deleted by anything; delete them yourself once you've confirmed the
 new binary is working, if you want to reclaim the space.
 
-## Step 5 — reinstall the CLI tools
+## Step 6 — verify
 
 ```sh
-uv tool install --reinstall ~/repos/claude-code-session-tools
+ccl --limit 5                    # most-recent-5 sessions, reading sessions.db
+ccmsg list                       # reads ccmsg.db
+ccsched list                     # reads ccsched.db
+ccst telemetry query --limit 5   # reads telemetry.db
+ccst doctor                      # migration-to-1.0.0:<store> checks should now show OK, not FAIL
 ```
 
-`--reinstall` is required — without it `uv` sees the version number changed but may still skip
-rebuilding in some cache states; this repo's own `.claude/CLAUDE.md` calls this out explicitly.
-This rebuilds the wheel from `main` and updates all six shims (`ccd`, `ccr`, `ccs`,
-`claude-code-usage`, `ccst`, `ccmsg`).
-
-Confirm:
-
-```sh
-ccst --version   # should print 1.0.0
-ccst doctor      # migration:<store> checks should now show OK, not FAIL, for the four migrated stores
-```
+All four listing commands should return data that looks like your pre-migration history, not
+empty results.
 
 If you migrated the four stores one at a time rather than all in one sitting, `ccst doctor` and
 `ccst gc report` both degrade cleanly against a mix of migrated/not-yet-migrated stores (WARN, not
@@ -175,17 +201,6 @@ incrementally: the scheduled-job catch-up digest can misbehave transiently if `c
 DB and the rows it indexes live in the other's. It self-heals (no crash, no data loss — a stale or
 default cursor just means the next digest is unusually large or empty once), but migrating all
 four together in one sitting avoids the blip entirely.
-
-## Step 6 — verify
-
-```sh
-ccl --limit 5                    # most-recent-5 sessions, reading sessions.db
-ccmsg list                       # reads ccmsg.db
-ccsched list                     # reads ccsched.db
-ccst telemetry query --limit 5   # reads telemetry.db
-```
-
-All four should return data that looks like your pre-migration history, not empty results.
 
 ## Step 7 — audit and retain backups
 
@@ -263,3 +278,13 @@ and `~/.local/share/claude/claude-flags.json`.
   (telemetry); 9 jobs + 7,595 cursors + 7,599 throttles (ccsched); 4,037+ tags and 20 session
   directories sampled (sessions) — all against read-only copies of this machine's real data, in an
   isolated scratch sandbox, never touching the real paths.
+
+## Ordering bug found and fixed (2026-07-25)
+
+The steps above previously ran dry-run/real-migration (then Steps 3/4) before reinstalling (then
+Step 5) — but `ccst migrate <store>`/`ccst sessions migrate` don't exist until 1.0.0 is installed.
+Confirmed directly against this machine's pre-upgrade `ccst 0.18.0`: it has neither a `migrate` nor
+a `sessions` noun (`ccst migrate --help` → `invalid choice: 'migrate'`). The doc's own "Script
+paths" section already said as much ("these subcommands only exist once 1.0.0 is installed") but
+the numbered walkthrough hadn't been updated to match. Reinstall now runs as Step 3, before any
+dry-run or real migration.
