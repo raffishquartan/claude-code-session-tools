@@ -225,13 +225,9 @@ def _cmd_skills_install(args: argparse.Namespace) -> int:
             failed.append(dest)
             continue
 
-        if action == SkillAction.WRONG_TARGET and not args.force:
-            print(
-                f"error: {dest} is a symlink to a different path; use --force to replace it",
-                file=sys.stderr,
-            )
-            failed.append(dest)
-            continue
+        # WRONG_TARGET: dest is a symlink we manage (created by a previous
+        # install), so repointing it is safe without --force — no user data
+        # at risk, unlike NON_SYMLINK_EXISTS above.
 
         # Move aside existing non-symlink or wrong-target symlink
         if dest.exists() or dest.is_symlink():

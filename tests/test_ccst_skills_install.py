@@ -97,14 +97,15 @@ def test_apply_is_idempotent(tmp_path: Path) -> None:
         assert link.resolve() == (src / name).resolve()
 
 
-# ---------- Test 4: stale symlink -> wrong-target in dry run; --apply --force fixes it ----------
+# ---------- Test 4: stale symlink -> wrong-target in dry run; --apply repoints it without --force ----------
 
 
-def test_stale_symlink_wrong_target_and_force(tmp_path: Path) -> None:
+def test_stale_symlink_wrong_target_self_heals_without_force(tmp_path: Path) -> None:
     src = _make_skills_source(tmp_path / "src", ["alpha"])
     tgt = _make_target_dir(tmp_path / "tgt")
 
-    # Create a stale symlink pointing to /tmp/somewhere-else
+    # Create a stale symlink pointing to /tmp/somewhere-else — e.g. left over
+    # from an install run against a since-deleted worktree checkout.
     elsewhere = tmp_path / "elsewhere"
     elsewhere.mkdir()
     stale_link = tgt / "alpha"
@@ -117,15 +118,9 @@ def test_stale_symlink_wrong_target_and_force(tmp_path: Path) -> None:
     # still pointing wrong after dry run
     assert stale_link.resolve() == elsewhere.resolve()
 
-    # --apply without --force must refuse
+    # --apply (no --force needed) must repoint a stale symlink we manage —
+    # no user data is at risk, unlike a real non-symlink file.
     result = _run("skills", "install", "--source", str(src), "--target", str(tgt), "--apply")
-    assert result.returncode != 0
-    assert stale_link.resolve() == elsewhere.resolve()
-
-    # --apply --force must fix it
-    result = _run(
-        "skills", "install", "--source", str(src), "--target", str(tgt), "--apply", "--force"
-    )
     assert result.returncode == 0
     assert stale_link.is_symlink()
     assert stale_link.resolve() == (src / "alpha").resolve()

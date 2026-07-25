@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **`ccst skills install --apply` no longer aborts on a stale symlink it manages.** A skill
+  symlink under `~/.claude/skills/` left pointing at an old location (e.g. a since-deleted git
+  worktree used for local dev/testing) was treated the same as a real user file at that path:
+  both required `--force` or the install failed for that skill. `ccst install-everything --apply`
+  calls the skills step with `force=False` and no way to override it, so any such stale symlink
+  silently failed to (re)install while every other step kept going — `install-everything --apply`
+  reported success even though the affected skill(s) were left broken. A dangling symlink under a
+  directory this tool itself manages carries no user data, so it's now always safe to repoint on
+  `--apply` without `--force`; `--force` is still required to move aside a real (non-symlink) file.
+
 ## [1.0.0] - 2026-07-25
 
 0.19.0 (2026-07-14) shipped the data-store SQLite restructure below as a minor bump. In practice
