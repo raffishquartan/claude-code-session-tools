@@ -32,6 +32,13 @@ Current subcommands:
                                  deletes anything).
   migrate ccsched                Migrate ccsched flat-file stores into ccsched.db
                                  (verify + tar-backup old files before removal).
+  migrate ccmsg                  Migrate the flat-file message store into ccmsg.db
+                                 (verify + tar-backup old files before removal).
+  migrate telemetry              Migrate fires.jsonl (+ rotated slots) into
+                                 telemetry.db (verify + tar-backup before removal).
+  migrate all                    Run every one-shot migration above in sequence.
+                                 Run from a plain terminal, not inside Claude Code
+                                 — the delete steps are blocked by bash-hard-deny.
   claude-md install              Add/update the inter-session-messaging block in
                                  ~/.claude/CLAUDE.md.
   claude-md uninstall            Remove the messaging block from CLAUDE.md.
@@ -66,6 +73,7 @@ HOOK_VERBS: dict[str, str] = {
     "last-screenshot": "cccs_hooks.last_screenshot",
     "messaging-deliver": "cccs_hooks.messaging_deliver",
     "catchup": "cccs_hooks.catchup",
+    "pending-migration": "cccs_hooks.pending_migration",
 }
 
 
@@ -80,6 +88,7 @@ HOOK_DESCRIPTIONS: dict[str, str] = {
     "last-screenshot": "Resolves the newest screenshot for the >lss token and injects its path",
     "messaging-deliver": "Delivers inter-session messages (digest + auto-read + receipts) on session start and each prompt",
     "catchup": "Reconciles+launches missed scheduled jobs (ccsched) detached and surfaces a catch-up digest (SessionStart + UserPromptSubmit)",
+    "pending-migration": "Detects legacy pre-1.0.0 flat-file data left unmigrated (ccmsg/ccsched/sessions/telemetry) and surfaces a FAIL digest pointing at `ccst migrate all`; honours `ccst doctor --mute` (SessionStart)",
 }
 
 
@@ -564,6 +573,7 @@ def _cmd_doctor(args: argparse.Namespace) -> int:
 
     from cc_session_tools.lib import doctor_mutes
     from cc_session_tools.lib.doctor import (
+        LegacyMigrationPaths,
         Status,
         filter_unmuted_issues,
         format_drift_report,
@@ -637,6 +647,21 @@ def _cmd_doctor(args: argparse.Namespace) -> int:
         "claude-flags": claude_flags_file(),
     }
 
+    from cc_session_tools.lib.paths import data_home
+    from cc_session_tools.cli.migrate_ccmsg import DEFAULT_OLD_ROOT as ccmsg_old_root
+    from cc_session_tools.cli.migrate_ccsched import DEFAULT_OLD_DIR as ccsched_old_dir
+    from cc_session_tools.cli.migrate_sessions_db import DEFAULT_MUTES_FILE, DEFAULT_TAGS_DIR
+    from cc_session_tools.cli.migrate_telemetry import DEFAULT_OLD_SOURCE_DIR as telemetry_old_dir
+
+    legacy_migration_paths = LegacyMigrationPaths(
+        ccmsg_old_root=ccmsg_old_root,
+        ccsched_old_dir=ccsched_old_dir,
+        tags_dir=DEFAULT_TAGS_DIR,
+        mutes_file=DEFAULT_MUTES_FILE,
+        telemetry_old_dir=telemetry_old_dir,
+        data_home=data_home(),
+    )
+
     results = run_all_checks(
         installed_version=__version__,
         settings_path=settings_path,
@@ -646,6 +671,7 @@ def _cmd_doctor(args: argparse.Namespace) -> int:
         env=env_vars,
         skip_pypi=args.no_pypi,
         store_paths=store_paths,
+        legacy_migration_paths=legacy_migration_paths,
     )
 
     if args.drift or getattr(args, "mode", None) == "drift":
@@ -895,6 +921,76 @@ def _cmd_migrate_ccsched(args: argparse.Namespace) -> int:
     if args.dry_run:
         argv.append("--dry-run")
     return migrate_main(argv)
+
+
+def _cmd_migrate_ccmsg(args: argparse.Namespace) -> int:
+    from cc_session_tools.cli.migrate_ccmsg import main as migrate_main
+
+    argv: list[str] = []
+    if args.old_root:
+        argv += ["--old-root", args.old_root]
+    if args.backup_dir:
+        argv += ["--backup-dir", args.backup_dir]
+    if args.dry_run:
+        argv.append("--dry-run")
+    return migrate_main(argv)
+
+
+def _cmd_migrate_telemetry(args: argparse.Namespace) -> int:
+    from cc_session_tools.cli.migrate_telemetry import main as migrate_main
+
+    argv: list[str] = []
+    if args.source_dir:
+        argv += ["--source-dir", args.source_dir]
+    if args.dest_dir:
+        argv += ["--dest-dir", args.dest_dir]
+    if args.dry_run:
+        argv.append("--dry-run")
+    if args.force:
+        argv.append("--force")
+    return migrate_main(argv)
+
+
+_MIGRATE_ALL_BANNER = (
+    "Migrating all legacy data stores (ccmsg, ccsched, sessions, telemetry) into\n"
+    "the SQLite stores under ~/.local/share/claude/. Each step is non-destructive\n"
+    "(write, verify, tar-backup — old files are only ever removed after a\n"
+    "successful verify).\n\n"
+    "IMPORTANT: run this from a plain terminal, NOT from inside a Claude Code\n"
+    "session. The ccmsg/ccsched/telemetry steps delete their own already-backed-up\n"
+    "old files as a final step, and the bash-hard-deny PreToolUse hook statically\n"
+    "blocks any script containing a delete call — there is no bypass for this."
+)
+
+
+def _cmd_migrate_all(args: argparse.Namespace) -> int:
+    print(_MIGRATE_ALL_BANNER)
+
+    steps: list[tuple[str, object]] = [
+        ("sessions", lambda: _cmd_sessions_migrate(argparse.Namespace(
+            dry_run=args.dry_run, sessions_db=None, tags_dir=None, mutes_file=None))),
+        ("ccmsg", lambda: _cmd_migrate_ccmsg(argparse.Namespace(
+            old_root=None, backup_dir=None, dry_run=args.dry_run))),
+        ("ccsched", lambda: _cmd_migrate_ccsched(argparse.Namespace(
+            old_dir=None, backup_dir=None, dry_run=args.dry_run))),
+        ("telemetry", lambda: _cmd_migrate_telemetry(argparse.Namespace(
+            source_dir=None, dest_dir=None, dry_run=args.dry_run, force=False))),
+    ]
+
+    overall_rc = 0
+    for name, step in steps:
+        print(f"\n=== {name} ===")
+        rc = step()  # type: ignore[operator]
+        if rc != 0:
+            overall_rc = rc
+
+    print()
+    if args.dry_run:
+        print("Dry run complete — re-run without --dry-run once you're satisfied.")
+    else:
+        print("All migrations attempted. Review any ERROR/ABORT lines above; a "
+              "non-zero step leaves its own old files untouched and is safe to re-run.")
+    return overall_rc
 
 
 # ---------- install-everything ----------
@@ -1373,6 +1469,26 @@ def _build_parser() -> argparse.ArgumentParser:
     m_ccsched.add_argument("--old-dir", default=None, metavar="PATH")
     m_ccsched.add_argument("--backup-dir", default=None, metavar="PATH")
     m_ccsched.add_argument("--dry-run", action="store_true")
+    m_ccmsg = migrate_sub.add_parser(
+        "ccmsg",
+        help="Migrate the flat-file message store into ccmsg.db (non-destructive)")
+    m_ccmsg.add_argument("--old-root", default=None, metavar="PATH")
+    m_ccmsg.add_argument("--backup-dir", default=None, metavar="PATH")
+    m_ccmsg.add_argument("--dry-run", action="store_true")
+    m_telemetry = migrate_sub.add_parser(
+        "telemetry",
+        help="Migrate fires.jsonl (+ rotated slots) into telemetry.db (non-destructive)")
+    m_telemetry.add_argument("--source-dir", default=None, metavar="PATH")
+    m_telemetry.add_argument("--dest-dir", default=None, metavar="PATH")
+    m_telemetry.add_argument("--dry-run", action="store_true")
+    m_telemetry.add_argument("--force", action="store_true",
+                              help="Allow inserting into a dest DB that already has rows")
+    m_all = migrate_sub.add_parser(
+        "all",
+        help="Run every one-shot data-store migration (sessions, ccmsg, ccsched, "
+             "telemetry) in sequence. Run from a plain terminal, not inside a "
+             "Claude Code session.")
+    m_all.add_argument("--dry-run", action="store_true")
 
     # ---- claude-md ----
     cmd_parser = sub.add_parser("claude-md", help="Manage the global CLAUDE.md messaging block")
@@ -1459,6 +1575,12 @@ def main() -> None:
     if args.noun == "migrate":
         if args.verb == "ccsched":
             sys.exit(_cmd_migrate_ccsched(args))
+        if args.verb == "ccmsg":
+            sys.exit(_cmd_migrate_ccmsg(args))
+        if args.verb == "telemetry":
+            sys.exit(_cmd_migrate_telemetry(args))
+        if args.verb == "all":
+            sys.exit(_cmd_migrate_all(args))
 
     if args.noun == "claude-md":
         if args.verb == "install":

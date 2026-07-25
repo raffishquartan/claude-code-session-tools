@@ -7,7 +7,52 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.19.0] - 2026-07-14
+## [1.0.0] - 2026-07-25
+
+0.19.0 (2026-07-14) shipped the data-store SQLite restructure below as a minor bump. In practice
+it was breaking: upgrading silently left `ccmsg`, `ccsched`, and session-tag/mute data invisible
+until a migration script was run by hand, `ccst doctor` reported that state as a harmless "not
+yet created" WARN indistinguishable from a fresh install, and two of the four migration scripts
+weren't part of the installed package at all — reachable only from a source checkout, not
+`pip`/`uv tool install`. **0.19.0 was yanked from PyPI.** 1.0.0 supersedes it: same restructure,
+plus the guard rail that should have shipped with it.
+
+### Added
+
+- **`ccst doctor` `migration:<store>` checks** (`ccmsg`/`ccsched`/`sessions`/`telemetry`) that
+  distinguish "fresh install, nothing to migrate" (OK) from "upgraded from <1.0.0, legacy data
+  still unmigrated" (FAIL) from "migration already ran, old files just not cleaned up yet" (WARN,
+  no data at risk). The previous `data-store:<store>` check couldn't tell these apart — an empty
+  new store read as "not yet created, expected before first use" whether or not there was live
+  data waiting in the old location.
+- **`ccst migrate ccmsg` / `ccst migrate telemetry` / `ccst migrate all`.** The `ccmsg` and
+  telemetry migrations move from `scripts/migrate_ccmsg_to_db.py` /
+  `scripts/migrate_fires_jsonl_to_telemetry_db.py` (dev-only, not packaged) into
+  `cc_session_tools.cli.migrate_ccmsg` / `migrate_telemetry`, shipped as `ccst` subcommands like
+  their `ccsched`/`sessions` siblings already were. `ccst migrate all` runs all four
+  (sessions, ccmsg, ccsched, telemetry) in one pass.
+- **`pending-migration` SessionStart hook.** Surfaces `migration:<store>` FAILs automatically at
+  session start (WARN-only findings — migrated but not cleaned up — stay quiet, since no data is
+  at risk). Honours `ccst doctor --mute <name>` so a deliberately-deferred migration doesn't
+  renag every session. Cannot run the migration itself — see below.
+
+### Changed
+
+- **Major version bump, not minor.** An on-disk data-store relocation/reformat that can leave a
+  user's data silently unmigrated is a breaking change regardless of whether the CLI surface
+  changed; see `.claude/CLAUDE.md`'s version policy.
+- `docs/data-store-migration-steps.md` updated for the `ccst migrate <store>` subcommands and the
+  new doctor checks.
+
+### Note on `ccst migrate all` / individual `ccst migrate <store>` commands
+
+None of these can run automatically end-to-end. `ccmsg`, `ccsched`, and `telemetry` migration
+each delete their own already-backed-up-and-verified old files as a final step, and the
+`bash-hard-deny` PreToolUse hook statically blocks any script containing a delete call from
+running inside a Claude Code session — by design, with no bypass. The `pending-migration` hook
+above only detects and surfaces the gap; run `ccst migrate all` yourself from a plain terminal.
+
+## [0.19.0] - 2026-07-14 (yanked from PyPI — see 1.0.0)
 
 ### Added
 

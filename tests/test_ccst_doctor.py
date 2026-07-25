@@ -11,11 +11,13 @@ import pytest
 
 from cc_session_tools.lib.doctor import (
     CheckResult,
+    LegacyMigrationPaths,
     Status,
     check_cli_on_path,
     check_data_stores,
     check_env_dir,
     check_hook_registered,
+    check_pending_data_store_migration,
     check_pypi_version,
     check_settings_json,
     check_skill_symlink,
@@ -333,7 +335,7 @@ def test_run_all_checks_includes_hook_checks(tmp_path: Path) -> None:
         skip_pypi=True,
     )
     hook_checks = [r for r in results if r.name.startswith("hook:")]
-    assert len(hook_checks) == 10  # all bundled hooks
+    assert len(hook_checks) == 11  # all bundled hooks
 
 
 def test_run_all_checks_warns_for_missing_hooks(tmp_path: Path) -> None:
@@ -579,3 +581,136 @@ def test_run_all_checks_skips_data_store_checks_when_omitted(tmp_path: Path) -> 
 def test_doctor_output_includes_data_store_checks() -> None:
     result = _run("doctor", "--no-pypi")
     assert "data-store:" in result.stdout
+
+
+# ---------- check_pending_data_store_migration ----------
+
+
+def _legacy_paths(tmp_path: Path) -> LegacyMigrationPaths:
+    return LegacyMigrationPaths(
+        ccmsg_old_root=tmp_path / "cc-messages",
+        ccsched_old_dir=tmp_path / "cc-scheduler",
+        tags_dir=tmp_path / "session-tags",
+        mutes_file=tmp_path / "cc-doctor-mutes.json",
+        telemetry_old_dir=tmp_path / "logs",
+        data_home=tmp_path / "data-home",
+    )
+
+
+def test_check_pending_migration_ok_when_nothing_legacy(tmp_path: Path) -> None:
+    results = check_pending_data_store_migration(_legacy_paths(tmp_path))
+
+    assert {r.name for r in results} == {
+        "migration:ccmsg", "migration:ccsched", "migration:sessions", "migration:telemetry",
+    }
+    assert all(r.status == Status.OK for r in results)
+    assert all("nothing to migrate" in r.reason for r in results)
+
+
+def test_check_pending_migration_fails_for_unmigrated_ccmsg(tmp_path: Path) -> None:
+    paths = _legacy_paths(tmp_path)
+    (paths.ccmsg_old_root / "projects" / "alpha" / "inbox").mkdir(parents=True)
+    (paths.ccmsg_old_root / "projects" / "alpha" / "inbox" / "msg.md").write_text("x")
+
+    results = {r.name: r for r in check_pending_data_store_migration(paths)}
+
+    assert results["migration:ccmsg"].status == Status.FAIL
+    assert "ccst migrate all" in results["migration:ccmsg"].reason
+    assert results["migration:ccsched"].status == Status.OK
+
+
+def test_check_pending_migration_fails_for_unmigrated_ccsched(tmp_path: Path) -> None:
+    paths = _legacy_paths(tmp_path)
+    paths.ccsched_old_dir.mkdir(parents=True)
+    (paths.ccsched_old_dir / "jobs.toml").write_text("[[job]]\n")
+
+    results = {r.name: r for r in check_pending_data_store_migration(paths)}
+
+    assert results["migration:ccsched"].status == Status.FAIL
+
+
+def test_check_pending_migration_fails_for_unmigrated_session_tags(tmp_path: Path) -> None:
+    paths = _legacy_paths(tmp_path)
+    paths.tags_dir.mkdir(parents=True)
+    (paths.tags_dir / "abc-123.tag").write_text("my-session")
+
+    results = {r.name: r for r in check_pending_data_store_migration(paths)}
+
+    assert results["migration:sessions"].status == Status.FAIL
+
+
+def test_check_pending_migration_fails_for_unmigrated_doctor_mutes(tmp_path: Path) -> None:
+    paths = _legacy_paths(tmp_path)
+    paths.mutes_file.write_text(json.dumps({"some-check": "2026-01-01"}))
+
+    results = {r.name: r for r in check_pending_data_store_migration(paths)}
+
+    assert results["migration:sessions"].status == Status.FAIL
+
+
+def test_check_pending_migration_fails_for_unmigrated_telemetry(tmp_path: Path) -> None:
+    paths = _legacy_paths(tmp_path)
+    paths.telemetry_old_dir.mkdir(parents=True)
+    (paths.telemetry_old_dir / "fires.jsonl").write_text('{"hook": "x"}\n')
+
+    results = {r.name: r for r in check_pending_data_store_migration(paths)}
+
+    assert results["migration:telemetry"].status == Status.FAIL
+
+
+def test_check_pending_migration_warns_when_already_migrated_but_old_files_remain(
+    tmp_path: Path,
+) -> None:
+    paths = _legacy_paths(tmp_path)
+    (paths.ccmsg_old_root / "projects" / "alpha" / "inbox").mkdir(parents=True)
+    (paths.ccmsg_old_root / "projects" / "alpha" / "inbox" / "msg.md").write_text("x")
+    paths.data_home.mkdir(parents=True)
+    conn = _db.connect(
+        paths.data_home / "ccmsg.db",
+        ddl="CREATE TABLE IF NOT EXISTS messages (id INTEGER PRIMARY KEY);",
+    )
+    conn.execute("INSERT INTO messages (id) VALUES (1)")
+    conn.commit()
+    conn.close()
+
+    results = {r.name: r for r in check_pending_data_store_migration(paths)}
+
+    assert results["migration:ccmsg"].status == Status.WARN
+    assert "already ran" in results["migration:ccmsg"].reason
+
+
+def test_run_all_checks_skips_pending_migration_when_paths_none(tmp_path: Path) -> None:
+    settings = tmp_path / "settings.json"
+    settings.write_text('{"hooks": {}}')
+    bundle = Path(__file__).parent.parent / "config" / "hooks-bundle.json"
+
+    results = run_all_checks(
+        installed_version="1.0.0",
+        settings_path=settings,
+        bundle_path=bundle,
+        skills_source_dir=None,
+        skills_target_dir=tmp_path / "skills",
+        env={"CLAUDE_SESSION_TOOLS_REPO_ROOT": None, "CLAUDE_SESSION_TOOLS_PROJ_ROOT": None},
+        skip_pypi=True,
+    )
+
+    assert not any(r.name.startswith("migration:") for r in results)
+
+
+def test_run_all_checks_includes_pending_migration_when_paths_given(tmp_path: Path) -> None:
+    settings = tmp_path / "settings.json"
+    settings.write_text('{"hooks": {}}')
+    bundle = Path(__file__).parent.parent / "config" / "hooks-bundle.json"
+
+    results = run_all_checks(
+        installed_version="1.0.0",
+        settings_path=settings,
+        bundle_path=bundle,
+        skills_source_dir=None,
+        skills_target_dir=tmp_path / "skills",
+        env={"CLAUDE_SESSION_TOOLS_REPO_ROOT": None, "CLAUDE_SESSION_TOOLS_PROJ_ROOT": None},
+        skip_pypi=True,
+        legacy_migration_paths=_legacy_paths(tmp_path),
+    )
+
+    assert any(r.name.startswith("migration:") for r in results)

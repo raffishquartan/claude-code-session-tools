@@ -1,12 +1,18 @@
 # Data-store migration steps
 
-> Step-by-step instructions for migrating this machine from the pre-0.19.0 flat-file/JSONL/TOML
+> Step-by-step instructions for migrating this machine from the pre-1.0.0 flat-file/JSONL/TOML
 > data stores to the SQLite (WAL mode) stores under `~/.local/share/claude/`. Companion to
 > `docs/data-store-migration-backups.md` (the post-migration audit checklist) and
 > `docs/superpowers/plans/2026-07-13-data-store-uplift-*.md` (the full design/implementation
 > record). Written 2026-07-17, revised the same day after an exhaustive cross-phase code review
 > and a real-data migration test (both against `f/claude-data-store-uplift`, 80 commits over
 > `main`) — every finding from both is folded into the steps below, not left as a separate list.
+> Updated 2026-07-24 for the 1.0.0 release: the original 0.19.0 tag shipped this restructure as a
+> minor bump with no way to detect an unmigrated upgrade (see `ccst doctor`'s `migration:*` checks,
+> added in 1.0.0) and two of the four migration scripts weren't part of the installed package at
+> all (`scripts/migrate_ccmsg_to_db.py`, `scripts/migrate_fires_jsonl_to_telemetry_db.py` — only
+> reachable from a source checkout, not `pip`/`uv tool install`). 0.19.0 was yanked from PyPI;
+> 1.0.0 supersedes it and ships all four migrations as `ccst migrate <store>` subcommands.
 
 ## What's changing on disk
 
@@ -29,21 +35,28 @@ activity sentinels row above — those are copied, never deleted, by design (har
 
 ## Script paths (quick reference)
 
-All commands below assume `cd ~/repos/claude-code-session-tools` first; full absolute paths
-given here so this section stands alone if you ever need it without that context:
+As of 1.0.0, all four migrations are `ccst migrate <store>` subcommands, installed with the
+package — no source checkout required on the machine being migrated:
 
-| Step | What it does | Full path |
+| Step | What it does | Command |
 |---|---|---|
-| 2 | standalone pre-migration backup | `/home/chris/repos/claude-code-session-tools/scripts/backup_pre_migration.sh` |
-| 3/4 | migrate `ccmsg` | `/home/chris/repos/claude-code-session-tools/scripts/migrate_ccmsg_to_db.py` |
-| 3/4 | migrate telemetry | `/home/chris/repos/claude-code-session-tools/scripts/migrate_fires_jsonl_to_telemetry_db.py` |
-| 3/4 | migrate `ccsched` | `/home/chris/repos/claude-code-session-tools/src/cc_session_tools/cli/migrate_ccsched.py` (run as a module: `uv run python -m cc_session_tools.cli.migrate_ccsched`, not invoked by file path directly) |
-| 3/4 | migrate sessions (tags/activity/mutes) | `/home/chris/repos/claude-code-session-tools/src/cc_session_tools/cli/migrate_sessions_db.py` (run as a module: `uv run python -m cc_session_tools.cli.migrate_sessions_db`, not invoked by file path directly) |
+| 2 | standalone pre-migration backup | `bash ~/repos/claude-code-session-tools/scripts/backup_pre_migration.sh` (source checkout only — not packaged, since it's a belt-and-suspenders extra on top of each migration's own backup, not required) |
+| 3/4 | migrate `ccmsg` | `ccst migrate ccmsg` |
+| 3/4 | migrate `ccsched` | `ccst migrate ccsched` |
+| 3/4 | migrate sessions (tags/activity/mutes) | `ccst sessions migrate` |
+| 3/4 | migrate telemetry | `ccst migrate telemetry` |
+| 3/4 | all four in one go | `ccst migrate all` |
 
-The `ccmsg`/telemetry scripts live under `scripts/` and are run directly by file path; the
-`ccsched`/sessions ones live under `src/cc_session_tools/cli/` and are proper CLI modules (also
-reachable as `ccst migrate ccsched` / `ccst sessions migrate` once you've reinstalled — see
-Step 5) — this split is why the commands in Steps 3-4 below don't all look the same shape.
+These subcommands only exist once 1.0.0 is installed. Prior to 1.0.0, `ccmsg`/`telemetry`
+migration wasn't reachable at all outside a source checkout — only `ccst migrate ccsched` /
+`ccst sessions migrate` existed as installed subcommands. As with the original 0.19.0 rollout
+(Step 0 below), reinstalling before migrating means the new binary's hooks start writing fresh
+activity into the new stores before the old data has been merged in; each migration script's
+INSERT-OR-IGNORE writes tolerate that (a subsequent migrate run merges old data in alongside
+whatever the new binary already wrote), but migrating in the same sitting you reinstall — rather
+than leaving old data sitting unmigrated for a while — avoids the transient digest/cursor blip
+described in Step 5. `ccst doctor` will FAIL on `migration:<store>` for anything still unmigrated,
+so you won't lose track of it either way.
 
 ## Step 0 — run everything from a plain terminal, not from inside Claude Code
 
@@ -85,12 +98,11 @@ table's note). Read-only — touches nothing under `~/.claude/`, `~/.cache/claud
 ## Step 3 — dry-run every migration script
 
 ```sh
-cd ~/repos/claude-code-session-tools
-python3 scripts/migrate_ccmsg_to_db.py --dry-run
-python3 scripts/migrate_fires_jsonl_to_telemetry_db.py --dry-run
-uv run python -m cc_session_tools.cli.migrate_ccsched --dry-run
-uv run python -m cc_session_tools.cli.migrate_sessions_db --dry-run
+ccst migrate all --dry-run
 ```
+
+(or run each individually: `ccst migrate ccmsg --dry-run`, `ccst migrate ccsched --dry-run`,
+`ccst sessions migrate --dry-run`, `ccst migrate telemetry --dry-run`)
 
 Each prints what it would do (row counts, files it would touch) without writing anything —
 confirmed by direct testing that every writer path in all four scripts is gated behind the
@@ -103,16 +115,11 @@ torn write, correctly skipped and counted) but is worth a glance before proceedi
 ## Step 4 — run each migration for real, one at a time
 
 ```sh
-python3 scripts/migrate_ccmsg_to_db.py
-python3 scripts/migrate_fires_jsonl_to_telemetry_db.py
-uv run python -m cc_session_tools.cli.migrate_ccsched
-uv run python -m cc_session_tools.cli.migrate_sessions_db
+ccst migrate all
 ```
 
-(`ccsched` and `sessions` are also reachable as `ccst migrate ccsched` / `ccst sessions migrate`
-once you've reinstalled per Step 5 below — but reinstalling first would mean the *hooks* start
-writing to the new stores before you've migrated the *old* data into them, so migrate first with
-the module invocations above, using the still-installed 0.18.0 binary.)
+(or run each individually, in any order: `ccst migrate ccmsg`, `ccst migrate ccsched`,
+`ccst sessions migrate`, `ccst migrate telemetry`)
 
 Order doesn't matter between the four — each is independent, and each script's own dry-run/verify
 step is unaffected by whether the others have run yet. If any one reports a mismatch and aborts
@@ -128,7 +135,8 @@ first response. The four scripts are not equally safe to re-run:
   already has rows requires `--force`, and `--force` **appends a full duplicate copy** rather than
   deduplicating. If the telemetry migration aborts partway (e.g. killed after writing but before
   its own backup+delete step), do NOT just re-run it — follow the recovery procedure printed in
-  its own `--help` / docstring (`scripts/migrate_fires_jsonl_to_telemetry_db.py`), which resets
+  its own `--help` / docstring (`ccst migrate telemetry --help`, or
+  `src/cc_session_tools/cli/migrate_telemetry.py` in a checkout), which resets
   the destination tables and their id sequences before a clean re-run.
 
 Expect the sessions migration to take a few seconds even with a large tag corpus (tens of
@@ -137,7 +145,7 @@ testing (now ~8500+ rows/sec), but if you're running an older checkout that pred
 large corpus taking several minutes is a known slow-not-hung condition, not a bug.
 
 Command-cache and claude-flags need **no migration script** — they're path moves only, picked up
-automatically the first time the new binary runs (Step 5). The old files at their pre-0.19.0
+automatically the first time the new binary runs (Step 5). The old files at their pre-1.0.0
 locations are not touched or deleted by anything; delete them yourself once you've confirmed the
 new binary is working, if you want to reclaim the space.
 
@@ -149,14 +157,14 @@ uv tool install --reinstall ~/repos/claude-code-session-tools
 
 `--reinstall` is required — without it `uv` sees the version number changed but may still skip
 rebuilding in some cache states; this repo's own `.claude/CLAUDE.md` calls this out explicitly.
-This rebuilds the wheel from `f/claude-data-store-uplift` (or `main`, once merged) and updates all
-six shims (`ccd`, `ccr`, `ccs`, `claude-code-usage`, `ccst`, `ccmsg`).
+This rebuilds the wheel from `main` and updates all six shims (`ccd`, `ccr`, `ccs`,
+`claude-code-usage`, `ccst`, `ccmsg`).
 
 Confirm:
 
 ```sh
-ccst --version   # should print 0.19.0
-ccst doctor      # data-store checks should now show OK, not WARN, for the four migrated stores
+ccst --version   # should print 1.0.0
+ccst doctor      # migration:<store> checks should now show OK, not FAIL, for the four migrated stores
 ```
 
 If you migrated the four stores one at a time rather than all in one sitting, `ccst doctor` and
@@ -186,7 +194,7 @@ tarball and each script's own `migration-backups/*.tar.gz` for 30 days, then del
 
 ## Rollback — unwinding the migration
 
-Only the flat-file *reads* stop once you reinstall 0.19.0 — nothing old is deleted until each
+Only the flat-file *reads* stop once you reinstall 1.0.0 — nothing old is deleted until each
 migration script's own verify+backup steps pass, and even then the new `.db` files never
 overwrite the old ones in place. So rolling back is: restore the old flat files, then reinstall
 the old binary.

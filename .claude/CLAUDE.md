@@ -59,9 +59,18 @@ Rationale and full design: `data-stores-design-spec.md` and
 
 ## Version policy
 
-- **Minor bump** (0.x.0): changes to install interface, CLI flags, or configuration
-  contract
-- **Patch bump** (0.0.x): bug fixes with no interface change
+Standard SemVer as of 1.0.0 (see CHANGELOG.md's 1.0.0 entry for why the 0.x scheme was retired
+early — 0.19.0 shipped a breaking on-disk change as a minor bump with no migration guard, was
+yanked from PyPI, and 1.0.0 replaced it):
+
+- **Major bump** (x.0.0): breaking changes — including any change that relocates, reformats, or
+  otherwise makes existing on-disk data unreadable by old code paths until a migration step runs,
+  even if no CLI flag or config contract changed. If a change like this ships, it must also ship
+  a `ccst doctor` check that FAILs (not WARNs) when the migration hasn't run yet — an empty/silent
+  new store is not distinguishable from a fresh install without one.
+- **Minor bump** (0.x.0): backwards-compatible changes — new features, new CLI flags/subcommands,
+  additive configuration.
+- **Patch bump** (0.0.x): bug fixes with no interface change.
 
 ## Commit style
 

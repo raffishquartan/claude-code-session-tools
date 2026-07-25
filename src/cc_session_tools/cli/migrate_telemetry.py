@@ -1,6 +1,6 @@
-#!/usr/bin/env python3
-# scripts/migrate_fires_jsonl_to_telemetry_db.py
-"""One-shot migration: fires.jsonl (+ rotated .1/.2/.3 slots) → telemetry.db.
+"""One-shot migration: fires.jsonl (+ rotated .1/.2/.3 slots) -> telemetry.db.
+
+Exposed via `ccst migrate telemetry` (and as part of `ccst migrate all`).
 
 Reads ~/.cache/claude/logs/fires.jsonl and any of fires.jsonl.{1,2,3} that
 exist (oldest slot first: .3, .2, .1, then the live file — so rows land in
@@ -17,15 +17,13 @@ no cursor-file rewrite is needed: an old stored offset of 42 continues to
 mean "the 42nd catch-up row" post-migration. If rotation already discarded
 old catch-up rows before this runs, the alignment is off by the number of
 dropped rows — a bounded, self-healing limitation of migrating from a lossy
-source (read_since clamps a stale offset rather than crashing). See the
-"Migration seam caveat" in this task's plan notes.
+source (read_since clamps a stale offset rather than crashing).
 
 Non-destructive: writes to telemetry.db, verifies the inserted row count
 against the parsed row count, tar.gz-backs-up the source fires.jsonl* files
 to <dest-dir>/migration-backups/, and only then deletes them from the source
 directory. Malformed lines are skipped and counted, never silently dropped
-from the summary — this is observability data, not irreplaceable content
-(see docs/superpowers/plans/2026-07-13-data-store-uplift-00-overview.md §4).
+from the summary — this is observability data, not irreplaceable content.
 
 Recovery from a partial run: safe to re-run in almost every failure case (it
 writes to a fresh table, verifies row counts, and only deletes source files
@@ -39,19 +37,20 @@ dest tables and reset their id sequences, then re-run WITHOUT --force:
     sqlite3 ~/.local/share/claude/telemetry.db \\
       "DELETE FROM telemetry_events; DELETE FROM catchup_events; \\
        DELETE FROM sqlite_sequence WHERE name IN ('telemetry_events','catchup_events');"
-    python3 scripts/migrate_fires_jsonl_to_telemetry_db.py
+    ccst migrate telemetry
 
 Resetting sqlite_sequence is required so re-inserted rows recover the id == N
 alignment; the source files are still present in this window (deleted only
 after the backup step the operator never reached), so nothing is lost.
 
-Usage:
-    python3 scripts/migrate_fires_jsonl_to_telemetry_db.py [--dry-run] [--force]
-    python3 scripts/migrate_fires_jsonl_to_telemetry_db.py \\
-        --source-dir ~/.cache/claude/logs --dest-dir ~/.local/share/claude
+This script's final step deletes already-backed-up-and-verified source files,
+so `bash-hard-deny` statically blocks it (and `ccst migrate telemetry`) from
+running inside a Claude Code session — run it from a plain terminal instead
+(see docs/data-store-migration-steps.md).
 
-Run this manually, once per machine, after Phase 5 has been deployed —
-not part of `ccst install` (see design-spec §8.3/§8.5).
+Usage:
+    ccst migrate telemetry [--dry-run] [--force]
+    ccst migrate telemetry --source-dir ~/.cache/claude/logs --dest-dir ~/.local/share/claude
 """
 from __future__ import annotations
 
@@ -62,13 +61,9 @@ import tarfile
 from datetime import datetime, timezone
 from pathlib import Path
 
-_REPO_ROOT = Path(__file__).resolve().parents[1]
-if str(_REPO_ROOT / "src") not in sys.path:
-    sys.path.insert(0, str(_REPO_ROOT / "src"))
+from cc_session_tools.lib import paths, telemetry_store
 
-from cc_session_tools.lib import paths, telemetry_store  # noqa: E402
-
-_OLD_DEFAULT_SOURCE_DIR = Path.home() / ".cache" / "claude" / "logs"
+DEFAULT_OLD_SOURCE_DIR = Path.home() / ".cache" / "claude" / "logs"
 _ROTATED_SLOTS_OLDEST_FIRST = (3, 2, 1)
 
 
@@ -216,10 +211,13 @@ def migrate(*, source_dir: Path, dest_dir: Path, dry_run: bool, force: bool) -> 
 
 
 def main(argv: list[str] | None = None) -> int:
-    p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    p = argparse.ArgumentParser(
+        prog="ccst migrate telemetry",
+        description="Migrate fires.jsonl (+ rotated slots) into telemetry.db.",
+    )
     p.add_argument(
         "--source-dir", default=None, metavar="PATH",
-        help=f"Old JSONL directory (default: {_OLD_DEFAULT_SOURCE_DIR})",
+        help=f"Old JSONL directory (default: {DEFAULT_OLD_SOURCE_DIR})",
     )
     p.add_argument(
         "--dest-dir", default=None, metavar="PATH",
@@ -229,7 +227,7 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--force", action="store_true", help="Allow inserting into a dest DB that already has rows")
     args = p.parse_args(argv)
 
-    source_dir = Path(args.source_dir) if args.source_dir else _OLD_DEFAULT_SOURCE_DIR
+    source_dir = Path(args.source_dir) if args.source_dir else DEFAULT_OLD_SOURCE_DIR
     dest_dir = Path(args.dest_dir) if args.dest_dir else paths.data_home()
 
     print(f"Source: {source_dir}")

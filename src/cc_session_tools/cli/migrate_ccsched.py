@@ -31,8 +31,7 @@ class MigrationError(RuntimeError):
     pass
 
 
-def _default_old_dir() -> Path:
-    return Path.home() / ".claude" / "cc-scheduler"
+DEFAULT_OLD_DIR = Path.home() / ".claude" / "cc-scheduler"
 
 
 def _read_old_jobs(old_dir: Path) -> list[JobSpec]:
@@ -200,7 +199,7 @@ def main(argv: list[str] | None = None) -> int:
                     help="Show what would migrate without writing.")
     args = ap.parse_args(argv)
 
-    old_dir = Path(args.old_dir) if args.old_dir else _default_old_dir()
+    old_dir = Path(args.old_dir) if args.old_dir else DEFAULT_OLD_DIR
     backup_dir = (Path(args.backup_dir) if args.backup_dir
                   else store.scheduler_dir() / "migration-backups")
     return run_migration(old_dir=old_dir, db_path=store.db_path(),

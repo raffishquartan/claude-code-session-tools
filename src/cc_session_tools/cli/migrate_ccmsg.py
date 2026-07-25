@@ -1,5 +1,6 @@
-#!/usr/bin/env python3
 """One-shot migration of the flat-file message store into ccmsg.db.
+
+Exposed via `ccst migrate ccmsg` (and as part of `ccst migrate all`).
 
 Reads the OLD partition tree (default ~/.claude/cc-messages), parses each
 message via message.parse(), inserts one row per message into ccmsg.db (under
@@ -12,8 +13,13 @@ Live .locks/*.lock files are transient (released on process exit); one present
 here indicates an orphaned crash-gap lock (R4). It is reported and left for
 manual cleanup, never migrated as data.
 
+This script's final step calls Path.unlink()/rmtree-equivalent cleanup on
+already-backed-up-and-verified old files, so `bash-hard-deny` statically blocks
+it (and `ccst migrate ccmsg`) from running inside a Claude Code session — run it
+from a plain terminal instead (see docs/data-store-migration-steps.md).
+
 Usage:
-    python3 scripts/migrate_ccmsg_to_db.py [--old-root PATH] [--backup-dir PATH] [--dry-run]
+    ccst migrate ccmsg [--old-root PATH] [--backup-dir PATH] [--dry-run]
 """
 from __future__ import annotations
 
@@ -27,7 +33,7 @@ from pathlib import Path
 from cc_session_tools.lib import paths
 from cc_session_tools.lib.messaging import message, repository, store
 
-_DEFAULT_OLD_ROOT = Path.home() / ".claude" / "cc-messages"
+DEFAULT_OLD_ROOT = Path.home() / ".claude" / "cc-messages"
 
 
 def _default_backup_dir() -> Path:
@@ -148,11 +154,11 @@ def migrate(*, old_root: Path, backup_dir: Path, dry_run: bool) -> int:
 
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(
-        prog="migrate_ccmsg_to_db.py",
+        prog="ccst migrate ccmsg",
         description="Migrate the flat-file message store into ccmsg.db.",
     )
     p.add_argument("--old-root", default=None, metavar="PATH",
-                   help=f"Old store root (default: {_DEFAULT_OLD_ROOT})")
+                   help=f"Old store root (default: {DEFAULT_OLD_ROOT})")
     p.add_argument("--backup-dir", default=None, metavar="PATH",
                    help="Where the pre-deletion tar.gz backup is written "
                         "(default: <data_home>/migration-backups)")
@@ -160,7 +166,7 @@ def main(argv: list[str] | None = None) -> int:
                    help="Report what would migrate without writing or deleting")
     args = p.parse_args(argv)
     return migrate(
-        old_root=Path(args.old_root) if args.old_root else _DEFAULT_OLD_ROOT,
+        old_root=Path(args.old_root) if args.old_root else DEFAULT_OLD_ROOT,
         backup_dir=Path(args.backup_dir) if args.backup_dir else _default_backup_dir(),
         dry_run=args.dry_run,
     )

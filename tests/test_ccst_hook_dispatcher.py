@@ -46,5 +46,6 @@ def test_hook_verbs_covers_every_shim_module() -> None:
         "last-screenshot",
         "messaging-deliver",
         "catchup",
+        "pending-migration",
     }
     assert set(HOOK_VERBS) == expected
