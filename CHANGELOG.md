@@ -44,6 +44,12 @@ plus the guard rail that should have shipped with it.
 - `docs/data-store-migration-steps.md` updated for the `ccst migrate <store>` subcommands and the
   new doctor checks.
 
+### Fixed
+
+- **`ccsched list` column alignment.** Columns used fixed widths, so a job id or cadence longer
+  than the assumed width threw every column after it out of alignment. Widths are now computed
+  from the actual data on each run.
+
 ### Note on `ccst migrate all` / individual `ccst migrate <store>` commands
 
 None of these can run automatically end-to-end. `ccmsg`, `ccsched`, and `telemetry` migration

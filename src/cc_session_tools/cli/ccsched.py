@@ -108,7 +108,9 @@ def _cmd_list(args: argparse.Namespace) -> int:
     specs = registry.load_registry()
     states = state.load_all_state()
     now = datetime.now(timezone.utc)
-    print(f"{'id':<24} {'cadence':<20} {'coalesce':<8} {'enabled':<7} {'last_success':<22} next_due")
+
+    headers = ("id", "cadence", "coalesce", "enabled", "last_success", "next_due")
+    rows = []
     for s in specs:
         js = states.get(s.job_id)
         if js is not None:
@@ -118,8 +120,15 @@ def _cmd_list(args: argparse.Namespace) -> int:
         baseline = baseline_ts if baseline_ts is not None else now
         last = (js.last_success if js else None) or "-"
         nd = next_due(parse_cadence(s.cadence), baseline, now).strftime("%Y-%m-%dT%H:%M:%SZ")
-        print(f"{s.job_id:<24} {s.cadence:<20} {s.coalesce.value:<8} "
-              f"{str(s.enabled).lower():<7} {last:<22} {nd}")
+        rows.append((s.job_id, s.cadence, s.coalesce.value, str(s.enabled).lower(), last, nd))
+
+    widths = [
+        max(len(header), *(len(row[i]) for row in rows)) if rows else len(header)
+        for i, header in enumerate(headers)
+    ]
+    print("  ".join(header.ljust(width) for header, width in zip(headers, widths[:-1])) + "  " + headers[-1])
+    for row in rows:
+        print("  ".join(cell.ljust(width) for cell, width in zip(row, widths[:-1])) + "  " + row[-1])
     return 0
 
 
