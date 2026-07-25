@@ -52,6 +52,9 @@ def _build_parser() -> argparse.ArgumentParser:
 
     sub.add_parser("list", help="List jobs with next_due.")
 
+    show_p = sub.add_parser("show", help="Show one job's full spec and state.")
+    show_p.add_argument("id")
+
     edit_p = sub.add_parser("edit", help="Modify an existing job.")
     edit_p.add_argument("id")
     edit_p.add_argument("--cadence")
@@ -129,6 +132,47 @@ def _cmd_list(args: argparse.Namespace) -> int:
     print("  ".join(header.ljust(width) for header, width in zip(headers, widths[:-1])) + "  " + headers[-1])
     for row in rows:
         print("  ".join(cell.ljust(width) for cell, width in zip(row, widths[:-1])) + "  " + row[-1])
+    return 0
+
+
+def _cmd_show(args: argparse.Namespace) -> int:
+    specs = {s.job_id: s for s in registry.load_registry()}
+    spec = specs.get(args.id)
+    if spec is None:
+        return _err(f"unknown job id: {args.id!r}")
+    js = state.get_state(args.id)
+    now = datetime.now(timezone.utc)
+    baseline_ts = None
+    if js is not None:
+        baseline_ts = state.parse_ts_or_none(js.last_success) or state.parse_ts_or_none(js.registered_at)
+    baseline = baseline_ts if baseline_ts is not None else now
+    nd = next_due(parse_cadence(spec.cadence), baseline, now).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    in_flight = "-"
+    if js is not None and js.in_flight is not None:
+        in_flight = (f"pid={js.in_flight.pid} started_at={js.in_flight.started_at} "
+                     f"instants={js.in_flight.instants}")
+
+    fields = [
+        ("id", spec.job_id),
+        ("cadence", spec.cadence),
+        ("coalesce", spec.coalesce.value),
+        ("enabled", str(spec.enabled).lower()),
+        ("surface", str(spec.surface).lower()),
+        ("catchup_window", spec.catchup_window),
+        ("timeout", spec.timeout),
+        ("command", " ".join(spec.command)),
+        ("next_due", nd),
+        ("registered_at", js.registered_at if js else "-"),
+        ("last_success", (js.last_success if js else None) or "-"),
+        ("last_attempt", (js.last_attempt if js else None) or "-"),
+        ("consecutive_failures", str(js.consecutive_failures) if js else "-"),
+        ("suspended", str(js.suspended).lower() if js else "-"),
+        ("in_flight", in_flight),
+    ]
+    width = max(len(label) for label, _ in fields)
+    for label, value in fields:
+        print(f"{label + ':':<{width + 1}} {value}")
     return 0
 
 
@@ -240,6 +284,8 @@ def main(argv: list[str] | None = None) -> int:
         return _cmd_add(args)
     if args.command == "list":
         return _cmd_list(args)
+    if args.command == "show":
+        return _cmd_show(args)
     if args.command == "edit":
         return _cmd_edit(args)
     if args.command == "enable":

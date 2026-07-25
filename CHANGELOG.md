@@ -31,6 +31,10 @@ plus the guard rail that should have shipped with it.
   `cc_session_tools.cli.migrate_ccmsg` / `migrate_telemetry`, shipped as `ccst` subcommands like
   their `ccsched`/`sessions` siblings already were. `ccst migrate all` runs all four
   (sessions, ccmsg, ccsched, telemetry) in one pass.
+- **`ccsched show <id>`.** Prints one job's full spec (cadence, coalesce, command, surface,
+  catchup_window, timeout) and current state (registered_at, last_success, last_attempt,
+  consecutive_failures, suspended, in_flight) — `ccsched list` only ever showed a summary row and
+  `ccsched status` only shows ledger history, neither surfaced the full picture for one job.
 - **`pending-migration` SessionStart hook.** Surfaces `migration-to-1.0.0:<store>` FAILs automatically at
   session start (WARN-only findings — migrated but not cleaned up — stay quiet, since no data is
   at risk). Honours `ccst doctor --mute <name>` so a deliberately-deferred migration doesn't

@@ -76,6 +76,24 @@ def test_list_shows_next_due(tmp_path: Path) -> None:
     assert "next_due" in res.stdout.lower() or "next" in res.stdout.lower()
 
 
+def test_show_prints_full_spec(tmp_path: Path) -> None:
+    _add_ok(tmp_path)
+    sched, hooks = _dirs(tmp_path)
+    res = _run(["show", "tesco"], sched, hooks)
+    assert res.returncode == 0
+    assert "cadence:" in res.stdout and "daily@09:00" in res.stdout
+    assert "timeout:" in res.stdout and "5s" in res.stdout
+    assert "catchup_window:" in res.stdout and "7d" in res.stdout
+    assert "command:" in res.stdout and "true" in res.stdout
+
+
+def test_show_unknown_id_errors(tmp_path: Path) -> None:
+    sched, hooks = _dirs(tmp_path)
+    res = _run(["show", "nope"], sched, hooks)
+    assert res.returncode == 2
+    assert "unknown job id" in (res.stderr + res.stdout).lower()
+
+
 def test_disable_then_enable(tmp_path: Path) -> None:
     _add_ok(tmp_path)
     sched, hooks = _dirs(tmp_path)
