@@ -523,8 +523,8 @@ validated `ccsched add` calls and disambiguates between:
 ### Registry
 
 The registry lives in `ccsched.db` — created lazily on first `ccsched add`;
-inspect it with `ccsched list`/`ccsched status` or any SQLite client (no longer
-hand-editable TOML). Every job declares a
+inspect it with `ccsched list`/`ccsched show <id>`/`ccsched status` or any
+SQLite client (no longer hand-editable TOML). Every job declares a
 `cadence`, `command` (argv), `coalesce` (`one`/`each`), optional `surface`
 (whether to include in the digest), and optional `catchup_window` (how far back
 to back-fill; default 7 days).

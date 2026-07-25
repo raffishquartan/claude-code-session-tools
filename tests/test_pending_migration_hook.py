@@ -58,7 +58,7 @@ def test_emits_fail_digest_when_legacy_data_present(
     emitted = _capture_emit(monkeypatch)
     assert pending_migration.main() == 0
     assert len(emitted) == 1
-    assert "migration:ccmsg" in emitted[0]
+    assert "migration-to-1.0.0:ccmsg" in emitted[0]
     assert "ccst migrate all" in emitted[0]
 
 
@@ -67,7 +67,7 @@ def test_respects_mute(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     old_root = tmp_path / "cc-messages" / "projects" / "alpha" / "inbox"
     old_root.mkdir(parents=True)
     (old_root / "msg.md").write_text("x")
-    doctor_mutes.add_mute(tmp_path / "sessions.db", "migration:ccmsg", today="2026-07-24")
+    doctor_mutes.add_mute(tmp_path / "sessions.db", "migration-to-1.0.0:ccmsg", today="2026-07-24")
 
     _stdin(monkeypatch, {"hook_event_name": "SessionStart", "session_id": "u"})
     emitted = _capture_emit(monkeypatch)
