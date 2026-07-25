@@ -430,7 +430,7 @@ def check_pending_data_store_migration(paths: LegacyMigrationPaths) -> list[Chec
 
     results: list[CheckResult] = []
     for store_name, (old_paths, legacy_count, new_db_path, tables) in sources.items():
-        name = f"migration:{store_name}"
+        name = f"migration-to-1.0.0:{store_name}"
         if legacy_count == 0:
             results.append(
                 CheckResult(name=name, status=Status.OK, reason="no legacy data found — nothing to migrate")

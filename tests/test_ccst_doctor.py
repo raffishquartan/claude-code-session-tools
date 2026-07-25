@@ -601,7 +601,7 @@ def test_check_pending_migration_ok_when_nothing_legacy(tmp_path: Path) -> None:
     results = check_pending_data_store_migration(_legacy_paths(tmp_path))
 
     assert {r.name for r in results} == {
-        "migration:ccmsg", "migration:ccsched", "migration:sessions", "migration:telemetry",
+        "migration-to-1.0.0:ccmsg", "migration-to-1.0.0:ccsched", "migration-to-1.0.0:sessions", "migration-to-1.0.0:telemetry",
     }
     assert all(r.status == Status.OK for r in results)
     assert all("nothing to migrate" in r.reason for r in results)
@@ -614,9 +614,9 @@ def test_check_pending_migration_fails_for_unmigrated_ccmsg(tmp_path: Path) -> N
 
     results = {r.name: r for r in check_pending_data_store_migration(paths)}
 
-    assert results["migration:ccmsg"].status == Status.FAIL
-    assert "ccst migrate all" in results["migration:ccmsg"].reason
-    assert results["migration:ccsched"].status == Status.OK
+    assert results["migration-to-1.0.0:ccmsg"].status == Status.FAIL
+    assert "ccst migrate all" in results["migration-to-1.0.0:ccmsg"].reason
+    assert results["migration-to-1.0.0:ccsched"].status == Status.OK
 
 
 def test_check_pending_migration_fails_for_unmigrated_ccsched(tmp_path: Path) -> None:
@@ -626,7 +626,7 @@ def test_check_pending_migration_fails_for_unmigrated_ccsched(tmp_path: Path) ->
 
     results = {r.name: r for r in check_pending_data_store_migration(paths)}
 
-    assert results["migration:ccsched"].status == Status.FAIL
+    assert results["migration-to-1.0.0:ccsched"].status == Status.FAIL
 
 
 def test_check_pending_migration_fails_for_unmigrated_session_tags(tmp_path: Path) -> None:
@@ -636,7 +636,7 @@ def test_check_pending_migration_fails_for_unmigrated_session_tags(tmp_path: Pat
 
     results = {r.name: r for r in check_pending_data_store_migration(paths)}
 
-    assert results["migration:sessions"].status == Status.FAIL
+    assert results["migration-to-1.0.0:sessions"].status == Status.FAIL
 
 
 def test_check_pending_migration_fails_for_unmigrated_doctor_mutes(tmp_path: Path) -> None:
@@ -645,7 +645,7 @@ def test_check_pending_migration_fails_for_unmigrated_doctor_mutes(tmp_path: Pat
 
     results = {r.name: r for r in check_pending_data_store_migration(paths)}
 
-    assert results["migration:sessions"].status == Status.FAIL
+    assert results["migration-to-1.0.0:sessions"].status == Status.FAIL
 
 
 def test_check_pending_migration_fails_for_unmigrated_telemetry(tmp_path: Path) -> None:
@@ -655,7 +655,7 @@ def test_check_pending_migration_fails_for_unmigrated_telemetry(tmp_path: Path) 
 
     results = {r.name: r for r in check_pending_data_store_migration(paths)}
 
-    assert results["migration:telemetry"].status == Status.FAIL
+    assert results["migration-to-1.0.0:telemetry"].status == Status.FAIL
 
 
 def test_check_pending_migration_warns_when_already_migrated_but_old_files_remain(
@@ -675,8 +675,8 @@ def test_check_pending_migration_warns_when_already_migrated_but_old_files_remai
 
     results = {r.name: r for r in check_pending_data_store_migration(paths)}
 
-    assert results["migration:ccmsg"].status == Status.WARN
-    assert "already ran" in results["migration:ccmsg"].reason
+    assert results["migration-to-1.0.0:ccmsg"].status == Status.WARN
+    assert "already ran" in results["migration-to-1.0.0:ccmsg"].reason
 
 
 def test_run_all_checks_skips_pending_migration_when_paths_none(tmp_path: Path) -> None:
@@ -694,7 +694,7 @@ def test_run_all_checks_skips_pending_migration_when_paths_none(tmp_path: Path) 
         skip_pypi=True,
     )
 
-    assert not any(r.name.startswith("migration:") for r in results)
+    assert not any(r.name.startswith("migration-to-1.0.0:") for r in results)
 
 
 def test_run_all_checks_includes_pending_migration_when_paths_given(tmp_path: Path) -> None:
@@ -713,4 +713,4 @@ def test_run_all_checks_includes_pending_migration_when_paths_given(tmp_path: Pa
         legacy_migration_paths=_legacy_paths(tmp_path),
     )
 
-    assert any(r.name.startswith("migration:") for r in results)
+    assert any(r.name.startswith("migration-to-1.0.0:") for r in results)

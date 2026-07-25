@@ -19,7 +19,7 @@ plus the guard rail that should have shipped with it.
 
 ### Added
 
-- **`ccst doctor` `migration:<store>` checks** (`ccmsg`/`ccsched`/`sessions`/`telemetry`) that
+- **`ccst doctor` `migration-to-1.0.0:<store>` checks** (`ccmsg`/`ccsched`/`sessions`/`telemetry`) that
   distinguish "fresh install, nothing to migrate" (OK) from "upgraded from <1.0.0, legacy data
   still unmigrated" (FAIL) from "migration already ran, old files just not cleaned up yet" (WARN,
   no data at risk). The previous `data-store:<store>` check couldn't tell these apart — an empty
@@ -31,7 +31,7 @@ plus the guard rail that should have shipped with it.
   `cc_session_tools.cli.migrate_ccmsg` / `migrate_telemetry`, shipped as `ccst` subcommands like
   their `ccsched`/`sessions` siblings already were. `ccst migrate all` runs all four
   (sessions, ccmsg, ccsched, telemetry) in one pass.
-- **`pending-migration` SessionStart hook.** Surfaces `migration:<store>` FAILs automatically at
+- **`pending-migration` SessionStart hook.** Surfaces `migration-to-1.0.0:<store>` FAILs automatically at
   session start (WARN-only findings — migrated but not cleaned up — stay quiet, since no data is
   at risk). Honours `ccst doctor --mute <name>` so a deliberately-deferred migration doesn't
   renag every session. Cannot run the migration itself — see below.
