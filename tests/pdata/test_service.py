@@ -361,3 +361,62 @@ def test_update_record_rejects_empty_update(monkeypatch, tmp_path):
             project="testproj", record_id=created.id, expected_version=1,
             content=None, file_path=None, fields={}, updated_at=2,
         )
+
+
+def test_get_record_excludes_soft_deleted_by_default(monkeypatch, tmp_path):
+    """Moved here from Task 12: depends on delete_record, added in this task."""
+    monkeypatch.setenv("CCST_PROJECT_DB_DIR", str(tmp_path))
+    created = service.add_record(
+        project="testproj", record_group="notes", content="x", file_path=None,
+        fields={}, created_at=1000,
+    )
+    service.delete_record(project="testproj", record_id=created.id, expected_version=1)
+    assert service.get_record(project="testproj", record_id=created.id) is None
+    assert service.get_record(
+        project="testproj", record_id=created.id, include_deleted=True,
+    ) is not None
+
+
+def test_query_records_excludes_soft_deleted_by_default(monkeypatch, tmp_path):
+    """Moved here from Task 14: depends on delete_record, added in this task. Regression test
+    for query's --include-deleted default-exclude contract (spec §4.5: 'list/query/get exclude
+    soft-deleted rows by default; --include-deleted shows them') — query is not exempt from
+    that default just because it filters on --where instead of --since/--until."""
+    monkeypatch.setenv("CCST_PROJECT_DB_DIR", str(tmp_path))
+    created = service.add_record(
+        project="testproj", record_group="notes", content="x", file_path=None,
+        fields={}, created_at=1,
+    )
+    service.delete_record(project="testproj", record_id=created.id, expected_version=1)
+
+    visible = service.query_records(
+        project="testproj", record_group="notes", where=["content = x"],
+    )
+    assert visible == []
+
+    visible_with_deleted = service.query_records(
+        project="testproj", record_group="notes", where=["content = x"],
+        include_deleted=True,
+    )
+    assert [r.id for r in visible_with_deleted] == [created.id]
+
+
+def test_delete_record_conflict(monkeypatch, tmp_path):
+    monkeypatch.setenv("CCST_PROJECT_DB_DIR", str(tmp_path))
+    created = service.add_record(
+        project="testproj", record_group="notes", content="x", file_path=None,
+        fields={}, created_at=1000,
+    )
+    with pytest.raises(service.VersionConflictError):
+        service.delete_record(project="testproj", record_id=created.id, expected_version=99)
+
+
+def test_restore_record_makes_it_visible_again(monkeypatch, tmp_path):
+    monkeypatch.setenv("CCST_PROJECT_DB_DIR", str(tmp_path))
+    created = service.add_record(
+        project="testproj", record_group="notes", content="x", file_path=None,
+        fields={}, created_at=1000,
+    )
+    service.delete_record(project="testproj", record_id=created.id, expected_version=1)
+    service.restore_record(project="testproj", record_id=created.id)
+    assert service.get_record(project="testproj", record_id=created.id) is not None

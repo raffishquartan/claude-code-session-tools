@@ -1000,6 +1000,41 @@ def _cmd_pdata_update(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_pdata_delete(args: argparse.Namespace) -> int:
+    from cc_session_tools.lib.pdata import formatting, service
+
+    try:
+        service.delete_record(
+            project=args.project, record_id=args.id, expected_version=args.version,
+        )
+    except service.RecordNotFoundError:
+        print(f"ccst pdata: record not found: {args.id}", file=sys.stderr)
+        return 1
+    except service.VersionConflictError as exc:
+        print(formatting.render_conflict_diff(exc.current, exc.attempted, fmt="table"))
+        return 3
+    except ValueError as exc:
+        print(f"ccst pdata: {exc}", file=sys.stderr)
+        return 2
+    print(f"deleted record {args.id}")
+    return 0
+
+
+def _cmd_pdata_restore(args: argparse.Namespace) -> int:
+    from cc_session_tools.lib.pdata import service
+
+    try:
+        service.restore_record(project=args.project, record_id=args.id)
+    except service.RecordNotFoundError:
+        print(f"ccst pdata: record not found (or not deleted): {args.id}", file=sys.stderr)
+        return 1
+    except ValueError as exc:
+        print(f"ccst pdata: {exc}", file=sys.stderr)
+        return 2
+    print(f"restored record {args.id}")
+    return 0
+
+
 # ---------- hooks run ----------
 
 
@@ -1683,6 +1718,16 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Format used only for the conflict diff on a version mismatch",
     )
 
+    pdata_delete_parser = pdata_sub.add_parser("delete", help="Soft-delete a record (version-checked)")
+    pdata_delete_parser.add_argument("--project", required=True, metavar="NAME")
+    pdata_delete_parser.add_argument("--id", required=True, type=int)
+    pdata_delete_parser.add_argument("--version", required=True, type=int,
+                                      metavar="EXPECTED_VERSION")
+
+    pdata_restore_parser = pdata_sub.add_parser("restore", help="Clear a soft-delete")
+    pdata_restore_parser.add_argument("--project", required=True, metavar="NAME")
+    pdata_restore_parser.add_argument("--id", required=True, type=int)
+
     # ---- sessions ----
     sessions_parser = sub.add_parser("sessions", help="sessions.db management commands")
     sessions_sub = sessions_parser.add_subparsers(dest="verb", metavar="<verb>")
@@ -1852,6 +1897,10 @@ def main() -> None:
             sys.exit(_cmd_pdata_query(args))
         if args.verb == "update":
             sys.exit(_cmd_pdata_update(args))
+        if args.verb == "delete":
+            sys.exit(_cmd_pdata_delete(args))
+        if args.verb == "restore":
+            sys.exit(_cmd_pdata_restore(args))
 
     if args.noun == "sessions":
         if args.verb == "migrate":

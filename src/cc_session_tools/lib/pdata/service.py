@@ -310,6 +310,50 @@ def update_record(
         conn.close()
 
 
+def delete_record(
+    *, project: str, record_id: int, expected_version: int, deleted_at: int | None = None,
+) -> None:
+    ts = deleted_at if deleted_at is not None else int(time.time())
+    conn = repository.connect(project)
+    try:
+        existing = repository.get_base_record(conn, record_id)
+        if existing is None or existing["deleted_at"] is not None:
+            raise RecordNotFoundError(record_id)
+
+        with repository._immediate(conn):
+            ok = repository.soft_delete(
+                conn, record_id=record_id, expected_version=expected_version, deleted_at=ts,
+            )
+        if not ok:
+            current_row = repository.get_base_record(conn, record_id)
+            assert current_row is not None
+            # Same race as update_record: the existence check above ran before this _immediate
+            # block took its write lock, so a concurrent soft-delete in that window makes
+            # soft_delete's own `AND deleted_at IS NULL` clause affect 0 rows. Re-check
+            # deleted_at (race-free now that we hold the lock) so an already-deleted record
+            # reports RecordNotFoundError rather than a misleading version conflict.
+            if current_row["deleted_at"] is not None:
+                raise RecordNotFoundError(record_id)
+            current = record_to_dict(_row_to_record(current_row))
+            attempted = {"id": record_id, "deleted_at": ts}
+            raise VersionConflictError(current=current, attempted=attempted)
+    finally:
+        conn.close()
+
+
+def restore_record(*, project: str, record_id: int, restored_at: int | None = None) -> None:
+    ts = restored_at if restored_at is not None else int(time.time())
+    conn = repository.connect(project)
+    try:
+        existing = repository.get_base_record(conn, record_id)
+        if existing is None or existing["deleted_at"] is None:
+            raise RecordNotFoundError(record_id)
+        with repository._immediate(conn):
+            repository.restore(conn, record_id=record_id, restored_at=ts)
+    finally:
+        conn.close()
+
+
 def schema_add_field(
     *,
     project: str,

@@ -517,3 +517,54 @@ def test_update_extension_row(monkeypatch, tmp_path):
         assert row["sender"] == "bob"
     finally:
         conn.close()
+
+
+def test_soft_delete_sets_deleted_at_with_version_check(monkeypatch, tmp_path):
+    monkeypatch.setenv("CCST_PROJECT_DB_DIR", str(tmp_path))
+    conn = repository.connect("testproj")
+    try:
+        with repository._immediate(conn):
+            rid = repository.insert_base_record(conn, record_group="a", content="x",
+                                                 file_path=None, created_at=1, updated_at=1)
+        with repository._immediate(conn):
+            ok = repository.soft_delete(conn, record_id=rid, expected_version=1, deleted_at=2)
+        assert ok is True
+        row = repository.get_base_record(conn, rid)
+        assert row["deleted_at"] == 2
+        assert row["version"] == 2
+    finally:
+        conn.close()
+
+
+def test_soft_delete_returns_false_on_version_mismatch(monkeypatch, tmp_path):
+    monkeypatch.setenv("CCST_PROJECT_DB_DIR", str(tmp_path))
+    conn = repository.connect("testproj")
+    try:
+        with repository._immediate(conn):
+            rid = repository.insert_base_record(conn, record_group="a", content="x",
+                                                 file_path=None, created_at=1, updated_at=1)
+        with repository._immediate(conn):
+            ok = repository.soft_delete(conn, record_id=rid, expected_version=99, deleted_at=2)
+        assert ok is False
+        row = repository.get_base_record(conn, rid)
+        assert row["deleted_at"] is None
+    finally:
+        conn.close()
+
+
+def test_restore_clears_deleted_at(monkeypatch, tmp_path):
+    monkeypatch.setenv("CCST_PROJECT_DB_DIR", str(tmp_path))
+    conn = repository.connect("testproj")
+    try:
+        with repository._immediate(conn):
+            rid = repository.insert_base_record(conn, record_group="a", content="x",
+                                                 file_path=None, created_at=1, updated_at=1)
+        with repository._immediate(conn):
+            repository.soft_delete(conn, record_id=rid, expected_version=1, deleted_at=2)
+        with repository._immediate(conn):
+            repository.restore(conn, record_id=rid, restored_at=3)
+        row = repository.get_base_record(conn, rid)
+        assert row["deleted_at"] is None
+        assert row["version"] == 3
+    finally:
+        conn.close()

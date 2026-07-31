@@ -286,6 +286,31 @@ def update_extension_row(
         )
 
 
+def soft_delete(
+    conn: sqlite3.Connection, *, record_id: int, expected_version: int, deleted_at: int,
+) -> bool:
+    """Same version-checked contract as update_base_record (spec §4.5/§6.2). Returns True iff
+    the row was found, not already deleted, and had the expected version."""
+    cur = conn.execute(
+        "UPDATE records SET deleted_at=?, version=version+1 "
+        "WHERE id=? AND version=? AND deleted_at IS NULL",
+        (deleted_at, record_id, expected_version),
+    )
+    return cur.rowcount == 1
+
+
+def restore(conn: sqlite3.Connection, *, record_id: int, restored_at: int) -> bool:
+    """Clears deleted_at. No version check on restore (spec doesn't require one for restore —
+    only delete/update are version-gated); bumps version so a concurrent restore+edit still
+    shows up in the version history. Returns True iff a soft-deleted row was found."""
+    cur = conn.execute(
+        "UPDATE records SET deleted_at=NULL, updated_at=?, version=version+1 "
+        "WHERE id=? AND deleted_at IS NOT NULL",
+        (restored_at, record_id),
+    )
+    return cur.rowcount == 1
+
+
 _WHERE_OPS = frozenset({"=", "!=", "<", ">", "<=", ">=", "LIKE"})
 # Deliberately a subset of naming.BASE_RECORD_COLUMNS, not the whole set: id/record_group are
 # already fixed by the surrounding SELECT/WHERE record_group=?, and version/deleted_at are

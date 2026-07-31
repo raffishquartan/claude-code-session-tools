@@ -214,3 +214,60 @@ def test_pdata_update_rejects_empty_update(base_env):
                       "--version", "1")
     assert r_update.returncode == 2
     assert "at least one" in r_update.stderr.lower()
+
+
+def test_pdata_delete_then_restore(base_env):
+    r_add = _run(base_env, "pdata", "add", "--project", "testproj", "--group", "notes",
+                  "--content", "x")
+    record_id = r_add.stdout.strip()
+
+    r_del = _run(base_env, "pdata", "delete", "--project", "testproj", "--id", record_id,
+                  "--version", "1")
+    assert r_del.returncode == 0, r_del.stderr
+
+    r_get = _run(base_env, "pdata", "get", "--project", "testproj", "--id", record_id)
+    assert r_get.returncode == 1
+
+    r_restore = _run(base_env, "pdata", "restore", "--project", "testproj", "--id", record_id)
+    assert r_restore.returncode == 0, r_restore.stderr
+
+    r_get2 = _run(base_env, "pdata", "get", "--project", "testproj", "--id", record_id)
+    assert r_get2.returncode == 0
+
+
+def test_pdata_delete_version_conflict_exits_3(base_env):
+    r_add = _run(base_env, "pdata", "add", "--project", "testproj", "--group", "notes",
+                  "--content", "x")
+    record_id = r_add.stdout.strip()
+    r_del = _run(base_env, "pdata", "delete", "--project", "testproj", "--id", record_id,
+                  "--version", "99")
+    assert r_del.returncode == 3
+
+
+def test_pdata_delete_rejects_bad_project_name(base_env):
+    r = _run(base_env, "pdata", "delete", "--project", "../escape", "--id", "1",
+              "--version", "1")
+    assert r.returncode == 2
+
+
+def test_pdata_restore_rejects_bad_project_name(base_env):
+    r = _run(base_env, "pdata", "restore", "--project", "../escape", "--id", "1")
+    assert r.returncode == 2
+
+
+def test_pdata_query_include_deleted(base_env):
+    """Moved here from Task 14: depends on `pdata delete`, added in this task."""
+    r_add = _run(base_env, "pdata", "add", "--project", "testproj", "--group", "notes",
+                  "--content", "gone")
+    record_id = r_add.stdout.strip()
+    _run(base_env, "pdata", "delete", "--project", "testproj", "--id", record_id,
+         "--version", "1")
+
+    import json
+    r_default = _run(base_env, "pdata", "query", "--project", "testproj", "--group", "notes",
+                       "--where", "content = gone", "--format", "json")
+    assert json.loads(r_default.stdout) == []
+
+    r_included = _run(base_env, "pdata", "query", "--project", "testproj", "--group", "notes",
+                        "--where", "content = gone", "--include-deleted", "--format", "json")
+    assert [row["content"] for row in json.loads(r_included.stdout)] == ["gone"]
