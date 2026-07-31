@@ -189,3 +189,24 @@ def test_add_record_with_no_fields_and_no_extension_table_stays_base_only(monkey
         file_path=None, fields={}, created_at=1000,
     )
     assert record.fields == {}
+
+
+def test_get_record_flattens_extension_fields(monkeypatch, tmp_path):
+    monkeypatch.setenv("CCST_PROJECT_DB_DIR", str(tmp_path))
+    service.schema_add_field(
+        project="testproj", record_group="key-events", field_name="sender",
+        sql_type="TEXT", description=None, default=None,
+    )
+    created = service.add_record(
+        project="testproj", record_group="key-events", content="an event",
+        file_path=None, fields={"sender": "alice"}, created_at=1000,
+    )
+    fetched = service.get_record(project="testproj", record_id=created.id)
+    assert fetched is not None
+    assert fetched.content == "an event"
+    assert fetched.fields == {"sender": "alice"}
+
+
+def test_get_record_returns_none_for_missing_id(monkeypatch, tmp_path):
+    monkeypatch.setenv("CCST_PROJECT_DB_DIR", str(tmp_path))
+    assert service.get_record(project="testproj", record_id=999) is None

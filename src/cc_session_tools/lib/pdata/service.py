@@ -97,6 +97,38 @@ def add_record(
     return record
 
 
+def get_record(
+    *, project: str, record_id: int, include_deleted: bool = False,
+) -> Record | None:
+    conn = repository.connect(project)
+    try:
+        row = repository.get_base_record(conn, record_id)
+        if row is None:
+            return None
+        if row["deleted_at"] is not None and not include_deleted:
+            return None
+        record = _row_to_record(row)
+        ext_row = repository.get_extension_row(conn, record.record_group, record_id)
+        if ext_row is not None:
+            record.fields = {k: ext_row[k] for k in ext_row.keys() if k != "record_id"}
+        return record
+    finally:
+        conn.close()
+
+
+def record_to_dict(record: Record) -> dict[str, object]:
+    """Flatten a Record into one dict (base columns + extension fields merged) for CLI
+    rendering. The single home of this shape — every ccst.py handler that prints a Record
+    (get/list/query, and the current side of an update/delete conflict) calls this instead of
+    each re-deriving its own flatten, per this repo's "one helper per shared shape" coding
+    standard."""
+    from dataclasses import asdict
+    d = asdict(record)
+    fields = d.pop("fields")
+    d.update(fields)
+    return d
+
+
 def schema_add_field(
     *,
     project: str,

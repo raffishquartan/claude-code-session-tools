@@ -97,3 +97,36 @@ def test_pdata_add_rejects_unregistered_field(base_env):
               "--content", "an event", "--field", "nope=x")
     assert r.returncode == 2
     assert "unregistered" in r.stderr
+
+
+def test_pdata_get_shows_flattened_fields(base_env):
+    _run(base_env, "pdata", "schema", "add-field", "--project", "testproj",
+         "--group", "key-events", "--field", "sender:TEXT")
+    r_add = _run(base_env, "pdata", "add", "--project", "testproj", "--group", "key-events",
+                  "--content", "an event", "--field", "sender=alice")
+    record_id = r_add.stdout.strip()
+    r_get = _run(base_env, "pdata", "get", "--project", "testproj", "--id", record_id)
+    assert r_get.returncode == 0
+    assert "alice" in r_get.stdout
+
+
+def test_pdata_get_missing_id_errors(base_env):
+    r = _run(base_env, "pdata", "get", "--project", "testproj", "--id", "999")
+    assert r.returncode == 1
+
+
+def test_pdata_get_rejects_bad_project_name(base_env):
+    r = _run(base_env, "pdata", "get", "--project", "../escape", "--id", "1")
+    assert r.returncode == 2
+
+
+def test_pdata_add_created_at_flag_is_persisted(base_env):
+    """End-to-end check (deferred from Task 6, which has no `get` yet) that `ccst pdata add
+    --created-at` actually lands the given epoch in storage rather than silently falling back
+    to 'now'."""
+    r_add = _run(base_env, "pdata", "add", "--project", "testproj", "--group", "ccst-ideas",
+                  "--content", "an old idea", "--created-at", "1000")
+    record_id = r_add.stdout.strip()
+    r_get = _run(base_env, "pdata", "get", "--project", "testproj", "--id", record_id)
+    assert r_get.returncode == 0
+    assert "1000" in r_get.stdout

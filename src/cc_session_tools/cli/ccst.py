@@ -929,6 +929,23 @@ def _cmd_pdata_schema_show(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_pdata_get(args: argparse.Namespace) -> int:
+    from cc_session_tools.lib.pdata import formatting, service
+
+    try:
+        record = service.get_record(
+            project=args.project, record_id=args.id, include_deleted=args.include_deleted,
+        )
+    except ValueError as exc:
+        print(f"ccst pdata: {exc}", file=sys.stderr)
+        return 2
+    if record is None:
+        print(f"ccst pdata: record not found: {args.id}", file=sys.stderr)
+        return 1
+    print(formatting.render([service.record_to_dict(record)], fmt="table"))
+    return 0
+
+
 # ---------- hooks run ----------
 
 
@@ -1561,6 +1578,11 @@ def _build_parser() -> argparse.ArgumentParser:
     pdata_schema_show_parser.add_argument("--project", required=True, metavar="NAME")
     pdata_schema_show_parser.add_argument("--group", required=True, metavar="RECORD_GROUP")
 
+    pdata_get_parser = pdata_sub.add_parser("get", help="Fetch a single record by id")
+    pdata_get_parser.add_argument("--project", required=True, metavar="NAME")
+    pdata_get_parser.add_argument("--id", required=True, type=int)
+    pdata_get_parser.add_argument("--include-deleted", action="store_true")
+
     # ---- sessions ----
     sessions_parser = sub.add_parser("sessions", help="sessions.db management commands")
     sessions_sub = sessions_parser.add_subparsers(dest="verb", metavar="<verb>")
@@ -1722,6 +1744,8 @@ def main() -> None:
                 sys.exit(_cmd_pdata_schema_list(args))
             if args.subverb == "show":
                 sys.exit(_cmd_pdata_schema_show(args))
+        if args.verb == "get":
+            sys.exit(_cmd_pdata_get(args))
 
     if args.noun == "sessions":
         if args.verb == "migrate":
