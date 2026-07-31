@@ -18,6 +18,7 @@ from cc_session_tools.lib.doctor import (
     check_env_dir,
     check_hook_registered,
     check_pending_data_store_migration,
+    check_pending_pdata_migration,
     check_pypi_version,
     check_settings_json,
     check_skill_symlink,
@@ -714,3 +715,87 @@ def test_run_all_checks_includes_pending_migration_when_paths_given(tmp_path: Pa
     )
 
     assert any(r.name.startswith("migration-to-1.0.0:") for r in results)
+
+
+# ---------- check_pending_pdata_migration ----------
+
+def test_check_pending_pdata_migration_ok_when_projects_root_missing(tmp_path: Path) -> None:
+    results = check_pending_pdata_migration(tmp_path / "does-not-exist")
+    assert len(results) == 1
+    assert results[0].status == Status.OK
+
+
+def test_check_pending_pdata_migration_ok_when_no_projects_have_archive(tmp_path: Path) -> None:
+    (tmp_path / "demo").mkdir()
+    results = check_pending_pdata_migration(tmp_path)
+    assert len(results) == 1
+    assert results[0].status == Status.OK
+
+
+def test_check_pending_pdata_migration_warns_for_undeleted_archive(tmp_path: Path) -> None:
+    project_dir = tmp_path / "demo"
+    archive_dir = project_dir / ".pdata-migrated"
+    archive_dir.mkdir(parents=True)
+    (archive_dir / "ideas.csv").write_text("idea\nfirst\n")
+    (archive_dir / "MANIFEST.md").write_text("- migrated ideas.csv\n")
+
+    results = check_pending_pdata_migration(tmp_path)
+
+    assert len(results) == 1
+    assert results[0].status == Status.WARN
+    assert "demo" in results[0].name
+    assert "1 archived" in results[0].reason
+
+
+def test_check_pending_pdata_migration_ignores_manifest_file_itself(tmp_path: Path) -> None:
+    project_dir = tmp_path / "demo"
+    archive_dir = project_dir / ".pdata-migrated"
+    archive_dir.mkdir(parents=True)
+    (archive_dir / "MANIFEST.md").write_text("nothing archived yet\n")
+
+    results = check_pending_pdata_migration(tmp_path)
+    assert results[0].status == Status.OK
+
+
+def test_check_pending_pdata_migration_reports_one_result_per_pending_project(
+    tmp_path: Path,
+) -> None:
+    for name in ("demo", "other"):
+        archive_dir = tmp_path / name / ".pdata-migrated"
+        archive_dir.mkdir(parents=True)
+        (archive_dir / "x.csv").write_text("x\n")
+
+    results = check_pending_pdata_migration(tmp_path)
+    assert {r.status for r in results} == {Status.WARN}
+    assert {r.name for r in results} == {"pdata-init:pending:demo", "pdata-init:pending:other"}
+
+
+def test_run_all_checks_includes_pdata_migration_check_when_projects_root_given(
+    tmp_path: Path,
+) -> None:
+    results = run_all_checks(
+        installed_version="1.2.0",
+        settings_path=tmp_path / "settings.json",
+        bundle_path=tmp_path / "bundle.json",
+        skills_source_dir=None,
+        skills_target_dir=tmp_path / "skills",
+        env={},
+        skip_pypi=True,
+        projects_root=tmp_path / "cc",
+    )
+    assert any(r.name.startswith("pdata-init:pending") for r in results)
+
+
+def test_run_all_checks_skips_pdata_migration_check_when_projects_root_omitted(
+    tmp_path: Path,
+) -> None:
+    results = run_all_checks(
+        installed_version="1.2.0",
+        settings_path=tmp_path / "settings.json",
+        bundle_path=tmp_path / "bundle.json",
+        skills_source_dir=None,
+        skills_target_dir=tmp_path / "skills",
+        env={},
+        skip_pypi=True,
+    )
+    assert not any(r.name.startswith("pdata-init:pending") for r in results)

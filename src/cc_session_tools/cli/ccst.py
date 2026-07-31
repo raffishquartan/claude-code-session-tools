@@ -660,6 +660,8 @@ def _cmd_doctor(args: argparse.Namespace) -> int:
         data_home=data_home(),
     )
 
+    from cc_session_tools.lib.pdata.init_paths import default_projects_root
+
     results = run_all_checks(
         installed_version=__version__,
         settings_path=settings_path,
@@ -670,6 +672,7 @@ def _cmd_doctor(args: argparse.Namespace) -> int:
         skip_pypi=args.no_pypi,
         store_paths=store_paths,
         legacy_migration_paths=legacy_migration_paths,
+        projects_root=default_projects_root(),
     )
 
     if args.drift or getattr(args, "mode", None) == "drift":
@@ -1032,6 +1035,45 @@ def _cmd_pdata_restore(args: argparse.Namespace) -> int:
         print(f"ccst pdata: {exc}", file=sys.stderr)
         return 2
     print(f"restored record {args.id}")
+    return 0
+
+
+def _cmd_pdata_init(args: argparse.Namespace) -> int:
+    from cc_session_tools.lib.pdata import init_service
+
+    rehearse = Path(args.rehearse) if args.rehearse else None
+
+    if not args.write:
+        try:
+            result = init_service.dry_run(project=args.project, rehearse=rehearse)
+        except ValueError as exc:
+            print(f"ccst pdata: {exc}", file=sys.stderr)
+            return 2
+        print(result.report)
+        print(f"\nProposal: {result.proposal_path}")
+        return 0
+
+    try:
+        write_result = init_service.write(project=args.project, rehearse=rehearse)
+    except (FileNotFoundError, ValueError) as exc:
+        print(f"ccst pdata: {exc}", file=sys.stderr)
+        return 2
+
+    if write_result.failure is not None:
+        print("ccst pdata init: verification failed, nothing was cut over:", file=sys.stderr)
+        for reason in write_result.failure.reasons:
+            print(f"  - {reason}", file=sys.stderr)
+        return 1
+
+    print(
+        f"Wrote {len(write_result.created_record_ids)} record(s) across "
+        f"{len(write_result.entries_written)} file(s)."
+    )
+    print(f"Backup: {write_result.backup_path}")
+    for path in write_result.entries_written:
+        print(f"  cut over: {path}")
+    print()
+    print(write_result.report)  # spec §7.1 step 4's diff report, for review
     return 0
 
 
@@ -1728,6 +1770,19 @@ def _build_parser() -> argparse.ArgumentParser:
     pdata_restore_parser.add_argument("--project", required=True, metavar="NAME")
     pdata_restore_parser.add_argument("--id", required=True, type=int)
 
+    pdata_init_parser = pdata_sub.add_parser(
+        "init", help="Initialize/migrate a project's data store (spec §7)"
+    )
+    pdata_init_parser.add_argument("--project", required=True, metavar="NAME")
+    pdata_init_parser.add_argument(
+        "--rehearse", default=None, metavar="PATH",
+        help="Run against a copy at PATH instead of the live project (spec §7.1 step 0)",
+    )
+    pdata_init_parser.add_argument(
+        "--write", action="store_true",
+        help="Perform the write/verify/backup/cutover phase (default: dry-run only)",
+    )
+
     # ---- sessions ----
     sessions_parser = sub.add_parser("sessions", help="sessions.db management commands")
     sessions_sub = sessions_parser.add_subparsers(dest="verb", metavar="<verb>")
@@ -1901,6 +1956,8 @@ def main() -> None:
             sys.exit(_cmd_pdata_delete(args))
         if args.verb == "restore":
             sys.exit(_cmd_pdata_restore(args))
+        if args.verb == "init":
+            sys.exit(_cmd_pdata_init(args))
 
     if args.noun == "sessions":
         if args.verb == "migrate":

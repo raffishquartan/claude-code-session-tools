@@ -20,6 +20,10 @@ from pathlib import Path
 from typing import Any
 
 from cc_session_tools.lib.db import connect as _db_connect
+from cc_session_tools.lib.pdata.init_paths import (
+    MIGRATED_ARCHIVE_DIRNAME,
+    MIGRATED_MANIFEST_FILENAME,
+)
 
 
 class Status(str, Enum):
@@ -466,6 +470,55 @@ def check_pending_data_store_migration(paths: LegacyMigrationPaths) -> list[Chec
     return results
 
 
+def check_pending_pdata_migration(projects_root: Path) -> list[CheckResult]:
+    """Warn about ccst pdata init runs whose archived-but-undeleted migrated-source
+    originals (spec §7.1 step 7) are still sitting under a project's
+    .pdata-migrated/ directory. Mirrors check_pending_data_store_migration()'s
+    pattern but is WARN-only: unlike the CCST-infra migration that check covers,
+    there is no version upgrade forcing every project through ccst pdata init, so
+    a project with no .pdata-migrated/ directory at all is a completely normal,
+    unremarkable state — nothing to FAIL on. Reuses init_paths.py's own
+    MIGRATED_ARCHIVE_DIRNAME/MIGRATED_MANIFEST_FILENAME constants (the same ones
+    cutover.py writes to) rather than re-typing the literal strings, so the two
+    can never drift apart."""
+    if not projects_root.is_dir():
+        return [CheckResult(
+            name="pdata-init:pending", status=Status.OK,
+            reason=f"{projects_root} does not exist — nothing to check",
+        )]
+
+    pending: list[tuple[str, Path, int]] = []
+    for project_dir in sorted(p for p in projects_root.iterdir() if p.is_dir()):
+        archive_dir = project_dir / MIGRATED_ARCHIVE_DIRNAME
+        if not archive_dir.is_dir():
+            continue
+        remaining = [
+            p for p in archive_dir.rglob("*")
+            if p.is_file() and p.name != MIGRATED_MANIFEST_FILENAME
+        ]
+        if remaining:
+            pending.append((project_dir.name, archive_dir, len(remaining)))
+
+    if not pending:
+        return [CheckResult(
+            name="pdata-init:pending", status=Status.OK,
+            reason="no archived-but-undeleted migration sources found",
+        )]
+
+    return [
+        CheckResult(
+            name=f"pdata-init:pending:{project_name}",
+            status=Status.WARN,
+            reason=(
+                f"{count} archived migrated-source file(s) remain at {archive_dir} — "
+                "safe to remove once verified (ccst pdata init never deletes "
+                "automatically, spec §7.1 step 7; manual delete only)"
+            ),
+        )
+        for project_name, archive_dir, count in pending
+    ]
+
+
 # ---------- high-level runner ----------
 
 
@@ -480,6 +533,7 @@ def run_all_checks(
     skip_pypi: bool = False,
     store_paths: dict[str, Path] | None = None,
     legacy_migration_paths: LegacyMigrationPaths | None = None,
+    projects_root: Path | None = None,
 ) -> list[CheckResult]:
     """Run the full doctor suite and return results.
 
@@ -506,6 +560,9 @@ def run_all_checks(
     legacy_migration_paths:
         Old on-disk locations for the pre-1.0.0 flat-file stores; when None,
         the pending-migration check is skipped.
+    projects_root:
+        Root holding every ``~/cc/<project>`` directory; when None, the
+        pending ``ccst pdata init`` cutover check is skipped.
     """
     results: list[CheckResult] = []
 
@@ -556,6 +613,10 @@ def run_all_checks(
     # Pending legacy-data migration
     if legacy_migration_paths is not None:
         results.extend(check_pending_data_store_migration(legacy_migration_paths))
+
+    # Pending ccst pdata init cutover (spec §7.1 step 7)
+    if projects_root is not None:
+        results.extend(check_pending_pdata_migration(projects_root))
 
     # PyPI version check
     if not skip_pypi:
