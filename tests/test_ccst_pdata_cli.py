@@ -48,3 +48,19 @@ def test_pdata_add_accepts_created_at_flag(base_env):
               "--created-at", "1000")
     assert r.returncode == 0, r.stderr
     assert "1" in r.stdout
+
+
+def test_pdata_schema_add_field(base_env):
+    r = _run(
+        base_env, "pdata", "schema", "add-field", "--project", "testproj",
+        "--group", "key-events", "--field", "sender:TEXT", "--description", "who sent it",
+    )
+    assert r.returncode == 0, r.stderr
+
+
+def test_pdata_schema_add_field_rejects_bad_field_spec(base_env):
+    r = _run(
+        base_env, "pdata", "schema", "add-field", "--project", "testproj",
+        "--group", "key-events", "--field", "not-a-valid-spec",
+    )
+    assert r.returncode == 2

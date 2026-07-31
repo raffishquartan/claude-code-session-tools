@@ -852,6 +852,36 @@ def _cmd_pdata_add(args: argparse.Namespace) -> int:
     return 0
 
 
+def _parse_field_spec(raw: str) -> tuple[str, str]:
+    """Parse "name:TYPE" into (name, TYPE). Raises ValueError on malformed input."""
+    if ":" not in raw:
+        raise ValueError(f"malformed --field spec (want name:TYPE): {raw!r}")
+    name, sql_type = raw.split(":", 1)
+    if not name or not sql_type:
+        raise ValueError(f"malformed --field spec (want name:TYPE): {raw!r}")
+    return name, sql_type
+
+
+def _cmd_pdata_schema_add_field(args: argparse.Namespace) -> int:
+    from cc_session_tools.lib.pdata import service
+
+    try:
+        field_name, sql_type = _parse_field_spec(args.field)
+        service.schema_add_field(
+            project=args.project,
+            record_group=args.group,
+            field_name=field_name,
+            sql_type=sql_type,
+            description=args.description,
+            default=args.default,
+        )
+    except ValueError as exc:
+        print(f"ccst pdata: {exc}", file=sys.stderr)
+        return 2
+    print(f"added field {field_name!r} ({sql_type}) to {args.group!r}")
+    return 0
+
+
 # ---------- hooks run ----------
 
 
@@ -1452,6 +1482,22 @@ def _build_parser() -> argparse.ArgumentParser:
              "see spec §5.",
     )
 
+    pdata_schema_parser = pdata_sub.add_parser("schema", help="Schema discovery and evolution")
+    pdata_schema_sub = pdata_schema_parser.add_subparsers(dest="subverb", metavar="<subverb>")
+    pdata_schema_sub.required = True
+
+    pdata_schema_add_field_parser = pdata_schema_sub.add_parser(
+        "add-field", help="Add/describe an extension-table field (idempotent)",
+    )
+    pdata_schema_add_field_parser.add_argument("--project", required=True, metavar="NAME")
+    pdata_schema_add_field_parser.add_argument("--group", required=True, metavar="RECORD_GROUP")
+    pdata_schema_add_field_parser.add_argument(
+        "--field", required=True, metavar="NAME:TYPE",
+        help="e.g. sender:TEXT — TYPE is one of TEXT, INTEGER, REAL, BLOB",
+    )
+    pdata_schema_add_field_parser.add_argument("--description", default=None, metavar="TEXT")
+    pdata_schema_add_field_parser.add_argument("--default", default=None, metavar="VALUE")
+
     # ---- sessions ----
     sessions_parser = sub.add_parser("sessions", help="sessions.db management commands")
     sessions_sub = sessions_parser.add_subparsers(dest="verb", metavar="<verb>")
@@ -1606,6 +1652,9 @@ def main() -> None:
     if args.noun == "pdata":
         if args.verb == "add":
             sys.exit(_cmd_pdata_add(args))
+        if args.verb == "schema":
+            if args.subverb == "add-field":
+                sys.exit(_cmd_pdata_schema_add_field(args))
 
     if args.noun == "sessions":
         if args.verb == "migrate":

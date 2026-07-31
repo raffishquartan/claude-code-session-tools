@@ -82,3 +82,30 @@ def add_record(
     finally:
         conn.close()
     return _row_to_record(row)
+
+
+def schema_add_field(
+    *,
+    project: str,
+    record_group: str,
+    field_name: str,
+    sql_type: str,
+    description: str | None,
+    default: object | None,
+) -> None:
+    naming.validate_record_group(record_group)
+    naming.validate_field_name(field_name)
+    now = int(time.time())
+    conn = repository.connect(project)
+    try:
+        with repository._immediate(conn):
+            repository.add_extension_column(
+                conn, record_group, field_name, sql_type, default=default,
+            )
+            if description is not None:
+                repository.upsert_field_description(
+                    conn, record_group=record_group, field_name=field_name,
+                    description=description, added_at=now,
+                )
+    finally:
+        conn.close()
