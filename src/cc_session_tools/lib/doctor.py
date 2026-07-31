@@ -533,6 +533,7 @@ def run_all_checks(
     skip_pypi: bool = False,
     store_paths: dict[str, Path] | None = None,
     legacy_migration_paths: LegacyMigrationPaths | None = None,
+    projects_root: Path | None = None,
 ) -> list[CheckResult]:
     """Run the full doctor suite and return results.
 
@@ -559,6 +560,9 @@ def run_all_checks(
     legacy_migration_paths:
         Old on-disk locations for the pre-1.0.0 flat-file stores; when None,
         the pending-migration check is skipped.
+    projects_root:
+        Root holding every ``~/cc/<project>`` directory; when None, the
+        pending ``ccst pdata init`` cutover check is skipped.
     """
     results: list[CheckResult] = []
 
@@ -609,6 +613,10 @@ def run_all_checks(
     # Pending legacy-data migration
     if legacy_migration_paths is not None:
         results.extend(check_pending_data_store_migration(legacy_migration_paths))
+
+    # Pending ccst pdata init cutover (spec §7.1 step 7)
+    if projects_root is not None:
+        results.extend(check_pending_pdata_migration(projects_root))
 
     # PyPI version check
     if not skip_pypi:

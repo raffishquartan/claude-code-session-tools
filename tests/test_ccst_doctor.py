@@ -768,3 +768,34 @@ def test_check_pending_pdata_migration_reports_one_result_per_pending_project(
     results = check_pending_pdata_migration(tmp_path)
     assert {r.status for r in results} == {Status.WARN}
     assert {r.name for r in results} == {"pdata-init:pending:demo", "pdata-init:pending:other"}
+
+
+def test_run_all_checks_includes_pdata_migration_check_when_projects_root_given(
+    tmp_path: Path,
+) -> None:
+    results = run_all_checks(
+        installed_version="1.2.0",
+        settings_path=tmp_path / "settings.json",
+        bundle_path=tmp_path / "bundle.json",
+        skills_source_dir=None,
+        skills_target_dir=tmp_path / "skills",
+        env={},
+        skip_pypi=True,
+        projects_root=tmp_path / "cc",
+    )
+    assert any(r.name.startswith("pdata-init:pending") for r in results)
+
+
+def test_run_all_checks_skips_pdata_migration_check_when_projects_root_omitted(
+    tmp_path: Path,
+) -> None:
+    results = run_all_checks(
+        installed_version="1.2.0",
+        settings_path=tmp_path / "settings.json",
+        bundle_path=tmp_path / "bundle.json",
+        skills_source_dir=None,
+        skills_target_dir=tmp_path / "skills",
+        env={},
+        skip_pypi=True,
+    )
+    assert not any(r.name.startswith("pdata-init:pending") for r in results)
