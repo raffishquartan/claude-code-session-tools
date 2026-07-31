@@ -273,3 +273,91 @@ def test_query_records_rejects_bad_where_operator(monkeypatch, tmp_path):
 # not here — it depends on service.delete_record, which doesn't exist until Task 16, matching
 # this plan's existing precedent of deferring a test to the task that provides its dependency
 # (see test_get_record_excludes_soft_deleted_by_default's "moved here from Task 12" note).
+
+
+def test_update_record_happy_path(monkeypatch, tmp_path):
+    monkeypatch.setenv("CCST_PROJECT_DB_DIR", str(tmp_path))
+    service.schema_add_field(
+        project="testproj", record_group="key-events", field_name="sender",
+        sql_type="TEXT", description=None, default=None,
+    )
+    created = service.add_record(
+        project="testproj", record_group="key-events", content="old",
+        file_path=None, fields={"sender": "alice"}, created_at=1,
+    )
+    updated = service.update_record(
+        project="testproj", record_id=created.id, expected_version=1,
+        content="new", file_path=None, fields={"sender": "bob"}, updated_at=2,
+    )
+    assert updated.content == "new"
+    assert updated.version == 2
+    assert updated.fields["sender"] == "bob"
+
+
+def test_update_record_conflict_raises_with_current_and_attempted(monkeypatch, tmp_path):
+    monkeypatch.setenv("CCST_PROJECT_DB_DIR", str(tmp_path))
+    created = service.add_record(
+        project="testproj", record_group="notes", content="old",
+        file_path=None, fields={}, created_at=1,
+    )
+    with pytest.raises(service.VersionConflictError) as exc_info:
+        service.update_record(
+            project="testproj", record_id=created.id, expected_version=99,
+            content="new", file_path=None, fields={}, updated_at=2,
+        )
+    assert exc_info.value.current["content"] == "old"
+    assert exc_info.value.attempted["content"] == "new"
+
+
+def test_update_record_missing_id_raises_not_found(monkeypatch, tmp_path):
+    monkeypatch.setenv("CCST_PROJECT_DB_DIR", str(tmp_path))
+    with pytest.raises(service.RecordNotFoundError):
+        service.update_record(
+            project="testproj", record_id=999, expected_version=1,
+            content="new", file_path=None, fields={}, updated_at=2,
+        )
+
+
+def test_update_record_omitting_file_preserves_existing_file_path(monkeypatch, tmp_path):
+    """Regression test: a content-only update (--file omitted, i.e. file_path=None) must not
+    silently null out a previously-set file_path."""
+    monkeypatch.setenv("CCST_PROJECT_DB_DIR", str(tmp_path))
+    created = service.add_record(
+        project="testproj", record_group="filings", content="old",
+        file_path="filings/original.md", fields={}, created_at=1,
+    )
+    updated = service.update_record(
+        project="testproj", record_id=created.id, expected_version=1,
+        content="new", file_path=None, fields={}, updated_at=2,
+    )
+    assert updated.content == "new"
+    assert updated.file_path == "filings/original.md"
+
+
+def test_update_record_omitting_content_updates_only_file_path(monkeypatch, tmp_path):
+    """Regression test: --content is optional per spec §5 — a file-only (or field-only) update
+    must not require resending the existing content."""
+    monkeypatch.setenv("CCST_PROJECT_DB_DIR", str(tmp_path))
+    created = service.add_record(
+        project="testproj", record_group="filings", content="original content",
+        file_path="filings/old.md", fields={}, created_at=1,
+    )
+    updated = service.update_record(
+        project="testproj", record_id=created.id, expected_version=1,
+        content=None, file_path="filings/new.md", fields={}, updated_at=2,
+    )
+    assert updated.content == "original content"
+    assert updated.file_path == "filings/new.md"
+
+
+def test_update_record_rejects_empty_update(monkeypatch, tmp_path):
+    monkeypatch.setenv("CCST_PROJECT_DB_DIR", str(tmp_path))
+    created = service.add_record(
+        project="testproj", record_group="notes", content="x",
+        file_path=None, fields={}, created_at=1,
+    )
+    with pytest.raises(ValueError, match="at least one"):
+        service.update_record(
+            project="testproj", record_id=created.id, expected_version=1,
+            content=None, file_path=None, fields={}, updated_at=2,
+        )

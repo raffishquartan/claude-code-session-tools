@@ -230,6 +230,62 @@ def list_base_records(
     return conn.execute(sql, params).fetchall()
 
 
+def update_base_record(
+    conn: sqlite3.Connection,
+    *,
+    record_id: int,
+    expected_version: int,
+    content: str | None,
+    file_path: str | None,
+    updated_at: int,
+) -> bool:
+    """UPDATE ... WHERE id=? AND version=?, bumping version by 1 (spec §6.2). Returns True iff
+    exactly one row was updated; False means the version didn't match (someone else's write
+    landed first) — caller (service.py) resolves the id-not-found-vs-conflict distinction by
+    checking whether the row exists at all.
+
+    content/file_path are each Optional per spec §5's `[--content "..."]  [--file <path>]` —
+    both are optional on update, meaning "leave this field unchanged", not "clear it to NULL".
+    COALESCE(?, content)/COALESCE(?, file_path) is what implements that: passing None reuses the
+    existing on-disk value instead of overwriting it. Without the COALESCE, a content-only update
+    (the common case — see spec §4.2's content+file_path record shape) would silently null out
+    file_path on every call that omits --file, a G1 silent-data-loss bug."""
+    cur = conn.execute(
+        "UPDATE records SET content=COALESCE(?, content), file_path=COALESCE(?, file_path), "
+        "updated_at=?, version=version+1 "
+        "WHERE id=? AND version=? AND deleted_at IS NULL",
+        (content, file_path, updated_at, record_id, expected_version),
+    )
+    return cur.rowcount == 1
+
+
+def update_extension_row(
+    conn: sqlite3.Connection, record_group: str, record_id: int, fields: Mapping[str, object],
+) -> None:
+    """Raises AssertionError if no ext_<group> row exists for record_id. This should be
+    unreachable: ensure_extension_table backfills every pre-existing row when the extension
+    table is first created (Task 7), and add_record/insert_extension_row create one for every
+    new row from then on (Task 10) — so every records row in a group with an extension table
+    has exactly one ext_<group> row (plan Decision 3). Asserting here turns any future
+    regression of that invariant into a loud failure instead of a silent no-op that discards the
+    field write (the bug this repository originally shipped with, caught in plan review before
+    implementation — see plan Decision 3)."""
+    if not fields:
+        return
+    table = naming.extension_table_name(record_group)
+    assignments = ", ".join(f'"{k}"=?' for k in fields)
+    cur = conn.execute(
+        f'UPDATE "{table}" SET {assignments} WHERE record_id=?',
+        (*fields.values(), record_id),
+    )
+    if cur.rowcount == 0:
+        raise AssertionError(
+            f"invariant violation: no {table} row for record_id={record_id} despite the "
+            f"extension table existing — the base/extension 1:1 row invariant was broken "
+            f"upstream (see plan Decision 3)"
+        )
+
+
 _WHERE_OPS = frozenset({"=", "!=", "<", ">", "<=", ">=", "LIKE"})
 # Deliberately a subset of naming.BASE_RECORD_COLUMNS, not the whole set: id/record_group are
 # already fixed by the surrounding SELECT/WHERE record_group=?, and version/deleted_at are

@@ -433,3 +433,87 @@ def test_query_records_rejects_unknown_field(monkeypatch, tmp_path):
             )
     finally:
         conn.close()
+
+
+def test_update_base_record_succeeds_with_correct_version(monkeypatch, tmp_path):
+    monkeypatch.setenv("CCST_PROJECT_DB_DIR", str(tmp_path))
+    conn = repository.connect("testproj")
+    try:
+        with repository._immediate(conn):
+            rid = repository.insert_base_record(conn, record_group="a", content="old",
+                                                 file_path=None, created_at=1, updated_at=1)
+        with repository._immediate(conn):
+            updated = repository.update_base_record(
+                conn, record_id=rid, expected_version=1, content="new",
+                file_path=None, updated_at=2,
+            )
+        assert updated is True
+        row = repository.get_base_record(conn, rid)
+        assert row["content"] == "new"
+        assert row["version"] == 2
+        assert row["updated_at"] == 2
+    finally:
+        conn.close()
+
+
+def test_update_base_record_returns_false_on_version_mismatch(monkeypatch, tmp_path):
+    monkeypatch.setenv("CCST_PROJECT_DB_DIR", str(tmp_path))
+    conn = repository.connect("testproj")
+    try:
+        with repository._immediate(conn):
+            rid = repository.insert_base_record(conn, record_group="a", content="old",
+                                                 file_path=None, created_at=1, updated_at=1)
+        with repository._immediate(conn):
+            updated = repository.update_base_record(
+                conn, record_id=rid, expected_version=99, content="new",
+                file_path=None, updated_at=2,
+            )
+        assert updated is False
+        row = repository.get_base_record(conn, rid)
+        assert row["content"] == "old"  # untouched
+        assert row["version"] == 1
+    finally:
+        conn.close()
+
+
+def test_update_base_record_with_content_none_preserves_existing_file_path(monkeypatch, tmp_path):
+    """Regression test: omitting --content/--file (passing None) must leave the existing
+    column value untouched, not overwrite it with NULL — a content-only or file-only update is
+    the normal case per spec §4.2's content+file_path record shape."""
+    monkeypatch.setenv("CCST_PROJECT_DB_DIR", str(tmp_path))
+    conn = repository.connect("testproj")
+    try:
+        with repository._immediate(conn):
+            rid = repository.insert_base_record(
+                conn, record_group="a", content="old", file_path="a/original.md",
+                created_at=1, updated_at=1,
+            )
+        with repository._immediate(conn):
+            updated = repository.update_base_record(
+                conn, record_id=rid, expected_version=1, content=None,
+                file_path=None, updated_at=2,
+            )
+        assert updated is True
+        row = repository.get_base_record(conn, rid)
+        assert row["content"] == "old"
+        assert row["file_path"] == "a/original.md"
+        assert row["version"] == 2
+    finally:
+        conn.close()
+
+
+def test_update_extension_row(monkeypatch, tmp_path):
+    monkeypatch.setenv("CCST_PROJECT_DB_DIR", str(tmp_path))
+    conn = repository.connect("testproj")
+    try:
+        with repository._immediate(conn):
+            repository.add_extension_column(conn, "key-events", "sender", "TEXT", default=None)
+            rid = repository.insert_base_record(conn, record_group="key-events", content="x",
+                                                 file_path=None, created_at=1, updated_at=1)
+            repository.insert_extension_row(conn, "key-events", rid, {"sender": "alice"})
+        with repository._immediate(conn):
+            repository.update_extension_row(conn, "key-events", rid, {"sender": "bob"})
+        row = repository.get_extension_row(conn, "key-events", rid)
+        assert row["sender"] == "bob"
+    finally:
+        conn.close()

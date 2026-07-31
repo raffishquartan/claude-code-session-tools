@@ -213,6 +213,103 @@ def query_records(
         conn.close()
 
 
+class RecordNotFoundError(Exception):
+    """Raised when a record id resolves to no row (or no active row)."""
+
+
+class VersionConflictError(Exception):
+    """Raised on an update()/delete() optimistic-concurrency conflict (spec §6.2). Carries the
+    current on-disk row and what the caller attempted, both flattened dicts, for the CLI to
+    render as a diff."""
+
+    def __init__(self, current: Mapping[str, object], attempted: Mapping[str, object]):
+        super().__init__(f"version conflict on record {current.get('id')}")
+        self.current = current
+        self.attempted = attempted
+
+
+def update_record(
+    *,
+    project: str,
+    record_id: int,
+    expected_version: int,
+    content: str | None,
+    file_path: str | None,
+    fields: Mapping[str, str],
+    updated_at: int | None = None,
+) -> Record:
+    """content and file_path are each optional (spec §5's `[--content "..."]  [--file <path>]`)
+    — omitting one (passing None) leaves that column unchanged; it does not clear it. At least
+    one of content, file_path, or fields must be given, or this is a no-op update request that
+    only bumps version/updated_at for nothing (this repo's coding standard: reject inputs that
+    ask the system to do nothing)."""
+    if content is None and file_path is None and not fields:
+        raise ValueError(
+            "ccst pdata update requires at least one of --content, --file, or --field"
+        )
+    _validate_relative_file_path(file_path)
+    ts = updated_at if updated_at is not None else int(time.time())
+
+    conn = repository.connect(project)
+    try:
+        existing = repository.get_base_record(conn, record_id)
+        if existing is None or existing["deleted_at"] is not None:
+            raise RecordNotFoundError(record_id)
+        record_group = existing["record_group"]
+
+        live_columns = set(repository.list_extension_columns(conn, record_group))
+        unregistered = set(fields) - live_columns
+        if unregistered:
+            raise ValueError(
+                f"unregistered field(s) for group {record_group!r}: "
+                f"{sorted(unregistered)} — run 'ccst pdata schema add-field' first"
+            )
+
+        with repository._immediate(conn):
+            ok = repository.update_base_record(
+                conn, record_id=record_id, expected_version=expected_version,
+                content=content, file_path=file_path, updated_at=ts,
+            )
+            if ok and fields:
+                repository.update_extension_row(conn, record_group, record_id, fields)
+
+        if not ok:
+            current_row = repository.get_base_record(conn, record_id)
+            assert current_row is not None
+            # The existence/soft-delete check above ran before this _immediate block acquired
+            # its write lock, so a concurrent soft-delete can land in that narrow window: the
+            # UPDATE's own `AND deleted_at IS NULL` clause then affects 0 rows for a reason that
+            # isn't actually a version mismatch. Re-check deleted_at here (now inside the lock,
+            # so this read is race-free) and report the accurate error rather than always
+            # assuming a conflict.
+            if current_row["deleted_at"] is not None:
+                raise RecordNotFoundError(record_id)
+            current = record_to_dict(_row_to_record(current_row))
+            ext_row = repository.get_extension_row(conn, record_group, record_id)
+            if ext_row is not None:
+                current.update({k: ext_row[k] for k in ext_row.keys() if k != "record_id"})
+            # A None content/file_path means "unchanged" (see the docstring above) — reflect
+            # what would actually have landed on disk in the conflict diff, not a misleading
+            # literal None, by falling back to the pre-update existing value for display.
+            attempted = {
+                "id": record_id,
+                "content": content if content is not None else existing["content"],
+                "file_path": file_path if file_path is not None else existing["file_path"],
+                **fields,
+            }
+            raise VersionConflictError(current=current, attempted=attempted)
+
+        updated_row = repository.get_base_record(conn, record_id)
+        assert updated_row is not None
+        record = _row_to_record(updated_row)
+        ext_row = repository.get_extension_row(conn, record_group, record_id)
+        if ext_row is not None:
+            record.fields = {k: ext_row[k] for k in ext_row.keys() if k != "record_id"}
+        return record
+    finally:
+        conn.close()
+
+
 def schema_add_field(
     *,
     project: str,

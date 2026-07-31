@@ -156,3 +156,61 @@ def test_pdata_query_with_where(base_env):
     import json
     parsed = json.loads(r.stdout)
     assert [row["content"] for row in parsed] == ["b"]
+
+
+def test_pdata_update_happy_path(base_env):
+    r_add = _run(base_env, "pdata", "add", "--project", "testproj", "--group", "notes",
+                  "--content", "old")
+    record_id = r_add.stdout.strip()
+    r_update = _run(base_env, "pdata", "update", "--project", "testproj", "--id", record_id,
+                      "--version", "1", "--content", "new")
+    assert r_update.returncode == 0, r_update.stderr
+    r_get = _run(base_env, "pdata", "get", "--project", "testproj", "--id", record_id)
+    assert "new" in r_get.stdout
+
+
+def test_pdata_update_version_conflict_exits_3(base_env):
+    r_add = _run(base_env, "pdata", "add", "--project", "testproj", "--group", "notes",
+                  "--content", "old")
+    record_id = r_add.stdout.strip()
+    r_update = _run(base_env, "pdata", "update", "--project", "testproj", "--id", record_id,
+                      "--version", "99", "--content", "new")
+    assert r_update.returncode == 3
+    assert "current" in r_update.stdout.lower() or "current" in r_update.stderr.lower()
+
+
+def test_pdata_update_without_content_preserves_existing_content(base_env):
+    """Regression test: --content is optional (spec §5) — a --file-only update must not require
+    resending --content, and must not overwrite content as a side effect."""
+    r_add = _run(base_env, "pdata", "add", "--project", "testproj", "--group", "filings",
+                  "--content", "original", "--file", "filings/old.md")
+    record_id = r_add.stdout.strip()
+    r_update = _run(base_env, "pdata", "update", "--project", "testproj", "--id", record_id,
+                      "--version", "1", "--file", "filings/new.md")
+    assert r_update.returncode == 0, r_update.stderr
+    r_get = _run(base_env, "pdata", "get", "--project", "testproj", "--id", record_id)
+    assert "original" in r_get.stdout
+    assert "filings/new.md" in r_get.stdout
+
+
+def test_pdata_update_without_file_preserves_existing_file_path(base_env):
+    """Regression test: a content-only update (--file omitted) must not silently null out a
+    previously-set file_path."""
+    r_add = _run(base_env, "pdata", "add", "--project", "testproj", "--group", "filings",
+                  "--content", "old", "--file", "filings/keep.md")
+    record_id = r_add.stdout.strip()
+    r_update = _run(base_env, "pdata", "update", "--project", "testproj", "--id", record_id,
+                      "--version", "1", "--content", "new")
+    assert r_update.returncode == 0, r_update.stderr
+    r_get = _run(base_env, "pdata", "get", "--project", "testproj", "--id", record_id)
+    assert "filings/keep.md" in r_get.stdout
+
+
+def test_pdata_update_rejects_empty_update(base_env):
+    r_add = _run(base_env, "pdata", "add", "--project", "testproj", "--group", "notes",
+                  "--content", "x")
+    record_id = r_add.stdout.strip()
+    r_update = _run(base_env, "pdata", "update", "--project", "testproj", "--id", record_id,
+                      "--version", "1")
+    assert r_update.returncode == 2
+    assert "at least one" in r_update.stderr.lower()

@@ -978,6 +978,28 @@ def _cmd_pdata_query(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_pdata_update(args: argparse.Namespace) -> int:
+    from cc_session_tools.lib.pdata import formatting, service
+
+    try:
+        fields = dict(_parse_field_assignment(raw) for raw in (args.field or []))
+        record = service.update_record(
+            project=args.project, record_id=args.id, expected_version=args.version,
+            content=args.content, file_path=args.file, fields=fields,
+        )
+    except service.RecordNotFoundError:
+        print(f"ccst pdata: record not found: {args.id}", file=sys.stderr)
+        return 1
+    except service.VersionConflictError as exc:
+        print(formatting.render_conflict_diff(exc.current, exc.attempted, fmt=args.format))
+        return 3
+    except ValueError as exc:
+        print(f"ccst pdata: {exc}", file=sys.stderr)
+        return 2
+    print(f"updated record {record.id} (version {record.version})")
+    return 0
+
+
 # ---------- hooks run ----------
 
 
@@ -1641,6 +1663,26 @@ def _build_parser() -> argparse.ArgumentParser:
         "--format", choices=("table", "json", "csv"), default="table",
     )
 
+    pdata_update_parser = pdata_sub.add_parser("update", help="Update a record (version-checked)")
+    pdata_update_parser.add_argument("--project", required=True, metavar="NAME")
+    pdata_update_parser.add_argument("--id", required=True, type=int)
+    pdata_update_parser.add_argument("--version", required=True, type=int, dest="version",
+                                      metavar="EXPECTED_VERSION")
+    pdata_update_parser.add_argument(
+        "--content", default=None,
+        help="New content. Omit to leave content unchanged (at least one of --content, "
+             "--file, --field is required)",
+    )
+    pdata_update_parser.add_argument(
+        "--file", default=None, metavar="PATH",
+        help="New relative file path. Omit to leave the existing file_path unchanged.",
+    )
+    pdata_update_parser.add_argument("--field", action="append", default=[], metavar="NAME=VALUE")
+    pdata_update_parser.add_argument(
+        "--format", choices=("table", "json"), default="table",
+        help="Format used only for the conflict diff on a version mismatch",
+    )
+
     # ---- sessions ----
     sessions_parser = sub.add_parser("sessions", help="sessions.db management commands")
     sessions_sub = sessions_parser.add_subparsers(dest="verb", metavar="<verb>")
@@ -1808,6 +1850,8 @@ def main() -> None:
             sys.exit(_cmd_pdata_list(args))
         if args.verb == "query":
             sys.exit(_cmd_pdata_query(args))
+        if args.verb == "update":
+            sys.exit(_cmd_pdata_update(args))
 
     if args.noun == "sessions":
         if args.verb == "migrate":
