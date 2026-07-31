@@ -58,7 +58,7 @@ import os
 import sys
 from enum import Enum
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from cc_session_tools import __version__
 from cc_session_tools.hooks_install import load_json, merge_hook_settings, write_json_atomic
@@ -882,6 +882,42 @@ def _cmd_pdata_schema_add_field(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_pdata_schema_list(args: argparse.Namespace) -> int:
+    from cc_session_tools.lib.pdata import service
+
+    try:
+        groups = service.schema_list(project=args.project)
+    except ValueError as exc:
+        print(f"ccst pdata: {exc}", file=sys.stderr)
+        return 2
+    if not groups:
+        print(f"No record_groups found in project {args.project!r}.")
+        return 0
+    name_w = max(len(str(g["record_group"])) for g in groups)
+    for g in groups:
+        ext = "yes" if g["has_extension_table"] else "no"
+        max_updated_at = g["max_updated_at"]
+        updated = _fmt_ts(cast(float, max_updated_at)) if max_updated_at else "(never)"
+        print(f"{str(g['record_group']):<{name_w}}  rows={g['row_count']:<6} "
+              f"ext={ext:<3} updated={updated}")
+    return 0
+
+
+def _cmd_pdata_schema_show(args: argparse.Namespace) -> int:
+    from cc_session_tools.lib.pdata import service
+
+    try:
+        columns = service.schema_show(project=args.project, record_group=args.group)
+    except ValueError as exc:
+        print(f"ccst pdata: {exc}", file=sys.stderr)
+        return 2
+    for c in columns:
+        type_label = c["type"] or ""
+        desc = c["description"] or ""
+        print(f"{c['source']:<9} {c['name']:<20} {type_label:<10} {desc}")
+    return 0
+
+
 # ---------- hooks run ----------
 
 
@@ -1498,6 +1534,17 @@ def _build_parser() -> argparse.ArgumentParser:
     pdata_schema_add_field_parser.add_argument("--description", default=None, metavar="TEXT")
     pdata_schema_add_field_parser.add_argument("--default", default=None, metavar="VALUE")
 
+    pdata_schema_list_parser = pdata_schema_sub.add_parser(
+        "list", help="List every record_group and whether it has an extension table",
+    )
+    pdata_schema_list_parser.add_argument("--project", required=True, metavar="NAME")
+
+    pdata_schema_show_parser = pdata_schema_sub.add_parser(
+        "show", help="Show base + extension columns for one record_group",
+    )
+    pdata_schema_show_parser.add_argument("--project", required=True, metavar="NAME")
+    pdata_schema_show_parser.add_argument("--group", required=True, metavar="RECORD_GROUP")
+
     # ---- sessions ----
     sessions_parser = sub.add_parser("sessions", help="sessions.db management commands")
     sessions_sub = sessions_parser.add_subparsers(dest="verb", metavar="<verb>")
@@ -1655,6 +1702,10 @@ def main() -> None:
         if args.verb == "schema":
             if args.subverb == "add-field":
                 sys.exit(_cmd_pdata_schema_add_field(args))
+            if args.subverb == "list":
+                sys.exit(_cmd_pdata_schema_list(args))
+            if args.subverb == "show":
+                sys.exit(_cmd_pdata_schema_show(args))
 
     if args.noun == "sessions":
         if args.verb == "migrate":

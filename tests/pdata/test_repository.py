@@ -255,3 +255,47 @@ def test_upsert_field_description(monkeypatch, tmp_path):
         assert rows[0]["description"] == "updated"
     finally:
         conn.close()
+
+
+def test_list_record_groups_returns_counts_and_ext_flag(monkeypatch, tmp_path):
+    monkeypatch.setenv("CCST_PROJECT_DB_DIR", str(tmp_path))
+    conn = repository.connect("testproj")
+    try:
+        with repository._immediate(conn):
+            repository.insert_base_record(
+                conn, record_group="ccst-ideas", content="a", file_path=None,
+                created_at=1, updated_at=1,
+            )
+            repository.insert_base_record(
+                conn, record_group="ccst-ideas", content="b", file_path=None,
+                created_at=2, updated_at=5,
+            )
+            repository.insert_base_record(
+                conn, record_group="filings", content="c", file_path=None,
+                created_at=3, updated_at=3,
+            )
+            repository.add_extension_column(conn, "filings", "doc_type", "TEXT", default=None)
+        groups = {g["record_group"]: g for g in repository.list_record_groups(conn)}
+        assert groups["ccst-ideas"]["row_count"] == 2
+        assert groups["ccst-ideas"]["has_extension_table"] is False
+        assert groups["ccst-ideas"]["max_updated_at"] == 5
+        assert groups["filings"]["row_count"] == 1
+        assert groups["filings"]["has_extension_table"] is True
+    finally:
+        conn.close()
+
+
+def test_list_record_groups_excludes_soft_deleted_from_row_count(monkeypatch, tmp_path):
+    monkeypatch.setenv("CCST_PROJECT_DB_DIR", str(tmp_path))
+    conn = repository.connect("testproj")
+    try:
+        with repository._immediate(conn):
+            rid = repository.insert_base_record(
+                conn, record_group="notes", content="a", file_path=None,
+                created_at=1, updated_at=1,
+            )
+            conn.execute("UPDATE records SET deleted_at=? WHERE id=?", (2, rid))
+        groups = {g["record_group"]: g for g in repository.list_record_groups(conn)}
+        assert groups["notes"]["row_count"] == 0
+    finally:
+        conn.close()

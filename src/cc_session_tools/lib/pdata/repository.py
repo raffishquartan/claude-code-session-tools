@@ -244,3 +244,60 @@ def upsert_field_description(
         "DO UPDATE SET description=excluded.description, added_at=excluded.added_at",
         (record_group, field_name, description, added_at),
     )
+
+
+def list_record_groups(conn: sqlite3.Connection) -> list[dict[str, object]]:
+    """Every distinct record_group in this project's DB: row count (active rows only, per
+    spec §4.5 default), whether it has an extension table, most recent updated_at.
+
+    row_count uses COUNT(*) FILTER (WHERE deleted_at IS NULL), not a WHERE clause on the query
+    itself — a WHERE deleted_at IS NULL placed before GROUP BY would drop a record_group whose
+    only rows are all soft-deleted from the result set entirely (there being no non-deleted row
+    left to GROUP BY), which would make it silently vanish from `schema list` instead of showing
+    row_count=0. The FILTER form still groups every record_group that has any row at all — active
+    or soft-deleted — and only restricts what gets counted."""
+    rows = conn.execute(
+        "SELECT record_group, "
+        "COUNT(*) FILTER (WHERE deleted_at IS NULL) AS row_count, "
+        "MAX(updated_at) AS max_updated_at "
+        "FROM records GROUP BY record_group ORDER BY record_group"
+    ).fetchall()
+    return [
+        {
+            "record_group": r["record_group"],
+            "row_count": r["row_count"],
+            "max_updated_at": r["max_updated_at"],
+            "has_extension_table": extension_table_exists(conn, r["record_group"]),
+        }
+        for r in rows
+    ]
+
+
+def show_schema_columns(conn: sqlite3.Connection, record_group: str) -> list[dict[str, object]]:
+    """Base columns (fixed) + live extension columns (name/type from PRAGMA table_info,
+    description from record_group_fields if set) for one record_group."""
+    columns: list[dict[str, object]] = [
+        {"source": "base", "name": name, "type": None, "description": None, "added_at": None}
+        for name in naming.BASE_RECORD_COLUMNS
+    ]
+    if not extension_table_exists(conn, record_group):
+        return columns
+
+    table = naming.extension_table_name(record_group)
+    descriptions = {
+        r["field_name"]: (r["description"], r["added_at"])
+        for r in conn.execute(
+            "SELECT field_name, description, added_at FROM record_group_fields "
+            "WHERE record_group=?",
+            (record_group,),
+        ).fetchall()
+    }
+    for r in conn.execute(f'PRAGMA table_info("{table}")'):
+        if r["name"] == "record_id":
+            continue
+        description, added_at = descriptions.get(r["name"], (None, None))
+        columns.append({
+            "source": "extension", "name": r["name"], "type": r["type"],
+            "description": description, "added_at": added_at,
+        })
+    return columns

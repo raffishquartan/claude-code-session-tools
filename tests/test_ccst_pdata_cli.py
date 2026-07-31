@@ -64,3 +64,21 @@ def test_pdata_schema_add_field_rejects_bad_field_spec(base_env):
         "--group", "key-events", "--field", "not-a-valid-spec",
     )
     assert r.returncode == 2
+
+
+def test_pdata_schema_list_and_show(base_env):
+    _run(base_env, "pdata", "add", "--project", "testproj", "--group", "filings",
+         "--content", "x")
+    r_list = _run(base_env, "pdata", "schema", "list", "--project", "testproj")
+    assert r_list.returncode == 0
+    assert "filings" in r_list.stdout
+
+    r_show = _run(base_env, "pdata", "schema", "show", "--project", "testproj",
+                    "--group", "filings")
+    assert r_show.returncode == 0
+    assert "content" in r_show.stdout
+
+
+def test_pdata_schema_list_rejects_bad_project_name(base_env):
+    r = _run(base_env, "pdata", "schema", "list", "--project", "../escape")
+    assert r.returncode == 2

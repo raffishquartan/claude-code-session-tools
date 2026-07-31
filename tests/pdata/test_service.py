@@ -123,3 +123,38 @@ def test_schema_add_field_rerun_updates_description_without_duplicating_column(
         assert rows[0]["description"] == "updated description"
     finally:
         conn.close()
+
+
+def test_schema_list_and_show(monkeypatch, tmp_path):
+    monkeypatch.setenv("CCST_PROJECT_DB_DIR", str(tmp_path))
+    service.add_record(
+        project="testproj", record_group="filings", content="x", file_path=None,
+        fields={}, created_at=1000,
+    )
+    service.schema_add_field(
+        project="testproj", record_group="filings", field_name="doc_type",
+        sql_type="TEXT", description="kind of document", default=None,
+    )
+
+    groups = service.schema_list(project="testproj")
+    names = {g["record_group"] for g in groups}
+    assert "filings" in names
+
+    columns = service.schema_show(project="testproj", record_group="filings")
+    base_names = {c["name"] for c in columns if c["source"] == "base"}
+    ext_names = {c["name"]: c for c in columns if c["source"] == "extension"}
+    assert base_names == {"id", "record_group", "content", "file_path",
+                           "created_at", "updated_at", "version", "deleted_at"}
+    assert ext_names["doc_type"]["type"] == "TEXT"
+    assert ext_names["doc_type"]["description"] == "kind of document"
+
+
+def test_schema_show_field_without_description_shows_blank(monkeypatch, tmp_path):
+    monkeypatch.setenv("CCST_PROJECT_DB_DIR", str(tmp_path))
+    service.schema_add_field(
+        project="testproj", record_group="filings", field_name="doc_type",
+        sql_type="TEXT", description=None, default=None,
+    )
+    columns = service.schema_show(project="testproj", record_group="filings")
+    ext = next(c for c in columns if c["name"] == "doc_type")
+    assert ext["description"] is None

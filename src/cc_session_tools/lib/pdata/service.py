@@ -109,3 +109,20 @@ def schema_add_field(
                 )
     finally:
         conn.close()
+
+
+def schema_list(*, project: str) -> list[dict[str, object]]:
+    conn = repository.connect(project)
+    try:
+        return repository.list_record_groups(conn)
+    finally:
+        conn.close()
+
+
+def schema_show(*, project: str, record_group: str) -> list[dict[str, object]]:
+    naming.validate_record_group(record_group)
+    conn = repository.connect(project)
+    try:
+        return repository.show_schema_columns(conn, record_group)
+    finally:
+        conn.close()
