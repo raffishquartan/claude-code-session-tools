@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`ccst pdata` — per-project SQLite data store CLI.** New `records`/`schema` subcommands
+  (`add`, `get`, `list`, `query`, `update`, `delete`, `restore`, `schema list`, `schema show`,
+  `schema add-field`) operate on one SQLite `.db` per project under
+  `~/.local/share/claude/project-db/<project>.db`. Every record lives in a `record_group`
+  (validated lowercase-hyphenated name); an optional per-group extension table gives structured
+  fields real typed/indexed columns without a CCST source change (`schema add-field`).
+  `update`/`delete` use optimistic concurrency (`--version`) and surface a current-vs-attempted
+  diff on conflict instead of silently overwriting or retrying. This is Plan A of the
+  per-project data-store feature — `ccst pdata init`/migration, the `pm-`-prefixed skills, and
+  `ccst pdata verify`/`export` are deferred to later plans (see
+  `docs/superpowers/plans/2026-07-30-ccst-pdata-core.md`'s Scope section).
+
 ### Fixed
 
 - **`ccst skills install --apply` no longer aborts on a stale symlink it manages.** A skill
