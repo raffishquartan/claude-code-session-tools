@@ -4,7 +4,7 @@ import os
 
 import pytest
 
-from cc_session_tools.lib.pdata import init_paths, store
+from cc_session_tools.lib.pdata import backup, init_paths, store
 
 
 def test_default_projects_root(monkeypatch, tmp_path):
@@ -63,3 +63,34 @@ def test_project_db_dir_override_clears_when_previously_unset(monkeypatch, tmp_p
     with init_paths.project_db_dir_override(rehearse_path):
         assert store.PROJECT_DB_DIR_ENV in os.environ
     assert store.PROJECT_DB_DIR_ENV not in os.environ
+
+
+def test_backup_dir_override_noop_without_rehearse(monkeypatch):
+    monkeypatch.delenv(backup.BACKUP_DIR_ENV, raising=False)
+    with init_paths.backup_dir_override(None):
+        assert backup.BACKUP_DIR_ENV not in os.environ
+
+
+def test_backup_dir_override_redirects_and_restores(monkeypatch, tmp_path):
+    monkeypatch.setenv(backup.BACKUP_DIR_ENV, "/original/backups")
+    rehearse_path = tmp_path / "rehearsal"
+    with init_paths.backup_dir_override(rehearse_path):
+        assert os.environ[backup.BACKUP_DIR_ENV] == str(
+            rehearse_path / init_paths.REHEARSAL_BACKUP_DIRNAME
+        )
+    assert os.environ[backup.BACKUP_DIR_ENV] == "/original/backups"
+
+
+def test_backup_dir_override_clears_when_previously_unset(monkeypatch, tmp_path):
+    monkeypatch.delenv(backup.BACKUP_DIR_ENV, raising=False)
+    rehearse_path = tmp_path / "rehearsal"
+    with init_paths.backup_dir_override(rehearse_path):
+        assert backup.BACKUP_DIR_ENV in os.environ
+    assert backup.BACKUP_DIR_ENV not in os.environ
+
+
+def test_excluded_dir_names_includes_rehearsal_backup_dirname():
+    """The classifier walks project_root via EXCLUDED_DIR_NAMES alone — without
+    this, a rehearsal's own backup tarball directory would be walked into and its
+    contents proposed as project files on a reclassification pass."""
+    assert init_paths.REHEARSAL_BACKUP_DIRNAME in init_paths.EXCLUDED_DIR_NAMES

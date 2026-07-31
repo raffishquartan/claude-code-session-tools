@@ -10,18 +10,22 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
 
-from cc_session_tools.lib.pdata import store
+from cc_session_tools.lib.pdata import backup, store
 
 PROJECTS_ROOT_ENV = "CCST_PROJECTS_ROOT"
 PROPOSAL_FILENAME = ".ccst-pdata-proposal.json"
 MIGRATED_ARCHIVE_DIRNAME = ".pdata-migrated"
 MIGRATED_MANIFEST_FILENAME = "MANIFEST.md"
 REHEARSAL_DB_DIRNAME = ".ccst-pdata-rehearsal-db"
+REHEARSAL_BACKUP_DIRNAME = ".ccst-pdata-rehearsal-backups"
 
 # Directories the classifier (classify.py) never walks into — repo/tool bookkeeping, not
-# project content in the sense spec §7.1's classification pass cares about.
+# project content in the sense spec §7.1's classification pass cares about. Both rehearsal
+# sandboxes are here so a reclassification pass never proposes a rehearsal's own .db or
+# backup tarball as project content.
 EXCLUDED_DIR_NAMES = frozenset({
     ".git", ".claude", "cc-sessions", MIGRATED_ARCHIVE_DIRNAME, REHEARSAL_DB_DIRNAME,
+    REHEARSAL_BACKUP_DIRNAME,
 })
 
 
@@ -63,3 +67,28 @@ def project_db_dir_override(rehearse: Path | None) -> Iterator[None]:
             os.environ.pop(store.PROJECT_DB_DIR_ENV, None)
         else:
             os.environ[store.PROJECT_DB_DIR_ENV] = previous
+
+
+@contextmanager
+def backup_dir_override(rehearse: Path | None) -> Iterator[None]:
+    """Redirect backup.create_backup() to a self-contained rehearsal directory
+    instead of the real backup_dir() (paths.data_home()/"pdata-backups" or
+    whatever CCST_PDATA_BACKUP_DIR is already set to), by reusing this plan's own
+    backup.BACKUP_DIR_ENV seam — mirrors project_db_dir_override's shape exactly.
+    Without this, a rehearsed --write would still deposit a
+    <project>-<epoch>.tar.gz into the same directory a genuine production
+    migration's backup would use, indistinguishable by filename. No-op when
+    rehearse is None."""
+    if rehearse is None:
+        yield
+        return
+    override_dir = rehearse / REHEARSAL_BACKUP_DIRNAME
+    previous = os.environ.get(backup.BACKUP_DIR_ENV)
+    os.environ[backup.BACKUP_DIR_ENV] = str(override_dir)
+    try:
+        yield
+    finally:
+        if previous is None:
+            os.environ.pop(backup.BACKUP_DIR_ENV, None)
+        else:
+            os.environ[backup.BACKUP_DIR_ENV] = previous
