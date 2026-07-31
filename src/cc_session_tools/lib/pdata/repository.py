@@ -59,3 +59,27 @@ def _immediate(conn: sqlite3.Connection) -> Iterator[None]:
         raise
     else:
         conn.execute("COMMIT")
+
+
+def insert_base_record(
+    conn: sqlite3.Connection,
+    *,
+    record_group: str,
+    content: str,
+    file_path: str | None,
+    created_at: int,
+    updated_at: int,
+) -> int:
+    """Insert one records row (caller already validated record_group). Returns the new id.
+    Caller owns the transaction (wrap in _immediate if this isn't the only statement)."""
+    cur = conn.execute(
+        "INSERT INTO records (record_group, content, file_path, created_at, updated_at) "
+        "VALUES (?, ?, ?, ?, ?)",
+        (record_group, content, file_path, created_at, updated_at),
+    )
+    assert cur.lastrowid is not None  # sqlite3 always sets this after a successful INSERT
+    return cur.lastrowid
+
+
+def get_base_record(conn: sqlite3.Connection, record_id: int) -> sqlite3.Row | None:
+    return conn.execute("SELECT * FROM records WHERE id=?", (record_id,)).fetchone()
