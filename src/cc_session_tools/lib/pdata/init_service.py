@@ -4,11 +4,20 @@ A's service.py — this module owns no SQL of its own.
 """
 from __future__ import annotations
 
+import csv
 from dataclasses import dataclass
 from pathlib import Path
 
-from cc_session_tools.lib.pdata import init_paths, manifest, repository, service
-from cc_session_tools.lib.pdata.manifest import Manifest
+from cc_session_tools.lib.pdata import (
+    backup,
+    cutover,
+    init_paths,
+    manifest,
+    repository,
+    service,
+)
+from cc_session_tools.lib.pdata.importers import ImportRow, count_source_rows, import_entry
+from cc_session_tools.lib.pdata.manifest import Manifest, ManifestEntry
 
 
 @dataclass
@@ -58,4 +67,206 @@ def _render_report(m: Manifest) -> str:
     lines.append(
         "Review/override entries in the proposal file listed below before running --write."
     )
+    return "\n".join(lines)
+
+
+@dataclass
+class WriteFailure:
+    reasons: list[str]
+
+
+@dataclass
+class WriteResult:
+    created_record_ids: list[int]
+    entries_written: list[str]
+    backup_path: Path | None
+    failure: WriteFailure | None
+    report: str = ""
+
+
+def _validate_no_conflicting_field_types(m: Manifest) -> None:
+    """Two manifest entries can legitimately feed the same record_group (nothing
+    in this module's manifest/write() design forbids it) — but Plan A's
+    schema_add_field/add_extension_column silently no-ops when a field name
+    already has a column, so two entries proposing the same field name with a
+    *different* sql_type would otherwise have the second entry's type silently
+    dropped, with no error, no warning, and no mention in the diff report, and its
+    rows coerced/stored under the first entry's column type. Catch the conflict
+    here, before any DDL or row import runs (a validation error, exit 2 — not a
+    verification failure with partially-inserted rows to roll back), so an
+    incompatible pair of entries is rejected up front instead of silently
+    corrupting one side's data."""
+    seen: dict[tuple[str, str], str] = {}
+    for entry in m.entries:
+        if entry.classification != "db-owned":
+            continue
+        for spec in entry.fields:
+            key = (entry.db_group(), spec.name)
+            prior_type = seen.get(key)
+            if prior_type is not None and prior_type != spec.sql_type:
+                raise ValueError(
+                    f"conflicting sql_type for field {spec.name!r} in record_group "
+                    f"{entry.db_group()!r}: {prior_type!r} (from an earlier entry) "
+                    f"vs {spec.sql_type!r} (from {entry.path!r}) — align both "
+                    f"entries' field sql_type in the proposal before running --write"
+                )
+            seen[key] = spec.sql_type
+
+
+def write(*, project: str, rehearse: Path | None = None) -> WriteResult:
+    project_root = init_paths.resolve_project_root(project, rehearse=rehearse)
+    proposal_path = project_root / init_paths.PROPOSAL_FILENAME
+    if not proposal_path.exists():
+        raise FileNotFoundError(
+            f"no classification proposal found at {proposal_path} — run "
+            f"'ccst pdata init --project {project}' (add --rehearse if rehearsing) first"
+        )
+    m = manifest.load(proposal_path)
+    _validate_no_conflicting_field_types(m)
+
+    created_ids: list[int] = []
+    reasons: list[str] = []
+    written_entries: list[ManifestEntry] = []
+    # (record_id, ImportRow) pairs per entry — kept (not just the id) so _verify can
+    # spot-check DB content against what was actually imported, and so the
+    # human-readable diff report (spec §7.1 step 4) has real content to show.
+    entry_rows: dict[str, list[tuple[int, ImportRow]]] = {}
+
+    # Both rehearsal-isolation seams are entered together for the whole
+    # write/verify/backup phase: project_db_dir_override redirects the .db (Plan
+    # A's CCST_PROJECT_DB_DIR seam), backup_dir_override redirects where
+    # backup.create_backup() below writes its tar.gz (this module's own
+    # CCST_PDATA_BACKUP_DIR seam). Without the second seam, a rehearsed --write
+    # would still deposit a real <project>-<epoch>.tar.gz into the production
+    # backup directory — indistinguishable by filename from a genuine migration's
+    # backup. Both are no-ops when rehearse is None.
+    with (
+        init_paths.project_db_dir_override(rehearse),
+        init_paths.backup_dir_override(rehearse),
+    ):
+        for entry in m.entries:
+            if entry.classification != "db-owned":
+                continue
+            try:
+                for spec in entry.fields:
+                    service.schema_add_field(
+                        project=project, record_group=entry.db_group(),
+                        field_name=spec.name, sql_type=spec.sql_type,
+                        description=spec.description, default=spec.default,
+                    )
+                rows_for_entry: list[tuple[int, ImportRow]] = []
+                for row in import_entry(project_root, entry):
+                    record = service.add_record(
+                        project=project, record_group=entry.db_group(),
+                        content=row.content, file_path=row.file_path,
+                        fields=row.fields, created_at=row.created_at,
+                    )
+                    created_ids.append(record.id)
+                    rows_for_entry.append((record.id, row))
+                entry_rows[entry.path] = rows_for_entry
+                written_entries.append(entry)
+            except (ValueError, OSError, csv.Error) as exc:
+                reasons.append(f"{entry.path}: {exc}")
+
+        reasons.extend(
+            _verify(project=project, project_root=project_root,
+                    written_entries=written_entries, entry_rows=entry_rows)
+        )
+
+        if reasons:
+            # Soft-delete every row inserted this run (spec §4.5) — no hard delete,
+            # full auditability, and nothing proceeds to backup/cutover. Every id
+            # here was just inserted in this single-threaded run, so its version is
+            # always 1 — but each delete_record call is still wrapped individually:
+            # service.RecordNotFoundError/VersionConflictError are plain Exception
+            # subclasses (not ValueError/OSError), so an unwrapped raise here would
+            # abort the loop mid-way and leave some just-inserted rows soft-deleted
+            # and others still live. Any rollback failure is reported alongside the
+            # original failure reasons rather than raised, since the caller still
+            # needs a WriteResult back, not a crash, to know backup/cutover did not
+            # run.
+            rollback_failures: list[str] = []
+            for record_id in created_ids:
+                try:
+                    service.delete_record(
+                        project=project, record_id=record_id, expected_version=1,
+                    )
+                except (service.RecordNotFoundError, service.VersionConflictError) as exc:
+                    rollback_failures.append(f"record {record_id}: rollback failed: {exc}")
+            return WriteResult(created_record_ids=[], entries_written=[],
+                               backup_path=None,
+                               failure=WriteFailure(reasons=reasons + rollback_failures))
+
+        # Still inside both overrides: a rehearsed run's backup must land in the
+        # rehearsal sandbox (backup_dir_override), never in the real backup dir.
+        backup_path = backup.create_backup(project=project, project_root=project_root)
+
+    cutover.archive_entries(project_root=project_root, entries=written_entries)
+    return WriteResult(
+        created_record_ids=created_ids,
+        entries_written=[e.path for e in written_entries],
+        backup_path=backup_path, failure=None,
+        report=_render_diff_report(written_entries=written_entries, entry_rows=entry_rows),
+    )
+
+
+def _verify(
+    *, project: str, project_root: Path, written_entries: list[ManifestEntry],
+    entry_rows: dict[str, list[tuple[int, ImportRow]]],
+) -> list[str]:
+    """Spec §7.1 step 4: entry-count parity (DB rows vs. an independent re-count of
+    the source file), a content spot-check (DB content vs. what was actually passed
+    to add_record), and file_path resolution — all three must hold for every
+    newly-inserted row before backup/cutover proceeds."""
+    reasons: list[str] = []
+    for entry in written_entries:
+        rows = entry_rows[entry.path]
+        expected_count = count_source_rows(project_root, entry)
+        if len(rows) != expected_count:
+            reasons.append(
+                f"{entry.path}: imported {len(rows)} row(s) but re-counting the source "
+                f"gives {expected_count} — entry-count parity check failed"
+            )
+        for record_id, import_row in rows:
+            record = service.get_record(project=project, record_id=record_id)
+            assert record is not None, (
+                f"record {record_id} inserted this run but missing during verification"
+            )
+            if record.content != import_row.content:
+                reasons.append(
+                    f"{entry.path}: record {record_id} content does not match what "
+                    f"was imported — content spot-check failed"
+                )
+            if record.file_path:
+                target = project_root / record.file_path
+                if not target.exists():
+                    reasons.append(
+                        f"{entry.path}: record {record_id} file_path "
+                        f"{record.file_path!r} does not resolve under {project_root}"
+                    )
+    return reasons
+
+
+def _render_diff_report(
+    *, written_entries: list[ManifestEntry],
+    entry_rows: dict[str, list[tuple[int, ImportRow]]],
+) -> str:
+    """Spec §7.1 step 4's human-readable diff report — old content vs. what landed
+    in the DB — for review. Printed by the CLI as part of a successful `--write`'s
+    output, immediately after verification passed and before the process would
+    otherwise exit; there is no separate interactive confirmation gate ahead of
+    backup/cutover (`--write` stays a single atomic operation), so this report is
+    the review artifact for that already-completed run, not a pre-cutover prompt —
+    the human review gate the spec protects against a wrong classification lives at
+    step 2 (proposal review) and step 0 (--rehearse), both of which run before
+    --write is ever invoked."""
+    lines = ["ccst pdata init --write — verification diff report:"]
+    for entry in written_entries:
+        rows = entry_rows[entry.path]
+        lines.append(f"  {entry.path}: {len(rows)} row(s) -> group={entry.db_group()}")
+        for record_id, row in rows[:3]:
+            preview = row.content[:80].replace("\n", " ")
+            lines.append(f"    id={record_id} content={preview!r}")
+        if len(rows) > 3:
+            lines.append(f"    ... and {len(rows) - 3} more row(s)")
     return "\n".join(lines)
