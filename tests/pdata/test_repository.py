@@ -388,3 +388,48 @@ def test_list_base_records_excludes_deleted_unless_asked(monkeypatch, tmp_path):
         )) == 1
     finally:
         conn.close()
+
+
+def test_query_records_filters_on_base_and_extension_columns(monkeypatch, tmp_path):
+    monkeypatch.setenv("CCST_PROJECT_DB_DIR", str(tmp_path))
+    conn = repository.connect("testproj")
+    try:
+        with repository._immediate(conn):
+            repository.add_extension_column(conn, "key-events", "sent_at", "INTEGER", default=None)
+            r1 = repository.insert_base_record(conn, record_group="key-events", content="a",
+                                                file_path=None, created_at=1, updated_at=1)
+            repository.insert_extension_row(conn, "key-events", r1, {"sent_at": 100})
+            r2 = repository.insert_base_record(conn, record_group="key-events", content="b",
+                                                file_path=None, created_at=2, updated_at=2)
+            repository.insert_extension_row(conn, "key-events", r2, {"sent_at": 200})
+
+        rows = repository.query_records(
+            conn, record_group="key-events",
+            conditions=[("sent_at", ">", "150")], limit=None,
+        )
+        assert [r["content"] for r in rows] == ["b"]
+
+        rows = repository.query_records(
+            conn, record_group="key-events",
+            conditions=[("content", "=", "a")], limit=None,
+        )
+        assert [r["content"] for r in rows] == ["a"]
+    finally:
+        conn.close()
+
+
+def test_query_records_rejects_unknown_field(monkeypatch, tmp_path):
+    monkeypatch.setenv("CCST_PROJECT_DB_DIR", str(tmp_path))
+    import pytest
+    conn = repository.connect("testproj")
+    try:
+        with repository._immediate(conn):
+            repository.insert_base_record(conn, record_group="key-events", content="a",
+                                           file_path=None, created_at=1, updated_at=1)
+        with pytest.raises(ValueError, match="unknown field"):
+            repository.query_records(
+                conn, record_group="key-events",
+                conditions=[("nope", "=", "x")], limit=None,
+            )
+    finally:
+        conn.close()

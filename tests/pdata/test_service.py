@@ -224,3 +224,52 @@ def test_list_records_flattens_extension_fields_for_every_row(monkeypatch, tmp_p
                         file_path=None, fields={"sender": "bob"}, created_at=2000)
     rows = service.list_records(project="testproj", record_group="key-events")
     assert [r.fields["sender"] for r in rows] == ["alice", "bob"]
+
+
+def test_query_records_service_layer(monkeypatch, tmp_path):
+    monkeypatch.setenv("CCST_PROJECT_DB_DIR", str(tmp_path))
+    service.schema_add_field(
+        project="testproj", record_group="key-events", field_name="sent_at",
+        sql_type="INTEGER", description=None, default=None,
+    )
+    # fields values are always strings (matching every --field k=v caller — the CLI can only
+    # ever produce strings, and add_record's fields: Mapping[str, str] signature reflects
+    # that). SQLite's own column affinity converts a bound TEXT '100' into the stored/compared
+    # INTEGER 100 for an INTEGER-affinity column — confirmed by direct execution — so this
+    # doesn't need Python-side int parsing anywhere in this plan.
+    service.add_record(project="testproj", record_group="key-events", content="a",
+                        file_path=None, fields={"sent_at": "100"}, created_at=1)
+    service.add_record(project="testproj", record_group="key-events", content="b",
+                        file_path=None, fields={"sent_at": "200"}, created_at=2)
+    rows = service.query_records(
+        project="testproj", record_group="key-events", where=["sent_at > 150"],
+    )
+    assert [r.content for r in rows] == ["b"]
+
+
+def test_query_records_rejects_bad_where_syntax(monkeypatch, tmp_path):
+    # Must be too few whitespace-separated tokens to match _WHERE_CLAUSE_RE at all (a single
+    # word, with no op/value) so this actually exercises the "malformed clause" branch — not
+    # the "invalid operator" branch already covered by test_query_records_rejects_bad_where_operator.
+    # ("not a valid clause" would parse as field="not", op="A", value="valid clause" and raise
+    # the invalid-operator error instead, since "A" is not a valid op — that string looked like
+    # a syntax failure but wasn't one.)
+    monkeypatch.setenv("CCST_PROJECT_DB_DIR", str(tmp_path))
+    with pytest.raises(ValueError, match="malformed"):
+        service.query_records(
+            project="testproj", record_group="key-events", where=["singleword"],
+        )
+
+
+def test_query_records_rejects_bad_where_operator(monkeypatch, tmp_path):
+    monkeypatch.setenv("CCST_PROJECT_DB_DIR", str(tmp_path))
+    with pytest.raises(ValueError, match="operator"):
+        service.query_records(
+            project="testproj", record_group="key-events", where=["content ~= x"],
+        )
+
+# Note: query's --include-deleted default-exclusion behaviour is regression-tested in Task 16
+# (test_query_records_excludes_soft_deleted_by_default / test_pdata_query_include_deleted),
+# not here — it depends on service.delete_record, which doesn't exist until Task 16, matching
+# this plan's existing precedent of deferring a test to the task that provides its dependency
+# (see test_get_record_excludes_soft_deleted_by_default's "moved here from Task 12" note).

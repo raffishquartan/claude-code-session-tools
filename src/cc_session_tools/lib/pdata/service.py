@@ -5,10 +5,34 @@ from __future__ import annotations
 
 import sqlite3
 import time
+import re as _re
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 
 from cc_session_tools.lib.pdata import naming, repository
+
+# op is deliberately \S+ here (not the literal alternation of valid ops) — matching only a
+# literal alternation would make an invalid op (e.g. "~=") fail to match the whole regex at all,
+# so the caller falls into the generic "malformed clause" branch and the dedicated "invalid
+# operator" error below becomes unreachable dead code. Capturing any non-space token as op and
+# checking membership afterward is what makes both error messages actually reachable.
+_WHERE_CLAUSE_RE = _re.compile(
+    r"^(?P<field>\S+)\s+(?P<op>\S+)\s+(?P<value>.+)$",
+)
+
+
+def _parse_where_clause(raw: str) -> tuple[str, str, str]:
+    match = _WHERE_CLAUSE_RE.match(raw.strip())
+    if not match:
+        raise ValueError(
+            f"malformed --where clause (want '<field> <op> <value>'): {raw!r}"
+        )
+    field_name = match.group("field")
+    op = match.group("op").upper()
+    value = match.group("value")
+    if op not in repository._WHERE_OPS:
+        raise ValueError(f"invalid --where operator {op!r}: {raw!r}")
+    return field_name, op, value
 
 
 @dataclass
@@ -144,6 +168,34 @@ def list_records(
         rows = repository.list_base_records(
             conn, record_group=record_group, since=since, until=until,
             limit=limit, include_deleted=include_deleted,
+        )
+        has_ext = repository.extension_table_exists(conn, record_group)
+        records = []
+        for row in rows:
+            record = _row_to_record(row)
+            if has_ext:
+                ext_row = repository.get_extension_row(conn, record_group, row["id"])
+                if ext_row is not None:
+                    record.fields = {
+                        k: ext_row[k] for k in ext_row.keys() if k != "record_id"
+                    }
+            records.append(record)
+        return records
+    finally:
+        conn.close()
+
+
+def query_records(
+    *, project: str, record_group: str, where: list[str], limit: int | None = None,
+    include_deleted: bool = False,
+) -> list[Record]:
+    naming.validate_record_group(record_group)
+    conditions = [_parse_where_clause(clause) for clause in where]
+    conn = repository.connect(project)
+    try:
+        rows = repository.query_records(
+            conn, record_group=record_group, conditions=conditions, limit=limit,
+            include_deleted=include_deleted,
         )
         has_ext = repository.extension_table_exists(conn, record_group)
         records = []

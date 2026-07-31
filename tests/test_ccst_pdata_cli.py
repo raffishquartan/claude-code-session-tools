@@ -141,3 +141,18 @@ def test_pdata_list_json_format(base_env):
     import json
     parsed = json.loads(r.stdout)
     assert parsed[0]["content"] == "idea one"
+
+
+def test_pdata_query_with_where(base_env):
+    _run(base_env, "pdata", "schema", "add-field", "--project", "testproj",
+         "--group", "key-events", "--field", "sent_at:INTEGER")
+    _run(base_env, "pdata", "add", "--project", "testproj", "--group", "key-events",
+         "--content", "a", "--field", "sent_at=100")
+    _run(base_env, "pdata", "add", "--project", "testproj", "--group", "key-events",
+         "--content", "b", "--field", "sent_at=200")
+    r = _run(base_env, "pdata", "query", "--project", "testproj", "--group", "key-events",
+              "--where", "sent_at > 150", "--format", "json")
+    assert r.returncode == 0, r.stderr
+    import json
+    parsed = json.loads(r.stdout)
+    assert [row["content"] for row in parsed] == ["b"]

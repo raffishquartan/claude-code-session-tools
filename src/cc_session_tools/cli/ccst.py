@@ -962,6 +962,22 @@ def _cmd_pdata_list(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_pdata_query(args: argparse.Namespace) -> int:
+    from cc_session_tools.lib.pdata import formatting, service
+
+    try:
+        records = service.query_records(
+            project=args.project, record_group=args.group,
+            where=args.where or [], limit=args.limit,
+            include_deleted=args.include_deleted,
+        )
+    except ValueError as exc:
+        print(f"ccst pdata: {exc}", file=sys.stderr)
+        return 2
+    print(formatting.render([service.record_to_dict(r) for r in records], fmt=args.format))
+    return 0
+
+
 # ---------- hooks run ----------
 
 
@@ -1610,6 +1626,21 @@ def _build_parser() -> argparse.ArgumentParser:
         "--format", choices=("table", "json", "csv"), default="table",
     )
 
+    pdata_query_parser = pdata_sub.add_parser(
+        "query", help="Query records with structured --where filters",
+    )
+    pdata_query_parser.add_argument("--project", required=True, metavar="NAME")
+    pdata_query_parser.add_argument("--group", required=True, metavar="RECORD_GROUP")
+    pdata_query_parser.add_argument(
+        "--where", action="append", default=[], metavar="'<field> <op> <value>'",
+        help="May repeat; clauses are ANDed. op is one of = != < > <= >= LIKE.",
+    )
+    pdata_query_parser.add_argument("--limit", type=int, default=None, metavar="N")
+    pdata_query_parser.add_argument("--include-deleted", action="store_true")
+    pdata_query_parser.add_argument(
+        "--format", choices=("table", "json", "csv"), default="table",
+    )
+
     # ---- sessions ----
     sessions_parser = sub.add_parser("sessions", help="sessions.db management commands")
     sessions_sub = sessions_parser.add_subparsers(dest="verb", metavar="<verb>")
@@ -1775,6 +1806,8 @@ def main() -> None:
             sys.exit(_cmd_pdata_get(args))
         if args.verb == "list":
             sys.exit(_cmd_pdata_list(args))
+        if args.verb == "query":
+            sys.exit(_cmd_pdata_query(args))
 
     if args.noun == "sessions":
         if args.verb == "migrate":

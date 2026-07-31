@@ -230,6 +230,60 @@ def list_base_records(
     return conn.execute(sql, params).fetchall()
 
 
+_WHERE_OPS = frozenset({"=", "!=", "<", ">", "<=", ">=", "LIKE"})
+# Deliberately a subset of naming.BASE_RECORD_COLUMNS, not the whole set: id/record_group are
+# already fixed by the surrounding SELECT/WHERE record_group=?, and version/deleted_at are
+# concurrency/soft-delete internals a --where filter has no legitimate reason to target
+# (deleted rows are already excluded by the r.deleted_at IS NULL clause below).
+_BASE_QUERYABLE_COLUMNS = frozenset({"content", "file_path", "created_at", "updated_at"})
+
+
+def query_records(
+    conn: sqlite3.Connection,
+    *,
+    record_group: str,
+    conditions: list[tuple[str, str, str]],
+    limit: int | None,
+    include_deleted: bool = False,
+) -> list[sqlite3.Row]:
+    """conditions is a list of (field, op, value) already syntax-checked by
+    service._parse_where_clause; op is guaranteed in _WHERE_OPS. field is resolved against
+    base columns first, then live extension columns — auto-LEFT-JOINing ext_<group> so a
+    caller never writes a JOIN or names the table (spec §5).
+
+    include_deleted mirrors list_base_records' flag (spec §4.5: "list/query/get exclude
+    soft-deleted rows by default; --include-deleted shows them") — query is not exempt from
+    that default just because it filters on --where instead of --since/--until."""
+    has_ext = extension_table_exists(conn, record_group)
+    ext_columns = set(list_extension_columns(conn, record_group)) if has_ext else set()
+    table = naming.extension_table_name(record_group) if has_ext else None
+
+    clauses = ["r.record_group=?"]
+    if not include_deleted:
+        clauses.append("r.deleted_at IS NULL")
+    params: list[object] = [record_group]
+    for field_name, op, value in conditions:
+        if op not in _WHERE_OPS:
+            raise ValueError(f"invalid operator {op!r}")
+        if field_name in _BASE_QUERYABLE_COLUMNS:
+            clauses.append(f'r."{field_name}" {op} ?')
+        elif field_name in ext_columns:
+            clauses.append(f'e."{field_name}" {op} ?')
+        else:
+            raise ValueError(
+                f"unknown field {field_name!r} for group {record_group!r} "
+                f"(not a base column or a registered extension field)"
+            )
+        params.append(value)
+
+    join = f'LEFT JOIN "{table}" e ON e.record_id = r.id' if table else ""
+    sql = f"SELECT r.* FROM records r {join} WHERE {' AND '.join(clauses)} ORDER BY r.id"
+    if limit is not None:
+        sql += " LIMIT ?"
+        params.append(limit)
+    return conn.execute(sql, params).fetchall()
+
+
 def insert_extension_row(
     conn: sqlite3.Connection, record_group: str, record_id: int, fields: Mapping[str, object],
 ) -> None:
