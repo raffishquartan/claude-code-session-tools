@@ -210,3 +210,17 @@ def test_get_record_flattens_extension_fields(monkeypatch, tmp_path):
 def test_get_record_returns_none_for_missing_id(monkeypatch, tmp_path):
     monkeypatch.setenv("CCST_PROJECT_DB_DIR", str(tmp_path))
     assert service.get_record(project="testproj", record_id=999) is None
+
+
+def test_list_records_flattens_extension_fields_for_every_row(monkeypatch, tmp_path):
+    monkeypatch.setenv("CCST_PROJECT_DB_DIR", str(tmp_path))
+    service.schema_add_field(
+        project="testproj", record_group="key-events", field_name="sender",
+        sql_type="TEXT", description=None, default=None,
+    )
+    service.add_record(project="testproj", record_group="key-events", content="e1",
+                        file_path=None, fields={"sender": "alice"}, created_at=1000)
+    service.add_record(project="testproj", record_group="key-events", content="e2",
+                        file_path=None, fields={"sender": "bob"}, created_at=2000)
+    rows = service.list_records(project="testproj", record_group="key-events")
+    assert [r.fields["sender"] for r in rows] == ["alice", "bob"]

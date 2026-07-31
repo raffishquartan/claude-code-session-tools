@@ -340,3 +340,51 @@ def test_insert_extension_row_with_no_fields_still_creates_row(monkeypatch, tmp_
         assert row["sender"] is None
     finally:
         conn.close()
+
+
+def test_list_base_records_filters_by_group_since_until(monkeypatch, tmp_path):
+    monkeypatch.setenv("CCST_PROJECT_DB_DIR", str(tmp_path))
+    conn = repository.connect("testproj")
+    try:
+        with repository._immediate(conn):
+            repository.insert_base_record(conn, record_group="a", content="1",
+                                           file_path=None, created_at=100, updated_at=100)
+            repository.insert_base_record(conn, record_group="a", content="2",
+                                           file_path=None, created_at=200, updated_at=200)
+            repository.insert_base_record(conn, record_group="b", content="3",
+                                           file_path=None, created_at=150, updated_at=150)
+        rows = repository.list_base_records(conn, record_group="a", since=None, until=None,
+                                             limit=None, include_deleted=False)
+        assert [r["content"] for r in rows] == ["1", "2"]
+
+        rows = repository.list_base_records(conn, record_group="a", since=150, until=None,
+                                             limit=None, include_deleted=False)
+        assert [r["content"] for r in rows] == ["2"]
+
+        rows = repository.list_base_records(conn, record_group="a", since=None, until=150,
+                                             limit=None, include_deleted=False)
+        assert [r["content"] for r in rows] == ["1"]
+
+        rows = repository.list_base_records(conn, record_group="a", since=None, until=None,
+                                             limit=1, include_deleted=False)
+        assert len(rows) == 1
+    finally:
+        conn.close()
+
+
+def test_list_base_records_excludes_deleted_unless_asked(monkeypatch, tmp_path):
+    monkeypatch.setenv("CCST_PROJECT_DB_DIR", str(tmp_path))
+    conn = repository.connect("testproj")
+    try:
+        with repository._immediate(conn):
+            rid = repository.insert_base_record(conn, record_group="a", content="1",
+                                                 file_path=None, created_at=1, updated_at=1)
+            conn.execute("UPDATE records SET deleted_at=? WHERE id=?", (2, rid))
+        assert repository.list_base_records(
+            conn, record_group="a", since=None, until=None, limit=None, include_deleted=False,
+        ) == []
+        assert len(repository.list_base_records(
+            conn, record_group="a", since=None, until=None, limit=None, include_deleted=True,
+        )) == 1
+    finally:
+        conn.close()

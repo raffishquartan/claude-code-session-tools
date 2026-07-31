@@ -129,6 +129,38 @@ def record_to_dict(record: Record) -> dict[str, object]:
     return d
 
 
+def list_records(
+    *,
+    project: str,
+    record_group: str,
+    since: int | None = None,
+    until: int | None = None,
+    limit: int | None = None,
+    include_deleted: bool = False,
+) -> list[Record]:
+    naming.validate_record_group(record_group)
+    conn = repository.connect(project)
+    try:
+        rows = repository.list_base_records(
+            conn, record_group=record_group, since=since, until=until,
+            limit=limit, include_deleted=include_deleted,
+        )
+        has_ext = repository.extension_table_exists(conn, record_group)
+        records = []
+        for row in rows:
+            record = _row_to_record(row)
+            if has_ext:
+                ext_row = repository.get_extension_row(conn, record_group, row["id"])
+                if ext_row is not None:
+                    record.fields = {
+                        k: ext_row[k] for k in ext_row.keys() if k != "record_id"
+                    }
+            records.append(record)
+        return records
+    finally:
+        conn.close()
+
+
 def schema_add_field(
     *,
     project: str,

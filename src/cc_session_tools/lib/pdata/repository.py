@@ -203,6 +203,33 @@ def _render_default_literal(value: object, normalized_type: str) -> str:
     raise ValueError(f"column defaults are not supported for type {normalized_type}")
 
 
+def list_base_records(
+    conn: sqlite3.Connection,
+    *,
+    record_group: str,
+    since: int | None,
+    until: int | None,
+    limit: int | None,
+    include_deleted: bool,
+) -> list[sqlite3.Row]:
+    clauses = ["record_group=?"]
+    params: list[object] = [record_group]
+    if not include_deleted:
+        clauses.append("deleted_at IS NULL")
+    if since is not None:
+        clauses.append("updated_at >= ?")
+        params.append(since)
+    if until is not None:
+        clauses.append("updated_at <= ?")
+        params.append(until)
+    where = " AND ".join(clauses)
+    sql = f"SELECT * FROM records WHERE {where} ORDER BY id"
+    if limit is not None:
+        sql += " LIMIT ?"
+        params.append(limit)
+    return conn.execute(sql, params).fetchall()
+
+
 def insert_extension_row(
     conn: sqlite3.Connection, record_group: str, record_id: int, fields: Mapping[str, object],
 ) -> None:

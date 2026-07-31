@@ -130,3 +130,14 @@ def test_pdata_add_created_at_flag_is_persisted(base_env):
     r_get = _run(base_env, "pdata", "get", "--project", "testproj", "--id", record_id)
     assert r_get.returncode == 0
     assert "1000" in r_get.stdout
+
+
+def test_pdata_list_json_format(base_env):
+    _run(base_env, "pdata", "add", "--project", "testproj", "--group", "ccst-ideas",
+         "--content", "idea one")
+    r = _run(base_env, "pdata", "list", "--project", "testproj", "--group", "ccst-ideas",
+              "--format", "json")
+    assert r.returncode == 0
+    import json
+    parsed = json.loads(r.stdout)
+    assert parsed[0]["content"] == "idea one"
