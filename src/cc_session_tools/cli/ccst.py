@@ -30,6 +30,8 @@ Current subcommands:
   gc report                      Report orphaned per-session-uuid entries across the
                                  scheduler, messaging, and session-env stores (never
                                  deletes anything).
+  pdata add                      Insert a new record into a project's SQLite data store (see
+                                 ccst pdata --help for the full records/schema subcommand set).
   migrate ccsched                Migrate ccsched flat-file stores into ccsched.db
                                  (verify + tar-backup old files before removal).
   migrate ccmsg                  Migrate the flat-file message store into ccmsg.db
@@ -56,7 +58,7 @@ import os
 import sys
 from enum import Enum
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from cc_session_tools import __version__
 from cc_session_tools.hooks_install import load_json, merge_hook_settings, write_json_atomic
@@ -225,13 +227,9 @@ def _cmd_skills_install(args: argparse.Namespace) -> int:
             failed.append(dest)
             continue
 
-        if action == SkillAction.WRONG_TARGET and not args.force:
-            print(
-                f"error: {dest} is a symlink to a different path; use --force to replace it",
-                file=sys.stderr,
-            )
-            failed.append(dest)
-            continue
+        # WRONG_TARGET: dest is a symlink we manage (created by a previous
+        # install), so repointing it is safe without --force — no user data
+        # at risk, unlike NON_SYMLINK_EXISTS above.
 
         # Move aside existing non-symlink or wrong-target symlink
         if dest.exists() or dest.is_symlink():
@@ -832,6 +830,211 @@ def _cmd_gc_report(args: argparse.Namespace) -> int:
     return 0
 
 
+# ---------- pdata ----------
+
+
+def _parse_field_assignment(raw: str) -> tuple[str, str]:
+    """Parse "k=v" into (k, v). Raises ValueError on malformed input."""
+    if "=" not in raw:
+        raise ValueError(f"malformed --field assignment (want name=value): {raw!r}")
+    name, value = raw.split("=", 1)
+    if not name:
+        raise ValueError(f"malformed --field assignment (want name=value): {raw!r}")
+    return name, value
+
+
+def _cmd_pdata_add(args: argparse.Namespace) -> int:
+    from cc_session_tools.lib.pdata import service
+
+    try:
+        fields = dict(_parse_field_assignment(raw) for raw in (args.field or []))
+        record = service.add_record(
+            project=args.project,
+            record_group=args.group,
+            content=args.content,
+            file_path=args.file,
+            fields=fields,
+            created_at=args.created_at,
+        )
+    except ValueError as exc:
+        print(f"ccst pdata: {exc}", file=sys.stderr)
+        return 2
+    print(record.id)
+    return 0
+
+
+def _parse_field_spec(raw: str) -> tuple[str, str]:
+    """Parse "name:TYPE" into (name, TYPE). Raises ValueError on malformed input."""
+    if ":" not in raw:
+        raise ValueError(f"malformed --field spec (want name:TYPE): {raw!r}")
+    name, sql_type = raw.split(":", 1)
+    if not name or not sql_type:
+        raise ValueError(f"malformed --field spec (want name:TYPE): {raw!r}")
+    return name, sql_type
+
+
+def _cmd_pdata_schema_add_field(args: argparse.Namespace) -> int:
+    from cc_session_tools.lib.pdata import service
+
+    try:
+        field_name, sql_type = _parse_field_spec(args.field)
+        service.schema_add_field(
+            project=args.project,
+            record_group=args.group,
+            field_name=field_name,
+            sql_type=sql_type,
+            description=args.description,
+            default=args.default,
+        )
+    except ValueError as exc:
+        print(f"ccst pdata: {exc}", file=sys.stderr)
+        return 2
+    print(f"added field {field_name!r} ({sql_type}) to {args.group!r}")
+    return 0
+
+
+def _cmd_pdata_schema_list(args: argparse.Namespace) -> int:
+    from cc_session_tools.lib.pdata import service
+
+    try:
+        groups = service.schema_list(project=args.project)
+    except ValueError as exc:
+        print(f"ccst pdata: {exc}", file=sys.stderr)
+        return 2
+    if not groups:
+        print(f"No record_groups found in project {args.project!r}.")
+        return 0
+    name_w = max(len(str(g["record_group"])) for g in groups)
+    for g in groups:
+        ext = "yes" if g["has_extension_table"] else "no"
+        max_updated_at = g["max_updated_at"]
+        updated = _fmt_ts(cast(float, max_updated_at)) if max_updated_at else "(never)"
+        print(f"{str(g['record_group']):<{name_w}}  rows={g['row_count']:<6} "
+              f"ext={ext:<3} updated={updated}")
+    return 0
+
+
+def _cmd_pdata_schema_show(args: argparse.Namespace) -> int:
+    from cc_session_tools.lib.pdata import service
+
+    try:
+        columns = service.schema_show(project=args.project, record_group=args.group)
+    except ValueError as exc:
+        print(f"ccst pdata: {exc}", file=sys.stderr)
+        return 2
+    for c in columns:
+        type_label = c["type"] or ""
+        desc = c["description"] or ""
+        print(f"{c['source']:<9} {c['name']:<20} {type_label:<10} {desc}")
+    return 0
+
+
+def _cmd_pdata_get(args: argparse.Namespace) -> int:
+    from cc_session_tools.lib.pdata import formatting, service
+
+    try:
+        record = service.get_record(
+            project=args.project, record_id=args.id, include_deleted=args.include_deleted,
+        )
+    except ValueError as exc:
+        print(f"ccst pdata: {exc}", file=sys.stderr)
+        return 2
+    if record is None:
+        print(f"ccst pdata: record not found: {args.id}", file=sys.stderr)
+        return 1
+    print(formatting.render([service.record_to_dict(record)], fmt="table"))
+    return 0
+
+
+def _cmd_pdata_list(args: argparse.Namespace) -> int:
+    from cc_session_tools.lib.pdata import formatting, service
+
+    try:
+        records = service.list_records(
+            project=args.project, record_group=args.group,
+            since=args.since, until=args.until, limit=args.limit,
+            include_deleted=args.include_deleted,
+        )
+    except ValueError as exc:
+        print(f"ccst pdata: {exc}", file=sys.stderr)
+        return 2
+    print(formatting.render([service.record_to_dict(r) for r in records], fmt=args.format))
+    return 0
+
+
+def _cmd_pdata_query(args: argparse.Namespace) -> int:
+    from cc_session_tools.lib.pdata import formatting, service
+
+    try:
+        records = service.query_records(
+            project=args.project, record_group=args.group,
+            where=args.where or [], limit=args.limit,
+            include_deleted=args.include_deleted,
+        )
+    except ValueError as exc:
+        print(f"ccst pdata: {exc}", file=sys.stderr)
+        return 2
+    print(formatting.render([service.record_to_dict(r) for r in records], fmt=args.format))
+    return 0
+
+
+def _cmd_pdata_update(args: argparse.Namespace) -> int:
+    from cc_session_tools.lib.pdata import formatting, service
+
+    try:
+        fields = dict(_parse_field_assignment(raw) for raw in (args.field or []))
+        record = service.update_record(
+            project=args.project, record_id=args.id, expected_version=args.version,
+            content=args.content, file_path=args.file, fields=fields,
+        )
+    except service.RecordNotFoundError:
+        print(f"ccst pdata: record not found: {args.id}", file=sys.stderr)
+        return 1
+    except service.VersionConflictError as exc:
+        print(formatting.render_conflict_diff(exc.current, exc.attempted, fmt=args.format))
+        return 3
+    except ValueError as exc:
+        print(f"ccst pdata: {exc}", file=sys.stderr)
+        return 2
+    print(f"updated record {record.id} (version {record.version})")
+    return 0
+
+
+def _cmd_pdata_delete(args: argparse.Namespace) -> int:
+    from cc_session_tools.lib.pdata import formatting, service
+
+    try:
+        service.delete_record(
+            project=args.project, record_id=args.id, expected_version=args.version,
+        )
+    except service.RecordNotFoundError:
+        print(f"ccst pdata: record not found: {args.id}", file=sys.stderr)
+        return 1
+    except service.VersionConflictError as exc:
+        print(formatting.render_conflict_diff(exc.current, exc.attempted, fmt="table"))
+        return 3
+    except ValueError as exc:
+        print(f"ccst pdata: {exc}", file=sys.stderr)
+        return 2
+    print(f"deleted record {args.id}")
+    return 0
+
+
+def _cmd_pdata_restore(args: argparse.Namespace) -> int:
+    from cc_session_tools.lib.pdata import service
+
+    try:
+        service.restore_record(project=args.project, record_id=args.id)
+    except service.RecordNotFoundError:
+        print(f"ccst pdata: record not found (or not deleted): {args.id}", file=sys.stderr)
+        return 1
+    except ValueError as exc:
+        print(f"ccst pdata: {exc}", file=sys.stderr)
+        return 2
+    print(f"restored record {args.id}")
+    return 0
+
+
 # ---------- hooks run ----------
 
 
@@ -1415,6 +1618,116 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Directory holding sessions.db (default: from CCST_SESSIONS_DIR or data_home())",
     )
 
+    # ---- pdata ----
+    pdata_parser = sub.add_parser("pdata", help="Per-project SQLite data store commands")
+    pdata_sub = pdata_parser.add_subparsers(dest="verb", metavar="<verb>")
+    pdata_sub.required = True
+
+    pdata_add_parser = pdata_sub.add_parser("add", help="Insert a new record")
+    pdata_add_parser.add_argument("--project", required=True, metavar="NAME")
+    pdata_add_parser.add_argument("--group", required=True, metavar="RECORD_GROUP")
+    pdata_add_parser.add_argument("--content", required=True)
+    pdata_add_parser.add_argument("--file", default=None, metavar="PATH",
+                                   help="Relative sibling/source file path")
+    pdata_add_parser.add_argument(
+        "--created-at", type=int, default=None, metavar="EPOCH",
+        help="Unix epoch seconds to backdate created_at/updated_at to (default: now); "
+             "see spec §5.",
+    )
+    pdata_add_parser.add_argument(
+        "--field", action="append", default=[], metavar="NAME=VALUE",
+        help="Extension field assignment; may repeat. Field must already be registered via "
+             "'ccst pdata schema add-field'.",
+    )
+
+    pdata_schema_parser = pdata_sub.add_parser("schema", help="Schema discovery and evolution")
+    pdata_schema_sub = pdata_schema_parser.add_subparsers(dest="subverb", metavar="<subverb>")
+    pdata_schema_sub.required = True
+
+    pdata_schema_add_field_parser = pdata_schema_sub.add_parser(
+        "add-field", help="Add/describe an extension-table field (idempotent)",
+    )
+    pdata_schema_add_field_parser.add_argument("--project", required=True, metavar="NAME")
+    pdata_schema_add_field_parser.add_argument("--group", required=True, metavar="RECORD_GROUP")
+    pdata_schema_add_field_parser.add_argument(
+        "--field", required=True, metavar="NAME:TYPE",
+        help="e.g. sender:TEXT — TYPE is one of TEXT, INTEGER, REAL, BLOB",
+    )
+    pdata_schema_add_field_parser.add_argument("--description", default=None, metavar="TEXT")
+    pdata_schema_add_field_parser.add_argument("--default", default=None, metavar="VALUE")
+
+    pdata_schema_list_parser = pdata_schema_sub.add_parser(
+        "list", help="List every record_group and whether it has an extension table",
+    )
+    pdata_schema_list_parser.add_argument("--project", required=True, metavar="NAME")
+
+    pdata_schema_show_parser = pdata_schema_sub.add_parser(
+        "show", help="Show base + extension columns for one record_group",
+    )
+    pdata_schema_show_parser.add_argument("--project", required=True, metavar="NAME")
+    pdata_schema_show_parser.add_argument("--group", required=True, metavar="RECORD_GROUP")
+
+    pdata_get_parser = pdata_sub.add_parser("get", help="Fetch a single record by id")
+    pdata_get_parser.add_argument("--project", required=True, metavar="NAME")
+    pdata_get_parser.add_argument("--id", required=True, type=int)
+    pdata_get_parser.add_argument("--include-deleted", action="store_true")
+
+    pdata_list_parser = pdata_sub.add_parser("list", help="List records in one record_group")
+    pdata_list_parser.add_argument("--project", required=True, metavar="NAME")
+    pdata_list_parser.add_argument("--group", required=True, metavar="RECORD_GROUP")
+    pdata_list_parser.add_argument("--since", type=int, default=None, metavar="EPOCH")
+    pdata_list_parser.add_argument("--until", type=int, default=None, metavar="EPOCH")
+    pdata_list_parser.add_argument("--limit", type=int, default=None, metavar="N")
+    pdata_list_parser.add_argument("--include-deleted", action="store_true")
+    pdata_list_parser.add_argument(
+        "--format", choices=("table", "json", "csv"), default="table",
+    )
+
+    pdata_query_parser = pdata_sub.add_parser(
+        "query", help="Query records with structured --where filters",
+    )
+    pdata_query_parser.add_argument("--project", required=True, metavar="NAME")
+    pdata_query_parser.add_argument("--group", required=True, metavar="RECORD_GROUP")
+    pdata_query_parser.add_argument(
+        "--where", action="append", default=[], metavar="'<field> <op> <value>'",
+        help="May repeat; clauses are ANDed. op is one of = != < > <= >= LIKE.",
+    )
+    pdata_query_parser.add_argument("--limit", type=int, default=None, metavar="N")
+    pdata_query_parser.add_argument("--include-deleted", action="store_true")
+    pdata_query_parser.add_argument(
+        "--format", choices=("table", "json", "csv"), default="table",
+    )
+
+    pdata_update_parser = pdata_sub.add_parser("update", help="Update a record (version-checked)")
+    pdata_update_parser.add_argument("--project", required=True, metavar="NAME")
+    pdata_update_parser.add_argument("--id", required=True, type=int)
+    pdata_update_parser.add_argument("--version", required=True, type=int, dest="version",
+                                      metavar="EXPECTED_VERSION")
+    pdata_update_parser.add_argument(
+        "--content", default=None,
+        help="New content. Omit to leave content unchanged (at least one of --content, "
+             "--file, --field is required)",
+    )
+    pdata_update_parser.add_argument(
+        "--file", default=None, metavar="PATH",
+        help="New relative file path. Omit to leave the existing file_path unchanged.",
+    )
+    pdata_update_parser.add_argument("--field", action="append", default=[], metavar="NAME=VALUE")
+    pdata_update_parser.add_argument(
+        "--format", choices=("table", "json"), default="table",
+        help="Format used only for the conflict diff on a version mismatch",
+    )
+
+    pdata_delete_parser = pdata_sub.add_parser("delete", help="Soft-delete a record (version-checked)")
+    pdata_delete_parser.add_argument("--project", required=True, metavar="NAME")
+    pdata_delete_parser.add_argument("--id", required=True, type=int)
+    pdata_delete_parser.add_argument("--version", required=True, type=int,
+                                      metavar="EXPECTED_VERSION")
+
+    pdata_restore_parser = pdata_sub.add_parser("restore", help="Clear a soft-delete")
+    pdata_restore_parser.add_argument("--project", required=True, metavar="NAME")
+    pdata_restore_parser.add_argument("--id", required=True, type=int)
+
     # ---- sessions ----
     sessions_parser = sub.add_parser("sessions", help="sessions.db management commands")
     sessions_sub = sessions_parser.add_subparsers(dest="verb", metavar="<verb>")
@@ -1565,6 +1878,29 @@ def main() -> None:
     if args.noun == "gc":
         if args.verb == "report":
             sys.exit(_cmd_gc_report(args))
+
+    if args.noun == "pdata":
+        if args.verb == "add":
+            sys.exit(_cmd_pdata_add(args))
+        if args.verb == "schema":
+            if args.subverb == "add-field":
+                sys.exit(_cmd_pdata_schema_add_field(args))
+            if args.subverb == "list":
+                sys.exit(_cmd_pdata_schema_list(args))
+            if args.subverb == "show":
+                sys.exit(_cmd_pdata_schema_show(args))
+        if args.verb == "get":
+            sys.exit(_cmd_pdata_get(args))
+        if args.verb == "list":
+            sys.exit(_cmd_pdata_list(args))
+        if args.verb == "query":
+            sys.exit(_cmd_pdata_query(args))
+        if args.verb == "update":
+            sys.exit(_cmd_pdata_update(args))
+        if args.verb == "delete":
+            sys.exit(_cmd_pdata_delete(args))
+        if args.verb == "restore":
+            sys.exit(_cmd_pdata_restore(args))
 
     if args.noun == "sessions":
         if args.verb == "migrate":

@@ -711,10 +711,10 @@ Symlink all bundled skills into `~/.claude/skills/`.
 # Dry run (default) - shows what would be created or skipped
 ccst skills install
 
-# Write the symlinks
+# Write the symlinks (also repoints any stale symlink left by a previous install)
 ccst skills install --apply
 
-# Replace wrong-target or conflicting symlinks
+# Replace a non-symlink file/dir that's sitting at a skill's target path
 ccst skills install --apply --force
 ```
 
