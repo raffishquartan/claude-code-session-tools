@@ -158,3 +158,34 @@ def test_schema_show_field_without_description_shows_blank(monkeypatch, tmp_path
     columns = service.schema_show(project="testproj", record_group="filings")
     ext = next(c for c in columns if c["name"] == "doc_type")
     assert ext["description"] is None
+
+
+def test_add_record_routes_field_to_extension_table(monkeypatch, tmp_path):
+    monkeypatch.setenv("CCST_PROJECT_DB_DIR", str(tmp_path))
+    service.schema_add_field(
+        project="testproj", record_group="key-events", field_name="sender",
+        sql_type="TEXT", description=None, default=None,
+    )
+    record = service.add_record(
+        project="testproj", record_group="key-events", content="an event",
+        file_path=None, fields={"sender": "alice"}, created_at=1000,
+    )
+    assert record.fields == {"sender": "alice"}
+
+
+def test_add_record_rejects_unregistered_field(monkeypatch, tmp_path):
+    monkeypatch.setenv("CCST_PROJECT_DB_DIR", str(tmp_path))
+    with pytest.raises(ValueError, match="unregistered field"):
+        service.add_record(
+            project="testproj", record_group="key-events", content="an event",
+            file_path=None, fields={"nope": "x"}, created_at=1000,
+        )
+
+
+def test_add_record_with_no_fields_and_no_extension_table_stays_base_only(monkeypatch, tmp_path):
+    monkeypatch.setenv("CCST_PROJECT_DB_DIR", str(tmp_path))
+    record = service.add_record(
+        project="testproj", record_group="ccst-ideas", content="an idea",
+        file_path=None, fields={}, created_at=1000,
+    )
+    assert record.fields == {}

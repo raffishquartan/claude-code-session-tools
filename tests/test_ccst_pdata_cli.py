@@ -82,3 +82,18 @@ def test_pdata_schema_list_and_show(base_env):
 def test_pdata_schema_list_rejects_bad_project_name(base_env):
     r = _run(base_env, "pdata", "schema", "list", "--project", "../escape")
     assert r.returncode == 2
+
+
+def test_pdata_add_with_field_routes_to_extension_table(base_env):
+    _run(base_env, "pdata", "schema", "add-field", "--project", "testproj",
+         "--group", "key-events", "--field", "sender:TEXT")
+    r = _run(base_env, "pdata", "add", "--project", "testproj", "--group", "key-events",
+              "--content", "an event", "--field", "sender=alice")
+    assert r.returncode == 0, r.stderr
+
+
+def test_pdata_add_rejects_unregistered_field(base_env):
+    r = _run(base_env, "pdata", "add", "--project", "testproj", "--group", "key-events",
+              "--content", "an event", "--field", "nope=x")
+    assert r.returncode == 2
+    assert "unregistered" in r.stderr

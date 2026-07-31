@@ -833,16 +833,27 @@ def _cmd_gc_report(args: argparse.Namespace) -> int:
 # ---------- pdata ----------
 
 
+def _parse_field_assignment(raw: str) -> tuple[str, str]:
+    """Parse "k=v" into (k, v). Raises ValueError on malformed input."""
+    if "=" not in raw:
+        raise ValueError(f"malformed --field assignment (want name=value): {raw!r}")
+    name, value = raw.split("=", 1)
+    if not name:
+        raise ValueError(f"malformed --field assignment (want name=value): {raw!r}")
+    return name, value
+
+
 def _cmd_pdata_add(args: argparse.Namespace) -> int:
     from cc_session_tools.lib.pdata import service
 
     try:
+        fields = dict(_parse_field_assignment(raw) for raw in (args.field or []))
         record = service.add_record(
             project=args.project,
             record_group=args.group,
             content=args.content,
             file_path=args.file,
-            fields={},
+            fields=fields,
             created_at=args.created_at,
         )
     except ValueError as exc:
@@ -1516,6 +1527,11 @@ def _build_parser() -> argparse.ArgumentParser:
         "--created-at", type=int, default=None, metavar="EPOCH",
         help="Unix epoch seconds to backdate created_at/updated_at to (default: now); "
              "see spec §5.",
+    )
+    pdata_add_parser.add_argument(
+        "--field", action="append", default=[], metavar="NAME=VALUE",
+        help="Extension field assignment; may repeat. Field must already be registered via "
+             "'ccst pdata schema add-field'.",
     )
 
     pdata_schema_parser = pdata_sub.add_parser("schema", help="Schema discovery and evolution")

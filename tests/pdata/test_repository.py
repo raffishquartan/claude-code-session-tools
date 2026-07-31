@@ -299,3 +299,44 @@ def test_list_record_groups_excludes_soft_deleted_from_row_count(monkeypatch, tm
         assert groups["notes"]["row_count"] == 0
     finally:
         conn.close()
+
+
+def test_insert_extension_row(monkeypatch, tmp_path):
+    monkeypatch.setenv("CCST_PROJECT_DB_DIR", str(tmp_path))
+    conn = repository.connect("testproj")
+    try:
+        with repository._immediate(conn):
+            repository.add_extension_column(conn, "key-events", "sender", "TEXT", default=None)
+            record_id = repository.insert_base_record(
+                conn, record_group="key-events", content="x", file_path=None,
+                created_at=1, updated_at=1,
+            )
+            repository.insert_extension_row(
+                conn, "key-events", record_id, {"sender": "alice"},
+            )
+        row = conn.execute(
+            'SELECT * FROM "ext_key_events" WHERE record_id=?', (record_id,)
+        ).fetchone()
+        assert row["sender"] == "alice"
+    finally:
+        conn.close()
+
+
+def test_insert_extension_row_with_no_fields_still_creates_row(monkeypatch, tmp_path):
+    monkeypatch.setenv("CCST_PROJECT_DB_DIR", str(tmp_path))
+    conn = repository.connect("testproj")
+    try:
+        with repository._immediate(conn):
+            repository.add_extension_column(conn, "key-events", "sender", "TEXT", default=None)
+            record_id = repository.insert_base_record(
+                conn, record_group="key-events", content="x", file_path=None,
+                created_at=1, updated_at=1,
+            )
+            repository.insert_extension_row(conn, "key-events", record_id, {})
+        row = conn.execute(
+            'SELECT * FROM "ext_key_events" WHERE record_id=?', (record_id,)
+        ).fetchone()
+        assert row is not None
+        assert row["sender"] is None
+    finally:
+        conn.close()

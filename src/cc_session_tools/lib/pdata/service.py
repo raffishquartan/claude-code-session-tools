@@ -73,15 +73,28 @@ def add_record(
     conn = repository.connect(project)
     try:
         with repository._immediate(conn):
+            live_columns = set(repository.list_extension_columns(conn, record_group))
+            unregistered = set(fields) - live_columns
+            if unregistered:
+                raise ValueError(
+                    f"unregistered field(s) for group {record_group!r}: "
+                    f"{sorted(unregistered)} — run 'ccst pdata schema add-field' first"
+                )
             record_id = repository.insert_base_record(
                 conn, record_group=record_group, content=content, file_path=file_path,
                 created_at=ts, updated_at=ts,
             )
+            if repository.extension_table_exists(conn, record_group):
+                repository.insert_extension_row(conn, record_group, record_id, fields)
         row = repository.get_base_record(conn, record_id)
-        assert row is not None  # just inserted in this same connection
+        assert row is not None
+        ext_row = repository.get_extension_row(conn, record_group, record_id)
+        record = _row_to_record(row)
+        if ext_row is not None:
+            record.fields = {k: ext_row[k] for k in ext_row.keys() if k != "record_id"}
     finally:
         conn.close()
-    return _row_to_record(row)
+    return record
 
 
 def schema_add_field(
