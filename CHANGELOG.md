@@ -9,6 +9,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`ccst pdata init` — unified per-project data-store init/migration.** New
+  `--project <name> [--rehearse <path>] [--write]` verb (spec §7): a dry-run pass classifies
+  every file in a project as folder-owned or db-owned (CSV/JSON get an automatic proposal; every
+  other file defaults to folder-owned, pending human review), writes a hand-editable
+  classification proposal, and — once approved and re-run with `--write` — imports the approved
+  entries into that project's `ccst pdata` store, verifies the result, takes a full pre-cutover
+  backup, and archives (never deletes) the original source files. A verification failure aborts
+  before any file is touched, with every row inserted during that run soft-deleted. `--rehearse
+  <path>` runs the whole procedure against a copy with zero effect on the real project or its
+  `.db`. `ccst doctor` gains a check that WARNs about archived-but-undeleted migrated-source
+  files (manual-delete-only, per spec). Ships with the `pm-project-init` skill, which drives the
+  tool and applies the judgement its deliberately conservative classifier defers to a human. This
+  is Plan B of the per-project data-store feature, built directly on Plan A's `ccst pdata`
+  schema/CLI — `ccst pdata verify`, the `pm-pdata-schema-design`/`pm-pdata-conflict-resolution`
+  skills, and any actual per-project migration content are deferred to later work (see
+  `docs/superpowers/plans/2026-07-30-ccst-pdata-init-migration.md`'s Scope section).
+
 - **`ccst pdata` — per-project SQLite data store CLI.** New `records`/`schema` subcommands
   (`add`, `get`, `list`, `query`, `update`, `delete`, `restore`, `schema list`, `schema show`,
   `schema add-field`) operate on one SQLite `.db` per project under
