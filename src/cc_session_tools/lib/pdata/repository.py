@@ -96,7 +96,10 @@ def insert_base_record(
 
 
 def get_base_record(conn: sqlite3.Connection, record_id: int) -> sqlite3.Row | None:
-    return conn.execute("SELECT * FROM records WHERE id=?", (record_id,)).fetchone()
+    row: sqlite3.Row | None = conn.execute(
+        "SELECT * FROM records WHERE id=?", (record_id,)
+    ).fetchone()
+    return row
 
 
 def ensure_extension_table(conn: sqlite3.Connection, record_group: str) -> None:
@@ -388,9 +391,10 @@ def get_extension_row(
     if not extension_table_exists(conn, record_group):
         return None
     table = naming.extension_table_name(record_group)
-    return conn.execute(
+    row: sqlite3.Row | None = conn.execute(
         f'SELECT * FROM "{table}" WHERE record_id=?', (record_id,)
     ).fetchone()
+    return row
 
 
 def upsert_field_description(
