@@ -71,3 +71,187 @@ def test_get_base_record_returns_none_for_missing_id(monkeypatch, tmp_path):
         assert repository.get_base_record(conn, 999) is None
     finally:
         conn.close()
+
+
+def test_ensure_extension_table_creates_table_with_record_id_pk(monkeypatch, tmp_path):
+    monkeypatch.setenv("CCST_PROJECT_DB_DIR", str(tmp_path))
+    conn = repository.connect("testproj")
+    try:
+        with repository._immediate(conn):
+            repository.ensure_extension_table(conn, "key-events")
+        tables = {r["name"] for r in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table'"
+        ).fetchall()}
+        assert "ext_key_events" in tables
+        cols = {r["name"] for r in conn.execute('PRAGMA table_info("ext_key_events")')}
+        assert cols == {"record_id"}
+    finally:
+        conn.close()
+
+
+def test_ensure_extension_table_is_idempotent(monkeypatch, tmp_path):
+    monkeypatch.setenv("CCST_PROJECT_DB_DIR", str(tmp_path))
+    conn = repository.connect("testproj")
+    try:
+        with repository._immediate(conn):
+            repository.ensure_extension_table(conn, "key-events")
+        with repository._immediate(conn):
+            repository.ensure_extension_table(conn, "key-events")  # must not raise
+    finally:
+        conn.close()
+
+
+def test_add_extension_column_creates_typed_column(monkeypatch, tmp_path):
+    monkeypatch.setenv("CCST_PROJECT_DB_DIR", str(tmp_path))
+    conn = repository.connect("testproj")
+    try:
+        with repository._immediate(conn):
+            repository.add_extension_column(conn, "key-events", "sender", "TEXT", default=None)
+        cols = {r["name"]: r["type"] for r in conn.execute('PRAGMA table_info("ext_key_events")')}
+        assert cols["sender"] == "TEXT"
+    finally:
+        conn.close()
+
+
+def test_add_extension_column_with_default(monkeypatch, tmp_path):
+    monkeypatch.setenv("CCST_PROJECT_DB_DIR", str(tmp_path))
+    conn = repository.connect("testproj")
+    try:
+        with repository._immediate(conn):
+            repository.add_extension_column(conn, "key-events", "is_read", "INTEGER", default=0)
+            repository.insert_base_record(
+                conn, record_group="key-events", content="x", file_path=None,
+                created_at=1, updated_at=1,
+            )
+            conn.execute(
+                'INSERT INTO "ext_key_events" (record_id) VALUES (1)'
+            )
+        row = conn.execute('SELECT is_read FROM "ext_key_events" WHERE record_id=1').fetchone()
+        assert row["is_read"] == 0
+    finally:
+        conn.close()
+
+
+def test_add_extension_column_is_idempotent_noop_if_column_exists(monkeypatch, tmp_path):
+    monkeypatch.setenv("CCST_PROJECT_DB_DIR", str(tmp_path))
+    conn = repository.connect("testproj")
+    try:
+        with repository._immediate(conn):
+            repository.add_extension_column(conn, "key-events", "sender", "TEXT", default=None)
+        with repository._immediate(conn):
+            repository.add_extension_column(conn, "key-events", "sender", "TEXT", default=None)
+        cols = [r["name"] for r in conn.execute('PRAGMA table_info("ext_key_events")')]
+        assert cols.count("sender") == 1
+    finally:
+        conn.close()
+
+
+def test_add_extension_column_rejects_bad_type(monkeypatch, tmp_path):
+    monkeypatch.setenv("CCST_PROJECT_DB_DIR", str(tmp_path))
+    import pytest
+    conn = repository.connect("testproj")
+    try:
+        with pytest.raises(ValueError, match="type"):
+            with repository._immediate(conn):
+                repository.add_extension_column(conn, "key-events", "x", "DROP TABLE records", default=None)
+    finally:
+        conn.close()
+
+
+def test_add_extension_column_with_text_default_escapes_quotes(monkeypatch, tmp_path):
+    """Regression test for the DDL-DEFAULT bound-parameter bug: ALTER TABLE ADD COLUMN ...
+    DEFAULT ? is not valid SQLite (confirmed: raises OperationalError), so the default must be
+    embedded as an escaped literal instead."""
+    monkeypatch.setenv("CCST_PROJECT_DB_DIR", str(tmp_path))
+    conn = repository.connect("testproj")
+    try:
+        with repository._immediate(conn):
+            repository.add_extension_column(
+                conn, "key-events", "note", "TEXT", default="it's fine",
+            )
+            record_id = repository.insert_base_record(
+                conn, record_group="key-events", content="x", file_path=None,
+                created_at=1, updated_at=1,
+            )
+            repository.insert_extension_row(conn, "key-events", record_id, {})
+        row = conn.execute(
+            'SELECT note FROM "ext_key_events" WHERE record_id=?', (record_id,)
+        ).fetchone()
+        assert row["note"] == "it's fine"
+    finally:
+        conn.close()
+
+
+def test_add_extension_column_with_invalid_integer_default_raises(monkeypatch, tmp_path):
+    monkeypatch.setenv("CCST_PROJECT_DB_DIR", str(tmp_path))
+    import pytest
+    conn = repository.connect("testproj")
+    try:
+        with pytest.raises(ValueError, match="INTEGER"):
+            with repository._immediate(conn):
+                repository.add_extension_column(
+                    conn, "key-events", "count", "INTEGER", default="not-a-number",
+                )
+    finally:
+        conn.close()
+
+
+def test_ensure_extension_table_backfills_rows_that_predate_it(monkeypatch, tmp_path):
+    """Regression test for the missing-backfill bug: a record_group that already had rows
+    before its first schema add-field call must still get an ext row for each of those rows —
+    otherwise a later `update --field` on one of them silently updates zero rows."""
+    monkeypatch.setenv("CCST_PROJECT_DB_DIR", str(tmp_path))
+    conn = repository.connect("testproj")
+    try:
+        with repository._immediate(conn):
+            pre_existing_id = repository.insert_base_record(
+                conn, record_group="notes", content="already here", file_path=None,
+                created_at=1, updated_at=1,
+            )
+        with repository._immediate(conn):
+            repository.add_extension_column(conn, "notes", "priority", "INTEGER", default=None)
+        ext_row = repository.get_extension_row(conn, "notes", pre_existing_id)
+        assert ext_row is not None
+        assert ext_row["priority"] is None
+
+        # And update_extension_row (Task 15) must be able to find that backfilled row —
+        # verified here directly against the raw UPDATE, since update_extension_row itself
+        # isn't defined until Task 15.
+        cur = conn.execute(
+            'UPDATE "ext_notes" SET priority=? WHERE record_id=?', (5, pre_existing_id),
+        )
+        assert cur.rowcount == 1
+    finally:
+        conn.close()
+
+
+def test_upsert_field_description(monkeypatch, tmp_path):
+    monkeypatch.setenv("CCST_PROJECT_DB_DIR", str(tmp_path))
+    conn = repository.connect("testproj")
+    try:
+        with repository._immediate(conn):
+            repository.upsert_field_description(
+                conn, record_group="key-events", field_name="sender",
+                description="who sent it", added_at=1000,
+            )
+        row = conn.execute(
+            "SELECT * FROM record_group_fields WHERE record_group=? AND field_name=?",
+            ("key-events", "sender"),
+        ).fetchone()
+        assert row["description"] == "who sent it"
+        assert row["added_at"] == 1000
+
+        # Re-run with a new description — must overwrite, not duplicate (idempotent upsert).
+        with repository._immediate(conn):
+            repository.upsert_field_description(
+                conn, record_group="key-events", field_name="sender",
+                description="updated", added_at=1000,
+            )
+        rows = conn.execute(
+            "SELECT * FROM record_group_fields WHERE record_group=? AND field_name=?",
+            ("key-events", "sender"),
+        ).fetchall()
+        assert len(rows) == 1
+        assert rows[0]["description"] == "updated"
+    finally:
+        conn.close()
