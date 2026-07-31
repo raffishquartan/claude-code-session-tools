@@ -102,3 +102,29 @@ def load(path: Path) -> Manifest:
         return Manifest(project=data["project"], entries=entries)
     except (KeyError, TypeError, AttributeError) as exc:
         raise ValueError(f"malformed manifest at {path}: {exc}") from exc
+
+
+def load_or_create(
+    project_root: Path, project: str, proposal_path: Path,
+    *, existing_record_groups: frozenset[str] = frozenset(),
+) -> Manifest:
+    """Never overwrites an existing proposal file (spec §7.1 step 2 — a human's
+    overrides must survive a re-run of the dry-run pass). First call for a project
+    creates it fresh from classify.walk_and_classify(); every later call returns the
+    file exactly as it is on disk. Delete the file to force a fresh classification
+    pass. `existing_record_groups` — the project's already-live record_groups —
+    is threaded through to the classifier so a fresh pass (first-ever run against
+    a project with prior pdata activity, or a forced reclassification) never
+    silently proposes merging a new file into an already-populated group; see
+    classify._disambiguate_record_groups."""
+    from cc_session_tools.lib.pdata import classify  # local import: breaks the
+    # classify<->manifest cycle (classify.py imports these dataclasses at module level)
+
+    if proposal_path.exists():
+        return load(proposal_path)
+    entries = classify.walk_and_classify(
+        project_root, existing_record_groups=existing_record_groups
+    )
+    m = Manifest(project=project, entries=entries)
+    save(m, proposal_path)
+    return m

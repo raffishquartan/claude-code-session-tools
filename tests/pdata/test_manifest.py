@@ -99,3 +99,47 @@ def test_load_raises_value_error_on_non_dict_entry(tmp_path):
     path.write_text(json.dumps({"project": "demo", "entries": ["not-an-object"]}))
     with pytest.raises(ValueError, match="malformed manifest"):
         manifest.load(path)
+
+
+def test_load_or_create_writes_fresh_proposal_when_missing(tmp_path):
+    project_root = tmp_path / "demo"
+    project_root.mkdir()
+    (project_root / "CLAUDE.md").write_text("# demo\n")
+    proposal_path = project_root / "proposal.json"
+
+    m = manifest.load_or_create(project_root, "demo", proposal_path)
+    assert proposal_path.exists()
+    assert [e.path for e in m.entries] == ["CLAUDE.md"]
+
+
+def test_load_or_create_never_overwrites_existing_proposal(tmp_path):
+    project_root = tmp_path / "demo"
+    project_root.mkdir()
+    (project_root / "CLAUDE.md").write_text("# demo\n")
+    proposal_path = project_root / "proposal.json"
+
+    manifest.load_or_create(project_root, "demo", proposal_path)
+    # Hand-edit exactly as a human override would (spec §7.1 step 2).
+    edited = manifest.load(proposal_path)
+    edited.entries[0].reviewed = True
+    manifest.save(edited, proposal_path)
+
+    # A new file appears on disk between the two calls — must NOT be picked up,
+    # and the hand-made edit must survive untouched.
+    (project_root / "new-file.md").write_text("later\n")
+    reloaded = manifest.load_or_create(project_root, "demo", proposal_path)
+    assert [e.path for e in reloaded.entries] == ["CLAUDE.md"]
+    assert reloaded.entries[0].reviewed is True
+
+
+def test_load_or_create_passes_existing_record_groups_to_classifier(tmp_path):
+    project_root = tmp_path / "demo"
+    project_root.mkdir()
+    (project_root / "notes.csv").write_text("x\n1\n")
+    proposal_path = project_root / "proposal.json"
+
+    m = manifest.load_or_create(
+        project_root, "demo", proposal_path,
+        existing_record_groups=frozenset({"notes"}),
+    )
+    assert m.entries[0].record_group != "notes"
