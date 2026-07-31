@@ -30,6 +30,8 @@ Current subcommands:
   gc report                      Report orphaned per-session-uuid entries across the
                                  scheduler, messaging, and session-env stores (never
                                  deletes anything).
+  pdata add                      Insert a new record into a project's SQLite data store (see
+                                 ccst pdata --help for the full records/schema subcommand set).
   migrate ccsched                Migrate ccsched flat-file stores into ccsched.db
                                  (verify + tar-backup old files before removal).
   migrate ccmsg                  Migrate the flat-file message store into ccmsg.db
@@ -828,6 +830,28 @@ def _cmd_gc_report(args: argparse.Namespace) -> int:
     return 0
 
 
+# ---------- pdata ----------
+
+
+def _cmd_pdata_add(args: argparse.Namespace) -> int:
+    from cc_session_tools.lib.pdata import service
+
+    try:
+        record = service.add_record(
+            project=args.project,
+            record_group=args.group,
+            content=args.content,
+            file_path=args.file,
+            fields={},
+            created_at=args.created_at,
+        )
+    except ValueError as exc:
+        print(f"ccst pdata: {exc}", file=sys.stderr)
+        return 2
+    print(record.id)
+    return 0
+
+
 # ---------- hooks run ----------
 
 
@@ -1411,6 +1435,23 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Directory holding sessions.db (default: from CCST_SESSIONS_DIR or data_home())",
     )
 
+    # ---- pdata ----
+    pdata_parser = sub.add_parser("pdata", help="Per-project SQLite data store commands")
+    pdata_sub = pdata_parser.add_subparsers(dest="verb", metavar="<verb>")
+    pdata_sub.required = True
+
+    pdata_add_parser = pdata_sub.add_parser("add", help="Insert a new record")
+    pdata_add_parser.add_argument("--project", required=True, metavar="NAME")
+    pdata_add_parser.add_argument("--group", required=True, metavar="RECORD_GROUP")
+    pdata_add_parser.add_argument("--content", required=True)
+    pdata_add_parser.add_argument("--file", default=None, metavar="PATH",
+                                   help="Relative sibling/source file path")
+    pdata_add_parser.add_argument(
+        "--created-at", type=int, default=None, metavar="EPOCH",
+        help="Unix epoch seconds to backdate created_at/updated_at to (default: now); "
+             "see spec §5.",
+    )
+
     # ---- sessions ----
     sessions_parser = sub.add_parser("sessions", help="sessions.db management commands")
     sessions_sub = sessions_parser.add_subparsers(dest="verb", metavar="<verb>")
@@ -1561,6 +1602,10 @@ def main() -> None:
     if args.noun == "gc":
         if args.verb == "report":
             sys.exit(_cmd_gc_report(args))
+
+    if args.noun == "pdata":
+        if args.verb == "add":
+            sys.exit(_cmd_pdata_add(args))
 
     if args.noun == "sessions":
         if args.verb == "migrate":
