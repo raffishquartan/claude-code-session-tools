@@ -32,6 +32,12 @@ Current subcommands:
                                  deletes anything).
   pdata add                      Insert a new record into a project's SQLite data store (see
                                  ccst pdata --help for the full records/schema subcommand set).
+  pdata reconcile-session-output Backfill the session-output index from cc-sessions/*/out/ on
+                                 disk for one project (--project NAME) or every discovered
+                                 project (--all-projects). Provisioned as a 7-day ccsched job by
+                                 `ccst ccsched-jobs install` — see ccst ccsched-jobs --help.
+                                 --schema-only bootstraps the schema/index for --project without
+                                 scanning or registering files.
   migrate ccsched                Migrate ccsched flat-file stores into ccsched.db
                                  (verify + tar-backup old files before removal).
   migrate ccmsg                  Migrate the flat-file message store into ccmsg.db
@@ -44,9 +50,12 @@ Current subcommands:
   claude-md install              Add/update the inter-session-messaging block in
                                  ~/.claude/CLAUDE.md.
   claude-md uninstall            Remove the messaging block from CLAUDE.md.
+  ccsched-jobs install           Register CCST's bundled ccsched jobs (see
+                                 lib/scheduler/bundled_jobs.py) if not already present.
+                                 Dry run by default; pass --apply to register.
   install-everything             Run all install steps (skills, hooks, shell,
-                                 claude-md) then health-check. Dry run by default;
-                                 pass --apply to write changes.
+                                 claude-md, scheduled jobs) then health-check.
+                                 Dry run by default; pass --apply to write changes.
 """
 from __future__ import annotations
 
@@ -1077,6 +1086,55 @@ def _cmd_pdata_init(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_pdata_reconcile_session_output(args: argparse.Namespace) -> int:
+    from cc_session_tools.lib import roots
+    from cc_session_tools.lib.pdata import session_output
+
+    if args.schema_only and args.all_projects:
+        print(
+            "ccst pdata: --schema-only requires --project (not --all-projects)",
+            file=sys.stderr,
+        )
+        return 2
+
+    try:
+        if args.all_projects:
+            targets = session_output.discover_projects_with_sessions()
+        else:
+            root = session_output.find_project_root(args.project)
+            if root is None:
+                print(
+                    f"ccst pdata: no project {args.project!r} found with a cc-sessions/ "
+                    f"directory under $CLAUDE_SESSION_TOOLS_REPO_ROOT or "
+                    f"$CLAUDE_SESSION_TOOLS_PROJ_ROOT",
+                    file=sys.stderr,
+                )
+                return 1
+            targets = [(args.project, root)]
+    except roots.RootsConfigError as exc:
+        print(f"ccst pdata: {exc}", file=sys.stderr)
+        return 1
+
+    if args.schema_only:
+        # Bootstraps the session_tag column and the file_path partial index without scanning
+        # cc-sessions/*/out/ — the fast path the pm-update-central-files skill's own AUTO item
+        # calls before its per-file registration loop, so that loop's dedupe query runs against
+        # the index instead of an unindexed scan (spec Goal G5). A full (non-schema-only)
+        # reconcile also ensures the schema as a side effect (see reconcile_project), so this
+        # flag only matters when the caller wants the schema bootstrapped WITHOUT also
+        # backfilling every unregistered file.
+        (name, _root), = targets
+        session_output.ensure_session_output_schema(name)
+        print(f"{name}: schema ensured")
+        return 0
+
+    for name, root in targets:
+        result = session_output.reconcile_project(name, root, dry_run=args.dry_run)
+        suffix = " (dry-run)" if args.dry_run else ""
+        print(f"{name}: scanned {result.scanned}, registered {result.registered}{suffix}")
+    return 0
+
+
 # ---------- hooks run ----------
 
 
@@ -1238,16 +1296,43 @@ def _cmd_migrate_all(args: argparse.Namespace) -> int:
     return overall_rc
 
 
+# ---------- ccsched-jobs install ----------
+
+
+def _cmd_ccsched_jobs_install(args: argparse.Namespace) -> int:
+    """Register CCST's bundled ccsched jobs (lib/scheduler/bundled_jobs.py) if not already
+    present. Idempotent and non-destructive: an existing job id is left completely untouched,
+    even if its cadence/timeout has since been hand-edited — a human may have deliberately
+    edited it via `ccsched edit`, and silently stomping that on every re-run would be a
+    surprising footgun. "Already there" is decided by an explicit membership check against
+    registry.load_registry()'s existing ids before add_job is ever called, not by attempting the
+    add and catching ccsched add's own duplicate-id RegistryError (this repo's "no exceptions
+    for control flow" coding standard rules that out)."""
+    from cc_session_tools.lib.scheduler import bundled_jobs, registry
+    from cc_session_tools.lib.scheduler.jobspec import validate_job_fields
+
+    existing_ids = {spec.job_id for spec in registry.load_registry()}
+    for job in bundled_jobs.BUNDLED_CCSCHED_JOBS:
+        if job.job_id in existing_ids:
+            print(f"  already registered: {job.job_id}")
+            continue
+        if not args.apply:
+            print(f"  would register: {job.job_id}")
+            continue
+        spec = validate_job_fields(
+            job_id=job.job_id, cadence=job.cadence, coalesce=job.coalesce,
+            command=list(job.command), surface=job.surface, enabled=True,
+            catchup_window=job.catchup_window, timeout=job.timeout,
+        )
+        registry.add_job(spec)
+        print(f"  registered: {job.job_id}")
+
+    if not args.apply:
+        print("\nDry run — re-run with --apply to register any missing job(s)")
+    return 0
+
+
 # ---------- install-everything ----------
-
-
-_INSTALL_STEPS: list[tuple[str, str]] = [
-    ("1/5  Skills",          "skills"),
-    ("2/5  Hooks",           "hooks"),
-    ("3/5  Shell helpers",   "shell"),
-    ("4/5  Global CLAUDE.md", "claude-md"),
-    ("5/5  Health check",    "doctor"),
-]
 
 
 def _cmd_install_everything(args: argparse.Namespace) -> int:
@@ -1257,12 +1342,12 @@ def _cmd_install_everything(args: argparse.Namespace) -> int:
 
     steps: list[tuple[str, str, object]] = [
         (
-            "1/5  Skills",
+            "Skills",
             "skills",
             argparse.Namespace(source=None, target=None, apply=apply, force=False),
         ),
         (
-            "2/5  Hooks",
+            "Hooks",
             "hooks",
             argparse.Namespace(
                 source=None,
@@ -1272,14 +1357,19 @@ def _cmd_install_everything(args: argparse.Namespace) -> int:
             ),
         ),
         (
-            "3/5  Shell helpers",
+            "Shell helpers",
             "shell",
             argparse.Namespace(apply=apply, rc_file=None),
         ),
         (
-            "4/5  Global CLAUDE.md",
+            "Global CLAUDE.md",
             "claude-md",
             argparse.Namespace(target=None, apply=apply),
+        ),
+        (
+            "Scheduled jobs",
+            "ccsched-jobs",
+            argparse.Namespace(apply=apply),
         ),
     ]
 
@@ -1288,16 +1378,19 @@ def _cmd_install_everything(args: argparse.Namespace) -> int:
         "hooks": _cmd_hooks_install,
         "shell": _cmd_shell_install,
         "claude-md": _cmd_claude_md_install,
+        "ccsched-jobs": _cmd_ccsched_jobs_install,
     }
 
+    # +1 accounts for the trailing health check below, which isn't itself a `steps` entry.
+    total_steps = len(steps) + 1
     overall_rc = 0
-    for label, key, step_args in steps:
-        print(f"\n=== {label} ===")
+    for i, (label, key, step_args) in enumerate(steps, start=1):
+        print(f"\n=== {i}/{total_steps}  {label} ===")
         rc = dispatch[key](step_args)  # type: ignore[operator]
         if rc != 0:
             overall_rc = rc
 
-    print("\n=== 5/5  Health check ===")
+    print(f"\n=== {total_steps}/{total_steps}  Health check ===")
     _cmd_doctor(
         argparse.Namespace(
             settings=None,
@@ -1783,6 +1876,23 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Perform the write/verify/backup/cutover phase (default: dry-run only)",
     )
 
+    pdata_reconcile_parser = pdata_sub.add_parser(
+        "reconcile-session-output",
+        help="Backfill the session-output index from cc-sessions/*/out/ on disk (idempotent)",
+    )
+    pdata_reconcile_target = pdata_reconcile_parser.add_mutually_exclusive_group(required=True)
+    pdata_reconcile_target.add_argument("--project", metavar="NAME")
+    pdata_reconcile_target.add_argument("--all-projects", action="store_true")
+    pdata_reconcile_parser.add_argument(
+        "--dry-run", action="store_true",
+        help="Report what would be registered without writing anything",
+    )
+    pdata_reconcile_parser.add_argument(
+        "--schema-only", action="store_true",
+        help="Bootstrap the session-output schema/index for --project and exit "
+             "(no file scan or registration)",
+    )
+
     # ---- sessions ----
     sessions_parser = sub.add_parser("sessions", help="sessions.db management commands")
     sessions_sub = sessions_parser.add_subparsers(dest="verb", metavar="<verb>")
@@ -1858,6 +1968,19 @@ def _build_parser() -> argparse.ArgumentParser:
              "Claude Code session.")
     m_all.add_argument("--dry-run", action="store_true")
 
+    # ---- ccsched-jobs ----
+    ccsched_jobs_parser = sub.add_parser(
+        "ccsched-jobs", help="Provision CCST-bundled ccsched jobs",
+    )
+    ccsched_jobs_sub = ccsched_jobs_parser.add_subparsers(dest="verb", metavar="<verb>")
+    ccsched_jobs_sub.required = True
+    ccsched_jobs_install_parser = ccsched_jobs_sub.add_parser(
+        "install", help="Register bundled jobs not already present (dry run by default)",
+    )
+    ccsched_jobs_install_parser.add_argument(
+        "--apply", action="store_true", help="Register jobs (default: dry run)",
+    )
+
     # ---- claude-md ----
     cmd_parser = sub.add_parser("claude-md", help="Manage the global CLAUDE.md messaging block")
     cmd_sub = cmd_parser.add_subparsers(dest="verb", metavar="<verb>")
@@ -1875,8 +1998,8 @@ def _build_parser() -> argparse.ArgumentParser:
     ie_parser = sub.add_parser(
         "install-everything",
         help=(
-            "Run all install steps (skills, hooks, shell, claude-md) then health-check. "
-            "Dry run by default; pass --apply to write changes."
+            "Run all install steps (skills, hooks, shell, claude-md, scheduled jobs) then "
+            "health-check. Dry run by default; pass --apply to write changes."
         ),
     )
     ie_parser.add_argument(
@@ -1958,6 +2081,8 @@ def main() -> None:
             sys.exit(_cmd_pdata_restore(args))
         if args.verb == "init":
             sys.exit(_cmd_pdata_init(args))
+        if args.verb == "reconcile-session-output":
+            sys.exit(_cmd_pdata_reconcile_session_output(args))
 
     if args.noun == "sessions":
         if args.verb == "migrate":
@@ -1974,6 +2099,10 @@ def main() -> None:
             sys.exit(_cmd_migrate_telemetry(args))
         if args.verb == "all":
             sys.exit(_cmd_migrate_all(args))
+
+    if args.noun == "ccsched-jobs":
+        if args.verb == "install":
+            sys.exit(_cmd_ccsched_jobs_install(args))
 
     if args.noun == "claude-md":
         if args.verb == "install":

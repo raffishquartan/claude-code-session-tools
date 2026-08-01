@@ -1,6 +1,7 @@
 """Tests for `ccst install-everything` subcommand."""
 from __future__ import annotations
 
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -58,11 +59,12 @@ def test_dry_run_is_default(tmp_path: Path) -> None:
     # Dry run banner must appear
     assert "dry run" in result.stdout.lower()
     # Section headers must be present
-    assert "1/5" in result.stdout
-    assert "2/5" in result.stdout
-    assert "3/5" in result.stdout
-    assert "4/5" in result.stdout
-    assert "5/5" in result.stdout
+    assert "1/6" in result.stdout
+    assert "2/6" in result.stdout
+    assert "3/6" in result.stdout
+    assert "4/6" in result.stdout
+    assert "5/6" in result.stdout
+    assert "6/6" in result.stdout
 
 
 def test_dry_run_does_not_write(tmp_path: Path) -> None:
@@ -103,6 +105,7 @@ def test_section_headers_present(tmp_path: Path) -> None:
     assert "Hooks" in out
     assert "Shell helpers" in out
     assert "CLAUDE.md" in out or "Global CLAUDE.md" in out
+    assert "Scheduled jobs" in out
     assert "Health check" in out
 
 
@@ -113,4 +116,28 @@ def test_no_pypi_flag_accepted() -> None:
     result = _run("install-everything", "--no-pypi")
     assert result.returncode == 0
     # With --no-pypi the PyPI check is skipped; command still completes
-    assert "5/5" in result.stdout
+    assert "6/6" in result.stdout
+
+
+# ---------- bundled ccsched jobs ----------
+
+
+def test_install_everything_registers_bundled_ccsched_jobs(tmp_path: Path) -> None:
+    env = os.environ.copy()
+    env["CCST_DATA_HOME"] = str(tmp_path / "data-home")
+
+    result = subprocess.run(
+        [
+            sys.executable, "-m", "cc_session_tools.cli.ccst", "install-everything",
+            "--apply", "--no-pypi",
+        ],
+        capture_output=True, text=True, cwd=str(Path(__file__).parent.parent), env=env,
+    )
+
+    # Not asserting overall returncode == 0 — matches test_apply_flag_accepted's own convention:
+    # the real ~/.claude/skills, ~/.claude/settings.json, shell rc, and global CLAUDE.md steps
+    # run against whatever this machine's actual state is and may legitimately warn/fail outside
+    # a fully-provisioned dev environment. Only the new step's own behaviour is under test here.
+    assert "unrecognized arguments" not in result.stderr
+    assert "Scheduled jobs" in result.stdout
+    assert "registered: pm-session-output-reconcile" in result.stdout
