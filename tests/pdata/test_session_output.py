@@ -158,3 +158,63 @@ def test_ensure_session_output_schema_creates_file_path_index(monkeypatch, tmp_p
         assert len(rows) == 1
     finally:
         conn.close()
+
+
+def test_get_watermark_defaults_to_zero_for_new_project(monkeypatch, tmp_path):
+    monkeypatch.setenv("CCST_PROJECT_DB_DIR", str(tmp_path))
+    assert session_output.get_watermark("testproj") == 0
+
+
+def test_set_watermark_then_get_watermark_round_trips(monkeypatch, tmp_path):
+    monkeypatch.setenv("CCST_PROJECT_DB_DIR", str(tmp_path))
+    session_output.set_watermark("testproj", 1234)
+    assert session_output.get_watermark("testproj") == 1234
+
+    session_output.set_watermark("testproj", 5678)  # update path, not just create
+    assert session_output.get_watermark("testproj") == 5678
+
+
+def test_set_watermark_retries_once_on_version_conflict(monkeypatch, tmp_path):
+    monkeypatch.setenv("CCST_PROJECT_DB_DIR", str(tmp_path))
+    from cc_session_tools.lib.pdata import service
+
+    session_output.set_watermark("testproj", 100)  # creates the row
+
+    real_update_record = service.update_record
+    calls = {"n": 0}
+
+    def flaky_update_record(**kwargs):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            record = session_output._get_watermark_record("testproj")
+            raise service.VersionConflictError(
+                current={"id": record.id, "version": record.version + 1},
+                attempted=kwargs,
+            )
+        return real_update_record(**kwargs)
+
+    monkeypatch.setattr(service, "update_record", flaky_update_record)
+
+    session_output.set_watermark("testproj", 200)  # must not raise
+
+    assert calls["n"] == 2
+    assert session_output.get_watermark("testproj") == 200
+
+
+def test_set_watermark_propagates_conflict_that_persists_after_retry(monkeypatch, tmp_path):
+    monkeypatch.setenv("CCST_PROJECT_DB_DIR", str(tmp_path))
+    from cc_session_tools.lib.pdata import service
+
+    session_output.set_watermark("testproj", 100)
+
+    def always_conflicts(**kwargs):
+        record = session_output._get_watermark_record("testproj")
+        raise service.VersionConflictError(
+            current={"id": record.id, "version": record.version + 1},
+            attempted=kwargs,
+        )
+
+    monkeypatch.setattr(service, "update_record", always_conflicts)
+
+    with pytest.raises(service.VersionConflictError):
+        session_output.set_watermark("testproj", 200)

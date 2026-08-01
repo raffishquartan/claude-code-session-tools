@@ -130,3 +130,59 @@ def ensure_session_output_schema(project: str) -> None:
         conn.commit()
     finally:
         conn.close()
+
+
+def _get_watermark_record(project: str) -> Record | None:
+    from cc_session_tools.lib.pdata import service, store
+
+    if not store.db_path(project).exists():
+        # A project with no .db file yet has no watermark row, by definition. Short-circuits
+        # before repository.connect() (called inside service.list_records), which always
+        # creates the .db file and its base schema as a side effect of connecting — even for a
+        # read-only lookup. Without this check, get_watermark() would create the project's .db
+        # file on every call, including reconcile_project's dry_run=True branch, contradicting
+        # its docstring's claim that dry-run "writes nothing". set_watermark()'s own create path
+        # (record is None) still creates the file as intended, via its own service.add_record
+        # call further down — this short-circuit only skips the unnecessary read-only connect.
+        return None
+
+    records = service.list_records(project=project, record_group=WATERMARK_GROUP, limit=1)
+    return records[0] if records else None
+
+
+def get_watermark(project: str) -> int:
+    """The epoch-seconds cursor of the last file successfully reconciled for this project, or 0
+    if reconciliation has never run (a full backfill on first run, same "safe against an empty
+    baseline" stance as the rest of this feature)."""
+    record = _get_watermark_record(project)
+    return int(record.content) if record is not None else 0
+
+
+def set_watermark(project: str, epoch: int) -> None:
+    """Create-or-update the single session-output-watermark row for this project (spec §4.3
+    singleton-state pattern). On a version conflict (a concurrent writer, e.g. a manual
+    `ccst pdata reconcile-session-output --project <name>` run landing at the same moment as the
+    scheduled job's own `--all-projects` sweep; the pm-update-central-files skill's AUTO item
+    never calls this function at all), refetch and retry exactly once; a conflict that persists
+    after the retry propagates rather than being silently discarded."""
+    from cc_session_tools.lib.pdata import service
+
+    record = _get_watermark_record(project)
+    if record is None:
+        service.add_record(
+            project=project, record_group=WATERMARK_GROUP, content=str(epoch),
+            file_path=None, fields={}, created_at=epoch,
+        )
+        return
+    try:
+        service.update_record(
+            project=project, record_id=record.id, expected_version=record.version,
+            content=str(epoch), file_path=None, fields={}, updated_at=epoch,
+        )
+    except service.VersionConflictError:
+        record = _get_watermark_record(project)
+        assert record is not None
+        service.update_record(
+            project=project, record_id=record.id, expected_version=record.version,
+            content=str(epoch), file_path=None, fields={}, updated_at=epoch,
+        )
