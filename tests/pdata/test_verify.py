@@ -221,3 +221,78 @@ def test_row_count_parity_not_tripped_by_a_legitimate_delete(monkeypatch, tmp_pa
         assert verify.check_row_count_parity(conn, "demo") == []
     finally:
         conn.close()
+
+
+def test_file_path_resolution_ok_when_file_exists(monkeypatch, tmp_path):
+    monkeypatch.setenv("CCST_PROJECT_DB_DIR", str(tmp_path / "dbs"))
+    monkeypatch.setenv(init_paths.PROJECTS_ROOT_ENV, str(tmp_path / "projects"))
+    project_root = tmp_path / "projects" / "demo"
+    project_root.mkdir(parents=True)
+    (project_root / "a.pdf").write_bytes(b"%PDF-1.4")
+
+    service.add_record(project="demo", record_group="filings", content="x",
+                       file_path="a.pdf", fields={}, created_at=1)
+
+    conn = repository.connect("demo")
+    try:
+        assert verify.check_file_path_resolution(conn, "demo", since=None) == []
+    finally:
+        conn.close()
+
+
+def test_file_path_resolution_fails_when_file_missing(monkeypatch, tmp_path):
+    monkeypatch.setenv("CCST_PROJECT_DB_DIR", str(tmp_path / "dbs"))
+    monkeypatch.setenv(init_paths.PROJECTS_ROOT_ENV, str(tmp_path / "projects"))
+    project_root = tmp_path / "projects" / "demo"
+    project_root.mkdir(parents=True)
+    # a.pdf deliberately not created
+
+    service.add_record(project="demo", record_group="filings", content="x",
+                       file_path="a.pdf", fields={}, created_at=1)
+
+    conn = repository.connect("demo")
+    try:
+        issues = verify.check_file_path_resolution(conn, "demo", since=None)
+        assert len(issues) == 1
+        assert issues[0].severity == "FAIL"
+        assert issues[0].check == "file-path-resolution"
+    finally:
+        conn.close()
+
+
+def test_file_path_resolution_ignores_rows_with_no_file_path(monkeypatch, tmp_path):
+    monkeypatch.setenv("CCST_PROJECT_DB_DIR", str(tmp_path / "dbs"))
+    monkeypatch.setenv(init_paths.PROJECTS_ROOT_ENV, str(tmp_path / "projects"))
+    service.add_record(project="demo", record_group="ccst-ideas", content="an idea",
+                       file_path=None, fields={}, created_at=1)
+    conn = repository.connect("demo")
+    try:
+        assert verify.check_file_path_resolution(conn, "demo", since=None) == []
+    finally:
+        conn.close()
+
+
+def test_file_path_resolution_honors_since_cursor(monkeypatch, tmp_path):
+    """A row updated before `since` is skipped even if its file is missing —
+    incremental scope (plan Decision 5); --full passes since=None to check
+    every row regardless of age."""
+    monkeypatch.setenv("CCST_PROJECT_DB_DIR", str(tmp_path / "dbs"))
+    monkeypatch.setenv(init_paths.PROJECTS_ROOT_ENV, str(tmp_path / "projects"))
+    project_root = tmp_path / "projects" / "demo"
+    project_root.mkdir(parents=True)
+
+    service.add_record(project="demo", record_group="filings", content="old",
+                       file_path="missing-old.pdf", fields={}, created_at=100)
+    service.add_record(project="demo", record_group="filings", content="new",
+                       file_path="missing-new.pdf", fields={}, created_at=200)
+
+    conn = repository.connect("demo")
+    try:
+        issues = verify.check_file_path_resolution(conn, "demo", since=150)
+        assert len(issues) == 1
+        assert "missing-new.pdf" in issues[0].message
+
+        issues_full = verify.check_file_path_resolution(conn, "demo", since=None)
+        assert len(issues_full) == 2
+    finally:
+        conn.close()

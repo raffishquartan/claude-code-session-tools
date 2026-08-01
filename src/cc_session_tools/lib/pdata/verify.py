@@ -143,3 +143,41 @@ def check_row_count_parity(conn: sqlite3.Connection, project: str) -> list[Verif
                 ),
             ))
     return issues
+
+
+def check_file_path_resolution(
+    conn: sqlite3.Connection, project: str, *, since: int | None,
+) -> list[VerifyIssue]:
+    """Every active record with a non-null file_path must resolve under the project root (spec
+    §4.2's own resolution rule). Read-only: uses init_paths.default_projects_root() directly
+    rather than init_paths.resolve_project_root(), which would mkdir a missing project directory
+    as a side effect — inappropriate for a check that must never write. since=None (--full) checks
+    every active row; otherwise only rows updated after since. Lists record groups via
+    repository.list_record_groups(conn) directly against the connection this function was already
+    handed, rather than service.schema_list(project=project) — the latter opens and closes a
+    brand-new connection to the same project .db (its own WAL-pragma/busy-timeout setup included)
+    purely to read the one list this function's own `conn` argument can already answer, an
+    avoidable extra connection-open per run per project (spec G5: cost must never scale with
+    unnecessary work)."""
+    project_root = init_paths.default_projects_root() / project
+    issues: list[VerifyIssue] = []
+    for group in repository.list_record_groups(conn):
+        record_group = str(group["record_group"])
+        rows = repository.list_base_records(
+            conn, record_group=record_group, since=since, until=None,
+            limit=None, include_deleted=False,
+        )
+        for row in rows:
+            file_path = row["file_path"]
+            if file_path is None:
+                continue
+            if not (project_root / file_path).is_file():
+                issues.append(VerifyIssue(
+                    check="file-path-resolution", severity="FAIL",
+                    record_group=record_group, record_id=row["id"],
+                    message=(
+                        f"record {row['id']}: file_path {file_path!r} does not "
+                        f"resolve under {project_root}"
+                    ),
+                ))
+    return issues
