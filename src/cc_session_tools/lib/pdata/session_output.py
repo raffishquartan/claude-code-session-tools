@@ -48,3 +48,47 @@ def find_project_root(project: str) -> Path | None:
         if name == project:
             return root
     return None
+
+
+def find_new_out_files(project_root: Path, *, since_mtime: int) -> list[tuple[Path, int]]:
+    """Every regular file under <project_root>/cc-sessions/*/out/ (any depth) whose mtime is at
+    or after since_mtime, as (absolute_path, mtime_epoch_seconds) pairs. Returns [] if
+    project_root has no cc-sessions/ directory at all (a genuinely new/empty project — same
+    "safe against an empty folder" stance as the rest of this feature).
+
+    Deliberately >= rather than a strict >: mtime is truncated to whole seconds (see the `int()`
+    below), so two files written within the same wall-clock second can share an mtime. A strict >
+    against a watermark that already equals that second would permanently exclude whichever of
+    those files gets scanned after the watermark has already advanced to it — a silent,
+    unrecoverable gap in the safety-net job's own coverage. >= re-admits already-registered files
+    as *candidates* every time their mtime matches the watermark, but `_is_already_registered`'s
+    file_path dedupe check makes re-including them a no-op — a little repeated scanning work,
+    never a repeated write, and never a missed file."""
+    cc_sessions = project_root / "cc-sessions"
+    if not cc_sessions.is_dir():
+        return []
+    results: list[tuple[Path, int]] = []
+    for session_dir in sorted(cc_sessions.iterdir()):
+        out_dir = session_dir / "out"
+        if not out_dir.is_dir():
+            continue
+        for file in sorted(out_dir.rglob("*")):
+            if not file.is_file():
+                continue
+            mtime = int(file.stat().st_mtime)
+            if mtime >= since_mtime:
+                results.append((file, mtime))
+    return results
+
+
+def session_tag_from_relpath(rel_path: str) -> str:
+    """Extract the <session_tag> from a 'cc-sessions/<session_tag>/out/...' relative path (the
+    shape every path passed here is guaranteed to have, since it always comes from
+    find_new_out_files's own walk — this raises loudly rather than guessing if that ever stops
+    being true, per this repo's 'throw loudly on an impossible state' coding standard)."""
+    parts = Path(rel_path).parts
+    if len(parts) < 4 or parts[0] != "cc-sessions" or parts[2] != "out":
+        raise ValueError(
+            f"expected a 'cc-sessions/<tag>/out/...' path, got {rel_path!r}"
+        )
+    return parts[1]
