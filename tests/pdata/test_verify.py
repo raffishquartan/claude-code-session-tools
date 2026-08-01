@@ -296,3 +296,103 @@ def test_file_path_resolution_honors_since_cursor(monkeypatch, tmp_path):
         assert len(issues_full) == 2
     finally:
         conn.close()
+
+
+def test_double_update_check_no_issue_on_first_sighting(monkeypatch, tmp_path):
+    """A row verify has never seen before has nothing to compare against —
+    it is recorded as a fresh watermark, not flagged."""
+    monkeypatch.setenv("CCST_PROJECT_DB_DIR", str(tmp_path))
+    record = service.add_record(project="demo", record_group="key-events", content="x",
+                                file_path=None, fields={}, created_at=1000)
+    conn = repository.connect("demo")
+    try:
+        verify.ensure_verify_tables(conn)
+        with repository._immediate(conn):
+            issues = verify.check_suspicious_double_updates(conn, "demo", since=None)
+        assert issues == []
+        watermark = conn.execute(
+            "SELECT * FROM pdata_verify_watermark WHERE record_id=?", (record.id,),
+        ).fetchone()
+        assert watermark["last_seen_version"] == 1
+    finally:
+        conn.close()
+
+
+def test_double_update_check_flags_two_updates_within_window(monkeypatch, tmp_path):
+    monkeypatch.setenv("CCST_PROJECT_DB_DIR", str(tmp_path))
+    record = service.add_record(project="demo", record_group="key-events", content="x",
+                                file_path=None, fields={}, created_at=1000)
+    conn = repository.connect("demo")
+    try:
+        verify.ensure_verify_tables(conn)
+        with repository._immediate(conn):
+            verify.check_suspicious_double_updates(conn, "demo", since=None)  # first sighting
+
+        service.update_record(project="demo", record_id=record.id, expected_version=1,
+                              content="v2", file_path=None, fields={}, updated_at=1010)
+        service.update_record(project="demo", record_id=record.id, expected_version=2,
+                              content="v3", file_path=None, fields={}, updated_at=1020)
+
+        conn2 = repository.connect("demo")
+        try:
+            with repository._immediate(conn2):
+                issues = verify.check_suspicious_double_updates(conn2, "demo", since=None)
+            assert len(issues) == 1
+            assert issues[0].severity == "WARN"
+            assert issues[0].check == "suspicious-double-update"
+            assert issues[0].record_id == record.id
+        finally:
+            conn2.close()
+    finally:
+        conn.close()
+
+
+def test_double_update_check_ignores_single_update(monkeypatch, tmp_path):
+    monkeypatch.setenv("CCST_PROJECT_DB_DIR", str(tmp_path))
+    record = service.add_record(project="demo", record_group="key-events", content="x",
+                                file_path=None, fields={}, created_at=1000)
+    conn = repository.connect("demo")
+    try:
+        verify.ensure_verify_tables(conn)
+        with repository._immediate(conn):
+            verify.check_suspicious_double_updates(conn, "demo", since=None)
+    finally:
+        conn.close()
+
+    service.update_record(project="demo", record_id=record.id, expected_version=1,
+                          content="v2", file_path=None, fields={}, updated_at=1010)
+
+    conn2 = repository.connect("demo")
+    try:
+        with repository._immediate(conn2):
+            issues = verify.check_suspicious_double_updates(conn2, "demo", since=None)
+        assert issues == []
+    finally:
+        conn2.close()
+
+
+def test_double_update_check_ignores_updates_outside_window(monkeypatch, tmp_path):
+    monkeypatch.setenv("CCST_PROJECT_DB_DIR", str(tmp_path))
+    record = service.add_record(project="demo", record_group="key-events", content="x",
+                                file_path=None, fields={}, created_at=1000)
+    conn = repository.connect("demo")
+    try:
+        verify.ensure_verify_tables(conn)
+        with repository._immediate(conn):
+            verify.check_suspicious_double_updates(conn, "demo", since=None)
+    finally:
+        conn.close()
+
+    far_future = 1000 + verify._DOUBLE_UPDATE_WINDOW_SECONDS + 1000
+    service.update_record(project="demo", record_id=record.id, expected_version=1,
+                          content="v2", file_path=None, fields={}, updated_at=1010)
+    service.update_record(project="demo", record_id=record.id, expected_version=2,
+                          content="v3", file_path=None, fields={}, updated_at=far_future)
+
+    conn2 = repository.connect("demo")
+    try:
+        with repository._immediate(conn2):
+            issues = verify.check_suspicious_double_updates(conn2, "demo", since=None)
+        assert issues == []  # version advanced by 2, but not within the window
+    finally:
+        conn2.close()

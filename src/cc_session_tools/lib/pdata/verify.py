@@ -181,3 +181,55 @@ def check_file_path_resolution(
                     ),
                 ))
     return issues
+
+
+def check_suspicious_double_updates(
+    conn: sqlite3.Connection, project: str, *, since: int | None,
+) -> list[VerifyIssue]:
+    """Flag an active row whose version has advanced by >=2 and whose updated_at has moved by no
+    more than _DOUBLE_UPDATE_WINDOW_SECONDS since the last time verify looked at it — i.e. at
+    least two updates landed inside one polling interval (spec §6.3). Always upserts every
+    examined row's current (version, updated_at) into pdata_verify_watermark afterwards, so the
+    next run's diff is against this run's state, regardless of whether an issue was raised this
+    time. Caller must run this inside a transaction (repository._immediate) since it writes. Lists
+    record groups via repository.list_record_groups(conn) directly against the already-open
+    connection, not service.schema_list(project=project) — see check_file_path_resolution's
+    docstring for why the latter is avoided here (an avoidable extra connection open per run per
+    project, spec G5)."""
+    issues: list[VerifyIssue] = []
+    for group in repository.list_record_groups(conn):
+        record_group = str(group["record_group"])
+        rows = repository.list_base_records(
+            conn, record_group=record_group, since=since, until=None,
+            limit=None, include_deleted=False,
+        )
+        for row in rows:
+            watermark = conn.execute(
+                "SELECT last_seen_version, last_seen_updated_at "
+                "FROM pdata_verify_watermark WHERE record_id=?",
+                (row["id"],),
+            ).fetchone()
+            if watermark is not None:
+                version_delta = row["version"] - watermark["last_seen_version"]
+                time_delta = row["updated_at"] - watermark["last_seen_updated_at"]
+                if version_delta >= 2 and time_delta <= _DOUBLE_UPDATE_WINDOW_SECONDS:
+                    issues.append(VerifyIssue(
+                        check="suspicious-double-update", severity="WARN",
+                        record_group=record_group, record_id=row["id"],
+                        message=(
+                            f"record {row['id']} in {record_group!r}: version "
+                            f"advanced by {version_delta} within {time_delta}s of "
+                            f"the last verify pass — two updates landed unusually "
+                            f"close together"
+                        ),
+                    ))
+            conn.execute(
+                "INSERT INTO pdata_verify_watermark "
+                "(record_id, last_seen_version, last_seen_updated_at) "
+                "VALUES (?, ?, ?) "
+                "ON CONFLICT(record_id) DO UPDATE SET "
+                "last_seen_version=excluded.last_seen_version, "
+                "last_seen_updated_at=excluded.last_seen_updated_at",
+                (row["id"], row["version"], row["updated_at"]),
+            )
+    return issues
