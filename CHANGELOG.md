@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Session-output index + `pm-update-central-files`.** `ccst pdata reconcile-session-output`
+  backfills a per-project `session-output` record_group (on `ccst pdata`'s existing schema/CLI)
+  from every `cc-sessions/*/out/` file on disk, incrementally via a per-project watermark.
+  `ccst ccsched-jobs install` (wired into `ccst install-everything` as a 6th step) provisions a
+  7-day job that runs it automatically; `ccst doctor` gets a matching health check. The
+  `update-central-files` skill moves here from `claude-code-config-sync`, renamed
+  `pm-update-central-files` (establishing the `pm-` prefix for cross-project,
+  project-management-family skills), and gains an AUTO item that registers each session's `out/`
+  deliverables into the index. See `docs/superpowers/plans/2026-07-30-ccst-pm-update-central-files.md`.
+
 - **`ccst pdata init` — unified per-project data-store init/migration.** New
   `--project <name> [--rehearse <path>] [--write]` verb (spec §7): a dry-run pass classifies
   every file in a project as folder-owned or db-owned (CSV/JSON get an automatic proposal; every
