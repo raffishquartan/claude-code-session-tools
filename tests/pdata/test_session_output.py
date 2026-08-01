@@ -218,3 +218,89 @@ def test_set_watermark_propagates_conflict_that_persists_after_retry(monkeypatch
 
     with pytest.raises(service.VersionConflictError):
         session_output.set_watermark("testproj", 200)
+
+
+def test_reconcile_project_registers_new_files_and_advances_watermark(monkeypatch, tmp_path):
+    monkeypatch.setenv("CCST_PROJECT_DB_DIR", str(tmp_path))
+    project_root = tmp_path / "proj"
+    out_file = project_root / "cc-sessions" / "20260710-foo" / "out" / "report.md"
+    _touch(out_file, 2000)
+
+    result = session_output.reconcile_project("testproj", project_root)
+
+    assert result.scanned == 1
+    assert result.registered == 1
+    assert result.watermark == 2000
+    assert session_output.get_watermark("testproj") == 2000
+
+    from cc_session_tools.lib.pdata import service
+
+    rows = service.list_records(project="testproj", record_group=session_output.SESSION_OUTPUT_GROUP)
+    assert len(rows) == 1
+    assert rows[0].file_path == "cc-sessions/20260710-foo/out/report.md"
+    assert rows[0].content == "report.md"
+    assert rows[0].fields["session_tag"] == "20260710-foo"
+
+
+def test_reconcile_project_skips_already_registered_files(monkeypatch, tmp_path):
+    monkeypatch.setenv("CCST_PROJECT_DB_DIR", str(tmp_path))
+    project_root = tmp_path / "proj"
+    out_file = project_root / "cc-sessions" / "20260710-foo" / "out" / "report.md"
+    _touch(out_file, 2000)
+
+    session_output.reconcile_project("testproj", project_root)
+    # A second run with no new files must not re-insert or error.
+    result = session_output.reconcile_project("testproj", project_root)
+
+    assert result.registered == 0
+
+    from cc_session_tools.lib.pdata import service
+
+    rows = service.list_records(project="testproj", record_group=session_output.SESSION_OUTPUT_GROUP)
+    assert len(rows) == 1
+
+
+def test_reconcile_project_dry_run_does_not_write(monkeypatch, tmp_path):
+    monkeypatch.setenv("CCST_PROJECT_DB_DIR", str(tmp_path))
+    project_root = tmp_path / "proj"
+    out_file = project_root / "cc-sessions" / "20260710-foo" / "out" / "report.md"
+    _touch(out_file, 2000)
+
+    result = session_output.reconcile_project("testproj", project_root, dry_run=True)
+
+    assert result.registered == 1  # reports what WOULD be registered
+    assert session_output.get_watermark("testproj") == 0  # but writes nothing
+
+    from cc_session_tools.lib.pdata import service
+
+    rows = service.list_records(project="testproj", record_group=session_output.SESSION_OUTPUT_GROUP)
+    assert rows == []
+
+
+def test_reconcile_project_dry_run_on_new_project_creates_no_db_file(monkeypatch, tmp_path):
+    # A dry-run that only reads should not have the side effect of creating the project's .db
+    # file — repository.connect() creates it and its base schema on every call (no readonly
+    # path), so this specifically exercises the case where _is_already_registered and
+    # get_watermark's own store.db_path().exists() short-circuits are the only thing preventing
+    # that connect() call from ever happening.
+    monkeypatch.setenv("CCST_PROJECT_DB_DIR", str(tmp_path))
+    from cc_session_tools.lib.pdata import store
+
+    project_root = tmp_path / "proj"
+    out_file = project_root / "cc-sessions" / "20260710-foo" / "out" / "report.md"
+    _touch(out_file, 2000)
+
+    session_output.reconcile_project("newproj", project_root, dry_run=True)
+
+    assert not store.db_path("newproj").exists()
+
+
+def test_reconcile_project_handles_empty_project(monkeypatch, tmp_path):
+    monkeypatch.setenv("CCST_PROJECT_DB_DIR", str(tmp_path))
+    project_root = tmp_path / "empty-proj"
+    project_root.mkdir()
+
+    result = session_output.reconcile_project("testproj", project_root)
+
+    assert result.scanned == 0
+    assert result.registered == 0

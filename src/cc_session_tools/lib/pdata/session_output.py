@@ -4,6 +4,7 @@ index against disk via a 7-day ccsched job. Pure orchestration on top of lib.pda
 this module adds no new tables or CLI primitives to Plan A's schema itself."""
 from __future__ import annotations
 
+from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -21,6 +22,14 @@ if TYPE_CHECKING:
 
 SESSION_OUTPUT_GROUP = "session-output"
 WATERMARK_GROUP = "session-output-watermark"
+
+
+@dataclass(frozen=True, slots=True)
+class ReconcileResult:
+    project: str
+    scanned: int
+    registered: int
+    watermark: int
 
 
 def discover_projects_with_sessions() -> list[tuple[str, Path]]:
@@ -186,3 +195,64 @@ def set_watermark(project: str, epoch: int) -> None:
             project=project, record_id=record.id, expected_version=record.version,
             content=str(epoch), file_path=None, fields={}, updated_at=epoch,
         )
+
+
+def _is_already_registered(project: str, rel_path: str) -> bool:
+    from cc_session_tools.lib.pdata import service, store
+
+    if not store.db_path(project).exists():
+        # A project with no .db file yet has no registered rows, by definition. Short-circuits
+        # before repository.connect() (called inside service.query_records), which always
+        # creates the .db file and its base schema as a side effect of connecting — even for a
+        # read-only lookup (repository.connect() applies ddl=_BASE_DDL on every connect, with no
+        # readonly path). Without this check, reconcile_project's dry_run=True branch would
+        # create the project's .db file via this very lookup, contradicting its own docstring's
+        # claim that dry-run "writes nothing".
+        return False
+
+    matches = service.query_records(
+        project=project, record_group=SESSION_OUTPUT_GROUP,
+        where=[f"file_path = {rel_path}"], limit=1,
+    )
+    return len(matches) > 0
+
+
+def reconcile_project(
+    project: str, project_root: Path, *, dry_run: bool = False,
+) -> ReconcileResult:
+    """Backfill session-output rows for every cc-sessions/*/out/ file newer than this project's
+    watermark that isn't already registered (spec §8 item 2). Safe to call repeatedly, safe to
+    call late, safe to coalesce (the ccsched contract, see manage-recurring-cc-jobs-using-ccsched
+    skill) — every insert is guarded by _is_already_registered's file_path dedupe check, and the
+    watermark only ever advances, never rewinds. dry_run reports what WOULD be registered without
+    writing anything (including the watermark)."""
+    from cc_session_tools.lib.pdata import service
+
+    if not dry_run:
+        ensure_session_output_schema(project)
+
+    since = get_watermark(project)
+    candidates = find_new_out_files(project_root, since_mtime=since)
+
+    registered = 0
+    watermark = since
+    for file_path, mtime in candidates:
+        watermark = max(watermark, mtime)
+        rel_path = str(file_path.relative_to(project_root))
+        if _is_already_registered(project, rel_path):
+            continue
+        if not dry_run:
+            service.add_record(
+                project=project, record_group=SESSION_OUTPUT_GROUP,
+                content=file_path.name, file_path=rel_path,
+                fields={"session_tag": session_tag_from_relpath(rel_path)},
+                created_at=mtime,
+            )
+        registered += 1
+
+    if not dry_run and watermark > since:
+        set_watermark(project, watermark)
+
+    return ReconcileResult(
+        project=project, scanned=len(candidates), registered=registered, watermark=watermark,
+    )
