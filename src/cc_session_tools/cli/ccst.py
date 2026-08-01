@@ -50,9 +50,12 @@ Current subcommands:
   claude-md install              Add/update the inter-session-messaging block in
                                  ~/.claude/CLAUDE.md.
   claude-md uninstall            Remove the messaging block from CLAUDE.md.
+  ccsched-jobs install           Register CCST's bundled ccsched jobs (see
+                                 lib/scheduler/bundled_jobs.py) if not already present.
+                                 Dry run by default; pass --apply to register.
   install-everything             Run all install steps (skills, hooks, shell,
-                                 claude-md) then health-check. Dry run by default;
-                                 pass --apply to write changes.
+                                 claude-md, scheduled jobs) then health-check.
+                                 Dry run by default; pass --apply to write changes.
 """
 from __future__ import annotations
 
@@ -1293,16 +1296,43 @@ def _cmd_migrate_all(args: argparse.Namespace) -> int:
     return overall_rc
 
 
+# ---------- ccsched-jobs install ----------
+
+
+def _cmd_ccsched_jobs_install(args: argparse.Namespace) -> int:
+    """Register CCST's bundled ccsched jobs (lib/scheduler/bundled_jobs.py) if not already
+    present. Idempotent and non-destructive: an existing job id is left completely untouched,
+    even if its cadence/timeout has since been hand-edited — a human may have deliberately
+    edited it via `ccsched edit`, and silently stomping that on every re-run would be a
+    surprising footgun. "Already there" is decided by an explicit membership check against
+    registry.load_registry()'s existing ids before add_job is ever called, not by attempting the
+    add and catching ccsched add's own duplicate-id RegistryError (this repo's "no exceptions
+    for control flow" coding standard rules that out)."""
+    from cc_session_tools.lib.scheduler import bundled_jobs, registry
+    from cc_session_tools.lib.scheduler.jobspec import validate_job_fields
+
+    existing_ids = {spec.job_id for spec in registry.load_registry()}
+    for job in bundled_jobs.BUNDLED_CCSCHED_JOBS:
+        if job.job_id in existing_ids:
+            print(f"  already registered: {job.job_id}")
+            continue
+        if not args.apply:
+            print(f"  would register: {job.job_id}")
+            continue
+        spec = validate_job_fields(
+            job_id=job.job_id, cadence=job.cadence, coalesce=job.coalesce,
+            command=list(job.command), surface=job.surface, enabled=True,
+            catchup_window=job.catchup_window, timeout=job.timeout,
+        )
+        registry.add_job(spec)
+        print(f"  registered: {job.job_id}")
+
+    if not args.apply:
+        print("\nDry run — re-run with --apply to register any missing job(s)")
+    return 0
+
+
 # ---------- install-everything ----------
-
-
-_INSTALL_STEPS: list[tuple[str, str]] = [
-    ("1/5  Skills",          "skills"),
-    ("2/5  Hooks",           "hooks"),
-    ("3/5  Shell helpers",   "shell"),
-    ("4/5  Global CLAUDE.md", "claude-md"),
-    ("5/5  Health check",    "doctor"),
-]
 
 
 def _cmd_install_everything(args: argparse.Namespace) -> int:
@@ -1312,12 +1342,12 @@ def _cmd_install_everything(args: argparse.Namespace) -> int:
 
     steps: list[tuple[str, str, object]] = [
         (
-            "1/5  Skills",
+            "Skills",
             "skills",
             argparse.Namespace(source=None, target=None, apply=apply, force=False),
         ),
         (
-            "2/5  Hooks",
+            "Hooks",
             "hooks",
             argparse.Namespace(
                 source=None,
@@ -1327,14 +1357,19 @@ def _cmd_install_everything(args: argparse.Namespace) -> int:
             ),
         ),
         (
-            "3/5  Shell helpers",
+            "Shell helpers",
             "shell",
             argparse.Namespace(apply=apply, rc_file=None),
         ),
         (
-            "4/5  Global CLAUDE.md",
+            "Global CLAUDE.md",
             "claude-md",
             argparse.Namespace(target=None, apply=apply),
+        ),
+        (
+            "Scheduled jobs",
+            "ccsched-jobs",
+            argparse.Namespace(apply=apply),
         ),
     ]
 
@@ -1343,16 +1378,19 @@ def _cmd_install_everything(args: argparse.Namespace) -> int:
         "hooks": _cmd_hooks_install,
         "shell": _cmd_shell_install,
         "claude-md": _cmd_claude_md_install,
+        "ccsched-jobs": _cmd_ccsched_jobs_install,
     }
 
+    # +1 accounts for the trailing health check below, which isn't itself a `steps` entry.
+    total_steps = len(steps) + 1
     overall_rc = 0
-    for label, key, step_args in steps:
-        print(f"\n=== {label} ===")
+    for i, (label, key, step_args) in enumerate(steps, start=1):
+        print(f"\n=== {i}/{total_steps}  {label} ===")
         rc = dispatch[key](step_args)  # type: ignore[operator]
         if rc != 0:
             overall_rc = rc
 
-    print("\n=== 5/5  Health check ===")
+    print(f"\n=== {total_steps}/{total_steps}  Health check ===")
     _cmd_doctor(
         argparse.Namespace(
             settings=None,
@@ -1930,6 +1968,19 @@ def _build_parser() -> argparse.ArgumentParser:
              "Claude Code session.")
     m_all.add_argument("--dry-run", action="store_true")
 
+    # ---- ccsched-jobs ----
+    ccsched_jobs_parser = sub.add_parser(
+        "ccsched-jobs", help="Provision CCST-bundled ccsched jobs",
+    )
+    ccsched_jobs_sub = ccsched_jobs_parser.add_subparsers(dest="verb", metavar="<verb>")
+    ccsched_jobs_sub.required = True
+    ccsched_jobs_install_parser = ccsched_jobs_sub.add_parser(
+        "install", help="Register bundled jobs not already present (dry run by default)",
+    )
+    ccsched_jobs_install_parser.add_argument(
+        "--apply", action="store_true", help="Register jobs (default: dry run)",
+    )
+
     # ---- claude-md ----
     cmd_parser = sub.add_parser("claude-md", help="Manage the global CLAUDE.md messaging block")
     cmd_sub = cmd_parser.add_subparsers(dest="verb", metavar="<verb>")
@@ -1947,8 +1998,8 @@ def _build_parser() -> argparse.ArgumentParser:
     ie_parser = sub.add_parser(
         "install-everything",
         help=(
-            "Run all install steps (skills, hooks, shell, claude-md) then health-check. "
-            "Dry run by default; pass --apply to write changes."
+            "Run all install steps (skills, hooks, shell, claude-md, scheduled jobs) then "
+            "health-check. Dry run by default; pass --apply to write changes."
         ),
     )
     ie_parser.add_argument(
@@ -2048,6 +2099,10 @@ def main() -> None:
             sys.exit(_cmd_migrate_telemetry(args))
         if args.verb == "all":
             sys.exit(_cmd_migrate_all(args))
+
+    if args.noun == "ccsched-jobs":
+        if args.verb == "install":
+            sys.exit(_cmd_ccsched_jobs_install(args))
 
     if args.noun == "claude-md":
         if args.verb == "install":
