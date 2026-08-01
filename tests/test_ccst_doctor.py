@@ -13,6 +13,7 @@ from cc_session_tools.lib.doctor import (
     CheckResult,
     LegacyMigrationPaths,
     Status,
+    check_ccsched_job_registered,
     check_cli_on_path,
     check_data_stores,
     check_env_dir,
@@ -799,3 +800,65 @@ def test_run_all_checks_skips_pdata_migration_check_when_projects_root_omitted(
         skip_pypi=True,
     )
     assert not any(r.name.startswith("pdata-init:pending") for r in results)
+
+
+# ---------- bundled ccsched job check ----------
+
+
+def test_check_ccsched_job_registered_ok_when_present_and_enabled(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("CCST_DATA_HOME", str(tmp_path))
+    from cc_session_tools.lib.scheduler import registry
+    from cc_session_tools.lib.scheduler.jobspec import validate_job_fields
+
+    spec = validate_job_fields(
+        job_id="pm-session-output-reconcile", cadence="every:7d", coalesce="one",
+        command=["ccst", "pdata", "reconcile-session-output", "--all-projects"],
+        surface=True, enabled=True, catchup_window="7d", timeout="300s",
+    )
+    registry.add_job(spec)
+
+    result = check_ccsched_job_registered("pm-session-output-reconcile")
+    assert result.status == Status.OK
+
+
+def test_check_ccsched_job_registered_warns_when_missing(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("CCST_DATA_HOME", str(tmp_path))
+    result = check_ccsched_job_registered("pm-session-output-reconcile")
+    assert result.status == Status.WARN
+    assert "not registered" in result.reason
+
+
+def test_check_ccsched_job_registered_warns_when_disabled(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("CCST_DATA_HOME", str(tmp_path))
+    from cc_session_tools.lib.scheduler import registry
+    from cc_session_tools.lib.scheduler.jobspec import validate_job_fields
+
+    spec = validate_job_fields(
+        job_id="pm-session-output-reconcile", cadence="every:7d", coalesce="one",
+        command=["ccst", "pdata", "reconcile-session-output", "--all-projects"],
+        surface=True, enabled=True, catchup_window="7d", timeout="300s",
+    )
+    registry.add_job(spec)
+    registry.set_enabled("pm-session-output-reconcile", False)
+
+    result = check_ccsched_job_registered("pm-session-output-reconcile")
+    assert result.status == Status.WARN
+    assert "disabled" in result.reason
+
+
+def test_run_all_checks_includes_bundled_ccsched_job_checks(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("CCST_DATA_HOME", str(tmp_path))
+    settings = tmp_path / "settings.json"
+    settings.write_text('{"hooks": {}}')
+    bundle = Path(__file__).parent.parent / "config" / "hooks-bundle.json"
+    results = run_all_checks(
+        installed_version="1.2.0",
+        settings_path=settings,
+        bundle_path=bundle,
+        skills_source_dir=None,
+        skills_target_dir=tmp_path / "skills",
+        env={"CLAUDE_SESSION_TOOLS_REPO_ROOT": None, "CLAUDE_SESSION_TOOLS_PROJ_ROOT": None},
+        skip_pypi=True,
+    )
+    names = [r.name for r in results]
+    assert "ccsched-job:pm-session-output-reconcile" in names

@@ -185,6 +185,32 @@ def check_skill_symlink(skill_name: str, skill_src: Path, skills_dir: Path) -> C
     )
 
 
+def check_ccsched_job_registered(job_id: str) -> CheckResult:
+    """WARN (not FAIL) if a CCST-bundled ccsched job (lib/scheduler/bundled_jobs.py) is missing
+    or disabled — recoverable by re-running `ccst ccsched-jobs install --apply` /
+    `ccsched enable <id>`, not a silent-data-loss risk (this repo's version policy reserves FAIL
+    for breaking on-disk migrations, which this is not)."""
+    from cc_session_tools.lib.scheduler import registry
+
+    name = f"ccsched-job:{job_id}"
+    try:
+        specs = registry.load_registry()
+    except registry.RegistryError as exc:
+        return CheckResult(name=name, status=Status.WARN, reason=f"ccsched.db unreadable: {exc}")
+    for spec in specs:
+        if spec.job_id == job_id:
+            if spec.enabled:
+                return CheckResult(name=name, status=Status.OK, reason="registered and enabled")
+            return CheckResult(
+                name=name, status=Status.WARN,
+                reason=f"registered but disabled — run 'ccsched enable {job_id}'",
+            )
+    return CheckResult(
+        name=name, status=Status.WARN,
+        reason="not registered — run 'ccst ccsched-jobs install --apply'",
+    )
+
+
 def check_pypi_version(installed_version: str, timeout: float = 3.0) -> CheckResult:
     """Compare installed version against the latest on PyPI.
 
@@ -605,6 +631,12 @@ def run_all_checks(
                 reason="bundled skills/ directory not found; skill checks skipped",
             )
         )
+
+    # Bundled ccsched jobs
+    from cc_session_tools.lib.scheduler import bundled_jobs
+
+    for job in bundled_jobs.BUNDLED_CCSCHED_JOBS:
+        results.append(check_ccsched_job_registered(job.job_id))
 
     # Data stores
     if store_paths is not None:
