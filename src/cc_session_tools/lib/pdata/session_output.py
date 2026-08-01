@@ -19,6 +19,9 @@ if TYPE_CHECKING:
     # adding a runtime import to the module's top level.
     from cc_session_tools.lib.pdata.service import Record
 
+SESSION_OUTPUT_GROUP = "session-output"
+WATERMARK_GROUP = "session-output-watermark"
+
 
 def discover_projects_with_sessions() -> list[tuple[str, Path]]:
     """(project_name, project_root) for every direct subdirectory of a configured session root
@@ -92,3 +95,38 @@ def session_tag_from_relpath(rel_path: str) -> str:
             f"expected a 'cc-sessions/<tag>/out/...' path, got {rel_path!r}"
         )
     return parts[1]
+
+
+def ensure_session_output_schema(project: str) -> None:
+    """Idempotent — safe to call on every reconcile run and from the pm-update-central-files
+    skill's own AUTO item (schema_add_field no-ops if the column already exists).
+
+    Also creates a partial index on records(file_path), scoped to record_group='session-output'
+    via a SQLite partial-index WHERE clause. Without it, _is_already_registered's per-file dedupe
+    check — and the equivalent `ccst pdata query --where "file_path = ..."` call the
+    pm-update-central-files skill's own AUTO item makes — is an unindexed scan across every
+    session-output row this project has ever accumulated (the base schema indexes only
+    record_group and updated_at). That scan grows without bound for a catch-all project like
+    `oneshot`, contradicting spec Goal G5 ("cost never scales with accumulated history"). Scoping
+    the index to this one record_group keeps it a session-output-only concern rather than a
+    change to the shared base-schema index list."""
+    from cc_session_tools.lib.pdata import repository, service
+
+    service.schema_add_field(
+        project=project,
+        record_group=SESSION_OUTPUT_GROUP,
+        field_name="session_tag",
+        sql_type="TEXT",
+        description="The cc-sessions/<session_tag>/ directory this out/ file was produced by",
+        default=None,
+    )
+
+    conn = repository.connect(project)
+    try:
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_records_session_output_file_path "
+            f"ON records(file_path) WHERE record_group = '{SESSION_OUTPUT_GROUP}'"
+        )
+        conn.commit()
+    finally:
+        conn.close()

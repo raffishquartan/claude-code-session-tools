@@ -113,3 +113,48 @@ def test_session_tag_from_relpath_extracts_the_session_directory_name():
 def test_session_tag_from_relpath_rejects_malformed_paths(bad_rel):
     with pytest.raises(ValueError, match="cc-sessions"):
         session_output.session_tag_from_relpath(bad_rel)
+
+
+def test_ensure_session_output_schema_creates_session_tag_column(monkeypatch, tmp_path):
+    monkeypatch.setenv("CCST_PROJECT_DB_DIR", str(tmp_path))
+    from cc_session_tools.lib.pdata import repository
+
+    session_output.ensure_session_output_schema("testproj")
+
+    conn = repository.connect("testproj")
+    try:
+        cols = repository.list_extension_columns(conn, session_output.SESSION_OUTPUT_GROUP)
+        assert "session_tag" in cols
+    finally:
+        conn.close()
+
+
+def test_ensure_session_output_schema_is_idempotent(monkeypatch, tmp_path):
+    monkeypatch.setenv("CCST_PROJECT_DB_DIR", str(tmp_path))
+    session_output.ensure_session_output_schema("testproj")
+    session_output.ensure_session_output_schema("testproj")  # must not raise
+
+
+def test_ensure_session_output_schema_creates_file_path_index(monkeypatch, tmp_path):
+    # _is_already_registered's dedupe check filters on file_path within the session-output
+    # record_group. Plan A's base schema only indexes record_group and updated_at (not
+    # file_path) — without a targeted index here, that check is an unindexed scan across every
+    # session-output row ever written for this project, which by design accumulates forever,
+    # directly contradicting spec Goal G5 ("cost never scales with accumulated history"). This
+    # index is scoped to this one record_group via a partial index
+    # (WHERE record_group = 'session-output'), so it stays a session-output-only concern and
+    # does not touch Plan A's own shared index list.
+    monkeypatch.setenv("CCST_PROJECT_DB_DIR", str(tmp_path))
+    from cc_session_tools.lib.pdata import repository
+
+    session_output.ensure_session_output_schema("testproj")
+
+    conn = repository.connect("testproj")
+    try:
+        rows = conn.execute(
+            "SELECT name FROM sqlite_master WHERE type = 'index' "
+            "AND name = 'idx_records_session_output_file_path'"
+        ).fetchall()
+        assert len(rows) == 1
+    finally:
+        conn.close()
