@@ -32,6 +32,12 @@ Current subcommands:
                                  deletes anything).
   pdata add                      Insert a new record into a project's SQLite data store (see
                                  ccst pdata --help for the full records/schema subcommand set).
+  pdata reconcile-session-output Backfill the session-output index from cc-sessions/*/out/ on
+                                 disk for one project (--project NAME) or every discovered
+                                 project (--all-projects). Provisioned as a 7-day ccsched job by
+                                 `ccst ccsched-jobs install` — see ccst ccsched-jobs --help.
+                                 --schema-only bootstraps the schema/index for --project without
+                                 scanning or registering files.
   migrate ccsched                Migrate ccsched flat-file stores into ccsched.db
                                  (verify + tar-backup old files before removal).
   migrate ccmsg                  Migrate the flat-file message store into ccmsg.db
@@ -1077,6 +1083,55 @@ def _cmd_pdata_init(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_pdata_reconcile_session_output(args: argparse.Namespace) -> int:
+    from cc_session_tools.lib import roots
+    from cc_session_tools.lib.pdata import session_output
+
+    if args.schema_only and args.all_projects:
+        print(
+            "ccst pdata: --schema-only requires --project (not --all-projects)",
+            file=sys.stderr,
+        )
+        return 2
+
+    try:
+        if args.all_projects:
+            targets = session_output.discover_projects_with_sessions()
+        else:
+            root = session_output.find_project_root(args.project)
+            if root is None:
+                print(
+                    f"ccst pdata: no project {args.project!r} found with a cc-sessions/ "
+                    f"directory under $CLAUDE_SESSION_TOOLS_REPO_ROOT or "
+                    f"$CLAUDE_SESSION_TOOLS_PROJ_ROOT",
+                    file=sys.stderr,
+                )
+                return 1
+            targets = [(args.project, root)]
+    except roots.RootsConfigError as exc:
+        print(f"ccst pdata: {exc}", file=sys.stderr)
+        return 1
+
+    if args.schema_only:
+        # Bootstraps the session_tag column and the file_path partial index without scanning
+        # cc-sessions/*/out/ — the fast path the pm-update-central-files skill's own AUTO item
+        # calls before its per-file registration loop, so that loop's dedupe query runs against
+        # the index instead of an unindexed scan (spec Goal G5). A full (non-schema-only)
+        # reconcile also ensures the schema as a side effect (see reconcile_project), so this
+        # flag only matters when the caller wants the schema bootstrapped WITHOUT also
+        # backfilling every unregistered file.
+        (name, _root), = targets
+        session_output.ensure_session_output_schema(name)
+        print(f"{name}: schema ensured")
+        return 0
+
+    for name, root in targets:
+        result = session_output.reconcile_project(name, root, dry_run=args.dry_run)
+        suffix = " (dry-run)" if args.dry_run else ""
+        print(f"{name}: scanned {result.scanned}, registered {result.registered}{suffix}")
+    return 0
+
+
 # ---------- hooks run ----------
 
 
@@ -1783,6 +1838,23 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Perform the write/verify/backup/cutover phase (default: dry-run only)",
     )
 
+    pdata_reconcile_parser = pdata_sub.add_parser(
+        "reconcile-session-output",
+        help="Backfill the session-output index from cc-sessions/*/out/ on disk (idempotent)",
+    )
+    pdata_reconcile_target = pdata_reconcile_parser.add_mutually_exclusive_group(required=True)
+    pdata_reconcile_target.add_argument("--project", metavar="NAME")
+    pdata_reconcile_target.add_argument("--all-projects", action="store_true")
+    pdata_reconcile_parser.add_argument(
+        "--dry-run", action="store_true",
+        help="Report what would be registered without writing anything",
+    )
+    pdata_reconcile_parser.add_argument(
+        "--schema-only", action="store_true",
+        help="Bootstrap the session-output schema/index for --project and exit "
+             "(no file scan or registration)",
+    )
+
     # ---- sessions ----
     sessions_parser = sub.add_parser("sessions", help="sessions.db management commands")
     sessions_sub = sessions_parser.add_subparsers(dest="verb", metavar="<verb>")
@@ -1958,6 +2030,8 @@ def main() -> None:
             sys.exit(_cmd_pdata_restore(args))
         if args.verb == "init":
             sys.exit(_cmd_pdata_init(args))
+        if args.verb == "reconcile-session-output":
+            sys.exit(_cmd_pdata_reconcile_session_output(args))
 
     if args.noun == "sessions":
         if args.verb == "migrate":
