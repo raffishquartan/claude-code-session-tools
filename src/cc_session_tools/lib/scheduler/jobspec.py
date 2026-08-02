@@ -31,6 +31,11 @@ class JobSpec:
     enabled: bool
     catchup_window: str
     timeout: str
+    # Exit codes that count as "ran, did not crash" for suspend accounting.
+    # A code in this set other than 0 is a job signalling findings (e.g. a
+    # drift-monitor command whose exit 1 means "found something"), not a
+    # failure - see worker.py's crashed/findings split.
+    success_exit_codes: tuple[int, ...] = (0,)
 
 
 def _check_id(job_id: str) -> None:
@@ -65,6 +70,31 @@ def _check_positive_duration(name: str, value: str) -> None:
         raise JobValidationError(f"invalid {name} {value!r}: {exc}") from exc
 
 
+def _check_success_exit_codes(codes: tuple[int, ...]) -> None:
+    if not codes:
+        raise JobValidationError("success_exit_codes must contain at least one code")
+    for code in codes:
+        if not (0 <= code <= 255):
+            raise JobValidationError(f"invalid exit code {code!r}: must be 0-255")
+
+
+def parse_success_exit_codes(raw: str) -> tuple[int, ...]:
+    """Parse a CLI-facing comma-separated exit-code list, e.g. '0,1'.
+
+    Boundary parser for ccsched's --success-exit-codes flag; raises
+    JobValidationError on anything that isn't a valid int list.
+    """
+    parts = [p.strip() for p in raw.split(",") if p.strip()]
+    if not parts:
+        raise JobValidationError("success_exit_codes must contain at least one code")
+    try:
+        codes = tuple(int(p) for p in parts)
+    except ValueError as exc:
+        raise JobValidationError(f"invalid success_exit_codes {raw!r}: must be comma-separated integers") from exc
+    _check_success_exit_codes(codes)
+    return codes
+
+
 def validate_job_fields(
     *,
     job_id: str,
@@ -75,6 +105,7 @@ def validate_job_fields(
     enabled: bool,
     catchup_window: str,
     timeout: str,
+    success_exit_codes: tuple[int, ...] = (0,),
 ) -> JobSpec:
     _check_id(job_id)
     try:
@@ -85,6 +116,7 @@ def validate_job_fields(
     command_tuple = _check_command(command)
     _check_positive_duration("catchup_window", catchup_window)
     _check_positive_duration("timeout", timeout)
+    _check_success_exit_codes(success_exit_codes)
     return JobSpec(
         job_id=job_id,
         cadence=cadence,
@@ -94,4 +126,5 @@ def validate_job_fields(
         enabled=enabled,
         catchup_window=catchup_window,
         timeout=timeout,
+        success_exit_codes=success_exit_codes,
     )

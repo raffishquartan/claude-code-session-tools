@@ -60,6 +60,32 @@ def test_unparseable_registry_warning_runs_nothing() -> None:
     assert "no jobs ran" in out
 
 
+def test_findings_render_as_report_body() -> None:
+    r = JobReport(job_id="ccst-doctor-drift-weekly", outcome=Outcome.RAN, surface=True,
+                  overdue="", ran=1, deferred=0, expired=0, consecutive_failures=0,
+                  findings="WARN data-store:claude-flags\nWARN migration-to-1.0.0:sessions")
+    out = format_digest([r])
+    assert "ccst-doctor-drift-weekly ran with findings" in out
+    assert "WARN data-store:claude-flags" in out
+    assert "WARN migration-to-1.0.0:sessions" in out
+
+
+def test_findings_surface_even_when_job_configured_silent() -> None:
+    """Findings are signal, not routine noise - a job with --no-surface must
+    still show its findings, the same way FAILED/SUSPENDED always show."""
+    r = JobReport(job_id="quiet-drift", outcome=Outcome.RAN, surface=False,
+                  overdue="", ran=1, deferred=0, expired=0, consecutive_failures=0,
+                  findings="WARN something")
+    out = format_digest([r])
+    assert "quiet-drift ran with findings" in out
+    assert "WARN something" in out
+
+
+def test_ran_without_findings_unaffected() -> None:
+    out = format_digest([_ran("tesco-shop-check")])
+    assert "ran with findings" not in out
+
+
 def test_suspended_job_always_surfaces_even_when_silent() -> None:
     r = JobReport(job_id="broken-job", outcome=Outcome.SUSPENDED, surface=False,
                   overdue="", ran=0, deferred=0, expired=0, consecutive_failures=10)

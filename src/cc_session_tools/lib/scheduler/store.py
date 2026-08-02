@@ -14,14 +14,15 @@ SCHEDULER_DIR_ENV = "CC_SCHEDULER_DIR"
 
 _DDL = """
 CREATE TABLE IF NOT EXISTS jobs (
-    job_id         TEXT PRIMARY KEY,
-    cadence        TEXT NOT NULL,
-    coalesce_kind  TEXT NOT NULL CHECK (coalesce_kind IN ('one', 'each')),
-    command        TEXT NOT NULL,
-    surface        INTEGER NOT NULL,
-    enabled        INTEGER NOT NULL,
-    catchup_window TEXT NOT NULL,
-    timeout        TEXT NOT NULL
+    job_id             TEXT PRIMARY KEY,
+    cadence            TEXT NOT NULL,
+    coalesce_kind      TEXT NOT NULL CHECK (coalesce_kind IN ('one', 'each')),
+    command            TEXT NOT NULL,
+    surface            INTEGER NOT NULL,
+    enabled            INTEGER NOT NULL,
+    catchup_window     TEXT NOT NULL,
+    timeout            TEXT NOT NULL,
+    success_exit_codes TEXT NOT NULL DEFAULT '[0]'
 );
 CREATE TABLE IF NOT EXISTS job_state (
     job_id               TEXT PRIMARY KEY,
@@ -58,6 +59,19 @@ def db_path() -> Path:
     return scheduler_dir() / "ccsched.db"
 
 
+def _migrate_jobs_table(conn: sqlite3.Connection) -> None:
+    """Idempotent ALTER TABLE for columns added after a jobs table already
+    existed on disk - CREATE TABLE IF NOT EXISTS in _DDL is a no-op against
+    an existing table, so new columns need an explicit add-if-missing step."""
+    cols = {row["name"] for row in conn.execute("PRAGMA table_info(jobs)")}
+    if "success_exit_codes" not in cols:
+        conn.execute("ALTER TABLE jobs ADD COLUMN success_exit_codes TEXT NOT NULL DEFAULT '[0]'")
+        conn.commit()
+
+
 def connect(*, readonly: bool = False) -> sqlite3.Connection:
     """Open ccsched.db with the schema applied (WAL + busy-timeout via lib.db)."""
-    return db.connect(db_path(), ddl=None if readonly else _DDL, readonly=readonly)
+    conn = db.connect(db_path(), ddl=None if readonly else _DDL, readonly=readonly)
+    if not readonly:
+        _migrate_jobs_table(conn)
+    return conn

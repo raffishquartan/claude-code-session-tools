@@ -32,11 +32,15 @@ ccl() {
     case "$_a" in
       --help|-h)
         cat <<'CCLHELP'
-Usage: ccl [--global] [--order-by {start,update,opened,active}]
+Usage: ccl [--global] [--order-by {start,update,opened,active}] [-n N | --limit N] [...]
 
 List Claude Code sessions in the current project (wrapper around ccs).
+Outside a directory with a known cc-sessions/, this errors with
+"no cc-sessions/ in current directory" - pass --global to search every
+configured root instead.
 
-Options:
+Options shown here (ccl intercepts these two; everything else, including
+-n/--limit and every other ccs flag, passes straight through to ccs):
   --global                              List sessions across all configured roots
                                         (default: current directory only).
   --order-by {start,update,opened,active}
@@ -48,6 +52,12 @@ Options:
                                         (also prints the opened timestamp)
                                active = newest-first by last Claude response
                                         (also prints the active timestamp)
+
+Also commonly used (passed through to ccs unmodified):
+  -n N, --limit N            Show only the N most recent sessions. Requires
+                             --order-by opened or --order-by active (start/
+                             update ordering is not database-indexed) -
+                             e.g. ccl --order-by active --limit 5.
 
 ccl is a shell function wrapper around 'ccs' (list mode only).
 For the full ccs interface, run: ccs --help
