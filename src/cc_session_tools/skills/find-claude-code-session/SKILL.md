@@ -56,7 +56,7 @@ Common fixes the user may need:
 **If stderr does NOT contain `[CST-ROOTS-CONFIG-ERROR]`:**
 The CLI returned an unrecognised error. Tell the user:
 
-> `ccs` returned an unrecognised error. The `find-claude-code-session` skill may be out of date relative to the `cc-session-tools` CLI. Try `ccs --version` and `ccs --help`, then update the skill at `~/repos/claude-code-session-tools/skills/find-claude-code-session/SKILL.md` to handle the new error format.
+> `ccs` returned an unrecognised error. The `find-claude-code-session` skill may be out of date relative to the `cc-session-tools` CLI. Try `ccs --version` and `ccs --help`, then update the skill at `~/repos/claude-code-session-tools/src/cc_session_tools/skills/find-claude-code-session/SKILL.md` to handle the new error format.
 
 ## Recipe ladder - escalate, stop at first hit
 

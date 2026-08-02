@@ -365,7 +365,7 @@ def test_extract_bundle_hook_names_missing_file(tmp_path: Path) -> None:
 def test_run_all_checks_returns_list(tmp_path: Path) -> None:
     settings = tmp_path / "settings.json"
     settings.write_text('{"hooks": {}}')
-    bundle = Path(__file__).parent.parent / "config" / "hooks-bundle.json"
+    bundle = Path(__file__).parent.parent / "src" / "cc_session_tools" / "config" / "hooks-bundle.json"
     results = run_all_checks(
         installed_version="0.11.0",
         settings_path=settings,
@@ -382,7 +382,7 @@ def test_run_all_checks_returns_list(tmp_path: Path) -> None:
 def test_run_all_checks_includes_hook_checks(tmp_path: Path) -> None:
     settings = tmp_path / "settings.json"
     settings.write_text('{"hooks": {}}')
-    bundle = Path(__file__).parent.parent / "config" / "hooks-bundle.json"
+    bundle = Path(__file__).parent.parent / "src" / "cc_session_tools" / "config" / "hooks-bundle.json"
     results = run_all_checks(
         installed_version="0.11.0",
         settings_path=settings,
@@ -399,7 +399,7 @@ def test_run_all_checks_includes_hook_checks(tmp_path: Path) -> None:
 def test_run_all_checks_warns_for_missing_hooks(tmp_path: Path) -> None:
     settings = tmp_path / "settings.json"
     settings.write_text('{"hooks": {}}')
-    bundle = Path(__file__).parent.parent / "config" / "hooks-bundle.json"
+    bundle = Path(__file__).parent.parent / "src" / "cc_session_tools" / "config" / "hooks-bundle.json"
     results = run_all_checks(
         installed_version="0.11.0",
         settings_path=settings,
@@ -599,7 +599,7 @@ def test_check_data_stores_handles_multiple_stores_independently(tmp_path: Path)
 def test_run_all_checks_includes_data_store_checks_when_store_paths_given(tmp_path: Path) -> None:
     settings = tmp_path / "settings.json"
     settings.write_text('{"hooks": {}}')
-    bundle = Path(__file__).parent.parent / "config" / "hooks-bundle.json"
+    bundle = Path(__file__).parent.parent / "src" / "cc_session_tools" / "config" / "hooks-bundle.json"
     store = tmp_path / "ccmsg.db"
     _db.connect(store, ddl=_DDL).close()
 
@@ -621,7 +621,7 @@ def test_run_all_checks_skips_data_store_checks_when_omitted(tmp_path: Path) -> 
     """store_paths defaults to None — existing callers that don't pass it are unaffected."""
     settings = tmp_path / "settings.json"
     settings.write_text('{"hooks": {}}')
-    bundle = Path(__file__).parent.parent / "config" / "hooks-bundle.json"
+    bundle = Path(__file__).parent.parent / "src" / "cc_session_tools" / "config" / "hooks-bundle.json"
 
     results = run_all_checks(
         installed_version="0.11.0",
@@ -781,7 +781,7 @@ def test_check_pending_migration_warns_when_already_migrated_but_old_files_remai
 def test_run_all_checks_skips_pending_migration_when_paths_none(tmp_path: Path) -> None:
     settings = tmp_path / "settings.json"
     settings.write_text('{"hooks": {}}')
-    bundle = Path(__file__).parent.parent / "config" / "hooks-bundle.json"
+    bundle = Path(__file__).parent.parent / "src" / "cc_session_tools" / "config" / "hooks-bundle.json"
 
     results = run_all_checks(
         installed_version="1.0.0",
@@ -799,7 +799,7 @@ def test_run_all_checks_skips_pending_migration_when_paths_none(tmp_path: Path) 
 def test_run_all_checks_includes_pending_migration_when_paths_given(tmp_path: Path) -> None:
     settings = tmp_path / "settings.json"
     settings.write_text('{"hooks": {}}')
-    bundle = Path(__file__).parent.parent / "config" / "hooks-bundle.json"
+    bundle = Path(__file__).parent.parent / "src" / "cc_session_tools" / "config" / "hooks-bundle.json"
 
     results = run_all_checks(
         installed_version="1.0.0",
@@ -947,7 +947,7 @@ def test_run_all_checks_includes_bundled_ccsched_job_checks(monkeypatch, tmp_pat
     monkeypatch.setenv("CCST_DATA_HOME", str(tmp_path))
     settings = tmp_path / "settings.json"
     settings.write_text('{"hooks": {}}')
-    bundle = Path(__file__).parent.parent / "config" / "hooks-bundle.json"
+    bundle = Path(__file__).parent.parent / "src" / "cc_session_tools" / "config" / "hooks-bundle.json"
     results = run_all_checks(
         installed_version="1.2.0",
         settings_path=settings,
@@ -1020,7 +1020,7 @@ def test_run_all_checks_includes_pdata_verify_when_projects_given(monkeypatch, t
     monkeypatch.setenv("CCST_DATA_HOME", str(tmp_path / "data-home"))
     settings = tmp_path / "settings.json"
     settings.write_text('{"hooks": {}}')
-    bundle = Path(__file__).parent.parent / "config" / "hooks-bundle.json"
+    bundle = Path(__file__).parent.parent / "src" / "cc_session_tools" / "config" / "hooks-bundle.json"
     results = run_all_checks(
         installed_version="0.11.0",
         settings_path=settings,
@@ -1115,7 +1115,7 @@ def test_run_all_checks_skips_pdata_verify_when_projects_none(monkeypatch, tmp_p
     monkeypatch.setenv("CCST_DATA_HOME", str(tmp_path / "data-home"))
     settings = tmp_path / "settings.json"
     settings.write_text('{"hooks": {}}')
-    bundle = Path(__file__).parent.parent / "config" / "hooks-bundle.json"
+    bundle = Path(__file__).parent.parent / "src" / "cc_session_tools" / "config" / "hooks-bundle.json"
     results = run_all_checks(
         installed_version="0.11.0",
         settings_path=settings,

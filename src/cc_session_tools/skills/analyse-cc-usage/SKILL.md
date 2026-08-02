@@ -197,7 +197,7 @@ ccusage --version
 
 # 5. The skill lives inside the cc-session-tools repo at skills/analyse-cc-usage/.
 #    Symlink it to ~/.claude/skills/ so it is discoverable:
-ln -s ~/repos/claude-code-session-tools/skills/analyse-cc-usage \
+ln -s ~/repos/claude-code-session-tools/src/cc_session_tools/skills/analyse-cc-usage \
     ~/.claude/skills/analyse-cc-usage
 
 # 6. Warm the cache (first run is the slow one)
