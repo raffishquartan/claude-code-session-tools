@@ -17,10 +17,15 @@ from cc_session_tools.lib.messaging.service import DeliverMode
 
 
 def _emit(context: str, event: str) -> None:
-    json.dump(
-        {"hookSpecificOutput": {"hookEventName": event, "additionalContext": context}},
-        sys.stdout,
-    )
+    payload: dict[str, object] = {
+        "hookSpecificOutput": {"hookEventName": event, "additionalContext": context}
+    }
+    # additionalContext alone only reaches the model, never the user's terminal
+    # outside the verbose transcript - see catchup.py's identical fix. A message
+    # actually waiting for this session must be visible, not just in context.
+    if context:
+        payload["systemMessage"] = context
+    json.dump(payload, sys.stdout)
 
 
 def _log_failure(reason: str) -> None:
