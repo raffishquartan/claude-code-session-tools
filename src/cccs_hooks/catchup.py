@@ -29,10 +29,21 @@ def _now() -> datetime:
 
 
 def _emit(context: str, event: str) -> None:
-    json.dump(
-        {"hookSpecificOutput": {"hookEventName": event, "additionalContext": context}},
-        sys.stdout,
-    )
+    payload: dict[str, object] = {
+        "hookSpecificOutput": {"hookEventName": event, "additionalContext": context}
+    }
+    # additionalContext alone only ever reaches the model (invisible to the user
+    # outside the verbose transcript) - systemMessage is the field Claude Code
+    # prints to the user's terminal directly. A SessionStart digest always gets
+    # one, even when empty, so a clean weekly check is visibly confirmed rather
+    # than silent; UserPromptSubmit only gets one when there is something to
+    # report, since it fires on every prompt and an empty message every turn
+    # would be noise.
+    if context:
+        payload["systemMessage"] = context
+    elif event == "SessionStart":
+        payload["systemMessage"] = "[cc-scheduler] no scheduled-task activity since your last session"
+    json.dump(payload, sys.stdout)
 
 
 def _log_failure(reason: str) -> None:
