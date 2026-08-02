@@ -862,3 +862,98 @@ def test_run_all_checks_includes_bundled_ccsched_job_checks(monkeypatch, tmp_pat
     )
     names = [r.name for r in results]
     assert "ccsched-job:pm-session-output-reconcile" in names
+
+
+def test_check_pdata_verify_warns_when_never_run(monkeypatch, tmp_path):
+    from cc_session_tools.lib.doctor import Status, check_pdata_verify
+
+    monkeypatch.setenv("CCST_PROJECT_DB_DIR", str(tmp_path))
+    results = check_pdata_verify(["never-verified"])
+    assert len(results) == 1
+    assert results[0].status == Status.WARN
+    assert results[0].name == "pdata-verify:never-verified"
+    assert "not run yet" in results[0].reason
+
+
+def test_check_pdata_verify_ok_when_last_run_clean(monkeypatch, tmp_path):
+    from cc_session_tools.lib.doctor import Status, check_pdata_verify
+    from cc_session_tools.lib.pdata import init_paths, service, verify
+
+    monkeypatch.setenv("CCST_PROJECT_DB_DIR", str(tmp_path))
+    monkeypatch.setenv(init_paths.PROJECTS_ROOT_ENV, str(tmp_path / "projects"))
+    service.add_record(project="demo", record_group="notes", content="x",
+                       file_path=None, fields={}, created_at=1)
+    verify.run_verify(project="demo", full=True)
+
+    results = check_pdata_verify(["demo"])
+    assert results[0].status == Status.OK
+
+
+def test_check_pdata_verify_fails_when_last_run_had_a_fail_issue(monkeypatch, tmp_path):
+    from cc_session_tools.lib.doctor import Status, check_pdata_verify
+    from cc_session_tools.lib.pdata import init_paths, service, verify
+
+    monkeypatch.setenv("CCST_PROJECT_DB_DIR", str(tmp_path))
+    monkeypatch.setenv(init_paths.PROJECTS_ROOT_ENV, str(tmp_path / "projects"))
+    service.add_record(project="demo", record_group="filings", content="x",
+                       file_path="missing.pdf", fields={}, created_at=1)
+    verify.run_verify(project="demo", full=True)
+
+    results = check_pdata_verify(["demo"])
+    assert results[0].status == Status.FAIL
+    assert "issue(s)" in results[0].reason
+
+
+def test_check_pdata_verify_returns_one_result_per_project(monkeypatch, tmp_path):
+    from cc_session_tools.lib.doctor import check_pdata_verify
+
+    monkeypatch.setenv("CCST_PROJECT_DB_DIR", str(tmp_path))
+    results = check_pdata_verify(["alpha", "beta"])
+    assert {r.name for r in results} == {"pdata-verify:alpha", "pdata-verify:beta"}
+
+
+def test_run_all_checks_includes_pdata_verify_when_projects_given(monkeypatch, tmp_path):
+    from cc_session_tools.lib.doctor import run_all_checks
+
+    monkeypatch.setenv("CCST_PROJECT_DB_DIR", str(tmp_path / "project-db"))
+    # Isolates the ungated check_ccsched_job_registered loop run_all_checks runs over every
+    # BUNDLED_CCSCHED_JOBS entry — without this, registry.load_registry() resolves
+    # scheduler.store.connect() to the real production ccsched.db (CC_SCHEDULER_DIR, else
+    # CCST_DATA_HOME/paths.data_home()) and creates its schema there.
+    monkeypatch.setenv("CCST_DATA_HOME", str(tmp_path / "data-home"))
+    settings = tmp_path / "settings.json"
+    settings.write_text('{"hooks": {}}')
+    bundle = Path(__file__).parent.parent / "config" / "hooks-bundle.json"
+    results = run_all_checks(
+        installed_version="0.11.0",
+        settings_path=settings,
+        bundle_path=bundle,
+        skills_source_dir=None,
+        skills_target_dir=tmp_path / "skills",
+        env={"CLAUDE_SESSION_TOOLS_REPO_ROOT": None, "CLAUDE_SESSION_TOOLS_PROJ_ROOT": None},
+        skip_pypi=True,
+        pdata_verify_projects=["demo"],
+    )
+    assert any(r.name == "pdata-verify:demo" for r in results)
+
+
+def test_run_all_checks_skips_pdata_verify_when_projects_none(monkeypatch, tmp_path):
+    from cc_session_tools.lib.doctor import run_all_checks
+
+    # Same isolation as the test above — run_all_checks() unconditionally exercises the
+    # check_ccsched_job_registered loop regardless of pdata_verify_projects.
+    monkeypatch.setenv("CCST_DATA_HOME", str(tmp_path / "data-home"))
+    settings = tmp_path / "settings.json"
+    settings.write_text('{"hooks": {}}')
+    bundle = Path(__file__).parent.parent / "config" / "hooks-bundle.json"
+    results = run_all_checks(
+        installed_version="0.11.0",
+        settings_path=settings,
+        bundle_path=bundle,
+        skills_source_dir=None,
+        skills_target_dir=tmp_path / "skills",
+        env={"CLAUDE_SESSION_TOOLS_REPO_ROOT": None, "CLAUDE_SESSION_TOOLS_PROJ_ROOT": None},
+        skip_pypi=True,
+        pdata_verify_projects=None,
+    )
+    assert not any(r.name.startswith("pdata-verify:") for r in results)

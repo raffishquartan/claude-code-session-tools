@@ -58,6 +58,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`ccst pdata verify` — the integrity-check backstop.** `--project <name> [--full] | --all-projects`
+  runs three checks per project: row-count parity against still-archived migration originals,
+  `file_path` resolution, and suspiciously-close-in-time double-updates (spec §6.3) — results are
+  persisted so `ccst doctor` can report a `pdata-verify:<project>` check cheaply, without doctor
+  itself paying the cost of a verify pass. A `pdata-verify-all` `ccsched` job (daily@03:00) is
+  provisioned automatically by `ccst install-everything`, feeding doctor rather than paging
+  anyone directly.
+- **`pm-pdata-schema-design` and `pm-pdata-conflict-resolution` skills.** The first is invoked
+  before writing a genuinely new kind of structured data into a project's `ccst pdata` store
+  (existing group vs. new group vs. extension table vs. free-text content); the second is invoked
+  whenever `ccst pdata update`/`delete` exits 3 (a version conflict), presenting the current-vs-
+  attempted diff for reconciliation rather than auto-retrying or silently picking a side.
+
+  Note: `ccst pdata export` (spec §5's remaining `pdata` subcommand) is not designed or
+  implemented by this work, nor by any prior `pdata` plan — flagged as the concrete scope for a
+  future Plan E. See `docs/superpowers/plans/2026-07-30-ccst-pdata-verify-and-skills.md`.
+
 - **Session-output index + `pm-update-central-files`.** `ccst pdata reconcile-session-output`
   backfills a per-project `session-output` record_group (on `ccst pdata`'s existing schema/CLI)
   from every `cc-sessions/*/out/` file on disk, incrementally via a per-project watermark.

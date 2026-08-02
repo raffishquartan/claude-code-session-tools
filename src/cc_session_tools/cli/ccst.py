@@ -38,6 +38,9 @@ Current subcommands:
                                  `ccst ccsched-jobs install` — see ccst ccsched-jobs --help.
                                  --schema-only bootstraps the schema/index for --project without
                                  scanning or registering files.
+  pdata verify                   Run the integrity-check backstop (row-count parity, file_path
+                                 resolution, suspicious double-updates) for --project NAME or
+                                 --all-projects and persist the result for ccst doctor.
   migrate ccsched                Migrate ccsched flat-file stores into ccsched.db
                                  (verify + tar-backup old files before removal).
   migrate ccmsg                  Migrate the flat-file message store into ccmsg.db
@@ -669,6 +672,7 @@ def _cmd_doctor(args: argparse.Namespace) -> int:
         data_home=data_home(),
     )
 
+    from cc_session_tools.lib.pdata import verify as _pdata_verify
     from cc_session_tools.lib.pdata.init_paths import default_projects_root
 
     results = run_all_checks(
@@ -682,6 +686,7 @@ def _cmd_doctor(args: argparse.Namespace) -> int:
         store_paths=store_paths,
         legacy_migration_paths=legacy_migration_paths,
         projects_root=default_projects_root(),
+        pdata_verify_projects=_pdata_verify.discover_projects(),
     )
 
     if args.drift or getattr(args, "mode", None) == "drift":
@@ -1133,6 +1138,30 @@ def _cmd_pdata_reconcile_session_output(args: argparse.Namespace) -> int:
         suffix = " (dry-run)" if args.dry_run else ""
         print(f"{name}: scanned {result.scanned}, registered {result.registered}{suffix}")
     return 0
+
+
+def _cmd_pdata_verify(args: argparse.Namespace) -> int:
+    from cc_session_tools.lib.pdata import verify
+
+    projects = verify.discover_projects() if args.all_projects else [args.project]
+    if not projects:
+        print("ccst pdata verify: no project databases found", file=sys.stderr)
+        return 2
+
+    worst = 0
+    for project in projects:
+        try:
+            summary = verify.run_verify(project=project, full=args.full)
+        except ValueError as exc:
+            print(f"ccst pdata verify: {project}: {exc}", file=sys.stderr)
+            worst = max(worst, 2)
+            continue
+        print(f"{project}: {summary.status} ({len(summary.issues)} issue(s))")
+        for issue in summary.issues:
+            print(f"  [{issue.severity}] {issue.check}: {issue.message}")
+        if summary.status != "OK":
+            worst = max(worst, 1)
+    return worst
 
 
 # ---------- hooks run ----------
@@ -1893,6 +1922,20 @@ def _build_parser() -> argparse.ArgumentParser:
              "(no file scan or registration)",
     )
 
+    pdata_verify_parser = pdata_sub.add_parser(
+        "verify", help="Run the integrity-check backstop (spec §6.3/§8.2)"
+    )
+    verify_target = pdata_verify_parser.add_mutually_exclusive_group(required=True)
+    verify_target.add_argument("--project", metavar="NAME")
+    verify_target.add_argument(
+        "--all-projects", action="store_true",
+        help="Verify every project with a .db under project-db/",
+    )
+    pdata_verify_parser.add_argument(
+        "--full", action="store_true",
+        help="Rescan every row instead of only rows changed since the last run",
+    )
+
     # ---- sessions ----
     sessions_parser = sub.add_parser("sessions", help="sessions.db management commands")
     sessions_sub = sessions_parser.add_subparsers(dest="verb", metavar="<verb>")
@@ -2083,6 +2126,8 @@ def main() -> None:
             sys.exit(_cmd_pdata_init(args))
         if args.verb == "reconcile-session-output":
             sys.exit(_cmd_pdata_reconcile_session_output(args))
+        if args.verb == "verify":
+            sys.exit(_cmd_pdata_verify(args))
 
     if args.noun == "sessions":
         if args.verb == "migrate":

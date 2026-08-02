@@ -28,4 +28,13 @@ BUNDLED_CCSCHED_JOBS: tuple[BundledJob, ...] = (
         surface=True,
         command=("ccst", "pdata", "reconcile-session-output", "--all-projects"),
     ),
+    BundledJob(
+        job_id="pdata-verify-all",
+        cadence="daily@03:00",
+        coalesce="one",
+        catchup_window="7d",
+        timeout="300s",
+        surface=False,
+        command=("ccst", "pdata", "verify", "--all-projects"),
+    ),
 )
