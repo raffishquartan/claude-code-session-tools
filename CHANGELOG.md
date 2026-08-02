@@ -45,6 +45,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   crash, so 10 consecutive weekly "found drift" runs auto-suspended the job — see the paired
   `Fixed` entry below. `ccsched show` prints the configured codes.
 
+- **`ccr` disambiguates duplicate transcripts sharing one session tag.** Hitting Ctrl-L twice
+  mid-session leaves a cleared transcript alongside the original, both still tagged with the
+  same session name — `ccr <tag>` previously resumed whichever the filesystem/DB scan happened
+  to return first, silently, sometimes the blank one. `ccr` now detects when more than one
+  JSONL transcript matches the resolved tag and prompts with a numbered picker showing each
+  transcript's size and last-updated time; a non-interactive invocation (or more than 10
+  candidates) resumes the most recently updated one and prints a warning instead of guessing
+  silently.
+
 ### Fixed
 
 - **CCST drift reports stopped appearing at session start after silently auto-suspending.**
@@ -59,6 +68,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   successful run, with the drift report's own stdout discarded. A nonzero-but-configured-success
   exit now carries its stdout into the digest as a `⚠ <job> ran with findings:` block, and is
   never folded into the routine-backlog summary line the way ordinary runs are.
+
+- **`ccl`/`ccs` help text no longer contradicts their own behaviour.** Three gaps, all
+  reproducible from `ccl --help` alone: (1) `ccl`'s own help heredoc never mentioned `-n`/
+  `--limit` even though it silently passes it through to `ccs` and it works; (2) the
+  "`--limit` requires `--order-by opened or active`" constraint was documented only inside the
+  `-n`/`--limit` help entry, invisible from the usage banner, the epilog examples, or `ccl
+  --help`; (3) plain `ccs`/`ccl` (no `--global`) requires a `cc-sessions/` known to `sessions.db`
+  under the current directory, silently, with no help text ever saying so or pointing at
+  `--global` as the fix. `ccl --help` and `ccs`'s epilog now cover `--limit`'s constraint and
+  the `--global` requirement; the "no cc-sessions/" error message itself now names `--global`
+  as the fix. Also fixed a stale `docs/data-store-migration-steps.md` verify-step example that
+  reproduced the exact `--limit` error from a real user report.
 
 - **`ccst skills install --apply` no longer aborts on a stale symlink it manages.** A skill
   symlink under `~/.claude/skills/` left pointing at an old location (e.g. a since-deleted git

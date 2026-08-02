@@ -143,6 +143,9 @@ Examples:
   ccs flaky                        # name search in current project
   ccs "GraphQL retry" --contents --global   # full-text search everywhere
   ccs --emptiness only             # only sessions you never typed in
+  ccs --global --order-by active --limit 5   # 5 most recently active, everywhere
+                                    # (-n/--limit requires --order-by opened or active -
+                                    #  see the -n/--limit help above)
 """
 
 
@@ -169,7 +172,9 @@ def _build_parser() -> argparse.ArgumentParser:
     # --- Scope group ---
     scope_grp = p.add_argument_group("Scope")
     scope_grp.add_argument("--global", dest="do_global", action="store_true",
-                           help="Search all sessions on this machine, not just the current directory.")
+                           help="Search all sessions on this machine, not just the current "
+                                "directory. Required outside a directory with a known "
+                                "cc-sessions/ (otherwise: 'no cc-sessions/ in current directory').")
     scope_grp.add_argument("--local", action="store_true",
                            help="Search only current directory's sessions "
                                 "(overrides CCS_DEFAULT_GLOBAL=1).")
@@ -1075,7 +1080,11 @@ def main(argv: list[str] | None = None) -> int:
         if effective_global:
             print("ccs: no sessions found in any configured root", file=sys.stderr)
         else:
-            print("ccs: no cc-sessions/ in current directory", file=sys.stderr)
+            print(
+                "ccs: no cc-sessions/ in current directory "
+                "(pass --global to search every configured root instead)",
+                file=sys.stderr,
+            )
         return 1
     debug(f"sessions found: {len(session_rows)}")
 

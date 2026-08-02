@@ -183,7 +183,8 @@ new binary is working, if you want to reclaim the space.
 ## Step 6 — verify
 
 ```sh
-ccl --limit 5                    # most-recent-5 sessions, reading sessions.db
+ccl --order-by active --limit 5  # most-recent-5 sessions, reading sessions.db
+                                  # (--limit requires --order-by opened or active)
 ccmsg list                       # reads ccmsg.db
 ccsched list                     # reads ccsched.db
 ccst telemetry query --limit 5   # reads telemetry.db
