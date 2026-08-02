@@ -36,3 +36,21 @@ def test_pdata_verify_all_job_command_and_cadence():
     assert job.cadence == "daily@03:00"  # avoids interactive-session hours
     assert job.coalesce == "one"
     assert job.surface is False  # results reach ccst doctor, not a direct interrupt (spec §8.2)
+
+
+def test_pdata_verify_all_job_treats_no_projects_yet_as_success():
+    """Exit 2 means "zero project .db files found" (plan Decision 8) — expected on any machine
+    that hasn't adopted pdata yet, not a crash. A real per-project issue exits 1, which must
+    still count as a failure, so only 2 is added alongside the default 0."""
+    job = next(
+        j for j in bundled_jobs.BUNDLED_CCSCHED_JOBS if j.job_id == "pdata-verify-all"
+    )
+    assert job.success_exit_codes == (0, 2)
+
+
+def test_session_output_job_uses_default_success_exit_codes():
+    job = next(
+        j for j in bundled_jobs.BUNDLED_CCSCHED_JOBS
+        if j.job_id == "pm-session-output-reconcile"
+    )
+    assert job.success_exit_codes == (0,)

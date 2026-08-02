@@ -16,6 +16,7 @@ class BundledJob:
     timeout: str
     surface: bool
     command: tuple[str, ...]
+    success_exit_codes: tuple[int, ...] = (0,)
 
 
 BUNDLED_CCSCHED_JOBS: tuple[BundledJob, ...] = (
@@ -36,5 +37,13 @@ BUNDLED_CCSCHED_JOBS: tuple[BundledJob, ...] = (
         timeout="300s",
         surface=False,
         command=("ccst", "pdata", "verify", "--all-projects"),
+        # `verify --all-projects` exits 2 for "zero project .db files found" (plan Decision 8,
+        # 2026-07-30-ccst-pdata-verify-and-skills.md) — a deliberate, distinct-from-clean CLI
+        # result for interactive callers, but for this daily unattended job it's the expected
+        # state on any machine that hasn't adopted pdata yet, not a crash. Without this, 10
+        # consecutive not-yet-adopted days auto-suspends the job before it ever gets a chance to
+        # run once pdata is adopted. A real per-project issue still exits 1, which isn't listed
+        # here, so it still counts as a failure.
+        success_exit_codes=(0, 2),
     ),
 )
