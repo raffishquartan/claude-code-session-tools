@@ -1352,6 +1352,7 @@ def _cmd_ccsched_jobs_install(args: argparse.Namespace) -> int:
             job_id=job.job_id, cadence=job.cadence, coalesce=job.coalesce,
             command=list(job.command), surface=job.surface, enabled=True,
             catchup_window=job.catchup_window, timeout=job.timeout,
+            success_exit_codes=job.success_exit_codes,
         )
         registry.add_job(spec)
         print(f"  registered: {job.job_id}")

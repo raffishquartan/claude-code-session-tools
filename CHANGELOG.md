@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.4.1] - 2026-08-02
+
+### Fixed
+
+- **The bundled `pdata-verify-all` ccsched job auto-suspended on any machine that hadn't yet
+  adopted pdata.** `ccst pdata verify --all-projects` correctly exits 2 for "zero project `.db`
+  files found" (plan Decision 8, `2026-07-30-ccst-pdata-verify-and-skills.md`) — a deliberate,
+  distinct-from-clean result for interactive callers. But the daily install-time job has no way
+  to have adopted pdata before it exists, so on a fresh install this "nothing to verify yet"
+  result recurred every day and, with `success_exit_codes` defaulting to `(0,)` for every
+  bundled job, counted as 10 consecutive crashes — auto-suspending the job before it ever got a
+  chance to run once a project actually had a store. `BundledJob` gained a `success_exit_codes`
+  field (defaulting to `(0,)`, unchanged for every other bundled job) and `pdata-verify-all` is
+  now registered with `(0, 2)`; a real per-project issue still exits 1, which isn't in that set,
+  so it still counts as a failure. Only affects newly-registered installs — an already-suspended
+  `pdata-verify-all` on an existing machine needs `ccsched edit pdata-verify-all
+  --success-exit-codes 0,2` followed by `ccsched enable pdata-verify-all`, since
+  `ccst ccsched-jobs install` never touches an already-registered job id.
+
 ## [1.3.1] - 2026-08-02
 
 ### Added
