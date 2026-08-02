@@ -38,7 +38,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `ccst pdata verify`/`export` are deferred to later plans (see
   `docs/superpowers/plans/2026-07-30-ccst-pdata-core.md`'s Scope section).
 
+- **`ccsched add`/`edit --success-exit-codes`.** A job's exit code contract can now say
+  "these codes mean I ran fine, not that I crashed" (default: `0` only, unchanged for every
+  existing job). A check-style command like `ccst doctor --drift` legitimately exits 1 to mean
+  "found something", but the scheduler previously had no way to distinguish that from a real
+  crash, so 10 consecutive weekly "found drift" runs auto-suspended the job — see the paired
+  `Fixed` entry below. `ccsched show` prints the configured codes.
+
 ### Fixed
+
+- **CCST drift reports stopped appearing at session start after silently auto-suspending.**
+  `ccst doctor --drift` (run weekly via a user-registered `ccsched` job) exits 1 whenever it
+  finds unmuted drift — a documented, intentional signal for scheduled use, not an error. The
+  scheduler had no way to tell "exited nonzero on purpose" from "crashed", so persistent
+  (legitimate, unmuted) drift caused 10 consecutive "failures" and auto-suspended the job on
+  2026-07-26, silencing it. Fixed via the new `success_exit_codes` job field (see `Added`
+  above); a job's own crash/timeout accounting now checks against that set instead of a
+  hardcoded `!= 0`. Separately, even a healthy run of this job never actually showed its
+  findings — the session-start digest only ever rendered a bare `✓ ran <job>` checkmark for a
+  successful run, with the drift report's own stdout discarded. A nonzero-but-configured-success
+  exit now carries its stdout into the digest as a `⚠ <job> ran with findings:` block, and is
+  never folded into the routine-backlog summary line the way ordinary runs are.
 
 - **`ccst skills install --apply` no longer aborts on a stale symlink it manages.** A skill
   symlink under `~/.claude/skills/` left pointing at an old location (e.g. a since-deleted git

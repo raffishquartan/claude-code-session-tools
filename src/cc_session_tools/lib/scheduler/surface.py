@@ -132,7 +132,21 @@ def surface(*, session_uuid: str, now: datetime) -> SurfaceResult:
                 age=_format_age(_parse_ts(e.get("ts")), now),
             ))
         elif event in _ROUTINE_EVENTS:
-            if _surface_flag(job_id, surface_by_id):
+            raw_exit = e.get("exit_code")
+            has_findings = (
+                event == ledger.LedgerEvent.RUN.value
+                and bool(e.get("error"))
+                and raw_exit not in (0, None)
+            )
+            if has_findings:
+                # Findings are signal, not routine noise - never folded into
+                # the SUMMARY line and never silenced, same as FAIL/SUSPEND.
+                reports.append(JobReport(
+                    job_id=job_id, outcome=Outcome.RAN, surface=True, overdue="",
+                    ran=int(cast(int, e.get("ran", 0)) or 0), deferred=0, expired=0,
+                    consecutive_failures=0, findings=str(e.get("error")),
+                ))
+            elif _surface_flag(job_id, surface_by_id):
                 routine.append(e)
             else:
                 # Silent jobs never surface, individually or in the summary —

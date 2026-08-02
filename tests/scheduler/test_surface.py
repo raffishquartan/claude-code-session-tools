@@ -131,6 +131,56 @@ def test_new_session_seed_skips_pre_existing_backlog(monkeypatch: pytest.MonkeyP
     assert result.reports == []
 
 
+def test_run_event_with_error_and_nonzero_exit_surfaces_as_findings(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _add("drift", surface=True)
+    ld.record(ld.LedgerEntry(job_id="drift", event=ld.LedgerEvent.RUN, owed=1,
+                             ran=1, exit_code=1, duration_ms=1, error="WARN: drifted"))
+    result = sf.surface(session_uuid="s1", now=_NOW)
+    rep = next(r for r in result.reports if r.job_id == "drift")
+    assert rep.outcome is Outcome.RAN
+    assert rep.findings == "WARN: drifted"
+    assert rep.surface is True
+
+
+def test_findings_surface_even_for_a_silent_job(monkeypatch: pytest.MonkeyPatch) -> None:
+    _add("drift", surface=False)
+    ld.record(ld.LedgerEntry(job_id="drift", event=ld.LedgerEvent.RUN, owed=1,
+                             ran=1, exit_code=1, duration_ms=1, error="WARN: drifted"))
+    result = sf.surface(session_uuid="s1", now=_NOW)
+    rep = next(r for r in result.reports if r.job_id == "drift")
+    assert rep.findings == "WARN: drifted"
+    assert rep.surface is True
+
+
+def test_findings_never_folded_into_routine_summary(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A findings-bearing RUN mixed into a large routine backlog must still
+    replay individually, exactly like FAILED/SUSPENDED - never swallowed by
+    the routine-backlog summary fold."""
+    _add("tesco", surface=True)
+    _add("drift", surface=True)
+    for _ in range(200):
+        _run_event("tesco")
+    ld.record(ld.LedgerEntry(job_id="drift", event=ld.LedgerEvent.RUN, owed=1,
+                             ran=1, exit_code=1, duration_ms=1, error="WARN: drifted"))
+    result = sf.surface(session_uuid="s1", now=_NOW)
+    findings_reports = [r for r in result.reports if r.findings]
+    assert len(findings_reports) == 1
+    assert findings_reports[0].job_id == "drift"
+    summary_reports = [r for r in result.reports if r.outcome is Outcome.SUMMARY]
+    assert len(summary_reports) == 1
+    assert summary_reports[0].count == 200  # drift's RUN excluded from the fold
+
+
+def test_run_event_with_zero_exit_has_no_findings(monkeypatch: pytest.MonkeyPatch) -> None:
+    _add("tesco", surface=True)
+    _run_event("tesco")
+    result = sf.surface(session_uuid="s1", now=_NOW)
+    rep = next(r for r in result.reports if r.job_id == "tesco")
+    assert rep.findings is None
+
+
 def test_suspend_event_surfaces_as_suspended_report(monkeypatch: pytest.MonkeyPatch) -> None:
     _add("broken-job", surface=False)
     ld.record(ld.LedgerEntry(job_id="broken-job", event=ld.LedgerEvent.SUSPEND, owed=0,

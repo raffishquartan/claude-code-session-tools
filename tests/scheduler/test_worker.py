@@ -24,10 +24,14 @@ def _dirs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("CCCS_HOOKS_DIR", str(tmp_path / "hooks"))
 
 
-def _add(job_id: str, cadence: str = "daily@09:00", coalesce: str = "one") -> None:
+def _add(
+    job_id: str, cadence: str = "daily@09:00", coalesce: str = "one",
+    success_exit_codes: tuple[int, ...] = (0,),
+) -> None:
     reg.add_job(validate_job_fields(
         job_id=job_id, cadence=cadence, coalesce=coalesce, command=["true"],
         surface=True, enabled=True, catchup_window="30d", timeout="5s",
+        success_exit_codes=success_exit_codes,
     ))
 
 
@@ -186,6 +190,55 @@ def test_success_preserves_existing_suspended_flag(monkeypatch: pytest.MonkeyPat
     after = st.load_all_state()["flaky"]
     assert after.consecutive_failures == 0  # success still resets the streak
     assert after.suspended is True  # but does not clear suspension
+
+
+def test_expected_nonzero_exit_does_not_count_as_failure(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A drift-monitor-style job with success_exit_codes=(0, 1) exiting 1 must
+    advance last_success and reset the failure streak, not accumulate toward
+    auto-suspend - the whole point of success_exit_codes."""
+    _add("drift", success_exit_codes=(0, 1))
+    _seed("drift")
+
+    def findings_runner(argv, timeout) -> RunOutcome:
+        return RunOutcome(exit_code=1, stdout="WARN: something drifted", stderr="",
+                          duration_ms=1, timed_out=False)
+
+    now = datetime(2026, 6, 20, 10, 0, tzinfo=UTC)
+    wk.run_job("drift", instants=1, now=now, runner=findings_runner)
+    after = st.load_all_state()["drift"]
+    assert after.last_success is not None
+    assert after.consecutive_failures == 0
+    assert after.suspended is False
+    rows = ld.read_recent(job_id="drift")
+    assert rows[-1]["event"] == ld.LedgerEvent.BACKFILL.value or rows[-1]["event"] == ld.LedgerEvent.RUN.value
+    assert rows[-1]["error"] == "WARN: something drifted"
+
+
+def test_exit_code_outside_success_set_still_counts_as_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """success_exit_codes=(0, 1) does not mean "anything goes" - exit 2 (a real
+    crash) must still increment the failure streak exactly as before."""
+    _add("drift", success_exit_codes=(0, 1))
+    _seed("drift")
+
+    def crash_runner(argv, timeout) -> RunOutcome:
+        return RunOutcome(exit_code=2, stdout="", stderr="traceback", duration_ms=1, timed_out=False)
+
+    now = datetime(2026, 6, 20, 10, 0, tzinfo=UTC)
+    wk.run_job("drift", instants=1, now=now, runner=crash_runner)
+    after = st.load_all_state()["drift"]
+    assert after.last_success is None
+    assert after.consecutive_failures == 1
+    assert ld.read_recent(job_id="drift")[-1]["event"] == ld.LedgerEvent.FAIL.value
+
+
+def test_plain_zero_exit_records_no_findings(monkeypatch: pytest.MonkeyPatch) -> None:
+    _add("tesco")
+    _seed("tesco")
+    now = datetime(2026, 6, 20, 10, 0, tzinfo=UTC)
+    wk.run_job("tesco", instants=1, now=now, runner=_ok_runner)
+    assert ld.read_recent(job_id="tesco")[-1]["error"] is None
 
 
 def test_second_worker_exits_when_lock_held_by_live_pid(monkeypatch: pytest.MonkeyPatch) -> None:

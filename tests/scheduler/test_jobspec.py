@@ -6,6 +6,7 @@ from cc_session_tools.lib.scheduler.jobspec import (
     CoalesceKind,
     JobSpec,
     JobValidationError,
+    parse_success_exit_codes,
     validate_job_fields,
 )
 
@@ -100,3 +101,47 @@ def test_bad_durations_rejected(field: str, bad: str) -> None:
     kwargs[field] = bad
     with pytest.raises(JobValidationError):
         validate_job_fields(**kwargs)  # type: ignore[arg-type]
+
+
+def test_success_exit_codes_defaults_to_zero_only() -> None:
+    assert _valid().success_exit_codes == (0,)
+
+
+def test_success_exit_codes_accepted() -> None:
+    spec = validate_job_fields(
+        job_id="drift-check", cadence="daily@09:00", coalesce="one", command=["x"],
+        surface=True, enabled=True, catchup_window="7d", timeout="60s",
+        success_exit_codes=(0, 1),
+    )
+    assert spec.success_exit_codes == (0, 1)
+
+
+def test_empty_success_exit_codes_rejected() -> None:
+    with pytest.raises(JobValidationError):
+        validate_job_fields(
+            job_id="j", cadence="daily@09:00", coalesce="one", command=["x"],
+            surface=True, enabled=True, catchup_window="7d", timeout="60s",
+            success_exit_codes=(),
+        )
+
+
+@pytest.mark.parametrize("bad_code", [-1, 256])
+def test_out_of_range_success_exit_code_rejected(bad_code: int) -> None:
+    with pytest.raises(JobValidationError):
+        validate_job_fields(
+            job_id="j", cadence="daily@09:00", coalesce="one", command=["x"],
+            surface=True, enabled=True, catchup_window="7d", timeout="60s",
+            success_exit_codes=(bad_code,),
+        )
+
+
+def test_parse_success_exit_codes() -> None:
+    assert parse_success_exit_codes("0") == (0,)
+    assert parse_success_exit_codes("0,1") == (0, 1)
+    assert parse_success_exit_codes(" 0 , 2 ") == (0, 2)
+
+
+@pytest.mark.parametrize("bad", ["", "abc", "0,x", ","])
+def test_parse_success_exit_codes_rejects_garbage(bad: str) -> None:
+    with pytest.raises(JobValidationError):
+        parse_success_exit_codes(bad)

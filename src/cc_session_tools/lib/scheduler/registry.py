@@ -26,6 +26,7 @@ def _spec_from_row(row: sqlite3.Row) -> JobSpec:
         enabled=bool(row["enabled"]),
         catchup_window=row["catchup_window"],
         timeout=row["timeout"],
+        success_exit_codes=tuple(json.loads(row["success_exit_codes"])),
     )
 
 
@@ -35,7 +36,7 @@ def load_registry() -> list[JobSpec]:
         try:
             rows = conn.execute(
                 "SELECT job_id, cadence, coalesce_kind, command, surface, enabled, "
-                "catchup_window, timeout FROM jobs ORDER BY rowid"
+                "catchup_window, timeout, success_exit_codes FROM jobs ORDER BY rowid"
             ).fetchall()
         finally:
             conn.close()
@@ -53,11 +54,12 @@ def add_job(spec: JobSpec) -> None:
     try:
         conn.execute(
             "INSERT INTO jobs (job_id, cadence, coalesce_kind, command, surface, "
-            "enabled, catchup_window, timeout) VALUES (?,?,?,?,?,?,?,?)",
+            "enabled, catchup_window, timeout, success_exit_codes) VALUES (?,?,?,?,?,?,?,?,?)",
             (
                 spec.job_id, spec.cadence, spec.coalesce.value,
                 json.dumps(list(spec.command)), int(spec.surface), int(spec.enabled),
                 spec.catchup_window, spec.timeout,
+                json.dumps(list(spec.success_exit_codes)),
             ),
         )
         conn.commit()
@@ -72,11 +74,11 @@ def replace_job(spec: JobSpec) -> None:
     try:
         cur = conn.execute(
             "UPDATE jobs SET cadence=?, coalesce_kind=?, command=?, surface=?, "
-            "enabled=?, catchup_window=?, timeout=? WHERE job_id=?",
+            "enabled=?, catchup_window=?, timeout=?, success_exit_codes=? WHERE job_id=?",
             (
                 spec.cadence, spec.coalesce.value, json.dumps(list(spec.command)),
                 int(spec.surface), int(spec.enabled), spec.catchup_window,
-                spec.timeout, spec.job_id,
+                spec.timeout, json.dumps(list(spec.success_exit_codes)), spec.job_id,
             ),
         )
         conn.commit()

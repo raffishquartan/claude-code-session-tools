@@ -46,3 +46,30 @@ def test_connect_applies_wal(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) ->
         assert conn.execute("PRAGMA journal_mode").fetchone()[0].lower() == "wal"
     finally:
         conn.close()
+
+
+def test_success_exit_codes_column_backfilled_on_pre_existing_db(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A jobs table created before success_exit_codes existed must gain the
+    column (with its default) on the next connect(), not error out - CREATE
+    TABLE IF NOT EXISTS alone is a no-op against an already-existing table."""
+    monkeypatch.setenv("CC_SCHEDULER_DIR", str(tmp_path))
+    conn = store.connect()
+    conn.execute("ALTER TABLE jobs DROP COLUMN success_exit_codes")
+    conn.commit()
+    conn.close()
+
+    conn2 = store.connect()
+    try:
+        cols = {r["name"] for r in conn2.execute("PRAGMA table_info(jobs)")}
+        assert "success_exit_codes" in cols
+        conn2.execute(
+            "INSERT INTO jobs (job_id, cadence, coalesce_kind, command, surface, "
+            "enabled, catchup_window, timeout) VALUES ('j','daily@09:00','one','[]',1,1,'7d','60s')"
+        )
+        conn2.commit()
+        row = conn2.execute("SELECT success_exit_codes FROM jobs WHERE job_id='j'").fetchone()
+        assert row["success_exit_codes"] == "[0]"
+    finally:
+        conn2.close()

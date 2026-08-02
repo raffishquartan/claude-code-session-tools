@@ -30,6 +30,10 @@ class JobReport:
     age: str | None = None
     # SUMMARY only: number of routine entries folded into this one line.
     count: int = 0
+    # RAN only: a successful-but-nonzero-exit run's captured stdout (e.g. a
+    # drift monitor's report). Always surfaced, never folded into SUMMARY -
+    # see surface.py.
+    findings: str | None = None
 
 
 def _ordinal(n: int) -> str:
@@ -60,6 +64,13 @@ def _line(report: JobReport) -> str | None:
             f"({_ordinal(report.consecutive_failures)} consecutive{age_suffix}) — see "
             f"`ccsched status {report.job_id}`"
         )
+    if report.outcome is Outcome.RAN and report.findings:
+        # Bypasses the surface gate deliberately, same as FAILED/SUSPENDED
+        # above: findings are signal, not routine noise a job can silence.
+        overdue = f" ({report.overdue} overdue)" if report.overdue else ""
+        header = f"⚠ {report.job_id} ran with findings{overdue}:"
+        body = "\n".join(f"  {line}" for line in report.findings.splitlines())
+        return f"{header}\n{body}"
     if not report.surface:
         return None
     if report.outcome is Outcome.LAUNCHED:
