@@ -7,46 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.3.1] - 2026-08-02
+
 ### Added
-
-- **Session-output index + `pm-update-central-files`.** `ccst pdata reconcile-session-output`
-  backfills a per-project `session-output` record_group (on `ccst pdata`'s existing schema/CLI)
-  from every `cc-sessions/*/out/` file on disk, incrementally via a per-project watermark.
-  `ccst ccsched-jobs install` (wired into `ccst install-everything` as a 6th step) provisions a
-  7-day job that runs it automatically; `ccst doctor` gets a matching health check. The
-  `update-central-files` skill moves here from `claude-code-config-sync`, renamed
-  `pm-update-central-files` (establishing the `pm-` prefix for cross-project,
-  project-management-family skills), and gains an AUTO item that registers each session's `out/`
-  deliverables into the index. See `docs/superpowers/plans/2026-07-30-ccst-pm-update-central-files.md`.
-
-- **`ccst pdata init` — unified per-project data-store init/migration.** New
-  `--project <name> [--rehearse <path>] [--write]` verb (spec §7): a dry-run pass classifies
-  every file in a project as folder-owned or db-owned (CSV/JSON get an automatic proposal; every
-  other file defaults to folder-owned, pending human review), writes a hand-editable
-  classification proposal, and — once approved and re-run with `--write` — imports the approved
-  entries into that project's `ccst pdata` store, verifies the result, takes a full pre-cutover
-  backup, and archives (never deletes) the original source files. A verification failure aborts
-  before any file is touched, with every row inserted during that run soft-deleted. `--rehearse
-  <path>` runs the whole procedure against a copy with zero effect on the real project or its
-  `.db`. `ccst doctor` gains a check that WARNs about archived-but-undeleted migrated-source
-  files (manual-delete-only, per spec). Ships with the `pm-project-init` skill, which drives the
-  tool and applies the judgement its deliberately conservative classifier defers to a human. This
-  is Plan B of the per-project data-store feature, built directly on Plan A's `ccst pdata`
-  schema/CLI — `ccst pdata verify`, the `pm-pdata-schema-design`/`pm-pdata-conflict-resolution`
-  skills, and any actual per-project migration content are deferred to later work (see
-  `docs/superpowers/plans/2026-07-30-ccst-pdata-init-migration.md`'s Scope section).
-
-- **`ccst pdata` — per-project SQLite data store CLI.** New `records`/`schema` subcommands
-  (`add`, `get`, `list`, `query`, `update`, `delete`, `restore`, `schema list`, `schema show`,
-  `schema add-field`) operate on one SQLite `.db` per project under
-  `~/.local/share/claude/project-db/<project>.db`. Every record lives in a `record_group`
-  (validated lowercase-hyphenated name); an optional per-group extension table gives structured
-  fields real typed/indexed columns without a CCST source change (`schema add-field`).
-  `update`/`delete` use optimistic concurrency (`--version`) and surface a current-vs-attempted
-  diff on conflict instead of silently overwriting or retrying. This is Plan A of the
-  per-project data-store feature — `ccst pdata init`/migration, the `pm-`-prefixed skills, and
-  `ccst pdata verify`/`export` are deferred to later plans (see
-  `docs/superpowers/plans/2026-07-30-ccst-pdata-core.md`'s Scope section).
 
 - **`ccsched add`/`edit --success-exit-codes`.** A job's exit code contract can now say
   "these codes mean I ran fine, not that I crashed" (default: `0` only, unchanged for every
@@ -90,6 +53,59 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the `--global` requirement; the "no cc-sessions/" error message itself now names `--global`
   as the fix. Also fixed a stale `docs/data-store-migration-steps.md` verify-step example that
   reproduced the exact `--limit` error from a real user report.
+
+## [1.3.0] - 2026-08-02
+
+### Added
+
+- **Session-output index + `pm-update-central-files`.** `ccst pdata reconcile-session-output`
+  backfills a per-project `session-output` record_group (on `ccst pdata`'s existing schema/CLI)
+  from every `cc-sessions/*/out/` file on disk, incrementally via a per-project watermark.
+  `ccst ccsched-jobs install` (wired into `ccst install-everything` as a 6th step) provisions a
+  7-day job that runs it automatically; `ccst doctor` gets a matching health check. The
+  `update-central-files` skill moves here from `claude-code-config-sync`, renamed
+  `pm-update-central-files` (establishing the `pm-` prefix for cross-project,
+  project-management-family skills), and gains an AUTO item that registers each session's `out/`
+  deliverables into the index. See `docs/superpowers/plans/2026-07-30-ccst-pm-update-central-files.md`.
+
+## [1.2.0] - 2026-07-31
+
+### Added
+
+- **`ccst pdata init` — unified per-project data-store init/migration.** New
+  `--project <name> [--rehearse <path>] [--write]` verb (spec §7): a dry-run pass classifies
+  every file in a project as folder-owned or db-owned (CSV/JSON get an automatic proposal; every
+  other file defaults to folder-owned, pending human review), writes a hand-editable
+  classification proposal, and — once approved and re-run with `--write` — imports the approved
+  entries into that project's `ccst pdata` store, verifies the result, takes a full pre-cutover
+  backup, and archives (never deletes) the original source files. A verification failure aborts
+  before any file is touched, with every row inserted during that run soft-deleted. `--rehearse
+  <path>` runs the whole procedure against a copy with zero effect on the real project or its
+  `.db`. `ccst doctor` gains a check that WARNs about archived-but-undeleted migrated-source
+  files (manual-delete-only, per spec). Ships with the `pm-project-init` skill, which drives the
+  tool and applies the judgement its deliberately conservative classifier defers to a human. This
+  is Plan B of the per-project data-store feature, built directly on Plan A's `ccst pdata`
+  schema/CLI — `ccst pdata verify`, the `pm-pdata-schema-design`/`pm-pdata-conflict-resolution`
+  skills, and any actual per-project migration content are deferred to later work (see
+  `docs/superpowers/plans/2026-07-30-ccst-pdata-init-migration.md`'s Scope section).
+
+## [1.1.0] - 2026-07-31
+
+### Added
+
+- **`ccst pdata` — per-project SQLite data store CLI.** New `records`/`schema` subcommands
+  (`add`, `get`, `list`, `query`, `update`, `delete`, `restore`, `schema list`, `schema show`,
+  `schema add-field`) operate on one SQLite `.db` per project under
+  `~/.local/share/claude/project-db/<project>.db`. Every record lives in a `record_group`
+  (validated lowercase-hyphenated name); an optional per-group extension table gives structured
+  fields real typed/indexed columns without a CCST source change (`schema add-field`).
+  `update`/`delete` use optimistic concurrency (`--version`) and surface a current-vs-attempted
+  diff on conflict instead of silently overwriting or retrying. This is Plan A of the
+  per-project data-store feature — `ccst pdata init`/migration, the `pm-`-prefixed skills, and
+  `ccst pdata verify`/`export` are deferred to later plans (see
+  `docs/superpowers/plans/2026-07-30-ccst-pdata-core.md`'s Scope section).
+
+### Fixed
 
 - **`ccst skills install --apply` no longer aborts on a stale symlink it manages.** A skill
   symlink under `~/.claude/skills/` left pointing at an old location (e.g. a since-deleted git
@@ -731,7 +747,13 @@ integration (push notifications when 8-digit confirmation gates fire).
 - `--version` flag on all three CLIs.
 - `.gitignore` entry for `.worktrees/`.
 
-[Unreleased]: https://github.com/raffishquartan/claude-code-session-tools/compare/v0.18.0...HEAD
+[Unreleased]: https://github.com/raffishquartan/claude-code-session-tools/compare/v1.3.1...HEAD
+[1.3.1]: https://github.com/raffishquartan/claude-code-session-tools/compare/v1.3.0...v1.3.1
+[1.3.0]: https://github.com/raffishquartan/claude-code-session-tools/compare/v1.2.0...v1.3.0
+[1.2.0]: https://github.com/raffishquartan/claude-code-session-tools/compare/v1.1.0...v1.2.0
+[1.1.0]: https://github.com/raffishquartan/claude-code-session-tools/compare/v1.0.0...v1.1.0
+[1.0.0]: https://github.com/raffishquartan/claude-code-session-tools/compare/v0.19.0...v1.0.0
+[0.19.0]: https://github.com/raffishquartan/claude-code-session-tools/compare/v0.18.0...v0.19.0
 [0.18.0]: https://github.com/raffishquartan/claude-code-session-tools/compare/v0.17.0...v0.18.0
 [0.17.0]: https://github.com/raffishquartan/claude-code-session-tools/compare/v0.16.0...v0.17.0
 [0.16.0]: https://github.com/raffishquartan/claude-code-session-tools/compare/v0.15.1...v0.16.0
