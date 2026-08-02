@@ -672,6 +672,7 @@ def _cmd_doctor(args: argparse.Namespace) -> int:
         data_home=data_home(),
     )
 
+    from cc_session_tools.lib.pdata import verify as _pdata_verify
     from cc_session_tools.lib.pdata.init_paths import default_projects_root
 
     results = run_all_checks(
@@ -685,6 +686,7 @@ def _cmd_doctor(args: argparse.Namespace) -> int:
         store_paths=store_paths,
         legacy_migration_paths=legacy_migration_paths,
         projects_root=default_projects_root(),
+        pdata_verify_projects=_pdata_verify.discover_projects(),
     )
 
     if args.drift or getattr(args, "mode", None) == "drift":

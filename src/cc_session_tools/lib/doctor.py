@@ -14,6 +14,7 @@ import os
 import shutil
 import sqlite3
 import subprocess
+import time
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
@@ -545,6 +546,57 @@ def check_pending_pdata_migration(projects_root: Path) -> list[CheckResult]:
     ]
 
 
+def _fmt_epoch(epoch: int) -> str:
+    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(epoch))
+
+
+def check_pdata_verify(projects: list[str]) -> list[CheckResult]:
+    """Read (never run) each project's most recently persisted `ccst pdata verify` result — a
+    background ccsched job produces it, this only reports it (spec §8.2's own "feeding failures
+    into ccst doctor... rather than only running silently in the background"). A project with no
+    verify db yet, or that has never had a verify run, WARNs rather than FAILing — matching
+    check_pending_data_store_migration's own precedent that an unremarkable not-yet-run state
+    should never read as broken.
+
+    Deliberately takes validated project *names*, not pre-resolved Path objects like
+    check_data_stores()'s `store_paths` — unlike a generic file-backed store, a project's pdata
+    store is never addressed by raw path anywhere in this codebase (service.py, repository.py,
+    verify.py itself are all keyed by project name; repository.connect(project) does the one
+    env-var-aware path lookup, in one place). Accepting a Path here would mean either duplicating
+    that lookup a second time in ccst.py just to hand doctor.py something it then discards in
+    favour of calling verify.last_run(project) anyway, or threading a parallel path-based entry
+    point through verify.py that nothing else needs. The project name *is* this check's resolved
+    handle, in the same sense that store_paths' Path values are check_data_stores()'s."""
+    from cc_session_tools.lib.pdata import verify
+
+    results: list[CheckResult] = []
+    for project in projects:
+        name = f"pdata-verify:{project}"
+        summary = verify.last_run(project)
+        if summary is None:
+            results.append(CheckResult(
+                name=name, status=Status.WARN,
+                reason="ccst pdata verify has not run yet for this project",
+            ))
+            continue
+        if summary.status == "OK":
+            results.append(CheckResult(
+                name=name, status=Status.OK,
+                reason=f"last run {_fmt_epoch(summary.run_at)}, no issues",
+            ))
+        else:
+            status = Status.FAIL if summary.status == "FAIL" else Status.WARN
+            results.append(CheckResult(
+                name=name, status=status,
+                reason=(
+                    f"last run {_fmt_epoch(summary.run_at)}: {len(summary.issues)} "
+                    f"issue(s), worst={summary.status} — run 'ccst pdata verify "
+                    f"--project {project}' for details"
+                ),
+            ))
+    return results
+
+
 # ---------- high-level runner ----------
 
 
@@ -560,6 +612,7 @@ def run_all_checks(
     store_paths: dict[str, Path] | None = None,
     legacy_migration_paths: LegacyMigrationPaths | None = None,
     projects_root: Path | None = None,
+    pdata_verify_projects: list[str] | None = None,
 ) -> list[CheckResult]:
     """Run the full doctor suite and return results.
 
@@ -589,6 +642,10 @@ def run_all_checks(
     projects_root:
         Root holding every ``~/cc/<project>`` directory; when None, the
         pending ``ccst pdata init`` cutover check is skipped.
+    pdata_verify_projects:
+        Project names whose last persisted ``ccst pdata verify`` result should
+        be reported; when None, the pdata-verify checks are skipped. Never
+        triggers a verify run — only reads what the recurring job left behind.
     """
     results: list[CheckResult] = []
 
@@ -649,6 +706,10 @@ def run_all_checks(
     # Pending ccst pdata init cutover (spec §7.1 step 7)
     if projects_root is not None:
         results.extend(check_pending_pdata_migration(projects_root))
+
+    # Last persisted ccst pdata verify result per project (spec §8.2)
+    if pdata_verify_projects is not None:
+        results.extend(check_pdata_verify(pdata_verify_projects))
 
     # PyPI version check
     if not skip_pypi:
