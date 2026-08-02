@@ -216,3 +216,90 @@ def test_ccr_debug_flag_produces_output(fake_repos, captured_launch, monkeypatch
     ccr.main(["foo", "--debug"])
     err = capsys.readouterr().err
     assert "[CCX_DEBUG]" in err
+
+
+# ---------------------------------------------------------------------------
+# Duplicate-transcript picker: two jsonls share one session tag (e.g. after
+# hitting Ctrl-L twice mid-session clears a copy alongside the original).
+# ---------------------------------------------------------------------------
+
+def _write_jsonl(project_dir: Path, uuid: str, basename: str, padding: str = "") -> Path:
+    import json
+
+    from cc_session_tools.lib.sessions import transcript_dir_for_project
+    tdir = transcript_dir_for_project(project_dir)
+    tdir.mkdir(parents=True, exist_ok=True)
+    p = tdir / f"{uuid}.jsonl"
+    p.write_text(json.dumps({"type": "custom-title", "customTitle": basename}) + "\n" + padding)
+    return p
+
+
+def test_ccr_multiple_transcripts_same_tag_shows_picker(fake_repos, captured_launch, monkeypatch):
+    sess = _make_session(fake_repos, "myproj", "20260504-foo-bar")
+    project_dir = sess.parent.parent
+    old = _write_jsonl(project_dir, "uuid-old", "20260504-foo-bar")
+    _write_jsonl(project_dir, "uuid-new", "20260504-foo-bar", padding="x" * 500)
+    import os
+    import time
+    os.utime(old, (time.time() - 3600, time.time() - 3600))
+
+    monkeypatch.setattr("sys.stdin.isatty", lambda: True)
+    from cc_session_tools.lib import picker
+    picked: dict = {}
+
+    def fake_pick(labels):
+        picked["labels"] = labels
+        return 0
+
+    monkeypatch.setattr(picker, "pick_from_list", fake_pick)
+
+    rc = ccr.main(["foo-bar"])
+    assert rc == 0
+    assert "uuid-new" in captured_launch["cmd"]  # sorted most-recent-first, index 0
+    assert any("B" in label for label in picked["labels"])  # size shown
+    assert any(":" in label for label in picked["labels"])  # timestamp shown
+
+
+def test_ccr_multiple_transcripts_non_interactive_picks_most_recent(
+    fake_repos, captured_launch, monkeypatch, capsys
+):
+    sess = _make_session(fake_repos, "myproj", "20260504-foo-bar")
+    project_dir = sess.parent.parent
+    old = _write_jsonl(project_dir, "uuid-old", "20260504-foo-bar")
+    _write_jsonl(project_dir, "uuid-new", "20260504-foo-bar")
+    import os
+    import time
+    os.utime(old, (time.time() - 3600, time.time() - 3600))
+
+    monkeypatch.setattr("sys.stdin.isatty", lambda: False)
+
+    rc = ccr.main(["foo-bar"])
+    assert rc == 0
+    assert "uuid-new" in captured_launch["cmd"]
+    err = capsys.readouterr().err
+    assert "share the session tag" in err
+
+
+def test_ccr_duplicate_transcript_picker_cancel_returns_0(fake_repos, captured_launch, monkeypatch):
+    sess = _make_session(fake_repos, "myproj", "20260504-foo-bar")
+    project_dir = sess.parent.parent
+    _write_jsonl(project_dir, "uuid-a", "20260504-foo-bar")
+    _write_jsonl(project_dir, "uuid-b", "20260504-foo-bar")
+
+    monkeypatch.setattr("sys.stdin.isatty", lambda: True)
+    from cc_session_tools.lib import picker
+    monkeypatch.setattr(picker, "pick_from_list", lambda labels: None)
+
+    rc = ccr.main(["foo-bar"])
+    assert rc == 0
+    assert "cmd" not in captured_launch
+
+
+def test_ccr_single_transcript_unaffected(fake_repos, captured_launch):
+    sess = _make_session(fake_repos, "myproj", "20260504-foo-bar")
+    project_dir = sess.parent.parent
+    _write_jsonl(project_dir, "uuid-only", "20260504-foo-bar")
+
+    rc = ccr.main(["foo-bar"])
+    assert rc == 0
+    assert "uuid-only" in captured_launch["cmd"]

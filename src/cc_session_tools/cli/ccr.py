@@ -4,13 +4,53 @@ import argparse
 import os
 import shutil
 import sys
+from datetime import datetime
 from pathlib import Path
 
 from cc_session_tools import __version__
 from cc_session_tools.lib.claude_flags import get_claude_flags
 from cc_session_tools.lib.roots import load_session_roots
-from cc_session_tools.lib.sessions import SESSION_FULL_RE, SessionMatch, find_jsonl_for_session, find_matching_sessions, find_orphan_transcripts, session_tag
+from cc_session_tools.lib.sessions import SESSION_FULL_RE, SessionMatch, find_all_jsonls_for_session, find_matching_sessions, find_orphan_transcripts, session_tag
 from cc_session_tools.lib.tasklist import id_for_project
+
+
+def _format_size(num_bytes: int) -> str:
+    size = float(num_bytes)
+    for unit in ("B", "KB", "MB"):
+        if size < 1024 or unit == "MB":
+            return f"{size:.0f}{unit}" if unit == "B" else f"{size:.1f}{unit}"
+        size /= 1024
+    return f"{size:.1f}GB"
+
+
+def _pick_duplicate_transcript(basename: str, candidates: list[Path]) -> Path | None:
+    """Multiple JSONL transcripts share one session tag - e.g. hitting Ctrl-L
+    twice mid-session clears one copy while `claude --resume` still lists it
+    alongside the original. Ask which one to resume rather than silently
+    picking whichever the filesystem/DB happens to return first."""
+    candidates = sorted(candidates, key=lambda p: p.stat().st_mtime, reverse=True)
+    if not sys.stdin.isatty() or len(candidates) > 10:
+        chosen = candidates[0]
+        mtime = datetime.fromtimestamp(chosen.stat().st_mtime)
+        print(
+            f"ccr: warning: {len(candidates)} transcripts share the session tag "
+            f"'{basename}'; resuming the most recently updated one "
+            f"(updated {mtime:%Y-%m-%d %H:%M}). Run ccr interactively to pick "
+            "a different one.",
+            file=sys.stderr,
+        )
+        return chosen
+    print(f"Multiple transcripts share the session tag '{basename}':")
+    from cc_session_tools.lib.picker import pick_from_list
+    labels = [
+        f"{_format_size(p.stat().st_size)}, updated "
+        f"{datetime.fromtimestamp(p.stat().st_mtime):%Y-%m-%d %H:%M} ({p.stem})"
+        for p in candidates
+    ]
+    idx = pick_from_list(labels)
+    if idx is None:
+        return None
+    return candidates[idx]
 
 
 def launch_claude_resume(cmd: list[str], env: dict[str, str], cwd: Path | None = None) -> None:
@@ -165,9 +205,14 @@ def main(argv: list[str] | None = None) -> int:
     # --remote-control always uses the directory basename for session-tag context.
     resume_arg = m.basename
     if not m.is_orphan:
-        jsonl = find_jsonl_for_session(m.basename, m.project_dir)
-        if jsonl is not None:
-            resume_arg = jsonl.stem  # UUID
+        candidates = find_all_jsonls_for_session(m.basename, m.project_dir)
+        if len(candidates) == 1:
+            resume_arg = candidates[0].stem  # UUID
+        elif len(candidates) > 1:
+            chosen = _pick_duplicate_transcript(m.basename, candidates)
+            if chosen is None:
+                return 0
+            resume_arg = chosen.stem
         else:
             debug(f"could not locate jsonl for {m.basename!r}; falling back to name-based resume")
 

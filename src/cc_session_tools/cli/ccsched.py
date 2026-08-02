@@ -24,6 +24,7 @@ from cc_session_tools.lib.scheduler.duration import parse_duration
 from cc_session_tools.lib.scheduler.jobspec import (
     JobSpec,
     JobValidationError,
+    parse_success_exit_codes,
     validate_job_fields,
 )
 from cc_session_tools.lib.scheduler.runner import run_command
@@ -43,6 +44,16 @@ def _build_parser() -> argparse.ArgumentParser:
     add_p.add_argument("--coalesce", default="one")
     add_p.add_argument("--catchup-window", default="7d")
     add_p.add_argument("--timeout", default="120s")
+    add_p.add_argument(
+        "--success-exit-codes", default="0",
+        help=(
+            "Comma-separated exit codes that count as a successful run, not a "
+            "failure (default: 0). Use e.g. '0,1' for a check-style command "
+            "whose exit 1 means 'found something', not 'crashed' - such a "
+            "code never counts toward auto-suspend, and its stdout is "
+            "surfaced in the session-start digest as findings."
+        ),
+    )
     add_surface = add_p.add_mutually_exclusive_group()
     add_surface.add_argument("--surface", dest="surface", action="store_true", default=True)
     add_surface.add_argument("--no-surface", dest="surface", action="store_false")
@@ -61,6 +72,7 @@ def _build_parser() -> argparse.ArgumentParser:
     edit_p.add_argument("--coalesce")
     edit_p.add_argument("--catchup-window")
     edit_p.add_argument("--timeout")
+    edit_p.add_argument("--success-exit-codes", default=None)
     edit_surface = edit_p.add_mutually_exclusive_group()
     edit_surface.add_argument("--surface", dest="surface", action="store_true", default=None)
     edit_surface.add_argument("--no-surface", dest="surface", action="store_false", default=None)
@@ -92,10 +104,12 @@ def _err(msg: str) -> int:
 def _cmd_add(args: argparse.Namespace) -> int:
     command = list(args.argv) if args.argv else []
     try:
+        success_exit_codes = parse_success_exit_codes(args.success_exit_codes)
         spec = validate_job_fields(
             job_id=args.id, cadence=args.cadence, coalesce=args.coalesce,
             command=command, surface=args.surface, enabled=True,
             catchup_window=args.catchup_window, timeout=args.timeout,
+            success_exit_codes=success_exit_codes,
         )
     except JobValidationError as exc:
         return _err(str(exc))
@@ -161,6 +175,7 @@ def _cmd_show(args: argparse.Namespace) -> int:
         ("surface", str(spec.surface).lower()),
         ("catchup_window", spec.catchup_window),
         ("timeout", spec.timeout),
+        ("success_exit_codes", ",".join(str(c) for c in spec.success_exit_codes)),
         ("command", " ".join(spec.command)),
         ("next_due", nd),
         ("registered_at", js.registered_at if js else "-"),
@@ -182,6 +197,11 @@ def _cmd_edit(args: argparse.Namespace) -> int:
     if cur is None:
         return _err(f"unknown job id: {args.id!r}")
     try:
+        success_exit_codes = (
+            parse_success_exit_codes(args.success_exit_codes)
+            if args.success_exit_codes is not None
+            else cur.success_exit_codes
+        )
         spec = validate_job_fields(
             job_id=args.id,
             cadence=args.cadence or cur.cadence,
@@ -191,6 +211,7 @@ def _cmd_edit(args: argparse.Namespace) -> int:
             enabled=cur.enabled,
             catchup_window=args.catchup_window or cur.catchup_window,
             timeout=args.timeout or cur.timeout,
+            success_exit_codes=success_exit_codes,
         )
     except JobValidationError as exc:
         return _err(str(exc))
@@ -228,22 +249,25 @@ def _cmd_run(args: argparse.Namespace) -> int:
     now = datetime.now(timezone.utc)
     attempt_ts = state.format_ts(now)
     state.ensure_registered_db(spec.job_id, now)
-    failed = outcome.timed_out or outcome.exit_code != 0
-    if failed:
+    crashed = outcome.timed_out or outcome.exit_code not in spec.success_exit_codes
+    if crashed:
         new_consecutive = state.record_manual_failure(spec.job_id, attempt_ts=attempt_ts)
     else:
         state.record_success(spec.job_id, new_success=attempt_ts, attempt_ts=attempt_ts)
         new_consecutive = 0
+    findings = None
+    if not crashed and outcome.exit_code != 0:
+        findings = outcome.stdout.strip()[:1000] or None
     ledger.record(ledger.LedgerEntry(
         job_id=spec.job_id,
-        event=ledger.LedgerEvent.FAIL if failed else ledger.LedgerEvent.RUN,
-        owed=1, ran=0 if failed else 1, exit_code=outcome.exit_code,
+        event=ledger.LedgerEvent.FAIL if crashed else ledger.LedgerEvent.RUN,
+        owed=1, ran=0 if crashed else 1, exit_code=outcome.exit_code,
         duration_ms=outcome.duration_ms,
-        error=(outcome.stderr.strip()[:200] or None) if failed else None,
-        consecutive_failures=new_consecutive if failed else 0,
+        error=(outcome.stderr.strip()[:200] or None) if crashed else findings,
+        consecutive_failures=new_consecutive if crashed else 0,
     ))
-    print(f"{'failed' if failed else 'ran'} {spec.job_id} (exit={outcome.exit_code})")
-    return 1 if failed else 0
+    print(f"{'failed' if crashed else 'ran'} {spec.job_id} (exit={outcome.exit_code})")
+    return 1 if crashed else 0
 
 
 def _cmd_status(args: argparse.Namespace) -> int:

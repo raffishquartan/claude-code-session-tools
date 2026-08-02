@@ -68,14 +68,21 @@ def _run_body(
     succeeded = 0
     for _ in range(runs):
         last_outcome = runner(spec.command, timeout)
-        if last_outcome.timed_out or last_outcome.exit_code != 0:
+        if last_outcome.timed_out or last_outcome.exit_code not in spec.success_exit_codes:
             break
         succeeded += 1
 
-    failed = last_outcome is None or last_outcome.timed_out or last_outcome.exit_code != 0
+    # "crashed" (drives suspend accounting) is distinct from "exited nonzero":
+    # a job's success_exit_codes may include codes other than 0 to mean "ran
+    # fine, found something" (e.g. a drift monitor) rather than "broke".
+    crashed = (
+        last_outcome is None
+        or last_outcome.timed_out
+        or last_outcome.exit_code not in spec.success_exit_codes
+    )
     attempt_ts = state.format_ts(now)
 
-    if failed:
+    if crashed:
         new_consecutive, _new_suspended, newly_suspended = state.record_failure(
             spec.job_id, attempt_ts=attempt_ts, threshold=DEFAULT_SUSPEND_THRESHOLD,
         )
@@ -95,7 +102,13 @@ def _run_body(
         new_success = state.format_ts(result.instants[succeeded - 1])
     state.record_success(spec.job_id, new_success=new_success, attempt_ts=attempt_ts)
     event = LedgerEvent.RUN if owed_n <= 1 and succeeded == 1 else LedgerEvent.BACKFILL
-    _record(spec, event, owed_n, succeeded, last_outcome, None)
+    # A nonzero-but-successful exit (e.g. drift found) carries its stdout into
+    # the digest via the ledger's error column, so it surfaces as findings
+    # rather than a bare checkmark - see surface.py/digest.py.
+    findings = None
+    if last_outcome is not None and last_outcome.exit_code != 0:
+        findings = last_outcome.stdout.strip()[:1000] or None
+    _record(spec, event, owed_n, succeeded, last_outcome, findings)
 
 
 def run_job(

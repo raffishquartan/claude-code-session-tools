@@ -107,6 +107,49 @@ def test_enable_unknown_id_errors(tmp_path: Path) -> None:
     assert res.returncode == 2
 
 
+def test_add_with_success_exit_codes(tmp_path: Path) -> None:
+    sched, hooks = _dirs(tmp_path)
+    res = _run(
+        ["add", "--id", "drift", "--cadence", "daily@09:00",
+         "--success-exit-codes", "0,1", "--command", "true"],
+        sched, hooks,
+    )
+    assert res.returncode == 0, res.stderr
+    show = _run(["show", "drift"], sched, hooks)
+    assert "success_exit_codes:" in show.stdout and "0,1" in show.stdout
+
+
+def test_add_rejects_bad_success_exit_codes(tmp_path: Path) -> None:
+    sched, hooks = _dirs(tmp_path)
+    # --success-exit-codes must precede --command: --command uses REMAINDER
+    # and swallows every arg after it, same as --coalesce/--cadence/etc above.
+    res = _run(
+        ["add", "--id", "j", "--cadence", "daily@09:00",
+         "--success-exit-codes", "0,nope", "--command", "true"],
+        sched, hooks,
+    )
+    assert res.returncode == 2
+    assert "success_exit_codes" in (res.stderr + res.stdout).lower()
+
+
+def test_edit_updates_success_exit_codes(tmp_path: Path) -> None:
+    _add_ok(tmp_path)
+    sched, hooks = _dirs(tmp_path)
+    res = _run(["edit", "tesco", "--success-exit-codes", "0,1"], sched, hooks)
+    assert res.returncode == 0, res.stderr
+    show = _run(["show", "tesco"], sched, hooks)
+    assert "0,1" in show.stdout
+
+
+def test_edit_without_success_exit_codes_preserves_existing(tmp_path: Path) -> None:
+    sched, hooks = _dirs(tmp_path)
+    _run(["add", "--id", "drift", "--cadence", "daily@09:00",
+          "--success-exit-codes", "0,1", "--command", "true"], sched, hooks)
+    _run(["edit", "drift", "--timeout", "10s"], sched, hooks)
+    show = _run(["show", "drift"], sched, hooks)
+    assert "0,1" in show.stdout
+
+
 def test_enable_clears_suspension(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _add_ok(tmp_path)
     sched, hooks = _dirs(tmp_path)

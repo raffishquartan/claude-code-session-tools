@@ -7,6 +7,55 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.3.1] - 2026-08-02
+
+### Added
+
+- **`ccsched add`/`edit --success-exit-codes`.** A job's exit code contract can now say
+  "these codes mean I ran fine, not that I crashed" (default: `0` only, unchanged for every
+  existing job). A check-style command like `ccst doctor --drift` legitimately exits 1 to mean
+  "found something", but the scheduler previously had no way to distinguish that from a real
+  crash, so 10 consecutive weekly "found drift" runs auto-suspended the job — see the paired
+  `Fixed` entry below. `ccsched show` prints the configured codes.
+
+- **`ccr` disambiguates duplicate transcripts sharing one session tag.** Hitting Ctrl-L twice
+  mid-session leaves a cleared transcript alongside the original, both still tagged with the
+  same session name — `ccr <tag>` previously resumed whichever the filesystem/DB scan happened
+  to return first, silently, sometimes the blank one. `ccr` now detects when more than one
+  JSONL transcript matches the resolved tag and prompts with a numbered picker showing each
+  transcript's size and last-updated time; a non-interactive invocation (or more than 10
+  candidates) resumes the most recently updated one and prints a warning instead of guessing
+  silently.
+
+### Fixed
+
+- **CCST drift reports stopped appearing at session start after silently auto-suspending.**
+  `ccst doctor --drift` (run weekly via a user-registered `ccsched` job) exits 1 whenever it
+  finds unmuted drift — a documented, intentional signal for scheduled use, not an error. The
+  scheduler had no way to tell "exited nonzero on purpose" from "crashed", so persistent
+  (legitimate, unmuted) drift caused 10 consecutive "failures" and auto-suspended the job on
+  2026-07-26, silencing it. Fixed via the new `success_exit_codes` job field (see `Added`
+  above); a job's own crash/timeout accounting now checks against that set instead of a
+  hardcoded `!= 0`. Separately, even a healthy run of this job never actually showed its
+  findings — the session-start digest only ever rendered a bare `✓ ran <job>` checkmark for a
+  successful run, with the drift report's own stdout discarded. A nonzero-but-configured-success
+  exit now carries its stdout into the digest as a `⚠ <job> ran with findings:` block, and is
+  never folded into the routine-backlog summary line the way ordinary runs are.
+
+- **`ccl`/`ccs` help text no longer contradicts their own behaviour.** Three gaps, all
+  reproducible from `ccl --help` alone: (1) `ccl`'s own help heredoc never mentioned `-n`/
+  `--limit` even though it silently passes it through to `ccs` and it works; (2) the
+  "`--limit` requires `--order-by opened or active`" constraint was documented only inside the
+  `-n`/`--limit` help entry, invisible from the usage banner, the epilog examples, or `ccl
+  --help`; (3) plain `ccs`/`ccl` (no `--global`) requires a `cc-sessions/` known to `sessions.db`
+  under the current directory, silently, with no help text ever saying so or pointing at
+  `--global` as the fix. `ccl --help` and `ccs`'s epilog now cover `--limit`'s constraint and
+  the `--global` requirement; the "no cc-sessions/" error message itself now names `--global`
+  as the fix. Also fixed a stale `docs/data-store-migration-steps.md` verify-step example that
+  reproduced the exact `--limit` error from a real user report.
+
+## [1.3.0] - 2026-08-02
+
 ### Added
 
 - **`ccst pdata verify` — the integrity-check backstop.** `--project <name> [--full] | --all-projects`
@@ -36,6 +85,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   project-management-family skills), and gains an AUTO item that registers each session's `out/`
   deliverables into the index. See `docs/superpowers/plans/2026-07-30-ccst-pm-update-central-files.md`.
 
+## [1.2.0] - 2026-07-31
+
+### Added
+
 - **`ccst pdata init` — unified per-project data-store init/migration.** New
   `--project <name> [--rehearse <path>] [--write]` verb (spec §7): a dry-run pass classifies
   every file in a project as folder-owned or db-owned (CSV/JSON get an automatic proposal; every
@@ -52,6 +105,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   schema/CLI — `ccst pdata verify`, the `pm-pdata-schema-design`/`pm-pdata-conflict-resolution`
   skills, and any actual per-project migration content are deferred to later work (see
   `docs/superpowers/plans/2026-07-30-ccst-pdata-init-migration.md`'s Scope section).
+
+## [1.1.0] - 2026-07-31
+
+### Added
 
 - **`ccst pdata` — per-project SQLite data store CLI.** New `records`/`schema` subcommands
   (`add`, `get`, `list`, `query`, `update`, `delete`, `restore`, `schema list`, `schema show`,
@@ -707,7 +764,13 @@ integration (push notifications when 8-digit confirmation gates fire).
 - `--version` flag on all three CLIs.
 - `.gitignore` entry for `.worktrees/`.
 
-[Unreleased]: https://github.com/raffishquartan/claude-code-session-tools/compare/v0.18.0...HEAD
+[Unreleased]: https://github.com/raffishquartan/claude-code-session-tools/compare/v1.3.1...HEAD
+[1.3.1]: https://github.com/raffishquartan/claude-code-session-tools/compare/v1.3.0...v1.3.1
+[1.3.0]: https://github.com/raffishquartan/claude-code-session-tools/compare/v1.2.0...v1.3.0
+[1.2.0]: https://github.com/raffishquartan/claude-code-session-tools/compare/v1.1.0...v1.2.0
+[1.1.0]: https://github.com/raffishquartan/claude-code-session-tools/compare/v1.0.0...v1.1.0
+[1.0.0]: https://github.com/raffishquartan/claude-code-session-tools/compare/v0.19.0...v1.0.0
+[0.19.0]: https://github.com/raffishquartan/claude-code-session-tools/compare/v0.18.0...v0.19.0
 [0.18.0]: https://github.com/raffishquartan/claude-code-session-tools/compare/v0.17.0...v0.18.0
 [0.17.0]: https://github.com/raffishquartan/claude-code-session-tools/compare/v0.16.0...v0.17.0
 [0.16.0]: https://github.com/raffishquartan/claude-code-session-tools/compare/v0.15.1...v0.16.0

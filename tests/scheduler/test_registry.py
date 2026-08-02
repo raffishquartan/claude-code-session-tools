@@ -34,6 +34,25 @@ def test_add_then_load_round_trips(tmp_path: Path, monkeypatch: pytest.MonkeyPat
     assert loaded[0].enabled is True
     assert loaded[0].catchup_window == "7d"
     assert loaded[0].timeout == "60s"
+    assert loaded[0].success_exit_codes == (0,)
+
+
+def test_success_exit_codes_round_trips_through_add_and_replace(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("CC_SCHEDULER_DIR", str(tmp_path))
+    reg.add_job(validate_job_fields(
+        job_id="drift", cadence="daily@09:00", coalesce="one", command=["x"],
+        surface=True, enabled=True, catchup_window="7d", timeout="60s",
+        success_exit_codes=(0, 1),
+    ))
+    assert reg.load_registry()[0].success_exit_codes == (0, 1)
+    reg.replace_job(validate_job_fields(
+        job_id="drift", cadence="daily@09:00", coalesce="one", command=["x"],
+        surface=True, enabled=True, catchup_window="7d", timeout="60s",
+        success_exit_codes=(0,),
+    ))
+    assert reg.load_registry()[0].success_exit_codes == (0,)
 
 
 def test_add_duplicate_id_rejected(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

@@ -390,6 +390,48 @@ def find_jsonl_for_session(basename: str, project_dir: Path) -> Path | None:
     return tag_match
 
 
+def find_all_jsonls_for_session(basename: str, project_dir: Path) -> list[Path]:
+    """Locate every JSONL transcript that matches `basename`'s tag/session
+    name, not just the first.
+
+    Same two-strategy matching as find_jsonl_for_session (sessions.db tag
+    lookup, then custom-title scan), but collects every confirmed match
+    instead of returning on the first — used to detect duplicate transcripts
+    under one session tag (e.g. a Ctrl-L-cleared copy left alongside the
+    original) so callers can ask which one to resume instead of silently
+    picking one.
+
+    Returns confirmed (custom-title-matched) jsonls when any exist; falls
+    back to tentative (tag-row-only, no custom-title yet) jsonls otherwise -
+    mirroring find_jsonl_for_session's own precedence.
+    """
+    from cc_session_tools.lib import sessions_db
+
+    transcript_dir = transcript_dir_for_project(project_dir)
+    if not transcript_dir.is_dir():
+        return []
+
+    suffix = session_tag(basename)
+    if suffix is None:
+        return []
+
+    jsonls = list(transcript_dir.glob("*.jsonl"))
+    tag_map = sessions_db.lookup_tags([j.stem for j in jsonls])
+
+    confirmed: list[Path] = []
+    tentative: list[Path] = []
+    for jsonl in jsonls:
+        content = tag_map.get(jsonl.stem)
+        has_tag = content is not None and (content == suffix or content == basename)
+        has_title = _jsonl_has_custom_title(jsonl, basename, suffix)
+        if has_title:
+            confirmed.append(jsonl)
+        elif has_tag:
+            tentative.append(jsonl)
+
+    return confirmed or tentative
+
+
 # Substrings that mark a "user" record as not a free-typed message:
 # slash-command invocations, hook-injected reminders, local command output.
 _NON_USER_CONTENT_PREFIXES = (
