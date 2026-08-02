@@ -16,10 +16,12 @@ functions are called.
 """
 from __future__ import annotations
 
+import json
 import sqlite3
+import time
 from dataclasses import dataclass, field
 
-from cc_session_tools.lib.pdata import importers, init_paths, manifest, repository
+from cc_session_tools.lib.pdata import importers, init_paths, manifest, repository, store
 
 _VERIFY_DDL = """
 CREATE TABLE IF NOT EXISTS pdata_verify_watermark (
@@ -233,3 +235,110 @@ def check_suspicious_double_updates(
                 (row["id"], row["version"], row["updated_at"]),
             )
     return issues
+
+
+def _worst_status(issues: list[VerifyIssue]) -> str:
+    if not issues:
+        return "OK"
+    return max((i.severity for i in issues), key=lambda s: _SEVERITY_ORDER[s])
+
+
+def _last_run_at(conn: sqlite3.Connection) -> int | None:
+    row = conn.execute("SELECT MAX(run_at) AS m FROM pdata_verify_runs").fetchone()
+    last: int | None = row["m"] if row is not None else None
+    return last
+
+
+def _persist_run(
+    conn: sqlite3.Connection, *, run_at: int, full_scan: bool, status: str,
+    issues: list[VerifyIssue],
+) -> None:
+    details = json.dumps([
+        {"check": i.check, "severity": i.severity, "record_group": i.record_group,
+         "record_id": i.record_id, "message": i.message}
+        for i in issues
+    ])
+    conn.execute(
+        "INSERT INTO pdata_verify_runs (run_at, full_scan, status, issue_count, details) "
+        "VALUES (?, ?, ?, ?, ?)",
+        (run_at, int(full_scan), status, len(issues), details),
+    )
+    conn.execute(
+        # Order by id, not run_at: run_at is second-resolution and two runs in a tight loop
+        # (as in the retention test) can share a value — id (the autoincrement rowid) is
+        # strictly monotonic with insertion order regardless of clock resolution, so it is the
+        # correct "most recent" tiebreak, here and in last_run() below.
+        "DELETE FROM pdata_verify_runs WHERE id NOT IN ("
+        "  SELECT id FROM pdata_verify_runs ORDER BY id DESC LIMIT ?"
+        ")",
+        (_MAX_RETAINED_RUNS,),
+    )
+
+
+def run_verify(*, project: str, full: bool = False) -> VerifySummary:
+    """Run all three checks (spec §6.3) and persist the result. Row-count parity always runs in
+    full; file_path resolution and the double-update check are scoped to rows changed since the
+    last run unless full=True.
+
+    Raises ValueError if `project` has no existing .db yet — repository.connect() would otherwise
+    silently create one (its own CREATE TABLE IF NOT EXISTS side effect) and report a brand-new
+    empty store as "clean", masking a typo'd or genuinely nonexistent project name behind a
+    false-looking-fine result. This mirrors discover_projects()'s own "only .dbs that already
+    exist" standard, applied here to a single explicitly-named project."""
+    if not store.db_path(project).exists():
+        raise ValueError(
+            f"no data store found for project {project!r} — run 'ccst pdata add' "
+            f"or 'ccst pdata init' for this project first"
+        )
+    conn = repository.connect(project)
+    try:
+        ensure_verify_tables(conn)
+        since = None if full else _last_run_at(conn)
+
+        issues: list[VerifyIssue] = []
+        issues.extend(check_row_count_parity(conn, project))
+        issues.extend(check_file_path_resolution(conn, project, since=since))
+
+        run_at = int(time.time())
+        with repository._immediate(conn):
+            issues.extend(check_suspicious_double_updates(conn, project, since=since))
+            status = _worst_status(issues)
+            _persist_run(conn, run_at=run_at, full_scan=full, status=status, issues=issues)
+        return VerifySummary(
+            project=project, run_at=run_at, full_scan=full, status=status, issues=issues,
+        )
+    finally:
+        conn.close()
+
+
+def last_run(project: str) -> VerifySummary | None:
+    """Read-only: the most recently persisted verify run, or None if verify has never run for
+    this project (or its .db doesn't exist yet). Never triggers a run itself — ccst doctor calls
+    this, not run_verify()."""
+    if not store.db_path(project).exists():
+        return None
+    conn = repository.connect(project)
+    try:
+        ensure_verify_tables(conn)
+        row = conn.execute(
+            "SELECT * FROM pdata_verify_runs ORDER BY id DESC LIMIT 1"
+        ).fetchone()
+        if row is None:
+            return None
+        issues = [VerifyIssue(**d) for d in json.loads(row["details"])]
+        return VerifySummary(
+            project=project, run_at=row["run_at"], full_scan=bool(row["full_scan"]),
+            status=row["status"], issues=issues,
+        )
+    finally:
+        conn.close()
+
+
+def discover_projects() -> list[str]:
+    """Every project with a .db under project_db_dir(), sorted — used by both
+    `ccst pdata verify --all-projects` and the doctor check, so a project need not have an
+    on-disk folder yet to be found."""
+    db_dir = store.project_db_dir()
+    if not db_dir.is_dir():
+        return []
+    return sorted(p.stem for p in db_dir.glob("*.db"))

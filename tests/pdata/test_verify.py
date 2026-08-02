@@ -396,3 +396,88 @@ def test_double_update_check_ignores_updates_outside_window(monkeypatch, tmp_pat
         assert issues == []  # version advanced by 2, but not within the window
     finally:
         conn2.close()
+
+
+def test_run_verify_persists_ok_summary_with_no_issues(monkeypatch, tmp_path):
+    monkeypatch.setenv("CCST_PROJECT_DB_DIR", str(tmp_path))
+    monkeypatch.setenv(init_paths.PROJECTS_ROOT_ENV, str(tmp_path / "projects"))
+    service.add_record(project="demo", record_group="ccst-ideas", content="an idea",
+                       file_path=None, fields={}, created_at=1000)
+    summary = verify.run_verify(project="demo", full=True)
+    assert summary.status == "OK"
+    assert summary.issues == []
+    assert summary.project == "demo"
+    assert summary.full_scan is True
+
+
+def test_run_verify_persists_worst_status_across_checks(monkeypatch, tmp_path):
+    monkeypatch.setenv("CCST_PROJECT_DB_DIR", str(tmp_path))
+    monkeypatch.setenv(init_paths.PROJECTS_ROOT_ENV, str(tmp_path / "projects"))
+    service.add_record(project="demo", record_group="filings", content="x",
+                       file_path="missing.pdf", fields={}, created_at=1000)
+    summary = verify.run_verify(project="demo", full=True)
+    assert summary.status == "FAIL"  # file-path-resolution is FAIL-severity
+    assert len(summary.issues) == 1
+
+
+def test_run_verify_second_call_reads_persisted_last_run(monkeypatch, tmp_path):
+    monkeypatch.setenv("CCST_PROJECT_DB_DIR", str(tmp_path))
+    monkeypatch.setenv(init_paths.PROJECTS_ROOT_ENV, str(tmp_path / "projects"))
+    service.add_record(project="demo", record_group="notes", content="x",
+                       file_path=None, fields={}, created_at=1)
+    verify.run_verify(project="demo", full=True)
+    last = verify.last_run("demo")
+    assert last is not None
+    assert last.status == "OK"
+
+
+def test_run_verify_raises_for_project_with_no_existing_store(monkeypatch, tmp_path):
+    """run_verify must never fabricate a brand-new, empty store (via repository.connect()'s
+    own CREATE TABLE IF NOT EXISTS side effect) for a project name that has never had one —
+    that would make `ccst pdata verify --project <typo>` silently report "clean" instead of
+    surfacing the mistake. Matches discover_projects()'s own "only .dbs that already exist"
+    standard (plan Decision 7) applied to a single named project too."""
+    monkeypatch.setenv("CCST_PROJECT_DB_DIR", str(tmp_path))
+    monkeypatch.setenv(init_paths.PROJECTS_ROOT_ENV, str(tmp_path / "projects"))
+    with pytest.raises(ValueError, match="no data store"):
+        verify.run_verify(project="never-touched-project", full=True)
+    assert not (tmp_path / "never-touched-project.db").exists()
+
+
+def test_last_run_returns_none_when_never_run(monkeypatch, tmp_path):
+    monkeypatch.setenv("CCST_PROJECT_DB_DIR", str(tmp_path))
+    assert verify.last_run("never-verified-project") is None
+
+
+def test_last_run_returns_none_when_db_does_not_exist(monkeypatch, tmp_path):
+    monkeypatch.setenv("CCST_PROJECT_DB_DIR", str(tmp_path / "does-not-exist"))
+    assert verify.last_run("demo") is None
+
+
+def test_discover_projects_lists_dbs_sorted(monkeypatch, tmp_path):
+    monkeypatch.setenv("CCST_PROJECT_DB_DIR", str(tmp_path))
+    service.add_record(project="zeta", record_group="notes", content="x",
+                       file_path=None, fields={}, created_at=1)
+    service.add_record(project="alpha", record_group="notes", content="x",
+                       file_path=None, fields={}, created_at=1)
+    assert verify.discover_projects() == ["alpha", "zeta"]
+
+
+def test_discover_projects_empty_when_dir_missing(monkeypatch, tmp_path):
+    monkeypatch.setenv("CCST_PROJECT_DB_DIR", str(tmp_path / "does-not-exist"))
+    assert verify.discover_projects() == []
+
+
+def test_run_verify_prunes_old_runs_beyond_retention(monkeypatch, tmp_path):
+    monkeypatch.setenv("CCST_PROJECT_DB_DIR", str(tmp_path))
+    monkeypatch.setenv(init_paths.PROJECTS_ROOT_ENV, str(tmp_path / "projects"))
+    service.add_record(project="demo", record_group="notes", content="x",
+                       file_path=None, fields={}, created_at=1)
+    for _ in range(verify._MAX_RETAINED_RUNS + 5):
+        verify.run_verify(project="demo", full=True)
+    conn = repository.connect("demo")
+    try:
+        count = conn.execute("SELECT COUNT(*) AS c FROM pdata_verify_runs").fetchone()["c"]
+        assert count == verify._MAX_RETAINED_RUNS
+    finally:
+        conn.close()
