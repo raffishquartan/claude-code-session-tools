@@ -663,9 +663,10 @@ The `ccst` umbrella CLI provides hook and skill management, shell helper install
 
 ### `ccst hooks install`
 
-Merges hook entries from a source `settings.json` into `~/.claude/settings.json`.
-With no `--source`, auto-discovers the bundled `config/hooks-bundle.json` and
-installs all nine default hooks.
+Brings `~/.claude/settings.json` into line with a source `settings.json`: adds
+the hooks it is missing, and removes any entry naming a hook this build of CCST
+cannot run. With no `--source`, auto-discovers the bundled
+`config/hooks-bundle.json` and installs all eleven default hooks.
 
 ```sh
 # Dry run (default) - shows what would be added
@@ -683,6 +684,15 @@ ccst hooks install --source /path/to/custom-hooks.json --apply
 
 Matching is by event type + matcher + command string; already-present hooks are
 never duplicated. The target file is written atomically (`.tmp` swap).
+
+The prune is what keeps an upgrade from stranding dead hooks. When a hook is
+removed or renamed, its old `ccst hooks run <name>` entry is left behind in
+`settings.json` — Claude Code goes on running it on every event it is bound to,
+and nothing else ever rewrites that file. Running `ccst hooks install --apply`
+after an upgrade clears them; `ccst doctor` FAILs on any that remain, naming the
+`ccst hooks uninstall --hook <name> --apply` that removes one by hand. Entries
+whose command is not `ccst hooks run <name>` belong to you, not CCST, and are
+never touched.
 
 ### `ccst hooks uninstall`
 

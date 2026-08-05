@@ -62,6 +62,33 @@ def test_query_events_respects_limit(tmp_path: Path) -> None:
     assert len(rows) == 2
 
 
+def test_query_events_orders_by_time_not_insertion_order(tmp_path: Path) -> None:
+    """The fires.jsonl import appends rows older than everything already
+    stored, so they carry the *highest* ids. Ordering by id would present the
+    oldest telemetry in the store as its newest."""
+    _insert(tmp_path, ts="2026-08-01T00:00:00Z")  # live row, id 1
+    _insert(tmp_path, ts="2026-06-01T00:00:00Z")  # imported row, id 2
+    rows = query_events(hooks_dir=tmp_path)
+    assert [r["ts"] for r in rows] == ["2026-08-01T00:00:00Z", "2026-06-01T00:00:00Z"]
+
+
+def test_query_events_limit_keeps_the_newest_after_an_import(tmp_path: Path) -> None:
+    """A limit applied on id order would return only imported history."""
+    _insert(tmp_path, ts="2026-08-01T00:00:00Z", hook="live")
+    for i in range(5):
+        _insert(tmp_path, ts=f"2026-06-0{i + 1}T00:00:00Z", hook="imported")
+    rows = query_events(limit=1, hooks_dir=tmp_path)
+    assert [r["hook"] for r in rows] == ["live"]
+
+
+def test_query_events_breaks_same_second_ties_by_id(tmp_path: Path) -> None:
+    """ts has whole-second resolution, so bursts of hook fires do tie."""
+    _insert(tmp_path, ts="2026-07-01T00:00:00Z", verdict="first")
+    _insert(tmp_path, ts="2026-07-01T00:00:00Z", verdict="second")
+    rows = query_events(hooks_dir=tmp_path)
+    assert [r["verdict"] for r in rows] == ["second", "first"]
+
+
 # ---------- CLI integration ----------
 
 def _run(*args: str) -> subprocess.CompletedProcess[str]:

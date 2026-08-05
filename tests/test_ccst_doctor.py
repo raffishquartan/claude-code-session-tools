@@ -18,6 +18,7 @@ from cc_session_tools.lib.doctor import (
     check_data_stores,
     check_env_dir,
     check_hook_registered,
+    check_no_stale_hooks,
     check_pending_data_store_migration,
     check_pending_pdata_migration,
     check_pypi_version,
@@ -29,6 +30,8 @@ from cc_session_tools.lib.doctor import (
     _version_tuple,
 )
 from cc_session_tools.lib import db as _db
+from cc_session_tools.lib import telemetry_store
+from cccs_hooks.telemetry import TelemetryEntry, log_event
 
 
 def _run(*args: str) -> subprocess.CompletedProcess[str]:
@@ -135,6 +138,59 @@ def test_check_hook_registered_wrong_event_still_found() -> None:
     settings = _settings_with_cmd("ccst hooks run session-tag", event="SessionStart")
     r = check_hook_registered("session-tag", settings)
     assert r.status == Status.OK
+
+
+# ---------- check_no_stale_hooks ----------
+
+def test_check_no_stale_hooks_clean_settings_is_ok() -> None:
+    settings = _settings_with_cmd("ccst hooks run after-response")
+    results = check_no_stale_hooks(settings)
+    assert [r.status for r in results] == [Status.OK]
+
+
+@pytest.mark.parametrize("removed_hook", ["edit-write-audit", "prompt-guard", "session-end"])
+def test_check_no_stale_hooks_fails_for_a_removed_hook(removed_hook: str) -> None:
+    """FAIL, not WARN: the entry breaks every event it is bound to, which is
+    a broken session rather than a missing feature."""
+    settings = _settings_with_cmd(f"ccst hooks run {removed_hook}")
+    results = check_no_stale_hooks(settings)
+    assert [r.status for r in results] == [Status.FAIL]
+    assert removed_hook in results[0].name
+    assert f"ccst hooks uninstall --hook {removed_hook} --apply" in results[0].reason
+
+
+def test_check_no_stale_hooks_reports_every_stale_entry() -> None:
+    settings = {
+        "hooks": {
+            "UserPromptSubmit": [{"hooks": [{"type": "command", "command": "ccst hooks run prompt-guard"}]}],
+            "Stop": [{"hooks": [{"type": "command", "command": "ccst hooks run session-end"}]}],
+        }
+    }
+    results = check_no_stale_hooks(settings)
+    assert {r.name for r in results} == {"hooks:stale:prompt-guard", "hooks:stale:session-end"}
+
+
+def test_check_no_stale_hooks_ignores_foreign_commands() -> None:
+    settings = _settings_with_cmd("/opt/mytool/notify.sh")
+    results = check_no_stale_hooks(settings)
+    assert [r.status for r in results] == [Status.OK]
+
+
+def test_run_all_checks_fails_on_a_stale_hook_entry(tmp_path: Path) -> None:
+    settings = tmp_path / "settings.json"
+    settings.write_text(json.dumps(_settings_with_cmd("ccst hooks run prompt-guard")))
+    bundle = Path(__file__).parent.parent / "config" / "hooks-bundle.json"
+    results = run_all_checks(
+        installed_version="1.4.1",
+        settings_path=settings,
+        bundle_path=bundle,
+        skills_source_dir=None,
+        skills_target_dir=tmp_path / "skills",
+        env={"CLAUDE_SESSION_TOOLS_REPO_ROOT": None, "CLAUDE_SESSION_TOOLS_PROJ_ROOT": None},
+        skip_pypi=True,
+    )
+    stale = [r for r in results if r.name.startswith("hooks:stale:")]
+    assert [r.status for r in stale] == [Status.FAIL]
 
 
 # ---------- check_skill_symlink ----------
@@ -658,6 +714,47 @@ def test_check_pending_migration_fails_for_unmigrated_telemetry(tmp_path: Path) 
     results = {r.name: r for r in check_pending_data_store_migration(paths)}
 
     assert results["migration-to-1.0.0:telemetry"].status == Status.FAIL
+
+
+def test_telemetry_still_fails_when_hooks_have_filled_the_db_but_no_import_ran(
+    tmp_path: Path,
+) -> None:
+    """The silent half of the bug. The hook writer fills telemetry.db from the
+    first session after install, so a row-count test read that as 'already
+    migrated' and downgraded FAIL to WARN — and because the SessionStart hook
+    only surfaces FAILs, the operator was never told the import was still
+    outstanding."""
+    paths = _legacy_paths(tmp_path)
+    paths.telemetry_old_dir.mkdir(parents=True)
+    (paths.telemetry_old_dir / "fires.jsonl").write_text('{"hook": "x"}\n')
+    log_event(
+        TelemetryEntry(
+            hook="session-tag", event="SessionStart", tool="", session_id="s",
+            cwd_short="x", decision="allow", cache="none", verdict="ok", input_hash="",
+        ),
+        hooks_dir=paths.data_home,
+    )
+
+    results = {r.name: r for r in check_pending_data_store_migration(paths)}
+
+    assert results["migration-to-1.0.0:telemetry"].status == Status.FAIL
+
+
+def test_telemetry_warns_once_the_import_marker_is_recorded(tmp_path: Path) -> None:
+    paths = _legacy_paths(tmp_path)
+    paths.telemetry_old_dir.mkdir(parents=True)
+    (paths.telemetry_old_dir / "fires.jsonl").write_text('{"hook": "x"}\n')
+    conn = telemetry_store.connect(paths.data_home)
+    _db.record_migration(
+        conn, telemetry_store.LEGACY_JSONL_MIGRATION, applied_at="2026-08-05T00:00:00Z"
+    )
+    conn.commit()
+    conn.close()
+
+    results = {r.name: r for r in check_pending_data_store_migration(paths)}
+
+    assert results["migration-to-1.0.0:telemetry"].status == Status.WARN
+    assert "already ran" in results["migration-to-1.0.0:telemetry"].reason
 
 
 def test_check_pending_migration_warns_when_already_migrated_but_old_files_remain(

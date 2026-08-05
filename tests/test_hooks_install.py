@@ -6,7 +6,13 @@ from pathlib import Path
 
 import pytest
 
-from cc_session_tools.hooks_install import merge_hook_settings, Addition, write_json_atomic
+from cc_session_tools.hooks_install import (
+    Addition,
+    Removal,
+    merge_hook_settings,
+    prune_stale_hooks,
+    write_json_atomic,
+)
 
 
 def _cmd(name: str) -> dict:
@@ -88,6 +94,105 @@ def test_addition_fields_populated() -> None:
     source = _source("hook-a", matcher="Bash", event="PreToolUse")
     merged, additions = merge_hook_settings(source_settings=source, target_settings={})
     assert additions[0] == Addition(event="PreToolUse", matcher="Bash", command="hook-a")
+
+
+# ---------- prune_stale_hooks ----------
+#
+# The three names below are the ones that actually stranded a settings.json:
+# edit-write-audit and prompt-guard were deleted in 0.17.0 and session-end was
+# renamed to after-response in the same release.
+
+_GONE = ("edit-write-audit", "prompt-guard", "session-end")
+_LIVE = ("session-tag", "after-response")
+
+
+def _ccst(name: str) -> dict:
+    return {"type": "command", "command": f"ccst hooks run {name}"}
+
+
+def test_prune_removes_hooks_this_build_no_longer_has() -> None:
+    target = {"hooks": {"UserPromptSubmit": [{"hooks": [_ccst("prompt-guard"), _ccst("session-tag")]}]}}
+    pruned, removals = prune_stale_hooks(target)
+    assert [r.hook_name for r in removals] == ["prompt-guard"]
+    assert pruned["hooks"]["UserPromptSubmit"][0]["hooks"] == [_ccst("session-tag")]
+
+
+@pytest.mark.parametrize("name", _GONE)
+def test_prune_removes_each_hook_dropped_in_0_17_0(name: str) -> None:
+    target = {"hooks": {"Stop": [{"hooks": [_ccst(name)]}]}}
+    _, removals = prune_stale_hooks(target)
+    assert [r.hook_name for r in removals] == [name]
+
+
+@pytest.mark.parametrize("name", _LIVE)
+def test_prune_keeps_hooks_this_build_still_has(name: str) -> None:
+    target = {"hooks": {"SessionStart": [{"hooks": [_ccst(name)]}]}}
+    pruned, removals = prune_stale_hooks(target)
+    assert removals == []
+    assert pruned == target
+
+
+def test_prune_never_touches_hooks_ccst_does_not_own() -> None:
+    """Anything not spelled `ccst hooks run <name>` belongs to someone else —
+    a third-party hook, or one the operator wrote by hand."""
+    target = {
+        "hooks": {
+            "Stop": [{"hooks": [
+                {"type": "command", "command": "/opt/mytool/notify.sh"},
+                {"type": "command", "command": "python3 -m my_hooks.audit"},
+                _ccst("session-end"),
+            ]}]
+        }
+    }
+    pruned, removals = prune_stale_hooks(target)
+    assert [r.hook_name for r in removals] == ["session-end"]
+    assert [h["command"] for h in pruned["hooks"]["Stop"][0]["hooks"]] == [
+        "/opt/mytool/notify.sh", "python3 -m my_hooks.audit",
+    ]
+
+
+def test_prune_drops_a_block_it_emptied() -> None:
+    target = {
+        "hooks": {
+            "PostToolUse": [{"matcher": "Edit|Write", "hooks": [_ccst("edit-write-audit")]}],
+            "SessionStart": [{"hooks": [_ccst("session-tag")]}],
+        }
+    }
+    pruned, _ = prune_stale_hooks(target)
+    assert "PostToolUse" not in pruned["hooks"]
+    assert pruned["hooks"]["SessionStart"][0]["hooks"] == [_ccst("session-tag")]
+
+
+def test_prune_leaves_an_empty_block_it_did_not_empty() -> None:
+    target = {"hooks": {"Stop": [{"hooks": []}]}}
+    pruned, removals = prune_stale_hooks(target)
+    assert removals == []
+    assert pruned == target
+
+
+def test_prune_records_event_and_matcher_for_each_removal() -> None:
+    target = {"hooks": {"PostToolUse": [{"matcher": "Edit|Write", "hooks": [_ccst("edit-write-audit")]}]}}
+    _, removals = prune_stale_hooks(target)
+    assert removals[0] == Removal(
+        event="PostToolUse",
+        matcher="Edit|Write",
+        command="ccst hooks run edit-write-audit",
+        hook_name="edit-write-audit",
+    )
+
+
+def test_prune_does_not_mutate_its_input() -> None:
+    target = {"hooks": {"Stop": [{"hooks": [_ccst("session-end")]}]}}
+    original = json.dumps(target, sort_keys=True)
+    prune_stale_hooks(target)
+    assert json.dumps(target, sort_keys=True) == original
+
+
+def test_prune_of_a_clean_settings_is_a_no_op() -> None:
+    target = {"hooks": {"SessionStart": [{"hooks": [_ccst("session-tag")]}]}, "permissions": {"allow": []}}
+    pruned, removals = prune_stale_hooks(target)
+    assert removals == []
+    assert pruned == target
 
 
 # ---------- write_json_atomic ----------

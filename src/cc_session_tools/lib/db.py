@@ -19,6 +19,21 @@ _BUSY_TIMEOUT_MS = 5000
 _MIN_SQLITE_VERSION = (3, 35, 0)
 _WAL_SWITCH_RETRY_SLEEP_S = 0.02
 
+# Append to any store's ddl to give it a one-shot-migration ledger.
+#
+# Row count is not a usable "has the migration run?" signal for any store the
+# running code also writes to: the new code starts writing the moment it is
+# installed, so a non-empty table means "somebody wrote something", not
+# "the legacy data was imported". A store that guesses from row counts either
+# refuses to migrate data it has not migrated, or reports a migration as done
+# that never happened. An explicit marker distinguishes the two.
+MIGRATIONS_DDL = """
+CREATE TABLE IF NOT EXISTS migrations (
+    name       TEXT PRIMARY KEY,
+    applied_at TEXT NOT NULL
+);
+"""
+
 
 def _enable_wal(conn: sqlite3.Connection, *, deadline: float) -> None:
     """Switch a connection into WAL journal mode, retrying on lock.
@@ -82,6 +97,23 @@ def connect(path: Path, *, ddl: str | None = None, readonly: bool = False) -> sq
 
     conn.row_factory = sqlite3.Row
     return conn
+
+
+def migration_applied(conn: sqlite3.Connection, name: str) -> bool:
+    """True if the named one-shot migration has been recorded on this store.
+
+    Requires MIGRATIONS_DDL to be part of the store's schema.
+    """
+    row = conn.execute("SELECT 1 FROM migrations WHERE name = ?", (name,)).fetchone()
+    return row is not None
+
+
+def record_migration(conn: sqlite3.Connection, name: str, *, applied_at: str) -> None:
+    """Mark the named one-shot migration as applied. Caller commits."""
+    conn.execute(
+        "INSERT OR REPLACE INTO migrations (name, applied_at) VALUES (?, ?)",
+        (name, applied_at),
+    )
 
 
 def checkpoint(conn: sqlite3.Connection) -> None:

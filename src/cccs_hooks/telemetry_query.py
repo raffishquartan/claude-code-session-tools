@@ -58,8 +58,15 @@ def query_events(
             params.append(since_ts)
         where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
         params.append(limit)
+        # Order by ts, not id: "most recent N" is a question about time, and
+        # id is insertion order. The one-shot fires.jsonl import appends rows
+        # older than everything already stored, so they carry the highest ids
+        # — ordering by id would present the oldest telemetry in the store as
+        # its newest. id remains the tie-break for rows sharing a timestamp
+        # (ts has whole-second resolution, so bursts of hook fires do tie).
         return conn.execute(
-            f"SELECT * FROM telemetry_events {where} ORDER BY id DESC LIMIT ?", params
+            f"SELECT * FROM telemetry_events {where} ORDER BY ts DESC, id DESC LIMIT ?",
+            params,
         ).fetchall()
     finally:
         conn.close()

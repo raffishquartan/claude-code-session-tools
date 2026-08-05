@@ -130,3 +130,32 @@ correctly leave it. Clearing a large existing backlog of never-renamed
 markers is a separate, explicit one-shot action
 (`find ~/cc -name .pending-rename -delete`), not something auto-prune should
 do silently.
+
+## Migration markers for ccmsg, ccsched and sessions
+
+`ccst migrate telemetry` records an explicit marker (`migrations` table, via
+`lib.db.MIGRATIONS_DDL`) when its one-shot import completes, and both the
+script and `ccst doctor` read that marker to decide whether the import has
+happened. The other three migrations still infer it from "does the new store
+have any rows".
+
+That inference is wrong for the same reason it was wrong for telemetry: the
+new code writes to these stores from the moment CCST is installed, well
+before anyone runs a migration. `sessions.db` gets `session_tags` rows from
+the session-tag hook on the first session; `ccsched.db` gets job rows on the
+first scheduler use; `ccmsg.db` gets rows on the first message. So a
+`ccst doctor` run on a machine with unmigrated legacy data can report
+`migration already ran` when it has not, and the SessionStart
+`pending-migration` hook — which only surfaces FAILs — then stays silent
+about it.
+
+- [ ] Add `db.MIGRATIONS_DDL` to the ccmsg, ccsched and sessions store
+  schemas.
+- [ ] Record a marker at the end of each of the three migrations, inside the
+  same transaction as the writes (see `migrate_telemetry.py` for why the
+  marker must not be a separate commit).
+- [ ] Switch `doctor.check_pending_data_store_migration` to the marker for
+  all four stores and delete the `_count_new_store_rows` branch.
+- [ ] Backfill: a store whose legacy sources are already gone has migrated by
+  definition — decide whether to write the marker on first connect in that
+  case, or leave it absent and rely on "no legacy data found -> OK".

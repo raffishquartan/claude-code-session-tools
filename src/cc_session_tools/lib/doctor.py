@@ -21,6 +21,7 @@ from pathlib import Path
 from typing import Any
 
 from cc_session_tools.lib.db import connect as _db_connect
+from cc_session_tools.lib.hook_registry import HOOK_VERBS, hook_name_from_command
 from cc_session_tools.lib.pdata.init_paths import (
     MIGRATED_ARCHIVE_DIRNAME,
     MIGRATED_MANIFEST_FILENAME,
@@ -136,6 +137,49 @@ def check_hook_registered(
         status=Status.WARN,
         reason=f"{command!r} not found in settings.json",
     )
+
+
+def check_no_stale_hooks(settings: dict[str, Any]) -> list[CheckResult]:
+    """FAIL for every settings.json entry naming a hook CCST no longer has.
+
+    :func:`check_hook_registered` only looks bundle -> settings, so it cannot
+    see an entry for a hook that was removed or renamed: nothing else reads
+    settings.json looking for names CCST does not recognise, and nothing
+    rewrites the file unless ``ccst hooks install`` runs. That blind spot let
+    three hooks dropped in 0.17.0 sit in a settings.json across two upgrades.
+
+    FAIL rather than WARN because the consequence is a broken session, not a
+    missing feature: Claude Code runs the entry on every event it is bound to
+    and surfaces the failure each time.
+    """
+    stale: list[tuple[str, str]] = []  # (hook_name, event)
+    for event, blocks in settings.get("hooks", {}).items():
+        for block in blocks:
+            for entry in block.get("hooks", []):
+                name = hook_name_from_command(entry.get("command", ""))
+                if name is not None and name not in HOOK_VERBS:
+                    stale.append((name, event))
+
+    if not stale:
+        return [CheckResult(
+            name="hooks:no-stale",
+            status=Status.OK,
+            reason="no settings.json entries for removed hooks",
+        )]
+
+    return [
+        CheckResult(
+            name=f"hooks:stale:{name}",
+            status=Status.FAIL,
+            reason=(
+                f"settings.json registers 'ccst hooks run {name}' on {event}, but this "
+                f"CCST has no such hook — it fails on every {event} event. Remove it with "
+                f"`ccst hooks uninstall --hook {name} --apply`, or run "
+                "`ccst hooks install --apply` to prune every stale entry at once"
+            ),
+        )
+        for name, event in sorted(set(stale))
+    ]
 
 
 def check_skill_symlink(skill_name: str, skill_src: Path, skills_dir: Path) -> CheckResult:
@@ -417,6 +461,27 @@ def _count_new_store_rows(db_path: Path, tables: tuple[str, ...]) -> int:
         conn.close()
 
 
+def _telemetry_import_recorded(db_path: Path) -> bool:
+    """True if telemetry.db records the fires.jsonl import as done."""
+    from cc_session_tools.lib.telemetry_store import LEGACY_JSONL_MIGRATION
+
+    if not db_path.exists():
+        return False
+    try:
+        conn = _db_connect(db_path, readonly=True)
+    except (sqlite3.DatabaseError, sqlite3.OperationalError, OSError):
+        return False
+    try:
+        row = conn.execute(
+            "SELECT 1 FROM migrations WHERE name = ?", (LEGACY_JSONL_MIGRATION,)
+        ).fetchone()
+        return row is not None
+    except sqlite3.OperationalError:
+        return False  # pre-marker schema: no migrations table
+    finally:
+        conn.close()
+
+
 def check_pending_data_store_migration(paths: LegacyMigrationPaths) -> list[CheckResult]:
     """Detect legacy flat-file data left over from a pre-1.0.0 install.
 
@@ -426,11 +491,20 @@ def check_pending_data_store_migration(paths: LegacyMigrationPaths) -> list[Chec
     expected before first use". This check makes that distinction explicit:
 
     - No legacy data found -> OK (fresh install or already cleaned up).
-    - Legacy data found, new store empty/missing -> FAIL: the upgrade is
+    - Legacy data found, migration not yet run -> FAIL: the upgrade is
       silently sitting on unmigrated data until ``ccst migrate all`` is run.
-    - Legacy data found, new store already has rows -> WARN: the migration
-      already ran but the old files weren't deleted (or deletion failed
-      partway); no data is at risk, just uncommitted cleanup.
+    - Legacy data found, migration already run -> WARN: the old files weren't
+      deleted (or deletion failed partway); no data is at risk, just
+      uncommitted cleanup.
+
+    "Has the migration run?" is answered by an explicit marker for telemetry
+    and by a row count for the other three. The row-count answer is a
+    heuristic, and a poor one wherever the new code writes to the store
+    before any migration happens: telemetry.db fills from the first hook fire
+    after install, so counting rows reported "already migrated" for anyone
+    who opened a session before migrating, and the FAIL that should have
+    prompted them never fired. The other three stores need the same marker
+    treatment; see TODO.md.
     """
     sources: dict[str, tuple[tuple[Path, ...], int, Path, tuple[str, ...]]] = {
         "ccmsg": (
@@ -469,8 +543,14 @@ def check_pending_data_store_migration(paths: LegacyMigrationPaths) -> list[Chec
             continue
 
         existing = ", ".join(str(p) for p in old_paths if p.exists())
-        new_count = _count_new_store_rows(new_db_path, tables)
-        if new_count == 0:
+        if store_name == "telemetry":
+            already_migrated = _telemetry_import_recorded(new_db_path)
+            evidence = "the import is recorded in telemetry.db"
+        else:
+            new_count = _count_new_store_rows(new_db_path, tables)
+            already_migrated = new_count > 0
+            evidence = f"{new_count} row(s) in {new_db_path.name}"
+        if not already_migrated:
             results.append(
                 CheckResult(
                     name=name,
@@ -489,8 +569,8 @@ def check_pending_data_store_migration(paths: LegacyMigrationPaths) -> list[Chec
                     name=name,
                     status=Status.WARN,
                     reason=(
-                        f"migration already ran ({new_count} row(s) in {new_db_path.name}) but "
-                        f"old files remain at {existing} — safe to remove once verified"
+                        f"migration already ran ({evidence}) but old files remain at "
+                        f"{existing} — safe to remove once verified"
                     ),
                 )
             )
@@ -672,6 +752,9 @@ def run_all_checks(
     bundle_hooks = _extract_bundle_hook_names(bundle_path)
     for hook_name in bundle_hooks:
         results.append(check_hook_registered(hook_name, settings_data))
+
+    # ...and the reverse direction: entries for hooks that no longer exist.
+    results.extend(check_no_stale_hooks(settings_data))
 
     # Skill symlinks
     if skills_source_dir is not None and skills_source_dir.is_dir():

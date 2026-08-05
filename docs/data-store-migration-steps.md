@@ -153,22 +153,26 @@ ccst migrate all
 `ccst sessions migrate`, `ccst migrate telemetry`)
 
 Order doesn't matter between the four — each is independent, and each script's own dry-run/verify
-step is unaffected by whether the others have run yet. If any one reports a mismatch and aborts
-(exit 2), **stop and read its stderr output before re-running** — do not reach for `--force` as a
-first response. The four scripts are not equally safe to re-run:
+step is unaffected by whether the others have run yet. If any one reports a mismatch and aborts,
+**stop and read its stderr output before re-running.**
 
-- **ccmsg, ccsched, sessions** are all safely re-runnable as-is (their own verify step tolerates
-  a DB that already has some or all of the data — this is what lets you re-run after an aborted
-  attempt, or double-check by running a second time, without `--force`).
-- **telemetry is the one exception.** Its catch-up-event ids must land at `id == N` for the
-  N-th row (so the pre-existing per-session cursor offsets keep meaning the same thing after
-  migration), which forbids `INSERT OR IGNORE`-style dedup. A second run against a dest DB that
-  already has rows requires `--force`, and `--force` **appends a full duplicate copy** rather than
-  deduplicating. If the telemetry migration aborts partway (e.g. killed after writing but before
-  its own backup+delete step), do NOT just re-run it — follow the recovery procedure printed in
-  its own `--help` / docstring (`ccst migrate telemetry --help`, or
-  `src/cc_session_tools/cli/migrate_telemetry.py` in a checkout), which resets
-  the destination tables and their id sequences before a clean re-run.
+All four are safely re-runnable. Their verify steps tolerate a destination DB that already holds
+data, which is what lets you re-run after an aborted attempt or double-check by running a second
+time.
+
+**You do not need an empty telemetry.db, and you should not expect one.** The hooks write to
+`telemetry.db` from the first Claude Code session after CCST is installed, so by the time you
+run this it will already hold rows. The telemetry migration appends alongside them and says so.
+Whether the import has already happened is tracked by a marker inside the database, not by
+counting rows — so a second run is refused because the import is recorded as done, and never
+because the table happens to be non-empty. There is no `--force` flag; if you find advice
+mentioning one, it predates CCST 2.0.0.
+
+One consequence worth knowing: imported rows are older than the rows already in the database but
+are inserted after them, so they get higher `id` values. Anything reading telemetry in time order
+sorts by `ts` (both `ccst telemetry` and the trim job do). The scheduler's per-session catch-up
+cursors are advanced past the imported rows automatically at the end of the migration, so
+imported history is never resurfaced as new activity.
 
 Expect the sessions migration to take a few seconds even with a large tag corpus (tens of
 thousands of `.tag` files) — this was a real ~30-rows/sec bottleneck found and fixed during
