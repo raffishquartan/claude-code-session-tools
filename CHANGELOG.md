@@ -7,6 +7,96 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.0.0] - 2026-08-05
+
+Two independent bugs, both surfaced by one 0.18.0 -> 1.4.1 upgrade: a stranded
+settings.json that wedged every session, and a telemetry migration that could
+not complete on the normal upgrade path.
+
+### Removed
+
+- **`ccst migrate telemetry --force`.** The flag existed to let the import run
+  against a destination DB that already had rows, and its abort message told
+  operators to reach for it. Both were wrong. `ccst migrate all` never accepted
+  a `--force` (so `ccst migrate all --force` failed in argparse, giving no way
+  to act on the advice at all), and for the case operators actually hit —
+  post-install hook rows — `--force` was unnecessary, while for the case it was
+  written for — a genuine re-run after a partial import — it double-inserted.
+  The import now appends unconditionally and refuses a second run on an
+  explicit marker instead, so there is nothing left for the flag to do. This is
+  the only breaking change and it is why this is a major bump.
+
+### Fixed
+
+- **Hooks removed from CCST stayed registered in `settings.json` forever, and
+  wedged the session.** `ccst hooks install` only ever added entries; nothing
+  removed one whose hook no longer existed, and nothing else rewrote the file.
+  A settings.json written at 0.16.0 therefore still carried `edit-write-audit`,
+  `prompt-guard` and `session-end` — deleted or renamed in 0.17.0 — through
+  every later upgrade. Because `ccst hooks run` validated the name with
+  argparse `choices=`, an unknown name exited **2**, which is Claude Code's
+  *blocking* exit code: the stale `prompt-guard` (UserPromptSubmit) swallowed
+  every prompt before Claude saw it, and the stale `session-end` (Stop) stopped
+  the session from ever ending. Three fixes, deepest first:
+  - `ccst hooks run <unknown>` now exits **1** (non-blocking) with a message
+    naming the valid hooks and the `ccst hooks uninstall --hook <name> --apply`
+    that clears the stale entry. No future hook removal can wedge a session,
+    whether or not the prune below has run.
+  - `ccst hooks install` now prunes entries naming a hook this build cannot
+    dispatch, in the same pass that adds new ones — so a rename drops the dead
+    entry and adds its replacement together, rather than leaving both. Entries
+    not spelled `ccst hooks run <name>` are never touched. `ccst
+    install-everything` inherits this.
+  - `ccst doctor` gained `hooks:no-stale`, which **FAILs** for each such entry.
+    The existing hook check only looked bundle -> settings, so it reported a
+    settings.json full of dead entries as entirely healthy.
+- **`ccst migrate telemetry` refused to run on any machine that had opened a
+  Claude Code session since installing CCST.** The import aborted if
+  `telemetry.db` already had rows — but the hook writer fills that database
+  from the first session after install, so the guard fired on the normal
+  upgrade path rather than on the rare partial-run it was written for. The
+  import now appends alongside the existing rows, and "has this already been
+  imported?" is answered by an explicit marker in a new `migrations` table
+  rather than by counting rows. Row count could never answer it: a non-empty
+  table means the hook writer has been running, which says nothing about
+  whether `fires.jsonl` was ever imported.
+- **`ccst doctor` reported the telemetry migration as already done when it had
+  not run.** Same root cause, opposite symptom: with `fires.jsonl` present and
+  `telemetry.db` non-empty, the row-count heuristic downgraded FAIL to WARN,
+  and since the SessionStart `pending-migration` hook only surfaces FAILs, the
+  operator was never told the import was still outstanding. The telemetry check
+  now reads the marker. The other three stores still use row counts and have
+  the same latent flaw; tracked in TODO.md.
+- **`ccst telemetry` listed the oldest rows in the store as its newest** after
+  an import. Appended rows are older by `ts` but get the highest ids, and the
+  query ordered by `id DESC`. It now orders by `ts DESC, id DESC` (id remains
+  the tie-break — `ts` has whole-second resolution, so bursts of fires do tie).
+- **Imported catch-up history would have resurfaced as new scheduler
+  activity.** `catchup_events.id` is the per-session surfacing cursor
+  (`WHERE id > ?`), so appending historical rows above every cursor's watermark
+  would replay old catch-up digests and re-reap jobs that already ran. Every
+  cursor is now advanced past the imported rows at the end of the migration
+  (`cursor.advance_all_cursors_to`), applying the rule `seed_new_session`
+  already applies to a new session: pre-existing history is not news. This
+  replaces the old `id == N` alignment with the pre-1.0.0 row-count cursor
+  files, which appending necessarily breaks.
+- **The telemetry import's verification could fail on a correct migration.** It
+  compared a before/after `COUNT(*)` delta, which a concurrent hook fire
+  inflates — and this database always has live writers by the time anyone
+  migrates. It now uses `sqlite3.Connection.total_changes`, which counts only
+  the migration's own writes.
+
+### Changed
+
+- `HOOK_VERBS` / `HOOK_DESCRIPTIONS` moved from `cli.ccst` to
+  `lib.hook_registry`, the single source of truth for which hooks this build
+  can dispatch. Three consumers now need to agree on that set (the dispatcher,
+  the settings.json prune, and the doctor check), which is one more than a CLI
+  module should be the home for.
+- `lib.db` gained `MIGRATIONS_DDL`, `migration_applied()` and
+  `record_migration()` so any store can record a one-shot migration explicitly
+  instead of inferring it from row counts.
+
 ## [1.4.1] - 2026-08-02
 
 ### Fixed

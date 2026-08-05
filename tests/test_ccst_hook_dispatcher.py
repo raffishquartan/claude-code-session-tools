@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pytest
 
-from cc_session_tools.cli.ccst import HOOK_VERBS
+from cc_session_tools.lib.hook_registry import HOOK_VERBS
 
 
 def _run(*args: str, stdin: str = "") -> subprocess.CompletedProcess[str]:
@@ -25,7 +25,28 @@ def _run(*args: str, stdin: str = "") -> subprocess.CompletedProcess[str]:
 def test_hooks_run_unknown_hook_name_rejected() -> None:
     result = _run("hooks", "run", "no-such-hook")
     assert result.returncode != 0
-    assert "no-such-hook" in result.stderr or "invalid choice" in result.stderr
+    assert "no-such-hook" in result.stderr
+
+
+@pytest.mark.parametrize("removed_hook", ["prompt-guard", "edit-write-audit", "session-end"])
+def test_unknown_hook_never_exits_2(removed_hook: str) -> None:
+    """Exit 2 is Claude Code's *blocking* code; every other non-zero value is
+    a non-blocking error. A settings.json entry naming a removed hook is a
+    stale-config problem, so it must warn, not block.
+
+    These three names are the ones that wedged a real install: argparse's
+    `choices=` rejected them with its own exit code (2), which made a stale
+    UserPromptSubmit entry swallow every prompt and a stale Stop entry stop
+    the session from ever ending.
+    """
+    result = _run("hooks", "run", removed_hook, stdin="{}")
+    assert result.returncode == 1
+    assert result.returncode != 2
+
+
+def test_unknown_hook_message_says_how_to_remove_the_stale_entry() -> None:
+    result = _run("hooks", "run", "prompt-guard", stdin="{}")
+    assert "ccst hooks uninstall --hook prompt-guard --apply" in result.stderr
 
 
 @pytest.mark.parametrize("verb", sorted(HOOK_VERBS))

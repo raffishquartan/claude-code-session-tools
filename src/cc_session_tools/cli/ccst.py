@@ -73,37 +73,13 @@ from pathlib import Path
 from typing import Any, cast
 
 from cc_session_tools import __version__
-from cc_session_tools.hooks_install import load_json, merge_hook_settings, write_json_atomic
-
-
-HOOK_VERBS: dict[str, str] = {
-    "bash-hard-deny": "cccs_hooks.bash_hard_deny",
-    "bash-security-review": "cccs_hooks.bash_security_review",
-    "marker-allow": "cccs_hooks.marker_allow",
-    "confirm-8digit": "cccs_hooks.confirm_8digit",
-    "after-response": "cccs_hooks.after_response",
-    "worklog-guard": "cccs_hooks.worklog_guard",
-    "session-tag": "cccs_hooks.session_tag",
-    "last-screenshot": "cccs_hooks.last_screenshot",
-    "messaging-deliver": "cccs_hooks.messaging_deliver",
-    "catchup": "cccs_hooks.catchup",
-    "pending-migration": "cccs_hooks.pending_migration",
-}
-
-
-HOOK_DESCRIPTIONS: dict[str, str] = {
-    "bash-hard-deny": "Hard-deny gate for Bash: blocks deletes, delete-by-move, gh/curl mutations, sudo, opentabs self-approval, telemetry-log reads (telemetry.db/fires.jsonl); auto-allows the rest (PreToolUse, Bash)",
-    "bash-security-review": "Reviews shell commands for security risks (tiered: allowlist, heuristics, LLM)",
-    "marker-allow": "Auto-approves a bare `touch` of a skill marker under ~/.cache/claude/markers/ (PreToolUse, Bash)",
-    "confirm-8digit": "Enforces an 8-digit confirmation gate before risky tool calls",
-    "after-response": "Touches a .last-active sentinel so `ccs --order-by active` can sort by recency",
-    "worklog-guard": "Blocks manual /compact if the session's WORKLOG.md is stale (PreCompact, matcher: manual)",
-    "session-tag": "For ccd/ccr-launched sessions: writes the session tag file so ccusage can map UUIDs to human-readable names, and emits additionalContext telling the assistant the tag/session-dir is already set",
-    "last-screenshot": "Resolves the newest screenshot for the >lss token and injects its path",
-    "messaging-deliver": "Delivers inter-session messages (digest + auto-read + receipts) on session start and each prompt",
-    "catchup": "Reconciles+launches missed scheduled jobs (ccsched) detached and surfaces a catch-up digest (SessionStart + UserPromptSubmit)",
-    "pending-migration": "Detects legacy pre-1.0.0 flat-file data left unmigrated (ccmsg/ccsched/sessions/telemetry) and surfaces a FAIL digest pointing at `ccst migrate all`; honours `ccst doctor --mute` (SessionStart)",
-}
+from cc_session_tools.hooks_install import (
+    load_json,
+    merge_hook_settings,
+    prune_stale_hooks,
+    write_json_atomic,
+)
+from cc_session_tools.lib.hook_registry import HOOK_DESCRIPTIONS, HOOK_VERBS
 
 
 # ---------- path discovery ----------
@@ -378,13 +354,24 @@ def _cmd_hooks_install(args: argparse.Namespace) -> int:
 
     target = load_json(target_path) if target_path.exists() else {}
 
-    merged, additions = merge_hook_settings(source_settings=source, target_settings=target)
+    # Prune before merging: a rename (old name removed, new name added in the
+    # same release) must drop the dead entry in the same pass that adds its
+    # replacement, or the upgrade leaves both registered and the dead one
+    # fires on every event it was bound to.
+    pruned, removals = prune_stale_hooks(target)
+    merged, additions = merge_hook_settings(source_settings=source, target_settings=pruned)
 
     inventory = _bundle_inventory(source)
     added_keys = {(a.event, a.matcher, a.command) for a in additions}
     _print_hooks_install_table(inventory, added_keys)
 
-    if not additions:
+    if removals:
+        print("\nStale entries in settings.json naming a hook this CCST no longer has:")
+        for r in removals:
+            matcher_label = f" [{r.matcher}]" if r.matcher else ""
+            print(f"  - remove  {r.event}{matcher_label}: {r.command}")
+
+    if not additions and not removals:
         print("\nAlready up to date — nothing to add.")
         return 0
 
@@ -1168,7 +1155,29 @@ def _cmd_pdata_verify(args: argparse.Namespace) -> int:
 
 
 def _cmd_hooks_run(args: argparse.Namespace) -> int:
-    module = importlib.import_module(HOOK_VERBS[args.hook])
+    """Dispatch to the named hook, or exit 1 (never 2) if it is unknown.
+
+    The exit code carries meaning to Claude Code: 2 is the *blocking* code,
+    and every other non-zero value is a non-blocking error that is merely
+    surfaced. An unknown hook name means settings.json still registers a hook
+    a later CCST removed — a stale-config problem, not a reason to block. When
+    this was an argparse `choices=` constraint, argparse's own exit code (2)
+    made every stale entry blocking: a stale UserPromptSubmit hook swallowed
+    every prompt, and a stale Stop hook stopped the session from ever ending.
+    Returning 1 degrades that to a visible warning instead.
+    """
+    module_path = HOOK_VERBS.get(args.hook)
+    if module_path is None:
+        print(
+            f"ccst hooks run: unknown hook {args.hook!r}.\n"
+            f"This build dispatches: {', '.join(sorted(HOOK_VERBS))}.\n"
+            "If settings.json still registers this hook, remove the stale entry with:\n"
+            f"    ccst hooks uninstall --hook {args.hook} --apply\n"
+            "or bring every entry up to date with: ccst hooks install --apply",
+            file=sys.stderr,
+        )
+        return 1
+    module = importlib.import_module(module_path)
     rc = module.main()
     return int(rc) if rc is not None else 0
 
@@ -1278,8 +1287,6 @@ def _cmd_migrate_telemetry(args: argparse.Namespace) -> int:
         argv += ["--dest-dir", args.dest_dir]
     if args.dry_run:
         argv.append("--dry-run")
-    if args.force:
-        argv.append("--force")
     return migrate_main(argv)
 
 
@@ -1306,7 +1313,7 @@ def _cmd_migrate_all(args: argparse.Namespace) -> int:
         ("ccsched", lambda: _cmd_migrate_ccsched(argparse.Namespace(
             old_dir=None, backup_dir=None, dry_run=args.dry_run))),
         ("telemetry", lambda: _cmd_migrate_telemetry(argparse.Namespace(
-            source_dir=None, dest_dir=None, dry_run=args.dry_run, force=False))),
+            source_dir=None, dest_dir=None, dry_run=args.dry_run))),
     ]
 
     overall_rc = 0
@@ -1515,9 +1522,12 @@ def _build_parser() -> argparse.ArgumentParser:
         "run",
         help="Run a Claude Code hook by name (reads event payload from stdin)",
     )
+    # Deliberately no choices=: argparse rejects an unknown value by exiting 2,
+    # which is Claude Code's blocking exit code. _cmd_hooks_run validates the
+    # name itself and exits 1 so a stale settings.json entry warns rather than
+    # wedges. See _cmd_hooks_run's docstring.
     run_parser.add_argument(
         "hook",
-        choices=sorted(HOOK_VERBS),
         metavar="<name>",
         help="Hook to run: " + ", ".join(sorted(HOOK_VERBS)),
     )
@@ -2003,8 +2013,6 @@ def _build_parser() -> argparse.ArgumentParser:
     m_telemetry.add_argument("--source-dir", default=None, metavar="PATH")
     m_telemetry.add_argument("--dest-dir", default=None, metavar="PATH")
     m_telemetry.add_argument("--dry-run", action="store_true")
-    m_telemetry.add_argument("--force", action="store_true",
-                              help="Allow inserting into a dest DB that already has rows")
     m_all = migrate_sub.add_parser(
         "all",
         help="Run every one-shot data-store migration (sessions, ccmsg, ccsched, "

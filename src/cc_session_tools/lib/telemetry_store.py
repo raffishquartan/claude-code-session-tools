@@ -13,6 +13,18 @@ so row ids are monotonic and never reused, even after every row is deleted —
 this is what lets lib.scheduler.ledger's catch-up cursor be `WHERE id > ?`
 instead of a re-derived row-count index (the old rotation/cursor-desync
 bug's root cause).
+
+Note what that guarantee is and is not: ids are monotonic *in insertion
+order*, which is not the same as chronological order in `ts`. The one-shot
+fires.jsonl import appends rows older than everything already present, so
+anything wanting time order must sort by `ts` (telemetry_trim already does;
+telemetry_query does since the import became append-based). The cursor only
+needs "never reused", which still holds.
+
+The migrations table records one-shot imports so they are never re-run and
+never mistaken for un-run. Do not infer migration state from row counts —
+this store's writer (cccs_hooks.telemetry) fills it from the moment CCST is
+installed, long before any import happens.
 """
 from __future__ import annotations
 
@@ -25,6 +37,12 @@ from cc_session_tools.lib import db, paths
 
 HOOKS_DIR_ENV = "CCCS_HOOKS_DIR"
 DB_FILENAME = "telemetry.db"
+
+# Marker name recorded in the migrations table by cli.migrate_telemetry once
+# the fires.jsonl* import has completed. Read by that script (to refuse a
+# second run) and by lib.doctor (to tell "not yet imported" from "imported,
+# old files not cleaned up").
+LEGACY_JSONL_MIGRATION = "fires-jsonl-to-telemetry-db"
 
 _DDL = """
 CREATE TABLE IF NOT EXISTS telemetry_events (
@@ -58,7 +76,7 @@ CREATE TABLE IF NOT EXISTS catchup_events (
 );
 CREATE INDEX IF NOT EXISTS idx_catchup_events_ts ON catchup_events(ts);
 CREATE INDEX IF NOT EXISTS idx_catchup_events_job_id ON catchup_events(job_id);
-"""
+""" + db.MIGRATIONS_DDL
 
 # Computed once at import time; tests override it with
 # monkeypatch.setattr(telemetry_store, "_DEFAULT_HOOKS_DIR", tmp_path) to
