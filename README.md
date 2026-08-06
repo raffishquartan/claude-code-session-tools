@@ -622,9 +622,24 @@ to the folder where your screenshots are saved - e.g. in the `env` block of
 }
 ```
 
-If `>lss` is used while `CCST_SCREENSHOT_DIR` is unset (or not a directory), the
-hook prints a visible warning to stderr telling you to set it. The hook never
-blocks and always exits 0.
+**Several directories** may be listed, separated by the platform path separator
+(`:` on macOS/Linux/WSL, `;` on native Windows); the first one that **exists**
+wins. This is for setups that sync `settings.json` verbatim across machines,
+where the screenshot directory necessarily differs per machine:
+
+```json
+"env": {
+  "CCST_SCREENSHOT_DIR": "/Users/you/Desktop:/mnt/c/Users/you/OneDrive/Pictures/Screenshots"
+}
+```
+
+On the Mac the first path resolves; under WSL the first is missing so the second
+is used. A single path behaves exactly as before, including when it does not
+exist.
+
+If `>lss` is used while `CCST_SCREENSHOT_DIR` is unset (or none of the listed
+paths is a directory), the hook prints a visible warning to stderr telling you to
+set it. The hook never blocks and always exits 0.
 
 ### Worklog guard hook
 
