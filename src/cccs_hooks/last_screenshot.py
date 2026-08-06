@@ -5,8 +5,12 @@ the newest screenshot plus a note telling Claude whether to read it. Text only;
 the image enters context only if Claude then calls Read. Always exits 0.
 
 The screenshot directory comes from the ``CCST_SCREENSHOT_DIR`` environment
-variable. If ">lss" is used while it is unset, a visible message is printed to
-stderr (which CC surfaces to the user) so they can set it.
+variable, which may list several directories separated by ``os.pathsep`` - the
+first that exists wins. That allows one value to be shared across machines whose
+screenshot directories necessarily differ (``~/Desktop`` on macOS,
+``/mnt/c/Users/<user>/.../Screenshots`` under WSL) when settings.json is synced
+between them verbatim. If ">lss" is used while it is unset, a visible message is
+printed to stderr (which CC surfaces to the user) so they can set it.
 """
 from __future__ import annotations
 
@@ -28,9 +32,35 @@ def find_token(text: str) -> bool:
 
 
 def resolve_screenshot_dir() -> Path | None:
-    """The configured screenshot directory, or None if unset."""
+    """The configured screenshot directory, or None if unset.
+
+    ``CCST_SCREENSHOT_DIR`` may hold several directories separated by
+    ``os.pathsep``, in which case the first one that exists wins. This exists so
+    a single value can be shared across machines: settings.json is synced
+    verbatim between them, but a screenshot directory is inherently
+    machine-specific (``~/Desktop`` on macOS,
+    ``/mnt/c/Users/<user>/.../Screenshots`` under WSL). Listing both lets the
+    same synced config work on either without a per-machine override.
+
+    A single path keeps behaving exactly as before, including when it does not
+    exist - callers distinguish "unset" from "set but missing" and report them
+    differently, so a lone bad path must still resolve rather than become None.
+    """
     raw = os.environ.get("CCST_SCREENSHOT_DIR")
-    return Path(raw) if raw else None
+    if not raw:
+        return None
+
+    candidates = [Path(p) for p in raw.split(os.pathsep) if p]
+    if not candidates:
+        return None
+
+    for candidate in candidates:
+        if candidate.is_dir():
+            return candidate
+
+    # None exist: fall back to the first, so the existing "configured but
+    # missing" diagnostic still names a concrete path for the user to fix.
+    return candidates[0]
 
 
 def newest_screenshot(directory: Path) -> Path | None:
