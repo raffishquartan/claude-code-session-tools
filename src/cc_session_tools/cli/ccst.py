@@ -1381,11 +1381,18 @@ def _cmd_install_everything(args: argparse.Namespace) -> int:
     apply: bool = args.apply
     no_pypi: bool = args.no_pypi
 
+    skills_target = getattr(args, "skills_target", None)
+    hooks_target = getattr(args, "hooks_target", None) or str(
+        Path.home() / ".claude" / "settings.json"
+    )
+    fragments_dir = getattr(args, "fragments_dir", None)
+    claude_md_target = getattr(args, "claude_md_target", None)
+
     steps: list[tuple[str, str, object]] = [
         (
             "Skills",
             "skills",
-            argparse.Namespace(source=None, target=None, apply=apply, force=False),
+            argparse.Namespace(source=None, target=skills_target, apply=apply, force=False),
         ),
         (
             "Hooks",
@@ -1393,19 +1400,22 @@ def _cmd_install_everything(args: argparse.Namespace) -> int:
             argparse.Namespace(
                 source=None,
                 hook=None,
-                target=str(Path.home() / ".claude" / "settings.json"),
+                target=hooks_target,
                 apply=apply,
             ),
         ),
         (
             "Shell helpers",
             "shell",
-            argparse.Namespace(apply=apply, fragments_dir=None),
+            argparse.Namespace(
+                apply=apply,
+                fragments_dir=[fragments_dir] if fragments_dir else None,
+            ),
         ),
         (
             "Global CLAUDE.md",
             "claude-md",
-            argparse.Namespace(target=None, apply=apply),
+            argparse.Namespace(target=claude_md_target, apply=apply),
         ),
         (
             "Scheduled jobs",
@@ -2067,6 +2077,26 @@ def _build_parser() -> argparse.ArgumentParser:
         "--no-pypi",
         action="store_true",
         help="Skip the PyPI version-drift check in the final health-check",
+    )
+    ie_parser.add_argument(
+        "--skills-target",
+        metavar="PATH",
+        help="Override the skills install target (default: ~/.claude/skills)",
+    )
+    ie_parser.add_argument(
+        "--hooks-target",
+        metavar="PATH",
+        help="Override the hooks settings.json target (default: ~/.claude/settings.json)",
+    )
+    ie_parser.add_argument(
+        "--fragments-dir",
+        metavar="PATH",
+        help="Override the shell fragments dir for the ccl() install (default: ~/.shellrc.d)",
+    )
+    ie_parser.add_argument(
+        "--claude-md-target",
+        metavar="PATH",
+        help="Override the global CLAUDE.md target (default: ~/.claude/CLAUDE.md)",
     )
 
     return parser
