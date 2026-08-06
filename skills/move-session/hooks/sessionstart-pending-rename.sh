@@ -24,7 +24,12 @@ if [[ ! -d "$cc_sessions_dir" ]]; then
 fi
 
 # Collect all .pending-rename markers in this project's cc-sessions/.
-mapfile -t markers < <(find "$cc_sessions_dir" -maxdepth 2 -name ".pending-rename" -type f 2>/dev/null)
+# Portable read loop rather than `mapfile` (bash 4.0+ only) — this script's
+# shebang binds to /bin/bash, which is bash 3.2 on macOS.
+markers=()
+while IFS= read -r marker; do
+  markers+=("$marker")
+done < <(find "$cc_sessions_dir" -maxdepth 2 -name ".pending-rename" -type f 2>/dev/null)
 if [[ ${#markers[@]} -eq 0 ]]; then
   exit 0
 fi
