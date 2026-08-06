@@ -15,20 +15,20 @@ teardown() {
 }
 
 @test "exits 0 with no output when no markers exist" {
-    run env CLAUDE_PROJECT_DIR="$PROJECT" bash "$HOOK" <<<'{}'
+    run env CLAUDE_PROJECT_DIR="$PROJECT" "$HOOK" <<<'{}'
     [ "$status" -eq 0 ]
     [ -z "$output" ]
 }
 
 @test "exits 0 with no output when project dir does not exist" {
-    run env CLAUDE_PROJECT_DIR="/nonexistent/path" bash "$HOOK" <<<'{}'
+    run env CLAUDE_PROJECT_DIR="/nonexistent/path" "$HOOK" <<<'{}'
     [ "$status" -eq 0 ]
     [ -z "$output" ]
 }
 
 @test "exits 0 with no output when cc-sessions dir does not exist" {
     BARE="$(mktemp -d)"
-    run env CLAUDE_PROJECT_DIR="$BARE" bash "$HOOK" <<<'{}'
+    run env CLAUDE_PROJECT_DIR="$BARE" "$HOOK" <<<'{}'
     [ "$status" -eq 0 ]
     [ -z "$output" ]
     rm -rf "$BARE"
@@ -42,7 +42,7 @@ uuid: aaaaaaaa-1111-2222-3333-bbbbbbbbbbbb
 tag: 20260503-test-tag
 written_at: 2026-05-03T14:00:00Z
 EOF
-    run env CLAUDE_PROJECT_DIR="$PROJECT" bash "$HOOK" <<<'{}'
+    run env CLAUDE_PROJECT_DIR="$PROJECT" "$HOOK" <<<'{}'
     [ "$status" -eq 0 ]
     [[ "$output" == *"pending session-rename marker(s)"* ]]
     [[ "$output" == *"$SESSION"* ]]
@@ -58,7 +58,7 @@ EOF
     echo "uuid: u2" > "$PROJECT/cc-sessions/20260502-two/.pending-rename"
     echo "tag: 20260502-two" >> "$PROJECT/cc-sessions/20260502-two/.pending-rename"
 
-    run env CLAUDE_PROJECT_DIR="$PROJECT" bash "$HOOK" <<<'{}'
+    run env CLAUDE_PROJECT_DIR="$PROJECT" "$HOOK" <<<'{}'
     [ "$status" -eq 0 ]
     [[ "$output" == *"u1"* ]]
     [[ "$output" == *"u2"* ]]
@@ -79,7 +79,7 @@ uuid: cccccccc-1111-2222-3333-dddddddddddd
 tag: 20260503-renamed-tag
 written_at: 2026-05-03T14:00:00Z
 EOF
-    run env CLAUDE_PROJECT_DIR="$PROJECT" bash "$HOOK" <<<'{}'
+    run env CLAUDE_PROJECT_DIR="$PROJECT" "$HOOK" <<<'{}'
     [ "$status" -eq 0 ]
     # The hook explains the split: /rename inside CC, rm outside CC, both
     # remain valid until run.
@@ -103,7 +103,7 @@ uuid: eeeeeeee-1111-2222-3333-ffffffffffff
 tag: 20260503-correct-tag-from-file
 written_at: 2026-05-03T14:00:00Z
 EOF
-    run env CLAUDE_PROJECT_DIR="$PROJECT" bash "$HOOK" <<<'{}'
+    run env CLAUDE_PROJECT_DIR="$PROJECT" "$HOOK" <<<'{}'
     [ "$status" -eq 0 ]
     # The /rename command must use the tag from the file, not the dir name.
     [[ "$output" == *"/rename 20260503-correct-tag-from-file"* ]]
@@ -121,7 +121,7 @@ EOF
     echo "uuid: aaaaaaaa-1111-2222-3333-bbbbbbbbbbbb" > "$SESSION/.pending-rename"
     echo "tag: 20260503-test-tag" >> "$SESSION/.pending-rename"
 
-    run env CLAUDE_PROJECT_DIR="$PROJECT" bash "$HOOK" <<<'{}'
+    run env CLAUDE_PROJECT_DIR="$PROJECT" "$HOOK" <<<'{}'
     [ "$status" -eq 0 ]
     [[ "$output" == *"find -L ~/cc -name .pending-rename -delete"* ]]
 }
@@ -131,7 +131,7 @@ EOF
     deep="$PROJECT/cc-sessions/some-dir/nested-deeper"
     mkdir -p "$deep"
     echo "uuid: deep" > "$deep/.pending-rename"
-    run env CLAUDE_PROJECT_DIR="$PROJECT" bash "$HOOK" <<<'{}'
+    run env CLAUDE_PROJECT_DIR="$PROJECT" "$HOOK" <<<'{}'
     [ "$status" -eq 0 ]
     [ -z "$output" ]
 }

@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.1.1] - 2026-08-06
+
+### Fixed
+
+- **`move-session`'s SessionStart hook no longer fails on macOS's default
+  bash.** `sessionstart-pending-rename.sh` used `mapfile`, a bash 4.0+
+  builtin, but its `#!/bin/bash` shebang resolves to `/bin/bash` when Claude
+  Code invokes it by absolute path — and on macOS that is the system-shipped
+  bash 3.2.57 (Apple has frozen it there since the GPLv3 license change).
+  Every session start printed `mapfile: command not found` and, under
+  `set -euo pipefail`, silently stopped surfacing any real pending-rename
+  markers. Replaced with a portable `while read` loop that works on bash
+  3.2+.
+
 ## [2.1.0] - 2026-08-06
 
 ### Added
