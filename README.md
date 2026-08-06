@@ -98,7 +98,7 @@ uv tool install cc-session-tools          # recommended
 #    idempotent — safe to re-run after upgrades)
 ccst skills install --apply               # symlinks skills into ~/.claude/skills/
 ccst hooks install --apply                # merges all bundled hooks into ~/.claude/settings.json
-ccst shell install --apply                # adds ccl() to ~/.bashrc and ~/.zshrc
+ccst shell install --apply                # writes ccl() to ~/.shellrc.d/ccl.sh
 
 # 3. Verify everything is wired up
 ccst doctor
@@ -108,7 +108,10 @@ ccst doctor
 #    CLIs and skills, and the 8-digit gate won't have an action list to enforce.
 ```
 
-After `ccst shell install --apply`, open a new shell (or `source ~/.bashrc`) to activate `ccl`.
+`ccst shell install` writes the fragment file but does not source it. Your shell rc
+must source `~/.shellrc.d/*.sh` — see [`ccst shell install`](#ccst-shell-install)
+below for the loop to add if it doesn't already. Once it's sourced, open a new
+shell (or re-source your rc file) to activate `ccl`.
 
 > **Installing from source (pre-release or offline):**
 > ```sh
@@ -144,7 +147,9 @@ ccst shell install --apply
 ccst doctor
 ```
 
-After `ccst shell install --apply`, re-source your shell rc file to pick up any updated `ccl()` function:
+`ccst shell install --apply` rewrites the `~/.shellrc.d/ccl.sh` fragment in
+place; re-source your shell rc file (or open a new shell) to pick up the
+updated `ccl()` function:
 
 ```sh
 source ~/.bashrc   # bash
@@ -330,7 +335,9 @@ ccl --global     # list across all configured roots
 ccl --emptiness only  # list only empty sessions
 ```
 
-After install, activate it with `source ~/.bashrc` (or open a new shell).
+Install writes `~/.shellrc.d/ccl.sh`; your shell rc must source `~/.shellrc.d/*.sh`
+for it to take effect (see [`ccst shell install`](#ccst-shell-install)). Once
+sourced, activate it with `source ~/.bashrc` (or open a new shell).
 
 ## Usage analytics CLI
 
@@ -746,8 +753,17 @@ ccst skills uninstall --skill move-session --apply
 
 ### `ccst shell install`
 
-Append a `ccl()` shell function to `~/.bashrc` and/or `~/.zshrc` between
-sentinel markers. Idempotent — re-running replaces the existing block.
+Write a `ccl()` shell function fragment to `~/.shellrc.d/ccl.sh` (or
+`--fragments-dir`). ccst does not edit `~/.bashrc`/`~/.zshrc` directly — those
+files may be managed by something else (e.g. chezmoi). Your shell rc is
+responsible for sourcing the fragments directory:
+
+```sh
+for f in ~/.shellrc.d/*.sh; do [ -r "$f" ] && source "$f"; done
+```
+
+`ccl` has no effect until that loop (or equivalent) is in your `.bashrc`/`.zshrc`.
+Idempotent — re-running overwrites the existing fragment.
 
 ```sh
 # Dry run (default) - shows what would be added
@@ -766,7 +782,7 @@ source ~/.zshrc    # zsh
 
 ### `ccst shell uninstall`
 
-Remove the sentinel-bracketed `ccl()` block from shell rc files.
+Remove the `ccl()` fragment file from `~/.shellrc.d/` (or `--fragments-dir`).
 
 ```sh
 ccst shell uninstall --apply
