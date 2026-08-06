@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.1.0] - 2026-08-06
+
+### Added
+
+- **`CCST_SCREENSHOT_DIR` may now list several directories**, separated by the
+  platform path separator (`:` on macOS/Linux/WSL, `;` on native Windows); the
+  first one that exists wins. This is for setups that sync `settings.json`
+  verbatim across machines, where the screenshot directory necessarily differs
+  per machine (e.g. `~/Desktop` on macOS vs. `/mnt/c/Users/<user>/.../Screenshots`
+  under WSL). A single path keeps behaving exactly as before, including when it
+  does not exist.
+
 ## [2.0.0] - 2026-08-05
 
 Two independent bugs, both surfaced by one 0.18.0 -> 1.4.1 upgrade: a stranded
@@ -873,7 +885,9 @@ integration (push notifications when 8-digit confirmation gates fire).
 - `--version` flag on all three CLIs.
 - `.gitignore` entry for `.worktrees/`.
 
-[Unreleased]: https://github.com/raffishquartan/claude-code-session-tools/compare/v1.3.1...HEAD
+[Unreleased]: https://github.com/raffishquartan/claude-code-session-tools/compare/v2.1.0...HEAD
+[2.1.0]: https://github.com/raffishquartan/claude-code-session-tools/compare/v2.0.0...v2.1.0
+[2.0.0]: https://github.com/raffishquartan/claude-code-session-tools/compare/v1.3.1...v2.0.0
 [1.3.1]: https://github.com/raffishquartan/claude-code-session-tools/compare/v1.3.0...v1.3.1
 [1.3.0]: https://github.com/raffishquartan/claude-code-session-tools/compare/v1.2.0...v1.3.0
 [1.2.0]: https://github.com/raffishquartan/claude-code-session-tools/compare/v1.1.0...v1.2.0

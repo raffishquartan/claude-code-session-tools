@@ -69,6 +69,60 @@ def test_resolve_dir_none_when_unset(monkeypatch: pytest.MonkeyPatch) -> None:
     assert resolve_screenshot_dir() is None
 
 
+def test_resolve_dir_single_missing_path_still_resolves(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A lone non-existent path must resolve, not become None.
+
+    Callers report "unset" and "set but missing" differently, so collapsing a
+    bad path to None would show the user the wrong diagnostic.
+    """
+    missing = tmp_path / "nope"
+    monkeypatch.setenv("CCST_SCREENSHOT_DIR", str(missing))
+    assert resolve_screenshot_dir() == missing
+
+
+def test_resolve_dir_picks_first_existing_of_several(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Several os.pathsep-separated paths: the first that exists wins.
+
+    This is what lets one synced settings.json serve both a macOS and a WSL
+    machine, where the screenshot directory necessarily differs.
+    """
+    missing = tmp_path / "wsl-style-path"
+    present = tmp_path / "mac-style-path"
+    present.mkdir()
+    monkeypatch.setenv(
+        "CCST_SCREENSHOT_DIR", os.pathsep.join([str(missing), str(present)])
+    )
+    assert resolve_screenshot_dir() == present
+
+
+def test_resolve_dir_falls_back_to_first_when_none_exist(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """When none of the listed paths exist, fall back to the first."""
+    first = tmp_path / "a"
+    second = tmp_path / "b"
+    monkeypatch.setenv(
+        "CCST_SCREENSHOT_DIR", os.pathsep.join([str(first), str(second)])
+    )
+    assert resolve_screenshot_dir() == first
+
+
+def test_resolve_dir_ignores_empty_segments(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Trailing or doubled separators must not yield a bogus Path('')."""
+    present = tmp_path / "real"
+    present.mkdir()
+    monkeypatch.setenv(
+        "CCST_SCREENSHOT_DIR", f"{os.pathsep}{present}{os.pathsep}{os.pathsep}"
+    )
+    assert resolve_screenshot_dir() == present
+
+
 # ---------- context note ----------
 
 def test_context_fresh_mentions_path_and_lss(tmp_path: Path) -> None:
