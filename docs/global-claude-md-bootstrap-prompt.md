@@ -51,7 +51,8 @@ ccst --version 2>&1
 claude-code-usage --version 2>&1
 
 # ccl shell function
-grep -s "ccl()" ~/.bashrc ~/.zshrc 2>/dev/null && echo "ccl: installed" || echo "ccl: NOT installed"
+ls ~/.shellrc.d/ccl.sh 2>/dev/null && echo "ccl: installed" || echo "ccl: NOT installed"
+grep -sq '~/.shellrc.d' ~/.bashrc ~/.zshrc 2>/dev/null && echo "ccl: sourced from rc file" || echo "ccl: rc file does NOT source ~/.shellrc.d/ - ccl will not be active even if installed"
 
 # Skill symlinks
 ls -la ~/.claude/skills/find-claude-code-session 2>/dev/null && echo "skill: find-claude-code-session OK" || echo "skill: find-claude-code-session MISSING"
@@ -246,8 +247,11 @@ After writing, read back the written section and confirm to the user:
 After writing, tell the user:
 
 1. Run `ccst doctor` to verify the full install is healthy.
-2. If `ccl` was not detected in Step 3, run `ccst shell install --apply` and
-   then `source ~/.bashrc` (or open a new shell) to activate it.
+2. If `ccl` was not detected in Step 3, run `ccst shell install --apply`. If
+   the rc file also does not source `~/.shellrc.d/`, add
+   `for f in ~/.shellrc.d/*.sh; do [ -r "$f" ] && source "$f"; done` to
+   `~/.bashrc`/`~/.zshrc` (or the equivalent in whatever manages them, e.g.
+   chezmoi). Then `source ~/.bashrc` (or open a new shell) to activate it.
 3. If any skills were missing, run `ccst skills install --apply`.
 4. If hooks were not registered, run `ccst hooks install --apply`.
 5. Telemetry is pruned automatically every 7 days via a `ccsched` job. If they

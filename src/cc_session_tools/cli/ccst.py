@@ -15,9 +15,9 @@ Current subcommands:
   skills uninstall [--skill <name>] Remove bundled skill symlinks.
   doctor                         Health-check: PATH, env vars, settings.json,
                                  hook registrations, skill symlinks, PyPI drift.
-  shell install                  Add the ccl() wrapper function to ~/.bashrc /
-                                 ~/.zshrc between sentinel markers.
-  shell uninstall                Remove the ccl() block from shell rc files.
+  shell install                  Write the ccl() wrapper function to a fragment
+                                 file in ~/.shellrc.d/ (or --fragments-dir).
+  shell uninstall                Remove that ccl() fragment file.
   sessions migrate               One-shot migration of the flat tag cache,
                                  activity sentinels, and cc-doctor-mutes.json
                                  into sessions.db. Non-destructive; never
@@ -696,8 +696,8 @@ def _cmd_doctor(args: argparse.Namespace) -> int:
 def _cmd_shell_install(args: argparse.Namespace) -> int:
     from cc_session_tools.lib.shell_install import RCAction, install_all
 
-    rc_paths = _resolve_rc_paths(args)
-    results = install_all(rc_paths, apply=args.apply)
+    fragments_dirs = _resolve_fragment_dirs(args)
+    results = install_all(fragments_dirs, apply=args.apply)
 
     for r in results:
         print(f"  {r.path}: {r.message}")
@@ -707,8 +707,12 @@ def _cmd_shell_install(args: argparse.Namespace) -> int:
     else:
         modified = [r for r in results if r.action in (RCAction.ADDED, RCAction.REPLACED)]
         if modified:
-            print(f"\nShell function installed in {len(modified)} file(s).")
-            print("Reload your shell or run: source ~/.bashrc  (or ~/.zshrc)")
+            print(f"\nShell function installed in {len(modified)} location(s).")
+            print(
+                "Make sure your shell rc sources it, e.g.:\n"
+                '  for f in ~/.shellrc.d/*.sh; do [ -r "$f" ] && source "$f"; done'
+            )
+            print("Then reload your shell or run: source ~/.bashrc  (or ~/.zshrc)")
 
     return 0
 
@@ -716,8 +720,8 @@ def _cmd_shell_install(args: argparse.Namespace) -> int:
 def _cmd_shell_uninstall(args: argparse.Namespace) -> int:
     from cc_session_tools.lib.shell_install import RCAction, uninstall_all
 
-    rc_paths = _resolve_rc_paths(args)
-    results = uninstall_all(rc_paths, apply=args.apply)
+    fragments_dirs = _resolve_fragment_dirs(args)
+    results = uninstall_all(fragments_dirs, apply=args.apply)
 
     for r in results:
         print(f"  {r.path}: {r.message}")
@@ -727,16 +731,16 @@ def _cmd_shell_uninstall(args: argparse.Namespace) -> int:
     else:
         removed = [r for r in results if r.action == RCAction.REMOVED]
         if removed:
-            print(f"\nShell function removed from {len(removed)} file(s).")
+            print(f"\nShell function removed from {len(removed)} location(s).")
 
     return 0
 
 
-def _resolve_rc_paths(args: argparse.Namespace) -> list[Path] | None:
-    """Return the list of rc paths from --rc-file args, or None for defaults."""
-    rc_files = getattr(args, "rc_file", None) or []
-    if rc_files:
-        return [Path(p) for p in rc_files]
+def _resolve_fragment_dirs(args: argparse.Namespace) -> list[Path] | None:
+    """Return the list of fragments dirs from --fragments-dir args, or None for defaults."""
+    fragments_dirs = getattr(args, "fragments_dir", None) or []
+    if fragments_dirs:
+        return [Path(p) for p in fragments_dirs]
     return None
 
 
@@ -1377,11 +1381,18 @@ def _cmd_install_everything(args: argparse.Namespace) -> int:
     apply: bool = args.apply
     no_pypi: bool = args.no_pypi
 
+    skills_target = getattr(args, "skills_target", None)
+    hooks_target = getattr(args, "hooks_target", None) or str(
+        Path.home() / ".claude" / "settings.json"
+    )
+    fragments_dir = getattr(args, "fragments_dir", None)
+    claude_md_target = getattr(args, "claude_md_target", None)
+
     steps: list[tuple[str, str, object]] = [
         (
             "Skills",
             "skills",
-            argparse.Namespace(source=None, target=None, apply=apply, force=False),
+            argparse.Namespace(source=None, target=skills_target, apply=apply, force=False),
         ),
         (
             "Hooks",
@@ -1389,19 +1400,22 @@ def _cmd_install_everything(args: argparse.Namespace) -> int:
             argparse.Namespace(
                 source=None,
                 hook=None,
-                target=str(Path.home() / ".claude" / "settings.json"),
+                target=hooks_target,
                 apply=apply,
             ),
         ),
         (
             "Shell helpers",
             "shell",
-            argparse.Namespace(apply=apply, rc_file=None),
+            argparse.Namespace(
+                apply=apply,
+                fragments_dir=[fragments_dir] if fragments_dir else None,
+            ),
         ),
         (
             "Global CLAUDE.md",
             "claude-md",
-            argparse.Namespace(target=None, apply=apply),
+            argparse.Namespace(target=claude_md_target, apply=apply),
         ),
         (
             "Scheduled jobs",
@@ -1659,7 +1673,7 @@ def _build_parser() -> argparse.ArgumentParser:
 
     shell_install_parser = shell_sub.add_parser(
         "install",
-        help="Add the ccl() wrapper function to ~/.bashrc and ~/.zshrc (dry run by default)",
+        help="Write the ccl() wrapper function fragment to ~/.shellrc.d/ (dry run by default)",
     )
     shell_install_parser.add_argument(
         "--apply",
@@ -1667,15 +1681,15 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Write changes (default: dry run)",
     )
     shell_install_parser.add_argument(
-        "--rc-file",
+        "--fragments-dir",
         action="append",
         metavar="PATH",
-        help="RC file to modify (may repeat; default: ~/.bashrc and ~/.zshrc)",
+        help="Fragments dir to write into (may repeat; default: ~/.shellrc.d)",
     )
 
     shell_uninstall_parser = shell_sub.add_parser(
         "uninstall",
-        help="Remove the ccl() block from ~/.bashrc and ~/.zshrc (dry run by default)",
+        help="Remove the ccl() fragment file from ~/.shellrc.d/ (dry run by default)",
     )
     shell_uninstall_parser.add_argument(
         "--apply",
@@ -1683,10 +1697,10 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Write changes (default: dry run)",
     )
     shell_uninstall_parser.add_argument(
-        "--rc-file",
+        "--fragments-dir",
         action="append",
         metavar="PATH",
-        help="RC file to modify (may repeat; default: ~/.bashrc and ~/.zshrc)",
+        help="Fragments dir to remove from (may repeat; default: ~/.shellrc.d)",
     )
 
     # ---- telemetry ----
@@ -2063,6 +2077,26 @@ def _build_parser() -> argparse.ArgumentParser:
         "--no-pypi",
         action="store_true",
         help="Skip the PyPI version-drift check in the final health-check",
+    )
+    ie_parser.add_argument(
+        "--skills-target",
+        metavar="PATH",
+        help="Override the skills install target (default: ~/.claude/skills)",
+    )
+    ie_parser.add_argument(
+        "--hooks-target",
+        metavar="PATH",
+        help="Override the hooks settings.json target (default: ~/.claude/settings.json)",
+    )
+    ie_parser.add_argument(
+        "--fragments-dir",
+        metavar="PATH",
+        help="Override the shell fragments dir for the ccl() install (default: ~/.shellrc.d)",
+    )
+    ie_parser.add_argument(
+        "--claude-md-target",
+        metavar="PATH",
+        help="Override the global CLAUDE.md target (default: ~/.claude/CLAUDE.md)",
     )
 
     return parser

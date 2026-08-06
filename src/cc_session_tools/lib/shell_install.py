@@ -1,19 +1,23 @@
-"""Install and uninstall the ``ccl()`` shell function in ~/.bashrc and ~/.zshrc.
+"""Install and uninstall the ``ccl()`` shell function as an rc fragment file.
 
-The function block is delimited by sentinel comment lines::
+ccst manages ``ccl()`` as a standalone file inside a shell-rc fragments
+directory (default ``~/.shellrc.d``) rather than editing ``~/.bashrc``/
+``~/.zshrc`` directly — those files may be managed by something else (e.g.
+chezmoi) and ccst has no business mutating them. Sourcing the fragments
+directory is the consuming shell's responsibility; a chezmoi-managed
+``.bashrc``/``.zshrc`` carries a loop like::
 
-    # >>> ccst shell function (ccl) >>>
-    ccl() { ... }       # list-mode wrapper; intercepts --help/-h
-    ccl-global() { ccs --global "$@"; }
-    # <<< ccst shell function (ccl) <<<
+    for f in ~/.shellrc.d/*.sh; do [ -r "$f" ] && source "$f"; done
+
+A shell with no such loop simply won't pick up ``ccl()`` — ccst does not
+fall back to writing into ``~/.bashrc``/``~/.zshrc`` directly.
 
 ``ccl --help`` prints a short, ccl-specific help message instead of
 delegating to ``ccs --help``.
 
-Operations are idempotent: re-running install replaces the block between the
-sentinels; uninstall removes it.
-
-All mutations are dry-run by default; pass ``apply=True`` to write.
+Operations are idempotent: re-running install overwrites the fragment file;
+uninstall removes it. All mutations are dry-run by default; pass
+``apply=True`` to write.
 """
 from __future__ import annotations
 
@@ -21,11 +25,11 @@ from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
 
-_SENTINEL_START = "# >>> ccst shell function (ccl) >>>"
-_SENTINEL_END = "# <<< ccst shell function (ccl) <<<"
+FRAGMENT_FILENAME = "ccl.sh"
 
-_BLOCK = """\
-# >>> ccst shell function (ccl) >>>
+_FRAGMENT = """\
+# Managed by ccst (claude-code-session-tools) - do not hand-edit.
+# Reinstall: ccst shell install --apply   Remove: ccst shell uninstall --apply
 ccl() {
   local _saw_global _saw_order_by _a
   for _a in "$@"; do
@@ -79,7 +83,6 @@ CCLHELP
 }
 ccl-global() { ccs --global "$@"; }
 ccl-recent() { ccs --global --order-by active "$@"; }
-# <<< ccst shell function (ccl) <<<
 """
 
 
@@ -88,8 +91,7 @@ class RCAction(str, Enum):
     REPLACED = "replaced"
     REMOVED = "removed"
     ALREADY_PRESENT = "already-present"
-    NOT_PRESENT = "not-present"  # uninstall when block not found
-    SKIPPED = "skipped"  # file does not exist
+    NOT_PRESENT = "not-present"  # uninstall when fragment not found
 
 
 @dataclass(frozen=True)
@@ -99,109 +101,79 @@ class RCResult:
     message: str
 
 
-def _find_block(lines: list[str]) -> tuple[int, int] | None:
-    """Return (start_idx, end_idx) of the sentinel block, or None."""
-    start = None
-    for i, line in enumerate(lines):
-        stripped = line.rstrip("\n").rstrip()
-        if stripped == _SENTINEL_START:
-            start = i
-        elif stripped == _SENTINEL_END and start is not None:
-            return (start, i)
-    return None
+def install_fragment(fragments_dir: Path, *, apply: bool = False) -> RCResult:
+    """Write (or refresh) the ccl() fragment file in fragments_dir.
 
+    Creates fragments_dir if it does not exist.
+    """
+    fragment_path = fragments_dir / FRAGMENT_FILENAME
 
-def install_rc(rc_path: Path, *, apply: bool = False) -> RCResult:
-    """Add or replace the ccl block in rc_path."""
-    if not rc_path.exists():
-        return RCResult(path=rc_path, action=RCAction.SKIPPED, message="file does not exist")
-
-    content = rc_path.read_text()
-    lines = content.splitlines(keepends=True)
-    span = _find_block(lines)
-
-    if span is not None:
-        start, end = span
-        existing_block = "".join(lines[start : end + 1])
-        if existing_block.rstrip("\n") == _BLOCK.rstrip("\n"):
+    if fragment_path.exists():
+        if fragment_path.read_text() == _FRAGMENT:
             return RCResult(
-                path=rc_path,
+                path=fragment_path,
                 action=RCAction.ALREADY_PRESENT,
-                message="block already up to date",
+                message="fragment already up to date",
             )
-        # Replace
-        new_lines = lines[:start] + [_BLOCK] + lines[end + 1 :]
-        new_content = "".join(new_lines)
         if apply:
-            rc_path.write_text(new_content)
+            fragment_path.write_text(_FRAGMENT)
         return RCResult(
-            path=rc_path,
+            path=fragment_path,
             action=RCAction.REPLACED,
-            message=f"{'replaced' if apply else 'would replace'} existing block",
+            message=f"{'replaced' if apply else 'would replace'} existing fragment",
         )
 
-    # Append
-    sep = "" if content.endswith("\n") or not content else "\n"
-    new_content = content + sep + _BLOCK
     if apply:
-        rc_path.write_text(new_content)
+        fragments_dir.mkdir(parents=True, exist_ok=True)
+        fragment_path.write_text(_FRAGMENT)
     return RCResult(
-        path=rc_path,
+        path=fragment_path,
         action=RCAction.ADDED,
-        message=f"{'added' if apply else 'would add'} block",
+        message=f"{'added' if apply else 'would add'} fragment",
     )
 
 
-def uninstall_rc(rc_path: Path, *, apply: bool = False) -> RCResult:
-    """Remove the ccl block from rc_path."""
-    if not rc_path.exists():
-        return RCResult(path=rc_path, action=RCAction.SKIPPED, message="file does not exist")
+def uninstall_fragment(fragments_dir: Path, *, apply: bool = False) -> RCResult:
+    """Remove the ccl() fragment file from fragments_dir."""
+    fragment_path = fragments_dir / FRAGMENT_FILENAME
 
-    content = rc_path.read_text()
-    lines = content.splitlines(keepends=True)
-    span = _find_block(lines)
-
-    if span is None:
+    if not fragment_path.exists():
         return RCResult(
-            path=rc_path,
+            path=fragment_path,
             action=RCAction.NOT_PRESENT,
-            message="block not found",
+            message="fragment not found",
         )
 
-    start, end = span
-    new_lines = lines[:start] + lines[end + 1 :]
-    new_content = "".join(new_lines)
     if apply:
-        rc_path.write_text(new_content)
+        fragment_path.unlink()
     return RCResult(
-        path=rc_path,
+        path=fragment_path,
         action=RCAction.REMOVED,
-        message=f"{'removed' if apply else 'would remove'} block",
+        message=f"{'removed' if apply else 'would remove'} fragment",
     )
 
 
 def install_all(
-    rc_paths: list[Path] | None = None, *, apply: bool = False
+    fragments_dirs: list[Path] | None = None, *, apply: bool = False
 ) -> list[RCResult]:
-    """Install the ccl block in each rc file that exists.
+    """Install the ccl() fragment into each given fragments directory.
 
-    Default rc_paths: [~/.bashrc, ~/.zshrc].
+    Default fragments_dirs: [~/.shellrc.d].
     """
-    paths = rc_paths if rc_paths is not None else _default_rc_paths()
-    return [install_rc(p, apply=apply) for p in paths]
+    dirs = fragments_dirs if fragments_dirs is not None else _default_fragments_dirs()
+    return [install_fragment(d, apply=apply) for d in dirs]
 
 
 def uninstall_all(
-    rc_paths: list[Path] | None = None, *, apply: bool = False
+    fragments_dirs: list[Path] | None = None, *, apply: bool = False
 ) -> list[RCResult]:
-    """Remove the ccl block from each rc file that exists.
+    """Remove the ccl() fragment from each given fragments directory.
 
-    Default rc_paths: [~/.bashrc, ~/.zshrc].
+    Default fragments_dirs: [~/.shellrc.d].
     """
-    paths = rc_paths if rc_paths is not None else _default_rc_paths()
-    return [uninstall_rc(p, apply=apply) for p in paths]
+    dirs = fragments_dirs if fragments_dirs is not None else _default_fragments_dirs()
+    return [uninstall_fragment(d, apply=apply) for d in dirs]
 
 
-def _default_rc_paths() -> list[Path]:
-    home = Path.home()
-    return [home / ".bashrc", home / ".zshrc"]
+def _default_fragments_dirs() -> list[Path]:
+    return [Path.home() / ".shellrc.d"]

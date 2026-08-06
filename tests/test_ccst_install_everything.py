@@ -83,15 +83,38 @@ def test_dry_run_does_not_write(tmp_path: Path) -> None:
 # ---------- apply mode ----------
 
 
-def test_apply_flag_accepted() -> None:
+def _isolated_apply_args(tmp_path: Path, *extra: str) -> list[str]:
+    """--apply args pointing every step's write target at tmp_path.
+
+    install-everything defaults every step's target to the real machine
+    (~/.claude/skills, ~/.claude/settings.json, ~/.shellrc.d,
+    ~/.claude/CLAUDE.md) when not overridden — tests must never exercise
+    --apply without these, or they mutate the developer's actual machine.
+    """
+    return [
+        "install-everything",
+        "--apply",
+        "--no-pypi",
+        "--skills-target", str(tmp_path / "skills"),
+        "--hooks-target", str(tmp_path / "settings.json"),
+        "--fragments-dir", str(tmp_path / "shellrc.d"),
+        "--claude-md-target", str(tmp_path / "CLAUDE.md"),
+        *extra,
+    ]
+
+
+def test_apply_flag_accepted(tmp_path: Path) -> None:
     # Verify --apply is a recognised flag (no argparse error) and changes output format.
-    # We don't assert rc==0 because the real ~/.claude/skills state varies per environment.
-    result = _run("install-everything", "--apply", "--no-pypi")
+    result = _run(*_isolated_apply_args(tmp_path))
+    assert result.returncode == 0
     # Must not be an argparse error
     assert "unrecognized arguments" not in result.stderr
-    assert "usage:" not in result.stderr.lower() or result.returncode == 2
     # Dry-run banner must be absent when --apply was passed
     assert "dry run complete" not in result.stdout.lower()
+    # Confirm writes actually landed in the isolated targets, not the real machine
+    assert (tmp_path / "shellrc.d" / "ccl.sh").exists()
+    assert (tmp_path / "settings.json").exists()
+    assert (tmp_path / "CLAUDE.md").exists()
 
 
 # ---------- section headers ----------
@@ -127,17 +150,11 @@ def test_install_everything_registers_bundled_ccsched_jobs(tmp_path: Path) -> No
     env["CCST_DATA_HOME"] = str(tmp_path / "data-home")
 
     result = subprocess.run(
-        [
-            sys.executable, "-m", "cc_session_tools.cli.ccst", "install-everything",
-            "--apply", "--no-pypi",
-        ],
+        [sys.executable, "-m", "cc_session_tools.cli.ccst", *_isolated_apply_args(tmp_path)],
         capture_output=True, text=True, cwd=str(Path(__file__).parent.parent), env=env,
     )
 
-    # Not asserting overall returncode == 0 — matches test_apply_flag_accepted's own convention:
-    # the real ~/.claude/skills, ~/.claude/settings.json, shell rc, and global CLAUDE.md steps
-    # run against whatever this machine's actual state is and may legitimately warn/fail outside
-    # a fully-provisioned dev environment. Only the new step's own behaviour is under test here.
+    assert result.returncode == 0
     assert "unrecognized arguments" not in result.stderr
     assert "Scheduled jobs" in result.stdout
     assert "registered: pm-session-output-reconcile" in result.stdout
