@@ -398,8 +398,10 @@ def _collect_session_rows(
     order_by/limit push an indexed ORDER BY ... LIMIT into SQL (see
     sessions_db.list_sessions) when order_by is a DB-backed column - this is
     what makes "most recent N" an O(log n) lookup, not a fetch-everything-then-
-    slice. For --global, the root filter is applied after the DB query, so with
-    --limit the returned N rows are the N most recent *before* root filtering.
+    slice. For --global, the root filter is applied after the DB query — see
+    _fetch_global_limited() for how the limit case stays correct despite that,
+    and _warn_if_corrupted_rows_present() for the stderr diagnostic printed
+    whenever a non-absolute project_dir row is found and omitted.
 
     `order_by` uses ccs's flag vocabulary ("opened"/"active"); it is mapped
     here to the sessions.db column names ("last_opened"/"last_active").
@@ -413,13 +415,59 @@ def _collect_session_rows(
         except RootsConfigError as e:
             print(str(e), file=sys.stderr)
             sys.exit(1)
-        rows = sessions_db.list_sessions(order_by=db_order_by, limit=db_limit)
-        return [r for r in rows if r.project_dir.parent in roots]
+        if db_limit is None:
+            rows = sessions_db.list_sessions(order_by=db_order_by, limit=None)
+            _warn_if_corrupted_rows_present(rows)
+            return [r for r in rows if r.project_dir.parent in roots]
+        return _fetch_global_limited(roots, db_order_by, db_limit)
 
     cwd = Path.cwd().resolve()
     return sessions_db.list_sessions(
         project_dir=cwd, order_by=db_order_by, limit=db_limit
     )
+
+
+_GLOBAL_LIMIT_GROWTH_FACTOR = 4
+
+
+def _warn_if_corrupted_rows_present(rows: list["sessions_db.SessionRow"]) -> None:
+    """Print a visible (user- and Claude-Code-visible, via stderr) heads-up when any fetched
+    row has a non-absolute project_dir — these are the specific rows `ccst repair sessions`
+    can fix, as opposed to ordinary out-of-root rows (a project simply not under a configured
+    root), which are normal scoping and not flagged."""
+    corrupted = sum(1 for r in rows if not r.project_dir.is_absolute())
+    if corrupted:
+        print(
+            f"ccs: {corrupted} session(s) in sessions.db have an invalid (non-absolute) "
+            "project_dir and are missing from this --global listing — run "
+            "'ccst repair sessions --dry-run' to see them, then --execute to fix.",
+            file=sys.stderr,
+        )
+
+
+def _fetch_global_limited(
+    roots: list[Path], db_order_by: str, db_limit: int
+) -> list["sessions_db.SessionRow"]:
+    """Fetch the db_limit most-recent in-root rows for --global.
+
+    A plain `ORDER BY ... LIMIT db_limit` applied before the root filter can
+    starve the result: any out-of-root (or corrupted — see the 2026-08-12
+    ccl-outdated-listings incident) row sitting ahead of a legitimate one in
+    last_active/last_opened order consumes a LIMIT slot that never gets
+    root-filtered back in. Grow the DB-side fetch window geometrically until
+    either db_limit in-root rows have survived the filter or the table is
+    exhausted (`len(rows) < fetch` signals exhaustion) — this keeps the
+    common case (most rows are in-root) at one query while staying correct
+    when it isn't. The corrupted-row warning fires once, on the final fetch.
+    """
+    fetch = db_limit
+    while True:
+        rows = sessions_db.list_sessions(order_by=db_order_by, limit=fetch)
+        filtered = [r for r in rows if r.project_dir.parent in roots]
+        if len(filtered) >= db_limit or len(rows) < fetch:
+            _warn_if_corrupted_rows_present(rows)
+            return filtered[:db_limit]
+        fetch *= _GLOBAL_LIMIT_GROWTH_FACTOR
 
 
 def _display_path(p: Path) -> str:
@@ -1053,6 +1101,14 @@ def main(argv: list[str] | None = None) -> int:
         print(
             "ccs: --limit requires --order-by opened or --order-by active "
             "(start/update ordering is not database-indexed — see design decision D1)",
+            file=sys.stderr,
+        )
+        return 2
+    if args.limit is not None and args.limit < 1:
+        print(
+            f"ccs: --limit must be a positive integer, got {args.limit} "
+            "(SQLite treats a negative LIMIT as unbounded, and Python's "
+            "list[:N] slicing would silently drop from the wrong end)",
             file=sys.stderr,
         )
         return 2
