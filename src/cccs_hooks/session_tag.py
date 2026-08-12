@@ -11,6 +11,9 @@ When CLD_SESSION_TAG is set (i.e. the session was started via the `ccd` or
 2. If CLD_SESSION_DIR is set and shaped like <project_dir>/cc-sessions/<basename>,
    upserts the sessions table's last_opened timestamp for that row (creating
    the row if it does not already exist — see sessions_db.touch_last_opened).
+   If CLD_SESSION_DIR is shaped like cc-sessions/<basename> but not absolute,
+   the write is skipped (it would collapse project_dir to '.') and the
+   anomaly is surfaced via both additionalContext and systemMessage.
 
 3. Emits `additionalContext` (mode-specific for CLD_SESSION_MODE=new vs
    resume) telling the assistant the tag/session-dir is already set, so it
@@ -101,24 +104,40 @@ def main(argv: list[str] | None = None) -> int:
             print(f"[session-tag] Failed to record tag: {exc}", file=sys.stderr)
 
     session_dir_str = os.environ.get("CLD_SESSION_DIR", "")
+    dir_rejected_msg: str | None = None
     if session_dir_str:
         session_dir_path = Path(session_dir_str)
         if session_dir_path.parent.name == "cc-sessions":
-            try:
-                sessions_db.touch_last_opened(
-                    session_dir_path.parent.parent, session_dir_path.name
+            if not session_dir_path.is_absolute():
+                dir_rejected_msg = (
+                    f"CLD_SESSION_DIR is not absolute ({session_dir_str!r}); skipping "
+                    "sessions.db update to avoid writing a corrupt project_dir. Run "
+                    "'ccst repair sessions --dry-run' if ccl/ccs --global later looks "
+                    "incomplete."
                 )
-            except (OSError, sqlite3.Error) as exc:
-                print(f"[session-tag] Failed to record .last-opened: {exc}", file=sys.stderr)
+            else:
+                try:
+                    sessions_db.touch_last_opened(
+                        session_dir_path.parent.parent, session_dir_path.name
+                    )
+                except (OSError, sqlite3.Error) as exc:
+                    print(f"[session-tag] Failed to record .last-opened: {exc}", file=sys.stderr)
 
     session_dir = session_dir_str or f"cc-sessions/{date.today():%Y%m%d}-{tag}"
     mode = os.environ.get("CLD_SESSION_MODE", "new")
-    print(json.dumps({
+    context = _additional_context_message(tag, session_dir, mode)
+    output: dict[str, object] = {
         "hookSpecificOutput": {
             "hookEventName": "SessionStart",
-            "additionalContext": _additional_context_message(tag, session_dir, mode),
+            "additionalContext": (
+                context if dir_rejected_msg is None
+                else f"{context}\n\n[session-tag] {dir_rejected_msg}"
+            ),
         }
-    }))
+    }
+    if dir_rejected_msg is not None:
+        output["systemMessage"] = f"[session-tag] {dir_rejected_msg}"
+    print(json.dumps(output))
 
     return 0
 

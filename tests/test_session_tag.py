@@ -216,6 +216,32 @@ def test_last_opened_not_recorded_when_dir_not_shaped_like_cc_sessions(tmp_path,
     assert sessions_db.list_sessions(path=db_dir / "sessions.db") == []
 
 
+def test_last_opened_not_recorded_when_cld_session_dir_is_relative(tmp_path, monkeypatch, capsys):
+    """Mirrors test_after_response.py's equivalent test. SessionStart uniquely supports both
+    additionalContext (Claude sees it) and systemMessage (user sees it) — both must carry
+    the diagnostic (see Task 2's visibility note).
+
+    Note: unlike the after_response.py mirror, sessions.db DOES get created here — write_tag()
+    fires unconditionally whenever session_id is present, independent of the CLD_SESSION_DIR
+    guard under test. So the assertion is on the sessions table being empty (via
+    list_sessions()), matching test_last_opened_not_recorded_when_dir_not_shaped_like_cc_sessions
+    immediately above, not on the db file's existence."""
+    payload = json.dumps({"session_id": "relative-dir-test", "cwd": "/some/project"})
+    monkeypatch.setenv("CLD_SESSION_TAG", "fix-ccst")
+    monkeypatch.setenv("CLD_SESSION_DIR", "cc-sessions/20260812-fix-ccst")
+    monkeypatch.setattr("sys.stdin", _stdin(payload))
+    db_dir = tmp_path / "db"
+    monkeypatch.setenv("CCST_SESSIONS_DIR", str(db_dir))
+
+    rc = session_tag.main()
+
+    assert rc == 0
+    assert sessions_db.list_sessions(path=db_dir / "sessions.db") == []
+    payload_out = json.loads(capsys.readouterr().out)
+    assert "not absolute" in payload_out["systemMessage"]
+    assert "not absolute" in payload_out["hookSpecificOutput"]["additionalContext"]
+
+
 # ---------------------------------------------------------------------------
 # main() — additionalContext emission (unaffected by the storage rewrite)
 # ---------------------------------------------------------------------------
