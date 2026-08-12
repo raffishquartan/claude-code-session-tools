@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import os
 import sqlite3
+import sys
 import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -156,6 +157,27 @@ def _row_to_session(row: sqlite3.Row) -> SessionRow:
     )
 
 
+def _reject_non_absolute_project_dir(project_dir: Path, basename: str, *, source: str) -> None:
+    """Print a clear, unmissable diagnostic to stderr — visible to a human reading the
+    terminal AND to Claude Code, which surfaces hook stderr as tool/hook output. A silent
+    rejection here means this row is permanently invisible to `ccl`/`ccs --global` until
+    repaired, so every rejection must say so out loud."""
+    print(
+        f"[sessions-db] REJECTED write from {source}: project_dir={str(project_dir)!r} for "
+        f"session {basename!r} is not absolute. This session will be MISSING from `ccl`/"
+        "`ccs --global` listings until fixed — run 'ccst repair sessions --dry-run' to see "
+        "it, then --execute to fix.",
+        file=sys.stderr,
+    )
+
+
+def _is_valid_project_dir(project_dir: Path, basename: str, *, source: str) -> bool:
+    if project_dir.is_absolute():
+        return True
+    _reject_non_absolute_project_dir(project_dir, basename, source=source)
+    return False
+
+
 def ensure_session_row(
     project_dir: Path,
     basename: str,
@@ -169,11 +191,16 @@ def ensure_session_row(
     fires (hooks disabled/broken); the hook's own touch_last_opened() upsert
     is the normal path and would create the same row moments later regardless.
 
+    Also a no-op — with a loud stderr diagnostic — when `project_dir` is not
+    absolute; see `_is_valid_project_dir`.
+
     conn, if given, is reused as-is (caller owns commit/close) — see write_tag."""
     from cc_session_tools.lib.sessions import session_start_date
 
     start_date = session_start_date(basename)
     if start_date is None:
+        return
+    if not _is_valid_project_dir(project_dir, basename, source="ensure_session_row"):
         return
     owns_conn = conn is None
     c = conn if conn is not None else connect(path=path)
@@ -201,11 +228,16 @@ def touch_last_opened(
 ) -> None:
     """Upsert the last_opened timestamp (epoch seconds) for (project_dir, basename).
 
+    Also a no-op — with a loud stderr diagnostic — when `project_dir` is not
+    absolute; see `_is_valid_project_dir`.
+
     conn, if given, is reused as-is (caller owns commit/close) — see write_tag."""
     from cc_session_tools.lib.sessions import session_start_date
 
     start_date = session_start_date(basename)
     if start_date is None:
+        return
+    if not _is_valid_project_dir(project_dir, basename, source="touch_last_opened"):
         return
     ts = when if when is not None else time.time()
     owns_conn = conn is None
@@ -234,11 +266,16 @@ def touch_last_active(
 ) -> None:
     """Upsert the last_active timestamp (epoch seconds) for (project_dir, basename).
 
+    Also a no-op — with a loud stderr diagnostic — when `project_dir` is not
+    absolute; see `_is_valid_project_dir`.
+
     conn, if given, is reused as-is (caller owns commit/close) — see write_tag."""
     from cc_session_tools.lib.sessions import session_start_date
 
     start_date = session_start_date(basename)
     if start_date is None:
+        return
+    if not _is_valid_project_dir(project_dir, basename, source="touch_last_active"):
         return
     ts = when if when is not None else time.time()
     owns_conn = conn is None
