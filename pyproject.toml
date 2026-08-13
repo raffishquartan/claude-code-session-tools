@@ -58,9 +58,10 @@ where = ["src"]
 
 [tool.setuptools.package-data]
 claude_code_usage = ["data/*.json"]
+cc_session_tools = ["skills/**/*", "config/*"]
 
 [tool.pytest.ini_options]
-testpaths = ["tests", "tests/scheduler", "skills/move-session/tests", "skills/list-empty-sessions/tests", "skills/delete-sessions/tests", "skills/generate-8digit-code/tests", "skills/reduce-persistent-context/tests", "skills/update-command-cache/tests"]
+testpaths = ["tests", "tests/scheduler", "src/cc_session_tools/skills/move-session/tests", "src/cc_session_tools/skills/list-empty-sessions/tests", "src/cc_session_tools/skills/delete-sessions/tests", "src/cc_session_tools/skills/generate-8digit-code/tests", "src/cc_session_tools/skills/reduce-persistent-context/tests", "src/cc_session_tools/skills/update-command-cache/tests"]
 addopts = "-q"
 pythonpath = ["src"]
 
