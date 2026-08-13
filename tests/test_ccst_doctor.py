@@ -1034,6 +1034,79 @@ def test_run_all_checks_includes_pdata_verify_when_projects_given(monkeypatch, t
     assert any(r.name == "pdata-verify:demo" for r in results)
 
 
+# ---------- check_sessions_project_dir_absolute ----------
+
+
+def test_check_sessions_project_dir_absolute_warns_on_bad_row(tmp_path):
+    from cc_session_tools.lib import sessions_db
+    from cc_session_tools.lib.doctor import Status, check_sessions_project_dir_absolute
+
+    db_path = tmp_path / "sessions.db"
+    conn = sessions_db.connect(path=db_path)
+    conn.execute(
+        "INSERT INTO sessions (project_dir, basename, start_date, discovered_at) "
+        "VALUES ('.', '20260101-bad', '20260101', '2026-01-01T00:00:00Z')"
+    )
+    conn.commit()
+    conn.close()
+
+    results = check_sessions_project_dir_absolute(db_path)
+    assert len(results) == 1
+    assert results[0].status == Status.WARN
+    assert "1 " in results[0].reason
+    assert "ccst repair sessions" in results[0].reason
+
+
+def test_check_sessions_project_dir_absolute_ok_when_clean(tmp_path):
+    from cc_session_tools.lib import sessions_db
+    from cc_session_tools.lib.doctor import Status, check_sessions_project_dir_absolute
+
+    db_path = tmp_path / "sessions.db"
+    sessions_db.ensure_session_row(tmp_path / "repos" / "proj", "20260101-good", path=db_path)
+
+    results = check_sessions_project_dir_absolute(db_path)
+    assert results[0].status == Status.OK
+
+
+def test_run_all_checks_includes_sessions_project_dir_check_when_path_given(tmp_path: Path) -> None:
+    from cc_session_tools.lib import sessions_db
+
+    settings = tmp_path / "settings.json"
+    settings.write_text('{"hooks": {}}')
+    bundle = Path(__file__).parent.parent / "config" / "hooks-bundle.json"
+    db_path = tmp_path / "sessions.db"
+    sessions_db.ensure_session_row(tmp_path / "repos" / "proj", "20260101-good", path=db_path)
+
+    results = run_all_checks(
+        installed_version="0.11.0",
+        settings_path=settings,
+        bundle_path=bundle,
+        skills_source_dir=None,
+        skills_target_dir=tmp_path / "skills",
+        env={"CLAUDE_SESSION_TOOLS_REPO_ROOT": None, "CLAUDE_SESSION_TOOLS_PROJ_ROOT": None},
+        skip_pypi=True,
+        sessions_db_path=db_path,
+    )
+    assert any(r.name == "sessions:project-dir-absolute" for r in results)
+
+
+def test_run_all_checks_skips_sessions_project_dir_check_when_path_none(tmp_path: Path) -> None:
+    settings = tmp_path / "settings.json"
+    settings.write_text('{"hooks": {}}')
+    bundle = Path(__file__).parent.parent / "config" / "hooks-bundle.json"
+
+    results = run_all_checks(
+        installed_version="0.11.0",
+        settings_path=settings,
+        bundle_path=bundle,
+        skills_source_dir=None,
+        skills_target_dir=tmp_path / "skills",
+        env={"CLAUDE_SESSION_TOOLS_REPO_ROOT": None, "CLAUDE_SESSION_TOOLS_PROJ_ROOT": None},
+        skip_pypi=True,
+    )
+    assert not any(r.name == "sessions:project-dir-absolute" for r in results)
+
+
 def test_run_all_checks_skips_pdata_verify_when_projects_none(monkeypatch, tmp_path):
     from cc_session_tools.lib.doctor import run_all_checks
 

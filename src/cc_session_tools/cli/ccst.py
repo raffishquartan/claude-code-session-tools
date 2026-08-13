@@ -674,6 +674,7 @@ def _cmd_doctor(args: argparse.Namespace) -> int:
         legacy_migration_paths=legacy_migration_paths,
         projects_root=default_projects_root(),
         pdata_verify_projects=_pdata_verify.discover_projects(),
+        sessions_db_path=store_paths["sessions"],
     )
 
     if args.drift or getattr(args, "mode", None) == "drift":
@@ -1243,6 +1244,58 @@ def _cmd_sessions_list(args: argparse.Namespace) -> int:
             f"{r.project_dir}"
         )
     return 0
+
+
+def _cmd_repair_sessions(args: argparse.Namespace) -> int:
+    from cc_session_tools.lib import db as db_lib
+    from cc_session_tools.lib import sessions_db, sessions_repair
+    from cc_session_tools.lib.roots import RootsConfigError, load_session_roots
+
+    db_path = Path(args.sessions_db) if args.sessions_db else sessions_db.default_db_path()
+    try:
+        roots = load_session_roots()
+    except RootsConfigError as e:
+        print(str(e), file=sys.stderr)
+        return 1
+
+    if args.execute:
+        if not db_path.exists():
+            # sqlite3.connect() auto-creates an empty file, so without this check
+            # db_lib.backup_to() below would silently back up (and repair() would open)
+            # a brand-new, empty sessions.db instead of failing loudly on the mistake.
+            print(f"No sessions.db found at {db_path} — nothing to back up or repair.", file=sys.stderr)
+            return 1
+        backup_dir = db_path.parent / "repair-backups"
+        backup_dir.mkdir(parents=True, exist_ok=True)
+        stamp = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+        backup_path = backup_dir / f"sessions-{stamp}.db"
+        db_lib.backup_to(db_path, backup_path)
+        print(f"Backed up sessions.db to {backup_path}")
+
+    report = sessions_repair.repair(roots, path=db_path, dry_run=not args.execute)
+    if not any((report.repaired, report.unresolved, report.ambiguous, report.conflicts)):
+        print("No non-absolute project_dir rows found in sessions.db.")
+        return 0
+
+    verb = "fixed" if args.execute else "would fix"
+    for basename, new_dir in report.repaired:
+        print(f"  {verb}: {basename} -> {new_dir}")
+    for basename in report.unresolved:
+        print(
+            f"  UNRESOLVED (no on-disk cc-sessions/{basename} under any root): {basename}",
+            file=sys.stderr,
+        )
+    for basename, candidates in report.ambiguous.items():
+        print(f"  AMBIGUOUS ({len(candidates)} candidates, skipped): {basename}", file=sys.stderr)
+    for basename in report.conflicts:
+        print(
+            f"  CONFLICT (a correct row for this basename already exists, skipped): {basename}",
+            file=sys.stderr,
+        )
+
+    if not args.execute and report.repaired:
+        print(f"\n{len(report.repaired)} row(s) would be repaired. Re-run with --execute to apply.")
+    return 1 if (report.unresolved or report.ambiguous or report.conflicts) else 0
 
 
 def _fmt_ts(epoch: float) -> str:
@@ -2034,6 +2087,32 @@ def _build_parser() -> argparse.ArgumentParser:
              "Claude Code session.")
     m_all.add_argument("--dry-run", action="store_true")
 
+    # ---- repair ----
+    repair_parser = sub.add_parser("repair", help="Repair known sessions.db/store corruption")
+    repair_sub = repair_parser.add_subparsers(dest="verb", metavar="<verb>")
+    repair_sub.required = True
+    r_sessions = repair_sub.add_parser(
+        "sessions",
+        help=(
+            "Fix sessions.db rows whose project_dir is not an absolute path (invisible "
+            "to `ccl`/`ccs --global`) by re-resolving them from on-disk cc-sessions/ "
+            "directories. Dry-run by default."
+        ),
+    )
+    r_sessions_mode = r_sessions.add_mutually_exclusive_group()
+    r_sessions_mode.add_argument(
+        "--execute", action="store_true",
+        help="Apply the repair (default: dry-run, print what would change).",
+    )
+    r_sessions_mode.add_argument(
+        "--dry-run", action="store_true",
+        help="Print what would change without writing (this is the default).",
+    )
+    r_sessions.add_argument(
+        "--sessions-db", default=None, metavar="PATH",
+        help="sessions.db path override (default: from CCST_SESSIONS_DIR)",
+    )
+
     # ---- ccsched-jobs ----
     ccsched_jobs_parser = sub.add_parser(
         "ccsched-jobs", help="Provision CCST-bundled ccsched jobs",
@@ -2187,6 +2266,10 @@ def main() -> None:
             sys.exit(_cmd_migrate_telemetry(args))
         if args.verb == "all":
             sys.exit(_cmd_migrate_all(args))
+
+    if args.noun == "repair":
+        if args.verb == "sessions":
+            sys.exit(_cmd_repair_sessions(args))
 
     if args.noun == "ccsched-jobs":
         if args.verb == "install":

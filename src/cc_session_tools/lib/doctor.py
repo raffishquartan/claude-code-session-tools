@@ -677,6 +677,31 @@ def check_pdata_verify(projects: list[str]) -> list[CheckResult]:
     return results
 
 
+def check_sessions_project_dir_absolute(sessions_db_path: Path) -> list[CheckResult]:
+    """WARN if any sessions.db row has a non-absolute project_dir. Every reader that
+    scopes --global by root (ccs.py, sessions.find_matching_sessions) compares
+    project_dir.parent against a resolved, absolute root — a relative project_dir can
+    never match, so the row becomes permanently invisible to --global listings without
+    ever raising an error. Not FAIL: it degrades --global listings but does not block
+    core functionality, and `ccst repair sessions` fixes it non-destructively."""
+    from cc_session_tools.lib import sessions_repair
+
+    bad = sessions_repair.find_non_absolute_rows(path=sessions_db_path)
+    if not bad:
+        return [CheckResult(
+            name="sessions:project-dir-absolute", status=Status.OK,
+            reason="all sessions.db rows have an absolute project_dir",
+        )]
+    return [CheckResult(
+        name="sessions:project-dir-absolute", status=Status.WARN,
+        reason=(
+            f"{len(bad)} sessions.db row(s) have a non-absolute project_dir and are "
+            "invisible to `ccl`/`ccs --global` — run 'ccst repair sessions --dry-run' "
+            "to see them, then --execute to fix"
+        ),
+    )]
+
+
 # ---------- high-level runner ----------
 
 
@@ -693,6 +718,7 @@ def run_all_checks(
     legacy_migration_paths: LegacyMigrationPaths | None = None,
     projects_root: Path | None = None,
     pdata_verify_projects: list[str] | None = None,
+    sessions_db_path: Path | None = None,
 ) -> list[CheckResult]:
     """Run the full doctor suite and return results.
 
@@ -726,6 +752,9 @@ def run_all_checks(
         Project names whose last persisted ``ccst pdata verify`` result should
         be reported; when None, the pdata-verify checks are skipped. Never
         triggers a verify run — only reads what the recurring job left behind.
+    sessions_db_path:
+        Path to sessions.db; when None, the project_dir-absolute check is
+        skipped.
     """
     results: list[CheckResult] = []
 
@@ -793,6 +822,10 @@ def run_all_checks(
     # Last persisted ccst pdata verify result per project (spec §8.2)
     if pdata_verify_projects is not None:
         results.extend(check_pdata_verify(pdata_verify_projects))
+
+    # Non-absolute project_dir rows in sessions.db
+    if sessions_db_path is not None:
+        results.extend(check_sessions_project_dir_absolute(sessions_db_path))
 
     # PyPI version check
     if not skip_pypi:
