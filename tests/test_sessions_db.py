@@ -111,6 +111,36 @@ def test_ensure_session_row_rejects_non_session_basename(db_path):
     assert sessions_db.list_sessions(path=db_path) == []
 
 
+def test_ensure_session_row_rejects_relative_project_dir_and_logs(db_path, capsys):
+    sessions_db.ensure_session_row(Path("."), "20260713-my-feature", path=db_path)
+    assert sessions_db.list_sessions(path=db_path) == []
+    err = capsys.readouterr().err
+    assert "[sessions-db]" in err
+    assert "20260713-my-feature" in err
+    assert "not absolute" in err
+    assert "ccst repair sessions" in err
+
+
+def test_touch_last_opened_rejects_relative_project_dir_and_logs(db_path, capsys):
+    sessions_db.touch_last_opened(Path("cc-sessions/x"), "20260713-foo", path=db_path)
+    assert sessions_db.list_sessions(path=db_path) == []
+    err = capsys.readouterr().err
+    assert "[sessions-db]" in err
+    assert "20260713-foo" in err
+    assert "not absolute" in err
+    assert "ccst repair sessions" in err
+
+
+def test_touch_last_active_rejects_relative_project_dir_and_logs(db_path, capsys):
+    sessions_db.touch_last_active(Path("cc-sessions/x"), "20260713-foo", path=db_path)
+    assert sessions_db.list_sessions(path=db_path) == []
+    err = capsys.readouterr().err
+    assert "[sessions-db]" in err
+    assert "20260713-foo" in err
+    assert "not absolute" in err
+    assert "ccst repair sessions" in err
+
+
 def test_touch_last_opened_sets_column(db_path):
     proj = Path("/repos/myproj")
     sessions_db.touch_last_opened(proj, "20260713-foo", path=db_path, when=1234.5)

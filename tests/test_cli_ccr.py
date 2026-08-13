@@ -303,3 +303,74 @@ def test_ccr_single_transcript_unaffected(fake_repos, captured_launch):
     rc = ccr.main(["foo-bar"])
     assert rc == 0
     assert "uuid-only" in captured_launch["cmd"]
+
+
+# ---------------------------------------------------------------------------
+# Task 8: surface corrupted-row misses (invisible to exact-match fast path,
+# find_matching_sessions, AND find_orphan_transcripts alike)
+# ---------------------------------------------------------------------------
+
+def test_ccr_warns_when_fragment_matches_only_a_corrupted_row(fake_repos, capsys, captured_launch):
+    """A row with a non-absolute project_dir is invisible to both the exact-match fast path
+    and find_matching_sessions's root filter, and find_orphan_transcripts skips it too (its
+    cc-sessions/<name>/ dir exists on disk). Without a diagnostic this is a silent 'not found' -
+    point the user at ccst repair sessions instead."""
+    from cc_session_tools.lib import sessions_db
+
+    conn = sessions_db.connect()
+    conn.execute(
+        "INSERT INTO sessions (project_dir, basename, start_date, discovered_at) "
+        "VALUES ('.', '20260101-corrupt', '20260101', '2026-01-01T00:00:00Z')"
+    )
+    conn.commit()
+    conn.close()
+
+    rc = ccr.main(["corrupt"])
+
+    assert rc == 1
+    err = capsys.readouterr().err
+    assert "no sessions match" in err
+    assert "ccst repair sessions" in err
+    assert "20260101-corrupt" in err
+
+
+def test_ccr_no_corrupted_row_warning_for_ordinary_out_of_root_miss(fake_repos, capsys, captured_launch):
+    """A session that simply isn't under a configured root (ordinary scoping) must NOT trigger
+    the corrupted-row diagnostic - that would be misleading."""
+    from pathlib import Path
+    from cc_session_tools.lib import sessions_db
+
+    sessions_db.ensure_session_row(Path("/some/other/root/proj"), "20260101-elsewhere")
+
+    rc = ccr.main(["elsewhere"])
+
+    assert rc == 1
+    err = capsys.readouterr().err
+    assert "no sessions match" in err
+    assert "ccst repair sessions" not in err
+
+
+def test_ccr_warns_about_corrupted_sibling_even_when_a_real_match_resumes(
+    fake_repos, capsys, captured_launch
+):
+    """A fragment that matches one real (resumable) session AND one corrupted row must still
+    resume the real session - but the corrupted sibling must not go unmentioned, or the user
+    never learns an unreachable duplicate exists."""
+    from cc_session_tools.lib import sessions_db
+
+    _make_session(fake_repos, "myproj", "20260504-shared-real")
+    conn = sessions_db.connect()
+    conn.execute(
+        "INSERT INTO sessions (project_dir, basename, start_date, discovered_at) "
+        "VALUES ('.', '20260101-shared-corrupt', '20260101', '2026-01-01T00:00:00Z')"
+    )
+    conn.commit()
+    conn.close()
+
+    rc = ccr.main(["shared"])
+
+    assert rc == 0
+    assert "20260504-shared-real" in captured_launch["cmd"]
+    err = capsys.readouterr().err
+    assert "ccst repair sessions" in err
+    assert "20260101-shared-corrupt" in err

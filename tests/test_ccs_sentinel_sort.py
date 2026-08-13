@@ -349,3 +349,123 @@ class TestLimitFlag:
         rc = ccs.main(["--order-by", "start", "--limit", "3"])
         assert rc == 2
         assert "requires --order-by opened or --order-by active" in capsys.readouterr().err
+
+
+# ---------------------------------------------------------------------------
+# --global --limit root filter
+# ---------------------------------------------------------------------------
+
+class TestGlobalLimitRootFilter:
+    """Regression test for the 2026-08-12 ccl-outdated-listings bug: --global --limit
+    pushed a DB-side LIMIT before the Python-side root filter, so out-of-root rows sitting
+    ahead of legitimate ones in last_active order silently starved the result below the
+    requested limit."""
+
+    def test_returns_exactly_limit_in_root_rows_not_starved_by_foreign_rows(
+        self, fake_home, fake_repos, monkeypatch, capsys
+    ):
+        from cc_session_tools.lib import sessions_db
+
+        # 8 rows OUTSIDE the configured root, all more recently active than every
+        # in-root row below — simulates the corrupted project_dir='.' rows (whose
+        # project_dir.parent is never in roots) occupying the top of the LIMIT window.
+        foreign = fake_home / "foreign-project"
+        (foreign / "cc-sessions").mkdir(parents=True)
+        for i in range(8):
+            name = f"20260101-foreign-{i:02d}"
+            (foreign / "cc-sessions" / name).mkdir()
+            sessions_db.ensure_session_row(foreign, name)
+            sessions_db.touch_last_active(foreign, name, when=1000.0 + i)
+
+        proj = fake_repos / "myproj"
+        (proj / "cc-sessions").mkdir(parents=True)
+        for i in range(5):
+            name = f"20260101-real-{i:02d}"
+            (proj / "cc-sessions" / name).mkdir()
+            sessions_db.ensure_session_row(proj, name)
+            sessions_db.touch_last_active(proj, name, when=500.0 + i)
+
+        monkeypatch.chdir(fake_repos)
+        rc = ccs.main(["--global", "--order-by", "active", "--limit", "5"])
+        assert rc == 0
+
+        out = capsys.readouterr().out
+        session_lines = [ln for ln in out.splitlines() if "20260101-real-" in ln]
+        assert len(session_lines) == 5, (
+            f"expected all 5 in-root sessions, got {len(session_lines)} — "
+            "the 8 foreign rows starved the LIMIT window"
+        )
+        assert "foreign" not in out
+        # Most-recent-first: real-04 (when=504.0) before real-00 (when=500.0).
+        assert "20260101-real-04" in session_lines[0]
+
+    def test_logs_when_non_absolute_rows_are_present_and_omitted(
+        self, fake_home, fake_repos, monkeypatch, capsys
+    ):
+        """Legitimate out-of-root rows (a project simply not under a configured root) are
+        NOT flagged — that's normal scoping, not a bug. Only rows with a non-absolute
+        (corrupted) project_dir trigger the diagnostic, since those are the ones
+        'ccst repair sessions' can actually fix."""
+        from cc_session_tools.lib import sessions_db
+
+        conn = sessions_db.connect()
+        conn.execute(
+            "INSERT INTO sessions (project_dir, basename, start_date, discovered_at, last_active) "
+            "VALUES ('.', '20260101-corrupt', '20260101', '2026-01-01T00:00:00Z', 9999.0)"
+        )
+        conn.commit()
+        conn.close()
+
+        proj = fake_repos / "myproj"
+        (proj / "cc-sessions" / "20260101-real").mkdir(parents=True)
+        sessions_db.ensure_session_row(proj, "20260101-real")
+
+        monkeypatch.chdir(fake_repos)
+        rc = ccs.main(["--global"])
+        assert rc == 0
+
+        err = capsys.readouterr().err
+        assert "ccst repair sessions" in err
+        assert "1" in err  # 1 corrupted row
+
+    def test_negative_limit_errors_cleanly_instead_of_wrapping_slice(
+        self, fake_home, fake_repos, monkeypatch, capsys
+    ):
+        """SQLite treats a negative LIMIT as unbounded, and filtered[:db_limit] with a
+        negative db_limit silently drops the LAST N in-root rows via Python's negative-index
+        slicing instead of erroring. Both stages must never see a negative limit — reject it
+        eagerly, mirroring the existing '--limit requires --order-by opened or active' check."""
+        proj = fake_repos / "myproj"
+        (proj / "cc-sessions" / "20260101-real").mkdir(parents=True)
+        from cc_session_tools.lib import sessions_db
+        sessions_db.ensure_session_row(proj, "20260101-real")
+
+        monkeypatch.chdir(fake_repos)
+        rc = ccs.main(["--global", "--order-by", "active", "--limit", "-1"])
+        assert rc == 2
+        assert "positive integer" in capsys.readouterr().err
+
+    def test_limit_larger_than_in_root_row_count_returns_all_without_hanging(
+        self, fake_home, fake_repos, monkeypatch, capsys
+    ):
+        """Isolates the len(rows) < fetch (table-exhaustion) loop-exit branch in
+        _fetch_global_limited: requesting more in-root rows than exist anywhere in the table
+        must terminate via exhaustion, not via len(filtered) >= db_limit, and must return
+        every in-root row rather than hanging or erroring."""
+        from cc_session_tools.lib import sessions_db
+
+        proj = fake_repos / "myproj"
+        (proj / "cc-sessions").mkdir(parents=True)
+        for i in range(3):
+            name = f"20260101-real-{i:02d}"
+            (proj / "cc-sessions" / name).mkdir()
+            sessions_db.ensure_session_row(proj, name)
+            sessions_db.touch_last_active(proj, name, when=500.0 + i)
+
+        monkeypatch.chdir(fake_repos)
+        rc = ccs.main(["--global", "--order-by", "active", "--limit", "1000"])
+        assert rc == 0
+
+        out = capsys.readouterr().out
+        session_lines = [ln for ln in out.splitlines() if "20260101-real-" in ln]
+        assert len(session_lines) == 3

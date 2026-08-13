@@ -2,6 +2,7 @@
 into sessions.db."""
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 from cccs_hooks import after_response
@@ -67,6 +68,26 @@ def test_last_active_not_recorded_when_dir_not_shaped_like_cc_sessions(
 
     assert rc == 0
     assert sessions_db.list_sessions(path=db_dir / "sessions.db") == []
+
+
+def test_relative_cld_session_dir_is_skipped_with_visible_system_message(
+    tmp_path: Path, monkeypatch, capsys
+) -> None:
+    """CLD_SESSION_DIR shaped like the bare 'cc-sessions/<basename>' relative form (the
+    2026-08-12 ccl-outdated-listings incident) must never reach sessions_db — skip the write
+    and surface a visible warning via the hook's systemMessage JSON field. Plain stderr is
+    discarded for an exit-0 Claude Code hook outside --debug mode; systemMessage is the only
+    mechanism that reliably reaches the user for a Stop hook (see Task 2's visibility note)."""
+    monkeypatch.setenv("CLD_SESSION_DIR", "cc-sessions/20260812-fix-ccst")
+    db_dir = tmp_path / "db"
+    monkeypatch.setenv("CCST_SESSIONS_DIR", str(db_dir))
+
+    rc = after_response.main()
+
+    assert rc == 0
+    assert not (db_dir / "sessions.db").exists()
+    payload = json.loads(capsys.readouterr().out)
+    assert "not absolute" in payload["systemMessage"]
 
 
 def test_write_failure_logs_to_stderr_no_exception(tmp_path: Path, monkeypatch, capsys) -> None:
