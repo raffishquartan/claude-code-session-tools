@@ -55,10 +55,21 @@ cccs-stats = "cccs_hooks.stats:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+# skills/ and config/ are bundled data, not importable code - without this
+# exclude, setuptools' auto-discovery treats every skills/<name>/ subdirectory
+# containing a .py file (scripts, dev-only test suites) as its own importable
+# sub-package, which then bypasses exclude-package-data entirely (that option
+# only filters within the file's *own* discovered package, and a wrongly
+# auto-discovered "cc_session_tools.skills.<name>.tests" package was never
+# covered by an exclude-package-data entry keyed just "cc_session_tools").
+exclude = ["cc_session_tools.skills", "cc_session_tools.skills.*", "cc_session_tools.config", "cc_session_tools.config.*"]
 
 [tool.setuptools.package-data]
 claude_code_usage = ["data/*.json"]
 cc_session_tools = ["skills/**/*", "config/*"]
+
+[tool.setuptools.exclude-package-data]
+cc_session_tools = ["**/tests/*", "**/__pycache__/*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests", "tests/scheduler", "src/cc_session_tools/skills/move-session/tests", "src/cc_session_tools/skills/list-empty-sessions/tests", "src/cc_session_tools/skills/delete-sessions/tests", "src/cc_session_tools/skills/generate-8digit-code/tests", "src/cc_session_tools/skills/reduce-persistent-context/tests", "src/cc_session_tools/skills/update-command-cache/tests"]
