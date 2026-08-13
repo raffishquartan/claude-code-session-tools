@@ -23,6 +23,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   discards on exit 0 outside `--debug` mode; and `ccs.py`'s `--global --limit` path grows its
   DB-side fetch window instead of fetching exactly `N` once, and now warns on stderr whenever a
   corrupted row is found and omitted from a listing.
+- **`ccr <fragment>` gave a plain "no sessions match" for a corrupted row, with no pointer to the
+  fix.** A `sessions.db` row with a non-absolute `project_dir` is invisible to every `ccr` lookup
+  path — the exact-match fast path and `find_matching_sessions` both filter by root, and
+  `find_orphan_transcripts` skips it too because its `cc-sessions/<name>/` directory already
+  exists on disk. `ccr` now warns on stderr whenever a fragment matches such a row, whether or
+  not it also matches a resumable session, and points at `ccst repair sessions`.
 
 ### Added
 

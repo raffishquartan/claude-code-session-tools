@@ -23,6 +23,30 @@ def _format_size(num_bytes: int) -> str:
     return f"{size:.1f}GB"
 
 
+def _warn_if_fragment_matches_corrupted_row(fragment: str) -> None:
+    """Print a stderr diagnostic when `fragment` matches a sessions.db row whose project_dir
+    is non-absolute. Such a row is invisible to every lookup path here — the exact-match fast
+    path and find_matching_sessions both filter by root, and find_orphan_transcripts skips it
+    because its cc-sessions/<name>/ directory already exists on disk — so without this it reads
+    as an ordinary "not found" rather than a fixable data problem. Called unconditionally
+    whenever `matches` is computed, not only when it's empty, so a corrupted sibling of a
+    resumable match is still surfaced. Mirrors ccs.py's _warn_if_corrupted_rows_present."""
+    from cc_session_tools.lib import sessions_repair
+
+    corrupted = [
+        row for row in sessions_repair.find_non_absolute_rows()
+        if fragment in row.basename
+    ]
+    if corrupted:
+        names = ", ".join(row.basename for row in corrupted)
+        print(
+            f"ccr: {len(corrupted)} session(s) matching '{fragment}' have an invalid "
+            f"(non-absolute) project_dir and can't be resumed by name: {names} — run "
+            "'ccst repair sessions --dry-run' to see them, then --execute to fix.",
+            file=sys.stderr,
+        )
+
+
 def _pick_duplicate_transcript(basename: str, candidates: list[Path]) -> Path | None:
     """Multiple JSONL transcripts share one session tag - e.g. hitting Ctrl-L
     twice mid-session clears one copy while `claude --resume` still lists it
@@ -114,6 +138,7 @@ def main(argv: list[str] | None = None) -> int:
         matches.extend(o for o in orphans if o.basename not in on_disk_basenames)
     debug(f"fragment: {args.fragment!r}")
     debug(f"matches: {[m.basename for m in matches]}")
+    _warn_if_fragment_matches_corrupted_row(args.fragment)
 
     if not matches:
         print(f"ccr: no sessions match '{args.fragment}'", file=sys.stderr)
