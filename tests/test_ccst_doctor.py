@@ -179,7 +179,7 @@ def test_check_no_stale_hooks_ignores_foreign_commands() -> None:
 def test_run_all_checks_fails_on_a_stale_hook_entry(tmp_path: Path) -> None:
     settings = tmp_path / "settings.json"
     settings.write_text(json.dumps(_settings_with_cmd("ccst hooks run prompt-guard")))
-    bundle = Path(__file__).parent.parent / "config" / "hooks-bundle.json"
+    bundle = Path(__file__).parent.parent / "src" / "cc_session_tools" / "config" / "hooks-bundle.json"
     results = run_all_checks(
         installed_version="1.4.1",
         settings_path=settings,

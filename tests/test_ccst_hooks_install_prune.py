@@ -17,7 +17,7 @@ from pathlib import Path
 import pytest
 
 REPO_ROOT = Path(__file__).parent.parent
-BUNDLE = REPO_ROOT / "config" / "hooks-bundle.json"
+BUNDLE = REPO_ROOT / "src" / "cc_session_tools" / "config" / "hooks-bundle.json"
 
 # Exactly what `git show v0.16.0:config/hooks-bundle.json` registered for the
 # three hooks 0.17.0 went on to remove or rename.
