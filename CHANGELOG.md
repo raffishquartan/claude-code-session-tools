@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.2.0] - 2026-08-13
+
+### Fixed
+
+- **`ccl`/`ccs --global` silently dropped and under-counted recent sessions.** A relative
+  `CLD_SESSION_DIR` could cause `sessions.db` writers to store `project_dir='.'`, which the
+  `--global` root filter then silently excluded — and for `--global --limit N`, those excluded
+  rows occupied slots in the DB-side `LIMIT N` window ahead of legitimate rows, so fewer than `N`
+  results came back even when `N` valid ones existed. `sessions_db.py`'s three writers now reject
+  non-absolute `project_dir` at the write boundary, printing a clear stderr diagnostic every time
+  instead of failing silently; the `session-tag`/`after-response` hooks skip the write and
+  surface the anomaly via their actual visible-output channel (SessionStart's `systemMessage` +
+  `additionalContext`, Stop's `systemMessage`) rather than stderr, which a Claude Code hook
+  discards on exit 0 outside `--debug` mode; and `ccs.py`'s `--global --limit` path grows its
+  DB-side fetch window instead of fetching exactly `N` once, and now warns on stderr whenever a
+  corrupted row is found and omitted from a listing.
+
+### Added
+
+- `ccst repair sessions [--dry-run|--execute]` — a new top-level `repair` command family
+  (parallel to the existing `migrate` family) — resolves and fixes sessions.db rows with a
+  non-absolute `project_dir` by locating their on-disk `cc-sessions/` directory. Backs up
+  `sessions.db` via `db.backup_to()` before `--execute` writes.
+- `ccst doctor` now WARNs when any `sessions.db` row has a non-absolute `project_dir`.
+
 ## [2.1.1] - 2026-08-06
 
 ### Fixed
