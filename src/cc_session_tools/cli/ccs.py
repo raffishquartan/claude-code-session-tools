@@ -451,8 +451,8 @@ def _fetch_global_limited(
     """Fetch the db_limit most-recent in-root rows for --global.
 
     A plain `ORDER BY ... LIMIT db_limit` applied before the root filter can
-    starve the result: any out-of-root (or corrupted — see the 2026-08-12
-    ccl-outdated-listings incident) row sitting ahead of a legitimate one in
+    starve the result: any out-of-root (or corrupted — see
+    _warn_if_corrupted_rows_present) row sitting ahead of a legitimate one in
     last_active/last_opened order consumes a LIMIT slot that never gets
     root-filtered back in. Grow the DB-side fetch window geometrically until
     either db_limit in-root rows have survived the filter or the table is
