@@ -483,6 +483,18 @@ def test_heuristic_credentials_path_word_boundary() -> None:
     assert "credentials path" in bsr.heuristic_flags("cp /backup/id_ed25519 /tmp/x")
 
 
+def test_heuristic_credentials_path_suffixed_key_names_still_match() -> None:
+    """id_rsa_<host> / id_ed25519_<purpose> is a mainstream ssh key-naming
+    convention - a trailing \\b after id_rsa/id_ed25519 would silently stop
+    matching these, a real coverage regression (not just an extra review),
+    unlike the false-positive fixes elsewhere in this heuristic sweep."""
+    assert "credentials path" in bsr.heuristic_flags("cat id_rsa_backup")
+    assert "credentials path" in bsr.heuristic_flags("cat id_rsa_github")
+    assert "credentials path" in bsr.heuristic_flags("tar czf k.tgz id_ed25519_work")
+    # the actual false positive Task 4 fixed must still be excluded:
+    assert bsr.heuristic_flags("myid_rsa_backup.txt cat") == []
+
+
 def test_heuristic_download_to_absolute_path_word_boundary() -> None:
     assert bsr.heuristic_flags("newwget --something -O /tmp/x") == []
     # 'curlie' is a real curl-compatible HTTP client - a left-side-only

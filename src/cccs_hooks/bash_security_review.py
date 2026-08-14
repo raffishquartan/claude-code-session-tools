@@ -54,7 +54,7 @@ _HEURISTIC_PATTERNS: list[tuple[re.Pattern[str], str]] = [
     (re.compile(r"\|\s*(sh|bash|zsh)(\s|$)"), "pipe to shell"),
     (re.compile(r"(^|\s)eval(\s|$)"), "eval"),
     (re.compile(r"\bbase64\s+(-d|--decode)"), "base64 decode"),
-    (re.compile(r"(\.ssh|\bid_rsa\b|\bid_ed25519\b|\.aws/credentials|\.netrc)"), "credentials path"),
+    (re.compile(r"(\.ssh|\bid_rsa|\bid_ed25519|\.aws/credentials|\.netrc)"), "credentials path"),
     (re.compile(r"(\bprintenv\b|\benv\s*$|\benv\s*\|)"), "env dump"),
     (re.compile(r"chmod\s+\S*s"), "setuid chmod"),
     (re.compile(r"(^|\s)(/etc/|/usr/|/var/|/boot/)"), "system path"),
