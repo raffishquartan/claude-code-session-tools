@@ -58,7 +58,7 @@ _HEURISTIC_PATTERNS: list[tuple[re.Pattern[str], str]] = [
     (re.compile(r"(printenv|env\s*$|env\s*\|)"), "env dump"),
     (re.compile(r"chmod\s+\S*s"), "setuid chmod"),
     (re.compile(r"(^|\s)(/etc/|/usr/|/var/|/boot/)"), "system path"),
-    (re.compile(r"(nc|ncat|netcat|socat)\s"), "raw network tool"),
+    (re.compile(r"\b(nc|ncat|netcat|socat)\s"), "raw network tool"),
     (re.compile(r"(wget|curl).*-O\s*/"), "download to absolute path"),
 ]
 

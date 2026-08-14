@@ -411,6 +411,16 @@ def test_heuristic_flags_clean_command() -> None:
     assert bsr.heuristic_flags("git fetch && git rebase origin/main") == []
 
 
+def test_heuristic_raw_network_tool_word_boundary() -> None:
+    """'sync' contains the substring 'nc ' - the pattern must not false-positive
+    on it, or on any other word that merely contains nc/ncat/netcat/socat."""
+    assert bsr.heuristic_flags("uv sync --extra dev") == []
+    assert bsr.heuristic_flags("rsync -av src/ dst/") == []
+    # still correctly flags the real thing:
+    assert "raw network tool" in bsr.heuristic_flags("nc -l 1234")
+    assert "raw network tool" in bsr.heuristic_flags("socat TCP-LISTEN:8080 -")
+
+
 # ---------- is_trivial ----------
 
 def test_is_trivial_ls() -> None:
