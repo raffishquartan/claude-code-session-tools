@@ -797,6 +797,50 @@ def test_tier05_xargs_rm_escalates_to_claude(
     assert spy.called
 
 
+def test_short_unpiped_rm_reaches_claude(
+    isolated_env: Path, mocker: MockerFixture
+) -> None:
+    """A bare 'rm -rf ...' - no pipe, no heuristic hit, well under 120 chars -
+    must still reach a real review. Write risk must be checked regardless of
+    shell composition or length, not only for piped/long commands."""
+    mocker.patch.object(bsr, "_resolve_claude_bin", return_value="/fake/claude")
+    spy = mocker.patch.object(
+        bsr, "call_claude",
+        return_value=("SUMMARY: delete\nRISKS: data loss\nVERDICT: dangerous", None),
+    )
+    rc = bsr.run(_input("rm -rf /tmp/x"))
+    assert rc == 0
+    assert spy.called
+
+
+def test_short_unpiped_sudo_apt_install_reaches_claude(
+    isolated_env: Path, mocker: MockerFixture
+) -> None:
+    """Same bug, a different write-risk verb not on the Tier-0 trivial
+    allowlist (unlike npm/pip3/pytest/python3/node, which are - see the
+    plan's Diagnosis point 6 for why those aren't valid examples here)."""
+    mocker.patch.object(bsr, "_resolve_claude_bin", return_value="/fake/claude")
+    spy = mocker.patch.object(
+        bsr, "call_claude",
+        return_value=("SUMMARY: install\nRISKS: system change\nVERDICT: safe", None),
+    )
+    rc = bsr.run(_input("sudo apt install vim"))
+    assert rc == 0
+    assert spy.called
+
+
+def test_short_unpiped_safe_command_still_exits_silently(
+    isolated_env: Path, mocker: MockerFixture
+) -> None:
+    """This fix must not turn every short command into a review - a
+    genuinely safe one (no heuristic hit, no write risk, not on the Tier 0
+    allowlist) must keep exiting silently, same as today."""
+    spy = mocker.patch.object(bsr, "call_claude")
+    rc = bsr.run(_input("grep foo bar.txt"))
+    assert rc == 0
+    assert not spy.called
+
+
 def test_tier05_telemetry_verdict_read_only(
     isolated_env: Path, mocker: MockerFixture
 ) -> None:

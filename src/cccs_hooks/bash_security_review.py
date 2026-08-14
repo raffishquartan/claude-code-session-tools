@@ -2,9 +2,10 @@
 
 Tiers:
   0.  Trivial allowlist (ls, pwd, git status, ...) - exit silently.
-  0.5 Read-only pre-filter - nontrivial commands with no heuristic flags and
-      no write/network/exec risk patterns - exit silently. Eliminates LLM
-      calls for piped read-only commands like `grep foo | wc -l`.
+  0.5 Read-only pre-filter - any non-Tier-0 command with no heuristic flags
+      and no write/network/exec risk pattern - exit silently, regardless of
+      shell composition or length. Eliminates LLM calls for piped read-only
+      commands like `grep foo | wc -l` and short write-risk-free ones alike.
   1.  Heuristic-flagged (pipe-to-shell, eval, base64 -d, ...) - always claude,
       never cache.
   2.  Cache hit (CCCS_USE_COMMAND_CACHE=1, fresh entry) - emit cached verdict.
@@ -296,32 +297,14 @@ def run(stdin_text: str) -> int:
     norm_form = norm_mod.normalise(command) if not skip_cache else None
     norm_sha  = cache_mod.sha256_command(norm_form) if norm_form else None
 
-    # Only "non-trivial" commands continue past this gate to claude. The bash
-    # original short-circuits when the command is borderline. Mirror that:
-    nontrivial = (
-        bool(hits)
-        or _NONTRIVIAL_RE.search(command) is not None
-        or len(command) > 120
-    )
-    if not nontrivial:
-        _emit_telemetry(
-            hi=hi, decision="allow", cache_state="none", verdict="trivial", sha=sha
-        )
-        cache_mod.invocations_record(
-            exit_tier=0,
-            verdict="allow",
-            session_id=hi.session_id or None,
-            tool_name=hi.tool_name,
-            exact_hash=sha,
-        )
-        return 0
-
     # ---- Tier 0.5: read-only pre-filter ----
-    # At this point the command is nontrivial (has shell composition, heuristic
-    # flags, or exceeds the length threshold). If there are no heuristic flags
-    # and no write/network/exec risk patterns, the command is safe to skip
-    # regardless of shell composition — piped read-only chains like
-    # `grep foo | wc -l` or `git log | head -20` carry no meaningful risk.
+    # Any command that reaches here (past Tier 0's trivial allowlist) is safe
+    # to skip if it has no heuristic flags and no write/network/exec risk
+    # pattern — regardless of shell composition or length. A piped read-only
+    # chain like `grep foo | wc -l` carries no meaningful risk, and neither
+    # does a short one like `grep foo bar.txt` alone: has_write_risk() must
+    # be consulted for every command that reaches this point, not only ones
+    # with shell composition or over the length threshold.
     if not hits and not has_write_risk(command):
         _emit_telemetry(
             hi=hi, decision="allow", cache_state="none", verdict="read-only", sha=sha
