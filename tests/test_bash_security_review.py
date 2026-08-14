@@ -815,6 +815,25 @@ def test_has_write_risk_not_flagged(cmd: str) -> None:
     assert not bsr.has_write_risk(cmd), f"Unexpected write risk in: {cmd!r}"
 
 
+def test_write_risk_uv_sync_build_lock() -> None:
+    assert bsr.has_write_risk("uv sync --extra dev")
+    assert bsr.has_write_risk("uv build --wheel -o dist/")
+    assert bsr.has_write_risk("uv lock")
+
+
+def test_write_risk_uv_read_only_subcommands_unaffected() -> None:
+    """uv tree / uv version / uv export don't fetch or install anything new -
+    same treatment as npm build/npm test, which also aren't in _WRITE_RISK_RE."""
+    assert not bsr.has_write_risk("uv tree")
+    assert not bsr.has_write_risk("uv version")
+
+
+def test_write_risk_uv_run_unaffected() -> None:
+    """uv run's write risk (if any) depends entirely on the wrapped command,
+    not on 'uv run' itself - this pattern must not fire on it."""
+    assert not bsr.has_write_risk("uv run pytest tests/a.py")
+
+
 # ---------- tier 0.5: read-only pre-filter ----------
 
 def test_tier05_piped_grep_exits_silently(

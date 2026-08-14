@@ -85,6 +85,15 @@ _WRITE_RISK_RE = re.compile(
     | \b(?:apt|apt-get|yum|dnf|brew)\s+(?:install|remove|purge|uninstall|update|upgrade)\b
     | \bpip3?\s+(?:install|uninstall|remove)\b
     | \bnpm\s+(?:install|uninstall|publish|update|ci)\b
+    # uv sync/build/lock fetch packages over the network and write a
+    # venv/lockfile/wheel to disk, like npm install/pip install above.
+    # run/tool/python are deliberately excluded - their risk depends on
+    # what they wrap, not on the verb itself. pip is excluded because
+    # `uv pip install` has different safety semantics from a bare `pip
+    # install` and isn't handled by this pattern. export/tree/version are
+    # excluded because they don't fetch or write new content, matching how
+    # npm build/npm test/cargo build are also absent from this pattern.
+    | \buv\s+(?:sync|build|lock)\b
     # System service control
     | \b(?:systemctl|service)\b
     # Cron modification
