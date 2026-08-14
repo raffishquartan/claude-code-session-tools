@@ -88,17 +88,15 @@ from cc_session_tools.lib.hook_registry import HOOK_DESCRIPTIONS, HOOK_VERBS
 def _discover_source_dir() -> Path:
     """Return the bundled skills/ directory.
 
-    Walk up from this module's file to find the repo root containing skills/.
-    Falls back to ~/repos/claude-code-session-tools/skills/ for wheel installs.
+    skills/ is packaged inside cc_session_tools (declared as package-data in
+    pyproject.toml), so it sits at the same relative depth from this module
+    whether cc_session_tools is an editable source checkout or an installed
+    wheel: src/cc_session_tools/cli/ccst.py -> ../skills. No install-location
+    fallback is needed - a fallback here would just mask a broken install.
     """
-    # From src/cc_session_tools/cli/ccst.py walk up: cli/ -> cc_session_tools/ -> src/ -> repo root
-    here = Path(__file__).resolve()
-    candidate = here.parent.parent.parent.parent / "skills"
+    candidate = Path(__file__).resolve().parent.parent / "skills"
     if candidate.is_dir():
         return candidate
-    fallback = Path.home() / "repos" / "claude-code-session-tools" / "skills"
-    if fallback.is_dir():
-        return fallback
     raise FileNotFoundError(
         "Cannot locate bundled skills/ directory. "
         "Run from the source tree or use --source to specify the path explicitly."
@@ -108,18 +106,12 @@ def _discover_source_dir() -> Path:
 def _discover_bundle() -> Path:
     """Return the bundled config/hooks-bundle.json path.
 
-    Walk up from this module's file to find the repo root containing config/.
-    Falls back to ~/repos/claude-code-session-tools/config/... for wheel installs.
+    config/ is packaged inside cc_session_tools the same way skills/ is (see
+    _discover_source_dir) - src/cc_session_tools/cli/ccst.py -> ../config.
     """
-    here = Path(__file__).resolve()
-    candidate = here.parent.parent.parent.parent / "config" / "hooks-bundle.json"
+    candidate = Path(__file__).resolve().parent.parent / "config" / "hooks-bundle.json"
     if candidate.is_file():
         return candidate
-    fallback = (
-        Path.home() / "repos" / "claude-code-session-tools" / "config" / "hooks-bundle.json"
-    )
-    if fallback.is_file():
-        return fallback
     raise FileNotFoundError(
         "Cannot locate bundled config/hooks-bundle.json. "
         "Run from the source tree or use --source to specify the path explicitly."

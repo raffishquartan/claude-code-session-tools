@@ -25,6 +25,17 @@ Categorically blocked, in file order (checks run in this exact order):
      hook's own source / documentation cannot self-match, and the python/node
      patterns require a trailing ``(`` so regex-literal declarations don't match.
   6. The same, but for a heredoc body fed to an interpreter.
+
+Self-cleanup exemption (applies within items 2, 5, 6 only): a Python call to
+``os.remove``, ``os.unlink``, or ``shutil.rmtree`` is NOT flagged if its sole
+argument is a bare variable that was assigned, earlier in the same
+command/script/heredoc body, directly from a ``tempfile.mkstemp``,
+``tempfile.mkdtemp``, or ``tempfile.NamedTemporaryFile`` call - i.e. a script
+cleaning up a scratch file/dir it created itself in the same breath. Anything
+else - a literal path, an attribute access, a variable from elsewhere, the
+pathlib delete-method form, or the Node ``fs.*Sync`` forms - is still flagged;
+there is no equivalent exemption for those.
+
   7. ``gh api ... DELETE``.
   8. ``gh release delete`` / ``gh release rm``.
   9. curl/wget with a destructive HTTP method (-X DELETE/POST/PUT/PATCH,
@@ -222,6 +233,47 @@ def _strip_comment_lines(text: str) -> str:
     return "\n".join(ln for ln in text.splitlines() if not _COMMENT_LINE_RE.match(ln))
 
 
+# ---- Helpers: temp-file self-cleanup exemption ----
+#
+# A script that creates its own scratch file/dir via tempfile.mkstemp() /
+# mkdtemp() / NamedTemporaryFile() and later removes THAT SAME variable is a
+# standard, safe idiom (create-then-clean-up-in-a-finally-block), not a
+# destructive operation on user data. The exemption is scoped narrowly to a
+# call whose sole argument is a bare identifier bound, earlier in the same
+# content, directly from one of those three tempfile-creation calls - a
+# literal path, an attribute access, an untracked variable, pathlib's
+# ``.unlink()`` method form, and the Node ``fs.*Sync`` forms are unaffected
+# and still always flagged.
+_TEMPFILE_ASSIGN_RE = re.compile(
+    r"(?:[A-Za-z_][A-Za-z0-9_]*\s*,\s*)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s*"
+    r"tempfile\.(?:mkstemp|mkdtemp|NamedTemporaryFile)\s*\("
+)
+_PY_TEMP_DEL_CALL_RE = re.compile(
+    r"(?:os\.remove|os\.unlink|shutil\.rmtree)\(\s*([A-Za-z_][A-Za-z0-9_]*)\s*\)"
+)
+
+
+def _self_cleanup_temp_vars(content: str) -> set[str]:
+    """Variable names assigned directly from a tempfile-creation call in *content*."""
+    return {m.group(1) for m in _TEMPFILE_ASSIGN_RE.finditer(content)}
+
+
+def _has_unsafe_py_delete(content: str, broad_del_re: "re.Pattern[str]") -> bool:
+    """True if *content* contains a destructive-delete call (per *broad_del_re*,
+    one of the module's ``_..._DEL_RE``/``_..._PY_DEL_RE`` patterns) that is NOT
+    the narrow self-cleanup idiom documented above. *broad_del_re* still does the
+    actual detection; this just carves the safe idiom back out of its hits."""
+    temp_vars = _self_cleanup_temp_vars(content)
+    safe_spans = [
+        m.span() for m in _PY_TEMP_DEL_CALL_RE.finditer(content) if m.group(1) in temp_vars
+    ]
+    for m in broad_del_re.finditer(content):
+        pos = m.start()
+        if not any(start <= pos < end for start, end in safe_spans):
+            return True
+    return False
+
+
 def _check_script_file(command: str) -> str | None:
     """Return a BLOCKED message if *command* invokes an interpreter on a readable
     script file whose (comment-stripped) contents contain a destructive op or a
@@ -255,7 +307,7 @@ def _check_script_file(command: str) -> str | None:
                 except OSError:
                     text = ""
                 stripped = _strip_comment_lines(text)
-                if _FILE_RM_RE.search(stripped) or _FILE_PY_DEL_RE.search(stripped):
+                if _FILE_RM_RE.search(stripped) or _has_unsafe_py_delete(stripped, _FILE_PY_DEL_RE):
                     return (
                         f"BLOCKED: Script file '{file}' contains a destructive file "
                         f"operation. {_DELETION_GUIDANCE}"
@@ -290,7 +342,7 @@ _HD_DEL_PY_RE = re.compile(
 
 def _scan_heredoc_body(body: str) -> str | None:
     """Return a hit-kind for the first matching pattern in a heredoc body."""
-    if _HD_DEL_RM_RE.search(body) or _HD_DEL_PY_RE.search(body):
+    if _HD_DEL_RM_RE.search(body) or _has_unsafe_py_delete(body, _HD_DEL_PY_RE):
         return "del"
     if _detect_mv_to_tmp(body):
         return "mv-direct"
@@ -444,7 +496,7 @@ def check_command(command: str) -> str | None:
         )
 
     # 2. Python/Node destructive file ops in an inline script.
-    if _INLINE_INTERP_RE.search(command) and _INLINE_DEL_RE.search(command):
+    if _INLINE_INTERP_RE.search(command) and _has_unsafe_py_delete(command, _INLINE_DEL_RE):
         return f"BLOCKED: Destructive file operation in inline script. {_DELETION_GUIDANCE}"
 
     # 3. Delete-by-move (direct mv command to a tmp-like location).

@@ -7,6 +7,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.3.0] - 2026-08-14
+
+### Fixed
+
+- **A `pip`/`uv tool install`-from-PyPI install couldn't find its own bundled skills or
+  `hooks-bundle.json`.** `skills/` and `config/` lived at the repo root, outside the installable
+  `cc_session_tools` package, so `setuptools` had no way to include them in the wheel; `ccst.py`'s
+  `_discover_source_dir()`/`_discover_bundle()` masked this by falling back to a hardcoded
+  `~/repos/claude-code-session-tools/...` path that only ever worked on one machine, with one
+  specific checkout location. Relocated `skills/` and `config/` under `src/cc_session_tools/` so
+  they're packaged the same way for an editable checkout and an installed wheel, and rewrote the
+  discovery functions to resolve them via a package-relative path instead of a fallback that would
+  just mask a broken install. Verified end-to-end: built a real wheel, installed it into a clean
+  venv with `HOME` pointed at a nonexistent directory, and ran `ccst skills install --apply` for
+  real. Along the way, also found and fixed a second, compounding bug: `setuptools`'s package
+  auto-discovery silently treated every `skills/<name>/` subdirectory as its own importable
+  sub-package, which meant a separate `exclude-package-data` rule (intended to strip each skill's
+  dev-only `tests/` directory and `__pycache__` from the wheel) was matching against the wrong
+  package and doing nothing. Excluding `skills/`/`config/` from package discovery fixed both at
+  once: a wheel's `skills/` payload dropped from 82 entries (41 of them test files, 28 bytecode
+  cache) to the 30 files a skill actually needs at runtime.
+- **`bash-hard-deny` blocked a script's own tempfile self-cleanup as a destructive operation.** The
+  script-file check (and its inline-script/heredoc siblings) flagged any `os.remove`/`os.unlink`/
+  `shutil.rmtree` call anywhere in an invoked script, including a `finally:`-block cleanup of a
+  file the same script had just created via `tempfile.mkstemp`/`mkdtemp`/`NamedTemporaryFile` — the
+  standard create-then-clean-up idiom. This made every skill using that idiom (e.g.
+  `gmail-email-to-pdf`'s PDF renderer) permanently unusable. The three delete-detection call sites
+  now carve out a narrow exemption: a delete call is not flagged if its sole argument is a bare
+  variable assigned, earlier in the same content, directly from one of those three
+  tempfile-creation calls. A literal path, an attribute access, an untracked variable, pathlib's
+  delete-method form, and the Node `fs.*Sync` forms are unaffected and still always flagged.
+- **The `ccsched` catch-up digest and inter-session message digest were invisible to the user.**
+  Both hooks only emitted `hookSpecificOutput.additionalContext` — injected into Claude's own
+  context, but never rendered outside the verbose transcript — so job findings and delivered
+  messages went unnoticed. Both now also emit `systemMessage`; `SessionStart`'s catch-up digest
+  always emits one (including an explicit "no activity" line when empty), `UserPromptSubmit`'s
+  only emits one when there's real content, since it fires on every prompt.
+
 ## [2.2.0] - 2026-08-13
 
 ### Fixed

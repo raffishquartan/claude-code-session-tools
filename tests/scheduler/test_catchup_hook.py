@@ -153,6 +153,31 @@ def test_hook_never_raises_on_corrupt_db(monkeypatch: pytest.MonkeyPatch) -> Non
     assert out == [""]  # empty degrade, not a digest string
 
 
+def test_emit_sets_system_message_when_digest_nonempty(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    catchup._emit("[cc-scheduler] scheduled-task catch-up:\n✗ tesco failed", "UserPromptSubmit")
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["systemMessage"] == "[cc-scheduler] scheduled-task catch-up:\n✗ tesco failed"
+    assert payload["hookSpecificOutput"]["additionalContext"] == payload["systemMessage"]
+
+
+def test_emit_session_start_sets_system_message_when_digest_empty(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    catchup._emit("", "SessionStart")
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["systemMessage"] == "[cc-scheduler] no scheduled-task activity since your last session"
+
+
+def test_emit_user_prompt_submit_has_no_system_message_when_digest_empty(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    catchup._emit("", "UserPromptSubmit")
+    payload = json.loads(capsys.readouterr().out)
+    assert "systemMessage" not in payload
+
+
 @pytest.mark.parametrize("event", ["SessionStart", "UserPromptSubmit"])
 def test_emits_event_name_matching_invoking_event(
     event: str, monkeypatch: pytest.MonkeyPatch

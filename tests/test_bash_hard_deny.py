@@ -317,6 +317,135 @@ def test_allows_file_with_destructive_refs_only_in_comments(
     _assert_allowed(monkeypatch, f"bash {f}")
 
 
+# --- Self-cleanup exemption: script removing its OWN tempfile-created scratch
+# --- file/dir should not be flagged as a destructive operation (bug: the
+# --- gmail-email-to-pdf skill's os.remove() of its own tempfile.mkstemp()
+# --- output was blocked outright by this hook).
+
+
+def test_allows_script_file_os_remove_of_own_mkstemp_var(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    f = tmp_path / "render.py"
+    f.write_text(
+        "import tempfile, os\n"
+        "fd, tmp_html = tempfile.mkstemp(suffix='.html', prefix='gmpdf-')\n"
+        "os.close(fd)\n"
+        "try:\n"
+        "    pass\n"
+        "finally:\n"
+        "    try:\n"
+        "        os.remove(tmp_html)\n"
+        "    except OSError:\n"
+        "        pass\n"
+    )
+    _assert_allowed(monkeypatch, f"python3 {f}")
+
+
+def test_allows_script_file_os_unlink_of_own_namedtemporaryfile_var(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    f = tmp_path / "render2.py"
+    f.write_text(
+        "import tempfile, os\n"
+        "tmp_path = tempfile.NamedTemporaryFile(delete=False).name\n"
+        "os.unlink(tmp_path)\n"
+    )
+    _assert_allowed(monkeypatch, f"python3 {f}")
+
+
+def test_allows_script_file_shutil_rmtree_of_own_mkdtemp_var(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    f = tmp_path / "render3.py"
+    f.write_text(
+        "import tempfile, shutil\n"
+        "scratch_dir = tempfile.mkdtemp()\n"
+        "shutil.rmtree(scratch_dir)\n"
+    )
+    _assert_allowed(monkeypatch, f"python3 {f}")
+
+
+def test_blocks_script_file_os_remove_of_non_temp_var_alongside_mkstemp(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # A script that legitimately creates a tempfile AND separately deletes an
+    # unrelated path must still be blocked for the unrelated deletion.
+    f = tmp_path / "mixed.py"
+    f.write_text(
+        "import tempfile, os\n"
+        "fd, tmp_html = tempfile.mkstemp()\n"
+        "os.close(fd)\n"
+        "os.remove(tmp_html)\n"
+        "os.remove('/home/alice/important-file.txt')\n"
+    )
+    _assert_blocked(monkeypatch, f"python3 {f}", "destructive")
+
+
+def test_blocks_script_file_os_remove_of_literal_path_no_tempfile(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    f = tmp_path / "still_bad.py"
+    f.write_text('import os\nos.remove("/tmp/target.txt")\n')
+    _assert_blocked(monkeypatch, f"python3 {f}", "destructive")
+
+
+def test_blocks_script_file_os_remove_of_variable_not_from_tempfile(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # A variable that merely LOOKS like it could be a temp path, but was never
+    # assigned from tempfile.mkstemp/mkdtemp/NamedTemporaryFile, must still block.
+    f = tmp_path / "spoofed.py"
+    f.write_text(
+        "import os\n"
+        "tmp_html = '/home/alice/.ssh/id_rsa'\n"
+        "os.remove(tmp_html)\n"
+    )
+    _assert_blocked(monkeypatch, f"python3 {f}", "destructive")
+
+
+def test_allows_inline_python_os_remove_of_own_mkstemp_var(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _assert_allowed(
+        monkeypatch,
+        "python3 -c \"import tempfile, os; fd, p = tempfile.mkstemp(); "
+        "os.close(fd); os.remove(p)\"",
+    )
+
+
+def test_blocks_inline_python_os_remove_of_literal_alongside_mkstemp(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _assert_blocked(
+        monkeypatch,
+        "python3 -c \"import tempfile, os; fd, p = tempfile.mkstemp(); "
+        "os.close(fd); os.remove('/home/alice/important.txt')\"",
+        "destructive",
+    )
+
+
+def test_allows_heredoc_os_remove_of_own_mkstemp_var(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cmd = (
+        "python3 <<EOF\n"
+        "import tempfile, os\n"
+        "fd, tmp_html = tempfile.mkstemp()\n"
+        "os.close(fd)\n"
+        "os.remove(tmp_html)\n"
+        "EOF"
+    )
+    _assert_allowed(monkeypatch, cmd)
+
+
+def test_blocks_heredoc_os_remove_of_literal_path(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cmd = "python3 <<EOF\nimport os\nos.remove('/tmp/target.txt')\nEOF"
+    _assert_blocked(monkeypatch, cmd, "destructive")
+
+
 def test_allows_bash_n_on_hook_own_source(monkeypatch: pytest.MonkeyPatch) -> None:
     # The hook's own source contains detection patterns as regex literals; those
     # must not trip the detector when a tool invokes `bash -n` on it.

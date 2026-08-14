@@ -178,7 +178,7 @@ def test_hooks_install_explicit_source_still_works(tmp_path: Path) -> None:
 
 def test_bundle_json_has_correct_events() -> None:
     """The hooks-bundle.json contains the expected event types."""
-    bundle_path = Path(__file__).parent.parent / "config" / "hooks-bundle.json"
+    bundle_path = Path(__file__).parent.parent / "src" / "cc_session_tools" / "config" / "hooks-bundle.json"
     assert bundle_path.is_file(), f"Bundle not found: {bundle_path}"
     bundle = json.loads(bundle_path.read_text())
     events = set(bundle["hooks"].keys())
@@ -186,7 +186,7 @@ def test_bundle_json_has_correct_events() -> None:
 
 
 def test_bundle_json_bash_security_review_has_bash_matcher() -> None:
-    bundle_path = Path(__file__).parent.parent / "config" / "hooks-bundle.json"
+    bundle_path = Path(__file__).parent.parent / "src" / "cc_session_tools" / "config" / "hooks-bundle.json"
     bundle = json.loads(bundle_path.read_text())
     found = False
     for block in bundle["hooks"]["PreToolUse"]:
@@ -198,7 +198,7 @@ def test_bundle_json_bash_security_review_has_bash_matcher() -> None:
 
 
 def test_bundle_json_confirm_8digit_has_no_matcher() -> None:
-    bundle_path = Path(__file__).parent.parent / "config" / "hooks-bundle.json"
+    bundle_path = Path(__file__).parent.parent / "src" / "cc_session_tools" / "config" / "hooks-bundle.json"
     bundle = json.loads(bundle_path.read_text())
     found = False
     for block in bundle["hooks"]["PreToolUse"]:

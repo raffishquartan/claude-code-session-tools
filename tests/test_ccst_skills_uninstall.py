@@ -109,7 +109,7 @@ def test_skills_uninstall_unknown_skill_errors(tmp_path: Path) -> None:
 def test_skills_uninstall_dry_run_shows_would_remove(tmp_path: Path) -> None:
     """Dry run reports what would be removed."""
     # Set up a target that has a bundled skill symlink
-    source_dir = Path(__file__).parent.parent / "skills"
+    source_dir = Path(__file__).parent.parent / "src" / "cc_session_tools" / "skills"
     if not source_dir.is_dir():
         pytest.skip("bundled skills/ not available")
     skills_found = [s for s in source_dir.iterdir() if (s / "SKILL.md").is_file()]
@@ -130,7 +130,7 @@ def test_skills_uninstall_dry_run_shows_would_remove(tmp_path: Path) -> None:
 
 def test_skills_uninstall_apply_removes_bundled_symlink(tmp_path: Path) -> None:
     """--apply removes a bundled skill symlink."""
-    source_dir = Path(__file__).parent.parent / "skills"
+    source_dir = Path(__file__).parent.parent / "src" / "cc_session_tools" / "skills"
     if not source_dir.is_dir():
         pytest.skip("bundled skills/ not available")
     skills_found = [s for s in source_dir.iterdir() if (s / "SKILL.md").is_file()]
@@ -151,7 +151,7 @@ def test_skills_uninstall_apply_removes_bundled_symlink(tmp_path: Path) -> None:
 
 def test_skills_uninstall_named_skill(tmp_path: Path) -> None:
     """--skill <name> removes only that skill."""
-    source_dir = Path(__file__).parent.parent / "skills"
+    source_dir = Path(__file__).parent.parent / "src" / "cc_session_tools" / "skills"
     if not source_dir.is_dir():
         pytest.skip("bundled skills/ not available")
     skills_found = sorted(

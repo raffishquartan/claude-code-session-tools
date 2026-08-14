@@ -70,6 +70,19 @@ def test_hook_emits_digest_for_addressed_message(
     assert any("Ping" in e for e in emitted)
 
 
+def test_emit_sets_system_message_when_digest_nonempty(capsys: pytest.CaptureFixture[str]) -> None:
+    messaging_deliver._emit("[messages] 1 new for you", "SessionStart")
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["systemMessage"] == "[messages] 1 new for you"
+    assert payload["hookSpecificOutput"]["additionalContext"] == payload["systemMessage"]
+
+
+def test_emit_has_no_system_message_when_digest_empty(capsys: pytest.CaptureFixture[str]) -> None:
+    messaging_deliver._emit("", "SessionStart")
+    payload = json.loads(capsys.readouterr().out)
+    assert "systemMessage" not in payload
+
+
 def test_hook_emits_empty_on_bad_stdin(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.setenv("CCST_MESSAGES_ROOT", str(tmp_path))
     monkeypatch.setattr("sys.stdin", io.StringIO("not json"))
