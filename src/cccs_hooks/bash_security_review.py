@@ -53,13 +53,13 @@ _NONTRIVIAL_RE = re.compile(r"[|;<]|&&|\|\||\$\(|`|<\(")
 _HEURISTIC_PATTERNS: list[tuple[re.Pattern[str], str]] = [
     (re.compile(r"\|\s*(sh|bash|zsh)(\s|$)"), "pipe to shell"),
     (re.compile(r"(^|\s)eval(\s|$)"), "eval"),
-    (re.compile(r"base64\s+(-d|--decode)"), "base64 decode"),
-    (re.compile(r"(\.ssh|id_rsa|id_ed25519|\.aws/credentials|\.netrc)"), "credentials path"),
-    (re.compile(r"(printenv|env\s*$|env\s*\|)"), "env dump"),
+    (re.compile(r"\bbase64\s+(-d|--decode)"), "base64 decode"),
+    (re.compile(r"(\.ssh|\bid_rsa\b|\bid_ed25519\b|\.aws/credentials|\.netrc)"), "credentials path"),
+    (re.compile(r"(\bprintenv\b|\benv\s*$|\benv\s*\|)"), "env dump"),
     (re.compile(r"chmod\s+\S*s"), "setuid chmod"),
     (re.compile(r"(^|\s)(/etc/|/usr/|/var/|/boot/)"), "system path"),
     (re.compile(r"\b(nc|ncat|netcat|socat)\s"), "raw network tool"),
-    (re.compile(r"(wget|curl).*-O\s*/"), "download to absolute path"),
+    (re.compile(r"\b(wget|curl)\b.*-O\s*/"), "download to absolute path"),
 ]
 
 _VERDICT_RE = re.compile(r"^VERDICT:\s*(safe|suspicious|dangerous)\s*$", re.MULTILINE)

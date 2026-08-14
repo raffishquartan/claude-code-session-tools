@@ -421,6 +421,48 @@ def test_heuristic_raw_network_tool_word_boundary() -> None:
     assert "raw network tool" in bsr.heuristic_flags("socat TCP-LISTEN:8080 -")
 
 
+def test_heuristic_env_dump_word_boundary() -> None:
+    """A variable/word merely ending or starting with 'env'/'printenv' must
+    not false-positive as an env dump."""
+    assert bsr.heuristic_flags("FOO=goodenv") == []
+    assert bsr.heuristic_flags("echo printenvironment.sh") == []
+    # still correctly flags the real thing:
+    assert "env dump" in bsr.heuristic_flags("printenv")
+    assert "env dump" in bsr.heuristic_flags("aws creds | env")
+    assert "env dump" in bsr.heuristic_flags("env")
+
+
+def test_heuristic_base64_decode_word_boundary() -> None:
+    assert bsr.heuristic_flags("somebase64 -d file") == []
+    assert "base64 decode" in bsr.heuristic_flags("base64 -d file.txt")
+    assert "base64 decode" in bsr.heuristic_flags("cat secret | base64 --decode")
+
+
+def test_heuristic_credentials_path_word_boundary() -> None:
+    assert bsr.heuristic_flags("myid_rsa_backup.txt cat") == []
+    assert "credentials path" in bsr.heuristic_flags("cat ~/.ssh/id_rsa")
+    assert "credentials path" in bsr.heuristic_flags("cat ~/.ssh/id_ed25519")
+    assert "credentials path" in bsr.heuristic_flags("cat ~/.aws/credentials")
+    assert "credentials path" in bsr.heuristic_flags("cat ~/.netrc")
+    # id_rsa/id_ed25519 must fire on their own, not only via the .ssh
+    # alternative in the same regex:
+    assert "credentials path" in bsr.heuristic_flags("cp /backup/id_rsa /tmp/x")
+    assert "credentials path" in bsr.heuristic_flags("cp /backup/id_ed25519 /tmp/x")
+
+
+def test_heuristic_download_to_absolute_path_word_boundary() -> None:
+    assert bsr.heuristic_flags("newwget --something -O /tmp/x") == []
+    # 'curlie' is a real curl-compatible HTTP client - a left-side-only
+    # boundary would still false-positive on it.
+    assert bsr.heuristic_flags("curlie https://example.com/x -O /tmp/y") == []
+    assert "download to absolute path" in bsr.heuristic_flags(
+        "wget https://example.com/x -O /tmp/y"
+    )
+    assert "download to absolute path" in bsr.heuristic_flags(
+        "curl https://example.com/x -O /tmp/y"
+    )
+
+
 # ---------- is_trivial ----------
 
 def test_is_trivial_ls() -> None:
