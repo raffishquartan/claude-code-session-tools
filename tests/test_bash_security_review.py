@@ -181,6 +181,39 @@ def test_norm_cache_hit_skips_claude(tmp_path: Path, monkeypatch: pytest.MonkeyP
     spy.assert_not_called()
 
 
+def test_uv_sync_norm_cache_hit_skips_claude(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, mocker: MockerFixture
+) -> None:
+    """Real end-to-end proof, not just a normalise()-unit-test one: two bare
+    'uv sync' invocations with different flags share a norm_sha cache entry,
+    and the second one never calls Claude. Reaches Tier 2 without any
+    compound (&&) trick because Task 1 fixed the nontrivial-gate bug that
+    would otherwise have made this test require one."""
+    monkeypatch.setenv("CCCS_USE_COMMAND_CACHE", "1")
+    monkeypatch.setenv("CCCS_CACHE_DB", str(tmp_path / "cache.db"))
+    monkeypatch.setenv("CCCS_HOOKS_DIR", str(tmp_path / "hooks"))
+    monkeypatch.delenv("CCCS_CACHE_PATH", raising=False)
+    monkeypatch.delenv("CCCS_CLAUDE_BIN", raising=False)
+    from cccs_hooks import cache as cache_mod
+    from cccs_hooks import normalise as norm_mod
+
+    cmd_a = "uv sync --extra dev"
+    cmd_b = "uv sync --extra test"  # different flag, same norm_sha
+    assert bsr.has_write_risk(cmd_a)  # sanity-check Task 5 actually landed
+    assert bsr.heuristic_flags(cmd_a) == []  # sanity-check Task 3 actually landed
+    exact_sha = cache_mod.sha256_command(cmd_a)
+    norm_form = norm_mod.normalise(cmd_a)
+    assert norm_form == "uv sync <ARGS>"  # sanity-check Step 3 actually landed
+    norm_sha = cache_mod.sha256_command(norm_form)
+    cache_mod.cache_record(exact_sha, "safe", "none", cmd_a, norm_sha=norm_sha)
+
+    spy = mocker.patch("cccs_hooks.bash_security_review.call_claude")
+    result = bsr.run(_input(cmd_b))
+
+    assert result == 0
+    spy.assert_not_called()
+
+
 # ---------- tier 3: claude escalation ----------
 
 def test_cache_miss_safe_verdict_records(

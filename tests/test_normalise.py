@@ -166,6 +166,40 @@ def test_pip_install_normalises():
 def test_cargo_build_normalises():
     assert normalise("cargo build") == "cargo build <ARGS>"
 
+def test_uv_sync_normalises():
+    assert normalise("uv sync --extra dev") == "uv sync <ARGS>"
+
+def test_uv_build_normalises():
+    assert normalise("uv build --wheel -o dist/") == "uv build <ARGS>"
+
+def test_uv_lock_normalises():
+    assert normalise("uv lock") == "uv lock <ARGS>"
+
+def test_uv_run_returns_none():
+    """uv run is NOT a closed-ended subcommand - it executes an arbitrary
+    wrapped command, so it must never collapse to one cache key here (that
+    would let one cached-safe 'uv run X' silently authorise a later, unrelated
+    'uv run Y'). Handled instead by Tier 0's prefix-strip (Task 2) or, for
+    untrusted wrapped verbs, by falling through to a real review every time -
+    never by normalisation."""
+    assert normalise("uv run pytest tests/a.py") is None
+
+def test_uv_tool_returns_none():
+    """uv tool run / uvx can invoke arbitrary installed tools - same
+    wrapped-arbitrary-command concern as uv run."""
+    assert normalise("uv tool run some-tool") is None
+
+def test_uv_python_returns_none():
+    """uv python can invoke an arbitrary interpreter - excluded for the same
+    reason python/python3 are in _NEVER_NORMALISE."""
+    assert normalise("uv python install 3.13") is None
+
+def test_uv_pip_returns_none():
+    """uv pip wraps pip's own subcommands with different safety semantics
+    from a bare pip install (e.g. --system can install outside a venv) -
+    deliberately not aliased into the existing 'pip' entry."""
+    assert normalise("uv pip install requests") is None
+
 def test_pip_install_normalises():
     assert normalise("pip install requests") == "pip install <ARGS>"
 
