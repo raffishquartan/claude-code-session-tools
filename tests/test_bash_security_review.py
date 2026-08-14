@@ -425,6 +425,68 @@ def test_is_trivial_long_command_not_trivial() -> None:
     assert not bsr.is_trivial("ls " + "x" * 200)
 
 
+def test_is_trivial_uv_run_pytest() -> None:
+    assert bsr.is_trivial("uv run pytest tests/test_foo.py -k bar -v")
+
+
+def test_is_trivial_uv_run_python() -> None:
+    assert bsr.is_trivial("uv run python -m cc_session_tools.cli.ccd --help")
+
+
+def test_is_trivial_uv_run_different_args_both_trivial() -> None:
+    """The whole point: two uv run pytest invocations with different args must
+    BOTH independently satisfy is_trivial() - this tier never needs a cache,
+    it just needs to recognise the wrapped verb every time."""
+    assert bsr.is_trivial("uv run pytest tests/a.py -k foo")
+    assert bsr.is_trivial("uv run pytest tests/b.py -v --no-header")
+
+
+def test_is_trivial_uv_run_with_leading_uv_flag_not_trivial() -> None:
+    """uv run --with foo pytest ... - a uv-level flag sits before the wrapped
+    verb. Deliberately NOT parsed: bail out rather than risk misidentifying
+    what's actually going to execute."""
+    assert not bsr.is_trivial("uv run --with foo pytest tests/a.py")
+
+
+def test_is_trivial_uv_run_untrusted_verb_not_trivial() -> None:
+    """uv run wrapping a verb that ISN'T already Tier-0-trusted must not
+    become trivial just because it's uv-wrapped."""
+    assert not bsr.is_trivial("uv run ./some-script.sh")
+    assert not bsr.is_trivial("uv run rm -rf /tmp/x")
+
+
+def test_is_trivial_uv_run_pipe_still_not_trivial() -> None:
+    """Shell composition inside the wrapped command still disqualifies it,
+    same as it already does for a bare trivial verb."""
+    assert not bsr.is_trivial("uv run pytest tests/a.py | tee out.log")
+
+
+def test_is_trivial_bare_uv_without_run_not_trivial() -> None:
+    """uv sync / uv build etc. are not Tier 0 - they go through Tier 2's
+    package-manager cache rule instead (see Task 5). Only 'uv run <verb>'
+    is handled here."""
+    assert not bsr.is_trivial("uv sync --extra dev")
+
+
+def test_is_trivial_stacked_uv_run_not_trivial() -> None:
+    """Only one 'uv run ' prefix is ever stripped (count=1). A second,
+    stacked 'uv run ' is left in place, and 'uv' itself is not a Tier-0
+    trusted verb, so the whole command correctly stays non-trivial."""
+    assert not bsr.is_trivial("uv run uv run pytest tests/a.py")
+
+
+def test_is_trivial_uv_run_length_check_uses_stripped_string() -> None:
+    """The 120-char length check must run against the stripped command, not
+    the raw one - otherwise the 7 extra chars of 'uv run ' prefix could push
+    an otherwise-trivial command over the threshold it wouldn't hit bare.
+    Chosen so the stripped form is under 120 chars (114) but the raw form
+    (121, prefix included) is over it: this would flip to False if a future
+    edit checked len(command) instead of len(checked)."""
+    raw = "uv run pytest " + "x" * 107
+    assert len(raw) - len("uv run ") < 120 <= len(raw)
+    assert bsr.is_trivial(raw)
+
+
 # ---------- extract_verdict ----------
 
 def test_extract_verdict_safe() -> None:

@@ -42,6 +42,11 @@ _TRIVIAL_RE = re.compile(
 _GIT_TRIVIAL_RE = re.compile(
     r"^\s*git\s+(status|diff|log|show|branch|rev-parse|config)(\s|$)"
 )
+# Matches only 'uv run <verb>' where <verb> does not itself start with '-' -
+# a uv-level flag between 'run' and the wrapped verb (e.g. `uv run --with foo
+# pytest ...`) is deliberately NOT parsed here; is_trivial() should bail out
+# rather than risk misidentifying what's actually going to execute.
+_UV_RUN_PREFIX_RE = re.compile(r"^\s*uv\s+run\s+(?!-)")
 _NONTRIVIAL_RE = re.compile(r"[|;<]|&&|\|\||\$\(|`|<\(")
 
 # Heuristic patterns from existing bash hook (lines 58-69).
@@ -122,12 +127,21 @@ def parse_input(raw: str) -> HookInput | None:
 
 
 def is_trivial(command: str) -> bool:
-    """True if the command is on the trivial allowlist with no shell composition."""
-    if not (_TRIVIAL_RE.match(command) or _GIT_TRIVIAL_RE.match(command)):
+    """True if the command is on the trivial allowlist with no shell composition.
+
+    A leading 'uv run ' is stripped first (when not followed by a uv-level
+    flag) so a uv-wrapped invocation of an already-trusted verb - e.g.
+    `uv run pytest ...`, `uv run python -m ...` - gets the exact same trust
+    decision the bare verb already gets. This is not a new trust decision:
+    every verb this can newly match was already unconditionally trusted by
+    _TRIVIAL_RE before this function is ever reached.
+    """
+    checked = _UV_RUN_PREFIX_RE.sub("", command, count=1)
+    if not (_TRIVIAL_RE.match(checked) or _GIT_TRIVIAL_RE.match(checked)):
         return False
-    if _NONTRIVIAL_RE.search(command):
+    if _NONTRIVIAL_RE.search(checked):
         return False
-    if len(command) >= 120:
+    if len(checked) >= 120:
         return False
     return True
 
