@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.4.0] - 2026-08-15
+
+### Fixed
+
+- **`bash-security-review` let short, unpiped, write-risk commands bypass review entirely.** A
+  bare `rm -rf ...` (or any other write-risk command with no shell composition and under the
+  120-character trivial-allowlist length threshold) previously fell through to Tier 0.5's
+  read-only pre-filter unreviewed, because `has_write_risk()` was only consulted for commands with
+  pipe/redirect composition or over the length threshold. It's now consulted for every command
+  that reaches Tier 0.5, regardless of shell composition or length. Several `_HEURISTIC_PATTERNS`
+  entries also matched inside unrelated longer words — `sync`/`rsync` inside `nc`, `somebase64`,
+  `printenvironment`, `newwget` — forcing unnecessary reviews on harmless commands; those patterns
+  are now word-boundaried. The `id_rsa`/`id_ed25519` credentials-path pattern also briefly grew a
+  matching trailing `\b` in the same sweep intended to exclude `myid_rsa_backup.txt`-style false
+  positives; that trailing boundary was removed again since it silently stopped matching the
+  mainstream `id_rsa_<host>`/`id_ed25519_<purpose>` suffixed key-naming convention — a real
+  coverage regression, not a false-positive fix (the leading `\b` alone already excluded the
+  intended false positive).
+
+### Added
+
+- `uv run <trusted-verb>` (e.g. `uv run pytest`, `uv run python -m ...`) now gets the same
+  zero-review trust as the bare verb. `uv sync`/`build`/`lock` are now recognised as write-risk and
+  cached after one real review, matching `npm install`/`cargo build`.
+
 ## [2.3.0] - 2026-08-14
 
 ### Fixed
