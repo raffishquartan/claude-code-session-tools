@@ -158,3 +158,39 @@ def test_install_everything_registers_bundled_ccsched_jobs(tmp_path: Path) -> No
     assert "unrecognized arguments" not in result.stderr
     assert "Scheduled jobs" in result.stdout
     assert "registered: pm-session-output-reconcile" in result.stdout
+
+
+# ---------- install-sync marker ----------
+
+
+def test_apply_records_synced_version(tmp_path: Path) -> None:
+    from cc_session_tools import __version__ as version
+    from cc_session_tools.lib import install_sync
+
+    env = os.environ.copy()
+    env["CCST_DATA_HOME"] = str(tmp_path / "data-home")
+
+    result = subprocess.run(
+        [sys.executable, "-m", "cc_session_tools.cli.ccst", *_isolated_apply_args(tmp_path)],
+        capture_output=True, text=True, cwd=str(Path(__file__).parent.parent), env=env,
+    )
+
+    assert result.returncode == 0
+    assert install_sync.get_synced_version(
+        path=tmp_path / "data-home" / "sessions.db"
+    ) == version
+
+
+def test_dry_run_does_not_record_synced_version(tmp_path: Path) -> None:
+    from cc_session_tools.lib import install_sync
+
+    env = os.environ.copy()
+    env["CCST_DATA_HOME"] = str(tmp_path / "data-home")
+
+    result = subprocess.run(
+        [sys.executable, "-m", "cc_session_tools.cli.ccst", "install-everything", "--no-pypi"],
+        capture_output=True, text=True, cwd=str(Path(__file__).parent.parent), env=env,
+    )
+
+    assert result.returncode == 0
+    assert install_sync.get_synced_version(path=tmp_path / "data-home" / "sessions.db") is None

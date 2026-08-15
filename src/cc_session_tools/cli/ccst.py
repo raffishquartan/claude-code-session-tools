@@ -1486,6 +1486,10 @@ def _cmd_install_everything(args: argparse.Namespace) -> int:
         if rc != 0:
             overall_rc = rc
 
+    if apply and overall_rc == 0:
+        from cc_session_tools.lib import install_sync
+        install_sync.record_synced(__version__)
+
     print(f"\n=== {total_steps}/{total_steps}  Health check ===")
     _cmd_doctor(
         argparse.Namespace(
