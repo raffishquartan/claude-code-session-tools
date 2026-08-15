@@ -1081,14 +1081,21 @@ the whole recovery story depends on — was still broken.
 reachable from the four exempt nouns** (`doctor`, `repair`, `migrate`, `install-everything`) for the
 same pattern, rather than waiting for a fourth review round to find the next one by chance: found
 and fixed the identical bug in `doctor_mutes.load_mutes` (used by `ccst doctor --list-mutes`/
-`--drift`). `migrate all` and `install-everything`'s other four steps (skills/hooks/shell/claude-md/
-ccsched-jobs) don't touch `sessions.db` at all, so they were confirmed unaffected rather than
-assumed so. **Deliberately not hardened**, as a scope boundary: `doctor_mutes.add_mute`/
-`remove_mute` (the write path behind `--mute`/`--unmute`) still raise on a corrupt store — writing
-to a definitely-corrupt file failing loudly is a UX-quality gap (raw traceback vs. a clean error),
-not the correctness/data-loss-adjacent risk the read-path crashes were; this plan's safety claim is
-about always being able to *see and diagnose* state on a corrupt store, not about every possible
-write against one succeeding gracefully.
+`--drift`). `install-everything`'s other four steps (skills/hooks/shell/claude-md/ccsched-jobs)
+don't touch `sessions.db` at all, confirmed rather than assumed. An independent, systematic
+follow-up audit (enumerating every `sessions_db`/`sessions_repair`/`doctor_mutes` call site and
+tracing reachability from all four exempt nouns, rather than more ad hoc poking) then corrected one
+inaccuracy in the paragraph above as originally written: `ccst migrate all` (non-dry-run) *does*
+touch `sessions.db` — `_migrate_tags`'s write-connect is the first statement it runs, unconditionally,
+even with zero legacy files — and does still raise on a corrupt store. **Deliberately not hardened**,
+as a scope boundary, alongside `doctor_mutes.add_mute`/`remove_mute` (the write path behind
+`--mute`/`--unmute`, which also still raises): writing to a definitely-corrupt file failing loudly
+is a UX-quality gap (raw traceback vs. a clean error), not the correctness/data-loss-adjacent risk
+the read-path crashes were. `doctor` (diagnose) and `repair` (fix, both dry-run and `--execute`) are
+what this plan's safety claim actually rests on — both are now fully hardened, verified end-to-end,
+not just reachable-then-crashing — and neither is a store-corruption repair tool in the first place;
+its own crash on a corrupt `sessions.db` is a pre-existing, narrower gap in a different, unrelated
+tool that happens to share the same underlying store.
 
 ---
 
