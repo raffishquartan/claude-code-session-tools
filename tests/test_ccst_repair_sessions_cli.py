@@ -134,6 +134,25 @@ def test_repair_dry_run_against_corrupt_db_fails_cleanly(base_env):
     assert "failed to open" in r.stderr
 
 
+def test_repair_execute_against_corrupt_db_fails_cleanly(base_env):
+    """A second, distinct crash site found in the same round: --execute's
+    backup step (db_lib.backup_to(), SQLite's own online backup API) also
+    opens lazily and only fails once the backup actually touches the file -
+    a different call site than the dry-run test above, reached only in
+    --execute mode. Both must be covered; fixing only the dry-run path
+    would leave the actual fix action of this recovery tool crashing."""
+    db_path = _sessions_db_path(base_env)
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    db_path.write_bytes(b"not a sqlite database file")
+
+    r = _run(base_env, "repair", "sessions", "--execute")
+
+    assert r.returncode != 0
+    assert "Traceback" not in r.stderr
+    assert str(db_path) in r.stderr
+    assert "failed to open" in r.stderr
+
+
 def test_repair_execute_updates_row_and_backs_up_first(base_env):
     from cc_session_tools.lib import sessions_db
 

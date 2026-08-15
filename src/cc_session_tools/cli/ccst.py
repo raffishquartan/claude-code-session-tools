@@ -1254,28 +1254,30 @@ def _cmd_repair_sessions(args: argparse.Namespace) -> int:
         print(str(e), file=sys.stderr)
         return 1
 
-    if args.execute:
-        if not db_path.exists():
-            # sqlite3.connect() auto-creates an empty file, so without this check
-            # db_lib.backup_to() below would silently back up (and repair() would open)
-            # a brand-new, empty sessions.db instead of failing loudly on the mistake.
-            print(f"No sessions.db found at {db_path} — nothing to back up or repair.", file=sys.stderr)
-            return 1
-        backup_dir = db_path.parent / "repair-backups"
-        backup_dir.mkdir(parents=True, exist_ok=True)
-        stamp = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-        backup_path = backup_dir / f"sessions-{stamp}.db"
-        db_lib.backup_to(db_path, backup_path)
-        print(f"Backed up sessions.db to {backup_path}")
-
+    # sqlite3.connect() (and the online backup API below) open lazily and
+    # only fail once a statement actually touches the file, so a corrupt-
+    # but-existing sessions.db reaches this try, not the exists() check
+    # above. This is the tool users are told to run to fix store corruption
+    # - both the backup step and the repair itself must fail loudly with a
+    # clear message here, not a raw traceback.
     try:
+        if args.execute:
+            if not db_path.exists():
+                # sqlite3.connect() auto-creates an empty file, so without this
+                # check db_lib.backup_to() below would silently back up (and
+                # repair() would open) a brand-new, empty sessions.db instead
+                # of failing loudly on the mistake.
+                print(f"No sessions.db found at {db_path} — nothing to back up or repair.", file=sys.stderr)
+                return 1
+            backup_dir = db_path.parent / "repair-backups"
+            backup_dir.mkdir(parents=True, exist_ok=True)
+            stamp = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+            backup_path = backup_dir / f"sessions-{stamp}.db"
+            db_lib.backup_to(db_path, backup_path)
+            print(f"Backed up sessions.db to {backup_path}")
+
         report = sessions_repair.repair(roots, path=db_path, dry_run=not args.execute)
     except sqlite3.DatabaseError as exc:
-        # sqlite3.connect() opens lazily and only fails once a query actually
-        # touches the file, so a corrupt db.exists()=True file reaches here,
-        # not the earlier existence check. This is the tool users are told
-        # to run to fix store corruption - it must fail loudly with a clear
-        # message here, not with a raw traceback.
         print(f"{db_path} exists but failed to open: {exc}", file=sys.stderr)
         return 1
     if not any((report.repaired, report.unresolved, report.ambiguous, report.conflicts)):
