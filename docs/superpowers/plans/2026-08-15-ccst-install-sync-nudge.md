@@ -1056,6 +1056,20 @@ test never proves the real pipeline" gap the `uv-aware-command-cache` plan's own
 about), and `record_synced()` reusing `sessions_db._now_iso()` instead of duplicating its
 timestamp-formatting logic inline.
 
+**A second final-review pass then found the corrupt-sessions.db survival claim was still false in
+two more places**, both reached only once the first round's `record_synced()` fix stopped masking
+them: `check_sessions_project_dir_absolute` (in `doctor.py`, reached by both `ccst doctor` and
+`install-everything`'s trailing health check) and `_cmd_repair_sessions` itself both still
+tracebacked on a corrupt `sessions.db`, because `sqlite3.connect()` opens lazily and a corrupt file
+only fails once a query actually touches it — the exact same root cause as the first round's fix,
+at two sites that root cause hadn't yet reached before. This closes the loop the whole plan's safety
+argument depends on: `doctor`/`repair`/`migrate`/`install-everything` must all genuinely survive the
+one failure mode (a corrupt sync-marker store) they're exempted from the gate specifically to let a
+user recover from — not just be reachable and then crash anyway. Verified with real, un-mocked
+corrupt-file subprocess tests for both sites, not unit-level mocks alone; a prior mocked-only test's
+docstring had incorrectly claimed the doctor-side crash was already handled elsewhere, and was
+corrected alongside the fix.
+
 ---
 
 ## Out of scope (deliberately, not oversights)
