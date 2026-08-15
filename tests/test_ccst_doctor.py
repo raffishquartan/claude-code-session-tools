@@ -733,7 +733,8 @@ def test_cmd_doctor_passes_synced_version_from_install_sync(tmp_path: Path, monk
     """Confirms the _cmd_doctor -> run_all_checks wiring specifically (not
     just run_all_checks in isolation): a value actually recorded via
     install_sync.record_synced() shows up as an OK install:synced result in
-    `ccst doctor`'s real subprocess output."""
+    `ccst doctor`'s real subprocess output. Passes --all since OK results are
+    hidden by default."""
     from cc_session_tools import __version__ as version
 
     env = os.environ.copy()
@@ -742,7 +743,7 @@ def test_cmd_doctor_passes_synced_version_from_install_sync(tmp_path: Path, monk
     install_sync.record_synced(version, path=tmp_path / "data-home" / "sessions.db")
 
     result = subprocess.run(
-        [sys.executable, "-m", "cc_session_tools.cli.ccst", "doctor", "--no-pypi"],
+        [sys.executable, "-m", "cc_session_tools.cli.ccst", "doctor", "--no-pypi", "--all"],
         capture_output=True, text=True, cwd=str(Path(__file__).parent.parent), env=env,
     )
 
