@@ -22,14 +22,20 @@ def get_synced_version(*, path: Path | None = None) -> str | None:
     """Return the version `install-everything --apply` last succeeded for,
     or None if it has never been recorded.
 
-    Covers two distinct "never recorded" states, both returning None: no
-    sessions.db file at all (fresh machine), and a sessions.db that predates
-    this table (every existing installation upgrading to the version that
-    ships this feature — session_tags/sessions/doctor_mutes already exist,
-    but install_sync doesn't yet). connect(readonly=True) skips DDL by
-    design (it must not create/migrate a store it's only meant to read), so
-    the second case reaches the SELECT and must be caught there too, not
-    just around connect() itself.
+    Covers three distinct states, all returning None: no sessions.db file at
+    all (fresh machine); a sessions.db that predates this table (every
+    existing installation upgrading to the version that ships this feature —
+    session_tags/sessions/doctor_mutes already exist, but install_sync
+    doesn't yet — connect(readonly=True) skips DDL by design, since it must
+    not create/migrate a store it's only meant to read, so this case reaches
+    the SELECT and must be caught there too, not just around connect()
+    itself); and a sessions.db that is corrupt/not a valid SQLite file at
+    all, which callers of this function (main()'s interactive gate among
+    them) must be able to survive without crashing - a corrupt db is
+    reported the same as "never synced" rather than propagating an
+    exception. sqlite3.DatabaseError is the shared parent of
+    OperationalError ("no such table") and the corrupt-file case, so
+    catching it alone covers both without a second except clause.
     """
     try:
         conn = sessions_db.connect(path=path, readonly=True)
@@ -40,8 +46,8 @@ def get_synced_version(*, path: Path | None = None) -> str | None:
             "SELECT value FROM install_sync WHERE key = ?", (_SYNCED_VERSION_KEY,)
         ).fetchone()
         return row["value"] if row is not None else None
-    except sqlite3.OperationalError:
-        return None  # e.g. "no such table: install_sync" - a pre-upgrade sessions.db
+    except sqlite3.DatabaseError:
+        return None  # "no such table: install_sync" (pre-upgrade db) or a corrupt file
     finally:
         conn.close()
 

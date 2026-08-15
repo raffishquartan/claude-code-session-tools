@@ -53,6 +53,21 @@ def test_get_synced_version_on_pre_upgrade_db_missing_table_returns_none(db_path
     assert install_sync.get_synced_version(path=db_path) is None
 
 
+def test_get_synced_version_on_corrupt_db_returns_none(db_path: Path) -> None:
+    """A sessions.db that exists but isn't a valid SQLite file at all (found
+    during code-quality review of the main() gate: sqlite3.connect() opens
+    lazily and succeeds even for a corrupt file, so the failure surfaces on
+    the SELECT as sqlite3.DatabaseError, not sqlite3.OperationalError).
+    get_synced_version() must survive this and return None like every other
+    "not synced" state, since callers - main()'s interactive gate among them
+    - must never crash on a corrupt store; a crash here would break even the
+    exempt commands (install-everything, doctor) that are supposed to be the
+    escape hatch."""
+    db_path.write_bytes(b"this is not a sqlite database file")
+
+    assert install_sync.get_synced_version(path=db_path) is None
+
+
 # ---------- should_block_for_unsynced_install ----------
 
 def test_blocks_when_versions_differ_and_interactive() -> None:

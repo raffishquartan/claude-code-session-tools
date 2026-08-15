@@ -2187,6 +2187,37 @@ def main() -> None:
         parser.print_help(sys.stderr)
         sys.exit(1)
 
+    from cc_session_tools.lib import install_sync
+
+    is_interactive = sys.stderr.isatty()
+    # Read the marker only when interactive: `ccst hooks run <verb>` fires on
+    # every single tool call in every open Claude Code session, and ccsched
+    # jobs run on a schedule - neither has a TTY on stderr, and neither
+    # should pay a SQLite open/close on every invocation just to compute a
+    # value should_block_for_unsynced_install would immediately discard
+    # anyway (its own is_interactive=False check returns False before ever
+    # looking at synced_version).
+    synced_version = install_sync.get_synced_version() if is_interactive else None
+    if install_sync.should_block_for_unsynced_install(
+        noun=args.noun,
+        verb=getattr(args, "verb", None),
+        installed_version=__version__,
+        synced_version=synced_version,
+        is_interactive=is_interactive,
+    ):
+        if synced_version is None:
+            state = "install-everything has never been run for this installation"
+        else:
+            state = f"install-everything was last synced at {synced_version}"
+        print(
+            f"ccst is installed at {__version__}, but {state}.\n"
+            "Skills, hooks, shell functions, scheduled jobs, and CLAUDE.md config may be "
+            "out of sync with this version.\n\n"
+            "Run: ccst install-everything --apply\n",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
     if args.noun == "hooks":
         if args.verb == "install":
             sys.exit(_cmd_hooks_install(args))
