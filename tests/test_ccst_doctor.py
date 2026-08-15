@@ -324,15 +324,54 @@ def test_check_pypi_version_outdated() -> None:
 # ---------- format_results ----------
 
 def test_format_results_shows_status_and_name() -> None:
+    """Default (show_all=False) shows only non-OK results."""
     results = [
         CheckResult("foo", Status.OK, "all good"),
         CheckResult("bar", Status.WARN, "missing"),
     ]
     out = format_results(results)
+    assert "WARN" in out
+    assert "bar" in out
+    assert "foo" not in out
+
+
+def test_format_results_show_all_includes_ok() -> None:
+    results = [
+        CheckResult("foo", Status.OK, "all good"),
+        CheckResult("bar", Status.WARN, "missing"),
+    ]
+    out = format_results(results, show_all=True)
     assert "OK" in out
     assert "WARN" in out
     assert "foo" in out
     assert "bar" in out
+
+
+def test_format_results_default_prints_all_argument_hint() -> None:
+    results = [CheckResult("bar", Status.WARN, "missing")]
+    out = format_results(results)
+    assert "--all" in out
+
+
+def test_format_results_show_all_omits_all_argument_hint() -> None:
+    results = [CheckResult("bar", Status.WARN, "missing")]
+    out = format_results(results, show_all=True)
+    assert "--all" not in out
+
+
+def test_format_results_default_all_ok_prints_summary_not_full_list() -> None:
+    """No non-OK results and show_all=False: nothing to filter down to, so a
+    summary line stands in for the (empty) table rather than printing
+    nothing at all."""
+    results = [
+        CheckResult("foo", Status.OK, "all good"),
+        CheckResult("baz", Status.OK, "also good"),
+    ]
+    out = format_results(results)
+    assert "foo" not in out
+    assert "baz" not in out
+    assert "2" in out  # some indication of how many checks ran/passed
+    assert "--all" in out
 
 
 def test_format_results_empty() -> None:
@@ -425,6 +464,23 @@ def test_doctor_runs_and_exits(tmp_path: Path) -> None:
 def test_doctor_outputs_status_table() -> None:
     result = _run("doctor", "--no-pypi")
     assert "[OK" in result.stdout or "[WARN" in result.stdout or "[FAIL" in result.stdout
+
+
+def test_doctor_default_omits_ok_and_shows_all_hint() -> None:
+    """Confirms the --all wiring end-to-end (not just format_results() in
+    isolation): default output has no [OK ] lines and does point at --all."""
+    result = _run("doctor", "--no-pypi")
+    assert "[OK  ]" not in result.stdout
+    assert "--all" in result.stdout
+
+
+def test_doctor_all_flag_omits_the_all_hint() -> None:
+    """--all's own output doesn't need to be told about --all again. (Whether
+    any individual check happens to be OK on the machine running this test
+    isn't asserted here - that's covered deterministically by the
+    format_results()-level tests above via synthetic CheckResults.)"""
+    result = _run("doctor", "--no-pypi", "--all")
+    assert "--all" not in result.stdout
 
 
 def test_doctor_exits_1_when_issues_found(tmp_path: Path) -> None:

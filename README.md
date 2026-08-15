@@ -833,7 +833,11 @@ between installed `ccst` and the latest release on PyPI.
 ```sh
 ccst doctor           # checks everything, including PyPI version check
 ccst doctor --no-pypi # skip the network version check (useful in CI)
+ccst doctor --all     # also print OK checks (default: only WARN/FAIL)
 ```
+
+By default only WARN/FAIL results are printed — a clean machine is otherwise dozens of `[OK]`
+lines to scroll past. Use `--all` to see the full check list, including everything that passed.
 
 Exit `0` if all checks are OK. Exit `1` if any check is WARN or FAIL.
 

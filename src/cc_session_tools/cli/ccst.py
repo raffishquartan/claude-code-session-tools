@@ -677,7 +677,7 @@ def _cmd_doctor(args: argparse.Namespace) -> int:
             print(report)
         return 1 if unmuted else 0
 
-    print(format_results(results))
+    print(format_results(results, show_all=getattr(args, "all", False)))
 
     any_issue = any(r.status in (Status.WARN, Status.FAIL) for r in results)
     return 1 if any_issue else 0
@@ -1673,6 +1673,11 @@ def _build_parser() -> argparse.ArgumentParser:
         "--no-pypi",
         action="store_true",
         help="Skip the PyPI version-drift check",
+    )
+    doctor_parser.add_argument(
+        "--all",
+        action="store_true",
+        help="Show every check result, including OK (default: only non-OK)",
     )
     doctor_parser.add_argument(
         "--drift",
