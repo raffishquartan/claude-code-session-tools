@@ -293,6 +293,36 @@ def check_pypi_version(installed_version: str, timeout: float = 3.0) -> CheckRes
         )
 
 
+def check_install_everything_synced(
+    installed_version: str, synced_version: str | None
+) -> CheckResult:
+    """WARN (not FAIL - always self-recoverable with one command, same
+    severity rationale as check_ccsched_job_registered) if the running ccst
+    version doesn't match the version 'install-everything --apply' last
+    succeeded for."""
+    name = "install:synced"
+    if synced_version == installed_version:
+        return CheckResult(
+            name=name, status=Status.OK,
+            reason=f"install-everything last synced at {installed_version}",
+        )
+    if synced_version is None:
+        return CheckResult(
+            name=name, status=Status.WARN,
+            reason=(
+                f"installed {installed_version}, install-everything has never been run — "
+                "run `ccst install-everything --apply`"
+            ),
+        )
+    return CheckResult(
+        name=name, status=Status.WARN,
+        reason=(
+            f"installed {installed_version}, install-everything last synced at "
+            f"{synced_version} — run `ccst install-everything --apply`"
+        ),
+    )
+
+
 def _version_tuple(v: str) -> tuple[int, ...]:
     """Parse a simple a.b.c version string into a comparable tuple."""
     parts: list[int] = []
@@ -454,7 +484,13 @@ def _count_new_store_rows(db_path: Path, tables: tuple[str, ...]) -> int:
         for table in tables:
             try:
                 total += int(conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0])
-            except sqlite3.OperationalError:
+            except sqlite3.DatabaseError:
+                # sqlite3.OperationalError ("no such table") is the common
+                # case; a corrupt file also reaches here, not the connect()
+                # guard above, because sqlite3.connect() opens lazily and
+                # only fails once a statement actually touches the file —
+                # both count as "can't be opened" per this function's
+                # contract, so both return 0 rather than raising.
                 continue
         return total
     finally:
@@ -683,10 +719,24 @@ def check_sessions_project_dir_absolute(sessions_db_path: Path) -> list[CheckRes
     project_dir.parent against a resolved, absolute root — a relative project_dir can
     never match, so the row becomes permanently invisible to --global listings without
     ever raising an error. Not FAIL: it degrades --global listings but does not block
-    core functionality, and `ccst repair sessions` fixes it non-destructively."""
+    core functionality, and `ccst repair sessions` fixes it non-destructively.
+
+    FAILs instead if sessions.db exists but isn't a valid SQLite file — same
+    "exists but failed to open" treatment check_data_stores already gives
+    this exact condition for other stores; sqlite3.connect() opens lazily
+    and only fails once find_non_absolute_rows actually queries the file, so
+    this must be caught here rather than assumed impossible."""
+    import sqlite3
+
     from cc_session_tools.lib import sessions_repair
 
-    bad = sessions_repair.find_non_absolute_rows(path=sessions_db_path)
+    try:
+        bad = sessions_repair.find_non_absolute_rows(path=sessions_db_path)
+    except sqlite3.DatabaseError as exc:
+        return [CheckResult(
+            name="sessions:project-dir-absolute", status=Status.FAIL,
+            reason=f"{sessions_db_path} exists but failed to open: {exc}",
+        )]
     if not bad:
         return [CheckResult(
             name="sessions:project-dir-absolute", status=Status.OK,
@@ -719,6 +769,7 @@ def run_all_checks(
     projects_root: Path | None = None,
     pdata_verify_projects: list[str] | None = None,
     sessions_db_path: Path | None = None,
+    synced_version: str | None = None,
 ) -> list[CheckResult]:
     """Run the full doctor suite and return results.
 
@@ -755,6 +806,9 @@ def run_all_checks(
     sessions_db_path:
         Path to sessions.db; when None, the project_dir-absolute check is
         skipped.
+    synced_version:
+        The version ``install-everything --apply`` last succeeded for, or
+        None if it has never been recorded.
     """
     results: list[CheckResult] = []
 
@@ -830,6 +884,11 @@ def run_all_checks(
     # PyPI version check
     if not skip_pypi:
         results.append(check_pypi_version(installed_version))
+
+    # Install-everything sync state
+    results.append(
+        check_install_everything_synced(installed_version, synced_version)
+    )
 
     return results
 

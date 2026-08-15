@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -18,6 +19,7 @@ from cc_session_tools.lib.doctor import (
     check_data_stores,
     check_env_dir,
     check_hook_registered,
+    check_install_everything_synced,
     check_no_stale_hooks,
     check_pending_data_store_migration,
     check_pending_pdata_migration,
@@ -321,6 +323,32 @@ def test_check_pypi_version_outdated() -> None:
     assert "0.99.0" in r.reason
 
 
+# ---------- check_install_everything_synced ----------
+
+def test_check_install_synced_ok_when_versions_match() -> None:
+    result = check_install_everything_synced(
+        installed_version="2.4.0", synced_version="2.4.0"
+    )
+    assert result.status == Status.OK
+
+
+def test_check_install_synced_warns_when_never_synced() -> None:
+    result = check_install_everything_synced(
+        installed_version="2.4.0", synced_version=None
+    )
+    assert result.status == Status.WARN
+    assert "install-everything" in result.reason
+
+
+def test_check_install_synced_warns_when_stale() -> None:
+    result = check_install_everything_synced(
+        installed_version="2.4.0", synced_version="2.3.0"
+    )
+    assert result.status == Status.WARN
+    assert "2.3.0" in result.reason
+    assert "2.4.0" in result.reason
+
+
 # ---------- format_results ----------
 
 def test_format_results_shows_status_and_name() -> None:
@@ -617,6 +645,54 @@ def test_run_all_checks_includes_data_store_checks_when_store_paths_given(tmp_pa
     assert any(r.name == "data-store:ccmsg" for r in results)
 
 
+def test_run_all_checks_includes_install_synced_check(tmp_path: Path) -> None:
+    """Found during final review: no existing test asserted the install:synced
+    check actually reaches run_all_checks()'s results, or that the
+    synced_version argument threads through correctly - the same "unit-tested
+    in isolation, never proven wired into the real pipeline" gap this repo's
+    own uv-aware-command-cache plan warns about."""
+    settings = tmp_path / "settings.json"
+    settings.write_text('{"hooks": {}}')
+    bundle = Path(__file__).parent.parent / "src" / "cc_session_tools" / "config" / "hooks-bundle.json"
+
+    results = run_all_checks(
+        installed_version="2.4.0",
+        settings_path=settings,
+        bundle_path=bundle,
+        skills_source_dir=None,
+        skills_target_dir=tmp_path / "skills",
+        env={"CLAUDE_SESSION_TOOLS_REPO_ROOT": None, "CLAUDE_SESSION_TOOLS_PROJ_ROOT": None},
+        skip_pypi=True,
+        synced_version="2.3.0",
+    )
+
+    matches = [r for r in results if r.name == "install:synced"]
+    assert len(matches) == 1
+    assert matches[0].status == Status.WARN
+    assert "2.3.0" in matches[0].reason
+    assert "2.4.0" in matches[0].reason
+
+
+def test_cmd_doctor_passes_synced_version_from_install_sync(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Confirms the _cmd_doctor -> run_all_checks wiring specifically (not
+    just run_all_checks in isolation): a value actually recorded via
+    install_sync.record_synced() shows up as an OK install:synced result in
+    `ccst doctor`'s real subprocess output."""
+    from cc_session_tools import __version__ as version
+
+    env = os.environ.copy()
+    env["CCST_DATA_HOME"] = str(tmp_path / "data-home")
+    from cc_session_tools.lib import install_sync
+    install_sync.record_synced(version, path=tmp_path / "data-home" / "sessions.db")
+
+    result = subprocess.run(
+        [sys.executable, "-m", "cc_session_tools.cli.ccst", "doctor", "--no-pypi"],
+        capture_output=True, text=True, cwd=str(Path(__file__).parent.parent), env=env,
+    )
+
+    assert "[OK  ] install:synced" in result.stdout
+
+
 def test_run_all_checks_skips_data_store_checks_when_omitted(tmp_path: Path) -> None:
     """store_paths defaults to None — existing callers that don't pass it are unaffected."""
     settings = tmp_path / "settings.json"
@@ -703,6 +779,27 @@ def test_check_pending_migration_fails_for_unmigrated_doctor_mutes(tmp_path: Pat
 
     results = {r.name: r for r in check_pending_data_store_migration(paths)}
 
+    assert results["migration-to-1.0.0:sessions"].status == Status.FAIL
+
+
+def test_check_pending_migration_survives_a_corrupt_new_store(tmp_path: Path) -> None:
+    """Found during install-sync-nudge's final review: sqlite3.connect()
+    opens lazily and doesn't validate the file, so a corrupt sessions.db
+    only fails on the first SELECT (sqlite3.DatabaseError), not on connect()
+    (sqlite3.OperationalError) - the row-counting loop's inner except only
+    caught the latter, so a corrupt new store crashed this whole check
+    instead of degrading to "can't be opened -> 0 rows", matching every
+    other unreadable-store case this function already handles."""
+    paths = _legacy_paths(tmp_path)
+    paths.tags_dir.mkdir(parents=True)
+    (paths.tags_dir / "abc-123.tag").write_text("my-session")  # legacy data present
+    paths.data_home.mkdir(parents=True)
+    (paths.data_home / "sessions.db").write_bytes(b"not a sqlite database file")
+
+    results = {r.name: r for r in check_pending_data_store_migration(paths)}
+
+    # legacy data present + new store unreadable (treated as 0 rows) -> FAIL,
+    # same as the "migration not yet run" case - the check must not raise.
     assert results["migration-to-1.0.0:sessions"].status == Status.FAIL
 
 

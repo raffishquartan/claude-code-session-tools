@@ -114,6 +114,45 @@ def test_repair_execute_against_nonexistent_db_errors_without_creating_backup(ba
     assert not (db_path.parent / "repair-backups").exists()
 
 
+def test_repair_dry_run_against_corrupt_db_fails_cleanly(base_env):
+    """Found during the install-sync-nudge branch's final review: this is
+    the exact command a `ccst doctor`/nudge message points users at to
+    investigate store corruption - it must fail with a clear message, not a
+    raw sqlite3 traceback. sqlite3.connect() opens lazily and only fails
+    once sessions_repair.repair() actually queries the file, so the
+    dry-run-default path (no --execute, so the earlier exists()-before-
+    backup guard never runs) is the one that needs its own guard."""
+    db_path = _sessions_db_path(base_env)
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    db_path.write_bytes(b"not a sqlite database file")
+
+    r = _run(base_env, "repair", "sessions")
+
+    assert r.returncode != 0
+    assert "Traceback" not in r.stderr
+    assert str(db_path) in r.stderr
+    assert "failed to open" in r.stderr
+
+
+def test_repair_execute_against_corrupt_db_fails_cleanly(base_env):
+    """A second, distinct crash site found in the same round: --execute's
+    backup step (db_lib.backup_to(), SQLite's own online backup API) also
+    opens lazily and only fails once the backup actually touches the file -
+    a different call site than the dry-run test above, reached only in
+    --execute mode. Both must be covered; fixing only the dry-run path
+    would leave the actual fix action of this recovery tool crashing."""
+    db_path = _sessions_db_path(base_env)
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    db_path.write_bytes(b"not a sqlite database file")
+
+    r = _run(base_env, "repair", "sessions", "--execute")
+
+    assert r.returncode != 0
+    assert "Traceback" not in r.stderr
+    assert str(db_path) in r.stderr
+    assert "failed to open" in r.stderr
+
+
 def test_repair_execute_updates_row_and_backs_up_first(base_env):
     from cc_session_tools.lib import sessions_db
 

@@ -75,12 +75,12 @@ def test_write_tag_creates_db_file(db_path):
     assert db_path.exists()
 
 
-def test_schema_has_three_tables(db_path):
+def test_schema_has_four_tables(db_path):
     sessions_db.write_tag("uuid-1", "my-feature", path=db_path)  # bootstrap schema
     conn = sqlite3.connect(str(db_path))
     names = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
     conn.close()
-    assert {"session_tags", "sessions", "doctor_mutes"} <= names
+    assert {"session_tags", "sessions", "doctor_mutes", "install_sync"} <= names
 
 
 # ---------- sessions table ----------

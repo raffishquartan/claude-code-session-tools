@@ -6,6 +6,9 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+from pytest_mock import MockerFixture
+
 
 def _run(*args: str) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
@@ -158,3 +161,133 @@ def test_install_everything_registers_bundled_ccsched_jobs(tmp_path: Path) -> No
     assert "unrecognized arguments" not in result.stderr
     assert "Scheduled jobs" in result.stdout
     assert "registered: pm-session-output-reconcile" in result.stdout
+
+
+# ---------- install-sync marker ----------
+
+
+def test_apply_records_synced_version(tmp_path: Path) -> None:
+    from cc_session_tools import __version__ as version
+    from cc_session_tools.lib import install_sync
+
+    env = os.environ.copy()
+    env["CCST_DATA_HOME"] = str(tmp_path / "data-home")
+
+    result = subprocess.run(
+        [sys.executable, "-m", "cc_session_tools.cli.ccst", *_isolated_apply_args(tmp_path)],
+        capture_output=True, text=True, cwd=str(Path(__file__).parent.parent), env=env,
+    )
+
+    assert result.returncode == 0
+    assert install_sync.get_synced_version(
+        path=tmp_path / "data-home" / "sessions.db"
+    ) == version
+
+
+def test_dry_run_does_not_record_synced_version(tmp_path: Path) -> None:
+    from cc_session_tools.lib import install_sync
+
+    env = os.environ.copy()
+    env["CCST_DATA_HOME"] = str(tmp_path / "data-home")
+
+    result = subprocess.run(
+        [sys.executable, "-m", "cc_session_tools.cli.ccst", "install-everything", "--no-pypi"],
+        capture_output=True, text=True, cwd=str(Path(__file__).parent.parent), env=env,
+    )
+
+    assert result.returncode == 0
+    assert install_sync.get_synced_version(path=tmp_path / "data-home" / "sessions.db") is None
+
+
+def test_apply_survives_a_write_error_recording_the_sync_marker(
+    tmp_path: Path, mocker: MockerFixture, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Found during final review: a corrupt sessions.db previously crashed
+    the whole --apply run at the record_synced() call, after the five
+    install steps had already succeeded - discarding their printed summary
+    and, worse, making install-everything itself (the exact command the
+    interactive gate tells a user to run) unusable on the one machine state
+    that most needs it. The five steps' own success (and exit code) must
+    survive a failure recording the marker; only a warning should be
+    printed.
+
+    Uses a mocked record_synced() rather than an actually-corrupt
+    sessions.db so this test isolates exactly the property this specific
+    commit owns (the write path degrading gracefully), independent of the
+    doctor.py read-side fixes tested separately below and in
+    test_ccst_doctor.py. See test_apply_survives_a_corrupt_sessions_db_end_to_end
+    below for the real, un-mocked, full-corruption scenario - this one is
+    the narrower in-process check (this file's usual subprocess convention
+    can't express a mock across the process boundary)."""
+    import sqlite3
+
+    from cc_session_tools.cli import ccst as ccst_module
+    from cc_session_tools.lib import install_sync
+
+    # Isolate the trailing health check too - it must run against a fresh,
+    # valid store, not the real ~/.local/share/claude/.
+    monkeypatch.setenv("CCST_DATA_HOME", str(tmp_path / "data-home"))
+    mocker.patch.object(
+        install_sync, "record_synced",
+        side_effect=sqlite3.DatabaseError("file is not a database"),
+    )
+    parser = ccst_module._build_parser()
+    args = parser.parse_args(_isolated_apply_args(tmp_path))
+
+    rc = ccst_module._cmd_install_everything(args)
+
+    assert rc == 0
+
+
+def test_apply_records_synced_version_end_to_end_via_subprocess(tmp_path: Path) -> None:
+    """A real, uncorrupted sessions.db must still work exactly as before -
+    this is the same scenario as test_apply_records_synced_version above,
+    kept as a second, full-subprocess confirmation specifically alongside
+    the in-process mock test, so a change that only satisfies the mock
+    (e.g. swallowing every exception unconditionally) can't pass silently
+    without ever exercising the real write path end-to-end."""
+    from cc_session_tools import __version__ as version
+    from cc_session_tools.lib import install_sync
+
+    env = os.environ.copy()
+    env["CCST_DATA_HOME"] = str(tmp_path / "data-home")
+
+    result = subprocess.run(
+        [sys.executable, "-m", "cc_session_tools.cli.ccst", *_isolated_apply_args(tmp_path)],
+        capture_output=True, text=True, cwd=str(Path(__file__).parent.parent), env=env,
+    )
+
+    assert result.returncode == 0
+    assert "warning: could not record the install-everything sync marker" not in result.stderr
+    assert install_sync.get_synced_version(
+        path=tmp_path / "data-home" / "sessions.db"
+    ) == version
+
+
+def test_apply_survives_a_corrupt_sessions_db_end_to_end(tmp_path: Path) -> None:
+    """Real, un-mocked reproduction of the full corrupt-sessions.db scenario,
+    found incomplete during a second final-review pass: fixing
+    record_synced() alone (see the mocked test above) was not sufficient -
+    install-everything's own trailing health check crashed on the identical
+    corrupt file via a completely different read site
+    (check_sessions_project_dir_absolute -> sessions_repair.find_non_absolute_rows
+    -> sessions_db.list_sessions), because sqlite3.connect() opens lazily and
+    only fails once a query actually touches the file. That site is now
+    fixed to FAIL cleanly instead of raising (see doctor.py). This test
+    exercises the real end-to-end command, not a mock, specifically to catch
+    any FUTURE read site that reintroduces the same gap."""
+    data_home = tmp_path / "data-home"
+    data_home.mkdir()
+    (data_home / "sessions.db").write_bytes(b"not a sqlite database file")
+
+    env = os.environ.copy()
+    env["CCST_DATA_HOME"] = str(data_home)
+
+    result = subprocess.run(
+        [sys.executable, "-m", "cc_session_tools.cli.ccst", *_isolated_apply_args(tmp_path)],
+        capture_output=True, text=True, cwd=str(Path(__file__).parent.parent), env=env,
+    )
+
+    assert result.returncode == 0
+    assert "Traceback" not in result.stderr
+    assert "warning: could not record the install-everything sync marker" in result.stderr

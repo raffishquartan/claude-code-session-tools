@@ -9,8 +9,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [2.4.0] - 2026-08-15
 
+### Added
+
+- **`ccst` now nudges an interactive user when `install-everything --apply` hasn't been run for
+  the currently-installed version.** `uv tool install --reinstall`/`--upgrade` (and `pip`/`pipx`
+  equivalents) don't run any code after installing, so nothing previously told a user their
+  skills/hooks/shell functions/scheduled jobs/`CLAUDE.md` config might be out of sync with a new
+  version — the exact gap that let stale `~/.claude/skills/*` symlinks survive a package
+  relocation undetected. `ccst install-everything --apply` now records the version it last
+  succeeded for (a new `install_sync` table in `sessions.db`); any interactive `ccst` invocation
+  (a real TTY on stderr) on a different version prints a nudge and exits, pointing at `ccst
+  install-everything --apply`. Automated callers are never affected: `ccst hooks run <verb>` (the
+  path Claude Code invokes on every tool call in every open session), every scheduled `ccsched`
+  job, and any future non-interactive caller are exempt by construction, since none of them have a
+  TTY. `ccst install-everything`, `ccst doctor`, `ccst repair`, and `ccst migrate` are also always
+  exempt, so a user always has a way to see or fix the state this nudge is protecting against, even
+  when the marker's own store (`sessions.db`) is corrupt.
+- **`ccst doctor` reports install-sync state as a check (`install:synced`).** WARN, not FAIL —
+  always self-recoverable with one command, same severity as the existing `ccsched-job:*` checks.
+- `uv run <trusted-verb>` (e.g. `uv run pytest`, `uv run python -m ...`) now gets the same
+  zero-review trust as the bare verb. `uv sync`/`build`/`lock` are now recognised as write-risk and
+  cached after one real review, matching `npm install`/`cargo build`.
+
 ### Fixed
 
+- **`ccst doctor`/`repair`/`install-everything`'s health check could traceback on a corrupt
+  `sessions.db` instead of reporting it cleanly.** `sqlite3.connect()` opens lazily and only fails
+  once a query actually touches the file, so `check_sessions_project_dir_absolute` (reached by
+  both `ccst doctor` and `install-everything`'s trailing health check), `_cmd_repair_sessions`
+  (both dry-run and its `--execute` backup step), and `doctor_mutes.load_mutes` (`--list-mutes`/
+  `--drift`) all still tracebacked on a corrupt store even after the initial `record_synced()` fix
+  — undermining the exact recovery path (`ccst repair sessions`) this release's install-sync
+  nudge depends on. All four sites now catch the corruption and report it as a normal check
+  result/CLI error instead of an unhandled exception. Add/remove-mute (the write path for
+  `--mute`/`--unmute`) is intentionally not covered — a raw traceback there is a UX-quality gap,
+  not a correctness one, since there's nothing to preserve on a definitely-corrupt file.
 - **`bash-security-review` let short, unpiped, write-risk commands bypass review entirely.** A
   bare `rm -rf ...` (or any other write-risk command with no shell composition and under the
   120-character trivial-allowlist length threshold) previously fell through to Tier 0.5's
@@ -25,12 +58,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   mainstream `id_rsa_<host>`/`id_ed25519_<purpose>` suffixed key-naming convention — a real
   coverage regression, not a false-positive fix (the leading `\b` alone already excluded the
   intended false positive).
-
-### Added
-
-- `uv run <trusted-verb>` (e.g. `uv run pytest`, `uv run python -m ...`) now gets the same
-  zero-review trust as the bare verb. `uv sync`/`build`/`lock` are now recognised as write-risk and
-  cached after one real review, matching `npm install`/`cargo build`.
 
 ## [2.3.0] - 2026-08-14
 

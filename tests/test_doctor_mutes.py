@@ -19,6 +19,19 @@ def test_load_mutes_empty_when_file_absent(mutes_path):
     assert doctor_mutes.load_mutes(mutes_path) == {}
 
 
+def test_load_mutes_empty_for_a_corrupt_db(mutes_path):
+    """Found while auditing sessions.db read sites for the same lazy-open
+    corruption gap fixed elsewhere on this branch (install_sync.py,
+    doctor.py's check_sessions_project_dir_absolute): sqlite3.connect()
+    opens lazily and only fails once a statement touches the file, so a
+    corrupt sessions.db reaches the SELECT here as sqlite3.DatabaseError,
+    not connect() as OperationalError. `ccst doctor --list-mutes`/`--drift`
+    must never crash on this - doctor is exempt from the install-sync gate
+    specifically so it always works."""
+    mutes_path.write_bytes(b"not a sqlite database file")
+    assert doctor_mutes.load_mutes(mutes_path) == {}
+
+
 def test_add_mute_then_load_returns_it(mutes_path):
     doctor_mutes.add_mute(mutes_path, "version:pypi", today="2026-07-13")
     assert doctor_mutes.load_mutes(mutes_path) == {"version:pypi": "2026-07-13"}
