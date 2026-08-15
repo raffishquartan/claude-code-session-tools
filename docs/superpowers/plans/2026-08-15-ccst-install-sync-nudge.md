@@ -1062,13 +1062,33 @@ them: `check_sessions_project_dir_absolute` (in `doctor.py`, reached by both `cc
 `install-everything`'s trailing health check) and `_cmd_repair_sessions` itself both still
 tracebacked on a corrupt `sessions.db`, because `sqlite3.connect()` opens lazily and a corrupt file
 only fails once a query actually touches it — the exact same root cause as the first round's fix,
-at two sites that root cause hadn't yet reached before. This closes the loop the whole plan's safety
-argument depends on: `doctor`/`repair`/`migrate`/`install-everything` must all genuinely survive the
-one failure mode (a corrupt sync-marker store) they're exempted from the gate specifically to let a
-user recover from — not just be reachable and then crash anyway. Verified with real, un-mocked
-corrupt-file subprocess tests for both sites, not unit-level mocks alone; a prior mocked-only test's
-docstring had incorrectly claimed the doctor-side crash was already handled elsewhere, and was
-corrected alongside the fix.
+at two sites that root cause hadn't yet reached before. `doctor`/`repair`/`migrate`/
+`install-everything` must all genuinely survive the one failure mode (a corrupt sync-marker store)
+they're exempted from the gate specifically to let a user recover from — not just be reachable and
+then crash anyway. Verified with real, un-mocked corrupt-file subprocess tests for both sites, not
+unit-level mocks alone; a prior mocked-only test's docstring had incorrectly claimed the doctor-side
+crash was already handled elsewhere, and was corrected alongside the fix.
+
+**A third pass found one more site inside the very fix just applied**: `_cmd_repair_sessions`'s
+`--execute` mode runs `db_lib.backup_to()` (SQLite's own online backup API) *before* the guarded
+`sessions_repair.repair()` call — the identical lazy-open failure mode, at a call the previous
+round's `try/except` didn't cover. Widened the same try block to cover both, since both can raise
+for the same reason and share the same recovery message. This meant the dry-run path
+(`ccst repair sessions`) had been fixed while the actual fix action (`--execute`) — the one thing
+the whole recovery story depends on — was still broken.
+
+**A subsequent self-audit (not another external review round) checked every other sessions.db read
+reachable from the four exempt nouns** (`doctor`, `repair`, `migrate`, `install-everything`) for the
+same pattern, rather than waiting for a fourth review round to find the next one by chance: found
+and fixed the identical bug in `doctor_mutes.load_mutes` (used by `ccst doctor --list-mutes`/
+`--drift`). `migrate all` and `install-everything`'s other four steps (skills/hooks/shell/claude-md/
+ccsched-jobs) don't touch `sessions.db` at all, so they were confirmed unaffected rather than
+assumed so. **Deliberately not hardened**, as a scope boundary: `doctor_mutes.add_mute`/
+`remove_mute` (the write path behind `--mute`/`--unmute`) still raise on a corrupt store — writing
+to a definitely-corrupt file failing loudly is a UX-quality gap (raw traceback vs. a clean error),
+not the correctness/data-loss-adjacent risk the read-path crashes were; this plan's safety claim is
+about always being able to *see and diagnose* state on a corrupt store, not about every possible
+write against one succeeding gracefully.
 
 ---
 
