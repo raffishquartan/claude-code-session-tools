@@ -81,6 +81,10 @@ _PKG_SAFE_SUBCMDS: dict[str, frozenset[str]] = {
     'pip':   frozenset({'install', 'show', 'list', 'freeze'}),
     'pip3':  frozenset({'install', 'show', 'list', 'freeze'}),
     'cargo': frozenset({'build', 'test', 'check', 'clippy', 'fmt', 'doc'}),
+    'uv':    frozenset({'sync', 'build', 'lock', 'export', 'tree', 'version'}),
+    # 'run', 'tool', 'python', 'pip' deliberately excluded — each either
+    # executes an arbitrary wrapped command/interpreter, or has different
+    # safety semantics from the bare tool it wraps. See Task 2 for 'run'.
 }
 
 

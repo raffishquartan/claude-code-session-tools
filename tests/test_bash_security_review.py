@@ -181,6 +181,39 @@ def test_norm_cache_hit_skips_claude(tmp_path: Path, monkeypatch: pytest.MonkeyP
     spy.assert_not_called()
 
 
+def test_uv_sync_norm_cache_hit_skips_claude(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, mocker: MockerFixture
+) -> None:
+    """Real end-to-end proof, not just a normalise()-unit-test one: two bare
+    'uv sync' invocations with different flags share a norm_sha cache entry,
+    and the second one never calls Claude. Reaches Tier 2 without any
+    compound (&&) trick because Task 1 fixed the nontrivial-gate bug that
+    would otherwise have made this test require one."""
+    monkeypatch.setenv("CCCS_USE_COMMAND_CACHE", "1")
+    monkeypatch.setenv("CCCS_CACHE_DB", str(tmp_path / "cache.db"))
+    monkeypatch.setenv("CCCS_HOOKS_DIR", str(tmp_path / "hooks"))
+    monkeypatch.delenv("CCCS_CACHE_PATH", raising=False)
+    monkeypatch.delenv("CCCS_CLAUDE_BIN", raising=False)
+    from cccs_hooks import cache as cache_mod
+    from cccs_hooks import normalise as norm_mod
+
+    cmd_a = "uv sync --extra dev"
+    cmd_b = "uv sync --extra test"  # different flag, same norm_sha
+    assert bsr.has_write_risk(cmd_a)  # sanity-check Task 5 actually landed
+    assert bsr.heuristic_flags(cmd_a) == []  # sanity-check Task 3 actually landed
+    exact_sha = cache_mod.sha256_command(cmd_a)
+    norm_form = norm_mod.normalise(cmd_a)
+    assert norm_form == "uv sync <ARGS>"  # sanity-check Step 3 actually landed
+    norm_sha = cache_mod.sha256_command(norm_form)
+    cache_mod.cache_record(exact_sha, "safe", "none", cmd_a, norm_sha=norm_sha)
+
+    spy = mocker.patch("cccs_hooks.bash_security_review.call_claude")
+    result = bsr.run(_input(cmd_b))
+
+    assert result == 0
+    spy.assert_not_called()
+
+
 # ---------- tier 3: claude escalation ----------
 
 def test_cache_miss_safe_verdict_records(
@@ -411,6 +444,70 @@ def test_heuristic_flags_clean_command() -> None:
     assert bsr.heuristic_flags("git fetch && git rebase origin/main") == []
 
 
+def test_heuristic_raw_network_tool_word_boundary() -> None:
+    """'sync' contains the substring 'nc ' - the pattern must not false-positive
+    on it, or on any other word that merely contains nc/ncat/netcat/socat."""
+    assert bsr.heuristic_flags("uv sync --extra dev") == []
+    assert bsr.heuristic_flags("rsync -av src/ dst/") == []
+    # still correctly flags the real thing:
+    assert "raw network tool" in bsr.heuristic_flags("nc -l 1234")
+    assert "raw network tool" in bsr.heuristic_flags("socat TCP-LISTEN:8080 -")
+
+
+def test_heuristic_env_dump_word_boundary() -> None:
+    """A variable/word merely ending or starting with 'env'/'printenv' must
+    not false-positive as an env dump."""
+    assert bsr.heuristic_flags("FOO=goodenv") == []
+    assert bsr.heuristic_flags("echo printenvironment.sh") == []
+    # still correctly flags the real thing:
+    assert "env dump" in bsr.heuristic_flags("printenv")
+    assert "env dump" in bsr.heuristic_flags("aws creds | env")
+    assert "env dump" in bsr.heuristic_flags("env")
+
+
+def test_heuristic_base64_decode_word_boundary() -> None:
+    assert bsr.heuristic_flags("somebase64 -d file") == []
+    assert "base64 decode" in bsr.heuristic_flags("base64 -d file.txt")
+    assert "base64 decode" in bsr.heuristic_flags("cat secret | base64 --decode")
+
+
+def test_heuristic_credentials_path_word_boundary() -> None:
+    assert bsr.heuristic_flags("myid_rsa_backup.txt cat") == []
+    assert "credentials path" in bsr.heuristic_flags("cat ~/.ssh/id_rsa")
+    assert "credentials path" in bsr.heuristic_flags("cat ~/.ssh/id_ed25519")
+    assert "credentials path" in bsr.heuristic_flags("cat ~/.aws/credentials")
+    assert "credentials path" in bsr.heuristic_flags("cat ~/.netrc")
+    # id_rsa/id_ed25519 must fire on their own, not only via the .ssh
+    # alternative in the same regex:
+    assert "credentials path" in bsr.heuristic_flags("cp /backup/id_rsa /tmp/x")
+    assert "credentials path" in bsr.heuristic_flags("cp /backup/id_ed25519 /tmp/x")
+
+
+def test_heuristic_credentials_path_suffixed_key_names_still_match() -> None:
+    """id_rsa_<host> / id_ed25519_<purpose> is a mainstream ssh key-naming
+    convention - a trailing \\b after id_rsa/id_ed25519 would silently stop
+    matching these, a real coverage regression (not just an extra review),
+    unlike the false-positive fixes elsewhere in this heuristic sweep."""
+    assert "credentials path" in bsr.heuristic_flags("cat id_rsa_backup")
+    assert "credentials path" in bsr.heuristic_flags("cat id_rsa_github")
+    assert "credentials path" in bsr.heuristic_flags("tar czf k.tgz id_ed25519_work")
+    # the actual false positive Task 4 fixed must still be excluded:
+    assert bsr.heuristic_flags("myid_rsa_backup.txt cat") == []
+
+
+def test_heuristic_download_to_absolute_path_word_boundary() -> None:
+    assert bsr.heuristic_flags("newwget --something -O /tmp/x") == []
+    # 'curlie' is a real curl-compatible HTTP client - a left-side-only
+    # boundary would still false-positive on it.
+    assert bsr.heuristic_flags("curlie https://example.com/x -O /tmp/y") == []
+    assert "download to absolute path" in bsr.heuristic_flags(
+        "wget https://example.com/x -O /tmp/y"
+    )
+    assert "download to absolute path" in bsr.heuristic_flags(
+        "curl https://example.com/x -O /tmp/y"
+    )
+
+
 # ---------- is_trivial ----------
 
 def test_is_trivial_ls() -> None:
@@ -423,6 +520,68 @@ def test_is_trivial_pipe_not_trivial() -> None:
 
 def test_is_trivial_long_command_not_trivial() -> None:
     assert not bsr.is_trivial("ls " + "x" * 200)
+
+
+def test_is_trivial_uv_run_pytest() -> None:
+    assert bsr.is_trivial("uv run pytest tests/test_foo.py -k bar -v")
+
+
+def test_is_trivial_uv_run_python() -> None:
+    assert bsr.is_trivial("uv run python -m cc_session_tools.cli.ccd --help")
+
+
+def test_is_trivial_uv_run_different_args_both_trivial() -> None:
+    """The whole point: two uv run pytest invocations with different args must
+    BOTH independently satisfy is_trivial() - this tier never needs a cache,
+    it just needs to recognise the wrapped verb every time."""
+    assert bsr.is_trivial("uv run pytest tests/a.py -k foo")
+    assert bsr.is_trivial("uv run pytest tests/b.py -v --no-header")
+
+
+def test_is_trivial_uv_run_with_leading_uv_flag_not_trivial() -> None:
+    """uv run --with foo pytest ... - a uv-level flag sits before the wrapped
+    verb. Deliberately NOT parsed: bail out rather than risk misidentifying
+    what's actually going to execute."""
+    assert not bsr.is_trivial("uv run --with foo pytest tests/a.py")
+
+
+def test_is_trivial_uv_run_untrusted_verb_not_trivial() -> None:
+    """uv run wrapping a verb that ISN'T already Tier-0-trusted must not
+    become trivial just because it's uv-wrapped."""
+    assert not bsr.is_trivial("uv run ./some-script.sh")
+    assert not bsr.is_trivial("uv run rm -rf /tmp/x")
+
+
+def test_is_trivial_uv_run_pipe_still_not_trivial() -> None:
+    """Shell composition inside the wrapped command still disqualifies it,
+    same as it already does for a bare trivial verb."""
+    assert not bsr.is_trivial("uv run pytest tests/a.py | tee out.log")
+
+
+def test_is_trivial_bare_uv_without_run_not_trivial() -> None:
+    """uv sync / uv build etc. are not Tier 0 - they go through Tier 2's
+    package-manager cache rule instead (see Task 5). Only 'uv run <verb>'
+    is handled here."""
+    assert not bsr.is_trivial("uv sync --extra dev")
+
+
+def test_is_trivial_stacked_uv_run_not_trivial() -> None:
+    """Only one 'uv run ' prefix is ever stripped (count=1). A second,
+    stacked 'uv run ' is left in place, and 'uv' itself is not a Tier-0
+    trusted verb, so the whole command correctly stays non-trivial."""
+    assert not bsr.is_trivial("uv run uv run pytest tests/a.py")
+
+
+def test_is_trivial_uv_run_length_check_uses_stripped_string() -> None:
+    """The 120-char length check must run against the stripped command, not
+    the raw one - otherwise the 7 extra chars of 'uv run ' prefix could push
+    an otherwise-trivial command over the threshold it wouldn't hit bare.
+    Chosen so the stripped form is under 120 chars (114) but the raw form
+    (121, prefix included) is over it: this would flip to False if a future
+    edit checked len(command) instead of len(checked)."""
+    raw = "uv run pytest " + "x" * 107
+    assert len(raw) - len("uv run ") < 120 <= len(raw)
+    assert bsr.is_trivial(raw)
 
 
 # ---------- extract_verdict ----------
@@ -701,6 +860,25 @@ def test_has_write_risk_not_flagged(cmd: str) -> None:
     assert not bsr.has_write_risk(cmd), f"Unexpected write risk in: {cmd!r}"
 
 
+def test_write_risk_uv_sync_build_lock() -> None:
+    assert bsr.has_write_risk("uv sync --extra dev")
+    assert bsr.has_write_risk("uv build --wheel -o dist/")
+    assert bsr.has_write_risk("uv lock")
+
+
+def test_write_risk_uv_read_only_subcommands_unaffected() -> None:
+    """uv tree / uv version / uv export don't fetch or install anything new -
+    same treatment as npm build/npm test, which also aren't in _WRITE_RISK_RE."""
+    assert not bsr.has_write_risk("uv tree")
+    assert not bsr.has_write_risk("uv version")
+
+
+def test_write_risk_uv_run_unaffected() -> None:
+    """uv run's write risk (if any) depends entirely on the wrapped command,
+    not on 'uv run' itself - this pattern must not fire on it."""
+    assert not bsr.has_write_risk("uv run pytest tests/a.py")
+
+
 # ---------- tier 0.5: read-only pre-filter ----------
 
 def test_tier05_piped_grep_exits_silently(
@@ -795,6 +973,50 @@ def test_tier05_xargs_rm_escalates_to_claude(
     rc = bsr.run(_input("find . -name '*.pyc' | xargs rm"))
     assert rc == 0
     assert spy.called
+
+
+def test_short_unpiped_rm_reaches_claude(
+    isolated_env: Path, mocker: MockerFixture
+) -> None:
+    """A bare 'rm -rf ...' - no pipe, no heuristic hit, well under 120 chars -
+    must still reach a real review. Write risk must be checked regardless of
+    shell composition or length, not only for piped/long commands."""
+    mocker.patch.object(bsr, "_resolve_claude_bin", return_value="/fake/claude")
+    spy = mocker.patch.object(
+        bsr, "call_claude",
+        return_value=("SUMMARY: delete\nRISKS: data loss\nVERDICT: dangerous", None),
+    )
+    rc = bsr.run(_input("rm -rf /tmp/x"))
+    assert rc == 0
+    assert spy.called
+
+
+def test_short_unpiped_sudo_apt_install_reaches_claude(
+    isolated_env: Path, mocker: MockerFixture
+) -> None:
+    """Same bug, a different write-risk verb not on the Tier-0 trivial
+    allowlist (unlike npm/pip3/pytest/python3/node, which are - see the
+    plan's Diagnosis point 6 for why those aren't valid examples here)."""
+    mocker.patch.object(bsr, "_resolve_claude_bin", return_value="/fake/claude")
+    spy = mocker.patch.object(
+        bsr, "call_claude",
+        return_value=("SUMMARY: install\nRISKS: system change\nVERDICT: safe", None),
+    )
+    rc = bsr.run(_input("sudo apt install vim"))
+    assert rc == 0
+    assert spy.called
+
+
+def test_short_unpiped_safe_command_still_exits_silently(
+    isolated_env: Path, mocker: MockerFixture
+) -> None:
+    """This fix must not turn every short command into a review - a
+    genuinely safe one (no heuristic hit, no write risk, not on the Tier 0
+    allowlist) must keep exiting silently, same as today."""
+    spy = mocker.patch.object(bsr, "call_claude")
+    rc = bsr.run(_input("grep foo bar.txt"))
+    assert rc == 0
+    assert not spy.called
 
 
 def test_tier05_telemetry_verdict_read_only(
