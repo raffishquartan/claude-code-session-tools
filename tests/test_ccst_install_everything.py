@@ -212,15 +212,13 @@ def test_apply_survives_a_write_error_recording_the_sync_marker(
     printed.
 
     Uses a mocked record_synced() rather than an actually-corrupt
-    sessions.db: a genuinely corrupt file also crashes install-everything's
-    trailing health check via several OTHER, pre-existing doctor.py/
-    sessions_db.py read sites this branch doesn't touch (confirmed while
-    writing this test - not something Task 3's fix, scoped only to
-    record_synced() itself, is responsible for curing end-to-end). Mocking
-    isolates exactly the property this branch owns: the write path this
-    branch added must degrade gracefully, tested in-process (this file's
-    usual subprocess convention can't express a mock across the process
-    boundary) against otherwise-real, isolated install steps."""
+    sessions.db so this test isolates exactly the property this specific
+    commit owns (the write path degrading gracefully), independent of the
+    doctor.py read-side fixes tested separately below and in
+    test_ccst_doctor.py. See test_apply_survives_a_corrupt_sessions_db_end_to_end
+    below for the real, un-mocked, full-corruption scenario - this one is
+    the narrower in-process check (this file's usual subprocess convention
+    can't express a mock across the process boundary)."""
     import sqlite3
 
     from cc_session_tools.cli import ccst as ccst_module
@@ -264,3 +262,32 @@ def test_apply_records_synced_version_end_to_end_via_subprocess(tmp_path: Path) 
     assert install_sync.get_synced_version(
         path=tmp_path / "data-home" / "sessions.db"
     ) == version
+
+
+def test_apply_survives_a_corrupt_sessions_db_end_to_end(tmp_path: Path) -> None:
+    """Real, un-mocked reproduction of the full corrupt-sessions.db scenario,
+    found incomplete during a second final-review pass: fixing
+    record_synced() alone (see the mocked test above) was not sufficient -
+    install-everything's own trailing health check crashed on the identical
+    corrupt file via a completely different read site
+    (check_sessions_project_dir_absolute -> sessions_repair.find_non_absolute_rows
+    -> sessions_db.list_sessions), because sqlite3.connect() opens lazily and
+    only fails once a query actually touches the file. That site is now
+    fixed to FAIL cleanly instead of raising (see doctor.py). This test
+    exercises the real end-to-end command, not a mock, specifically to catch
+    any FUTURE read site that reintroduces the same gap."""
+    data_home = tmp_path / "data-home"
+    data_home.mkdir()
+    (data_home / "sessions.db").write_bytes(b"not a sqlite database file")
+
+    env = os.environ.copy()
+    env["CCST_DATA_HOME"] = str(data_home)
+
+    result = subprocess.run(
+        [sys.executable, "-m", "cc_session_tools.cli.ccst", *_isolated_apply_args(tmp_path)],
+        capture_output=True, text=True, cwd=str(Path(__file__).parent.parent), env=env,
+    )
+
+    assert result.returncode == 0
+    assert "Traceback" not in result.stderr
+    assert "warning: could not record the install-everything sync marker" in result.stderr

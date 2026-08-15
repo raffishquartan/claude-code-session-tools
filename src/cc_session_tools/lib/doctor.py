@@ -719,10 +719,24 @@ def check_sessions_project_dir_absolute(sessions_db_path: Path) -> list[CheckRes
     project_dir.parent against a resolved, absolute root — a relative project_dir can
     never match, so the row becomes permanently invisible to --global listings without
     ever raising an error. Not FAIL: it degrades --global listings but does not block
-    core functionality, and `ccst repair sessions` fixes it non-destructively."""
+    core functionality, and `ccst repair sessions` fixes it non-destructively.
+
+    FAILs instead if sessions.db exists but isn't a valid SQLite file — same
+    "exists but failed to open" treatment check_data_stores already gives
+    this exact condition for other stores; sqlite3.connect() opens lazily
+    and only fails once find_non_absolute_rows actually queries the file, so
+    this must be caught here rather than assumed impossible."""
+    import sqlite3
+
     from cc_session_tools.lib import sessions_repair
 
-    bad = sessions_repair.find_non_absolute_rows(path=sessions_db_path)
+    try:
+        bad = sessions_repair.find_non_absolute_rows(path=sessions_db_path)
+    except sqlite3.DatabaseError as exc:
+        return [CheckResult(
+            name="sessions:project-dir-absolute", status=Status.FAIL,
+            reason=f"{sessions_db_path} exists but failed to open: {exc}",
+        )]
     if not bad:
         return [CheckResult(
             name="sessions:project-dir-absolute", status=Status.OK,

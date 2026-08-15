@@ -1241,6 +1241,8 @@ def _cmd_sessions_list(args: argparse.Namespace) -> int:
 
 
 def _cmd_repair_sessions(args: argparse.Namespace) -> int:
+    import sqlite3
+
     from cc_session_tools.lib import db as db_lib
     from cc_session_tools.lib import sessions_db, sessions_repair
     from cc_session_tools.lib.roots import RootsConfigError, load_session_roots
@@ -1266,7 +1268,16 @@ def _cmd_repair_sessions(args: argparse.Namespace) -> int:
         db_lib.backup_to(db_path, backup_path)
         print(f"Backed up sessions.db to {backup_path}")
 
-    report = sessions_repair.repair(roots, path=db_path, dry_run=not args.execute)
+    try:
+        report = sessions_repair.repair(roots, path=db_path, dry_run=not args.execute)
+    except sqlite3.DatabaseError as exc:
+        # sqlite3.connect() opens lazily and only fails once a query actually
+        # touches the file, so a corrupt db.exists()=True file reaches here,
+        # not the earlier existence check. This is the tool users are told
+        # to run to fix store corruption - it must fail loudly with a clear
+        # message here, not with a raw traceback.
+        print(f"{db_path} exists but failed to open: {exc}", file=sys.stderr)
+        return 1
     if not any((report.repaired, report.unresolved, report.ambiguous, report.conflicts)):
         print("No non-absolute project_dir rows found in sessions.db.")
         return 0
