@@ -653,6 +653,7 @@ def _cmd_doctor(args: argparse.Namespace) -> int:
 
     from cc_session_tools.lib.pdata import verify as _pdata_verify
     from cc_session_tools.lib.pdata.init_paths import default_projects_root
+    from cc_session_tools.lib import install_sync
 
     results = run_all_checks(
         installed_version=__version__,
@@ -667,6 +668,7 @@ def _cmd_doctor(args: argparse.Namespace) -> int:
         projects_root=default_projects_root(),
         pdata_verify_projects=_pdata_verify.discover_projects(),
         sessions_db_path=store_paths["sessions"],
+        synced_version=install_sync.get_synced_version(),
     )
 
     if args.drift or getattr(args, "mode", None) == "drift":

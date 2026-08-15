@@ -18,6 +18,7 @@ from cc_session_tools.lib.doctor import (
     check_data_stores,
     check_env_dir,
     check_hook_registered,
+    check_install_everything_synced,
     check_no_stale_hooks,
     check_pending_data_store_migration,
     check_pending_pdata_migration,
@@ -319,6 +320,32 @@ def test_check_pypi_version_outdated() -> None:
         r = check_pypi_version("0.11.0")
     assert r.status == Status.WARN
     assert "0.99.0" in r.reason
+
+
+# ---------- check_install_everything_synced ----------
+
+def test_check_install_synced_ok_when_versions_match() -> None:
+    result = check_install_everything_synced(
+        installed_version="2.4.0", synced_version="2.4.0"
+    )
+    assert result.status == Status.OK
+
+
+def test_check_install_synced_warns_when_never_synced() -> None:
+    result = check_install_everything_synced(
+        installed_version="2.4.0", synced_version=None
+    )
+    assert result.status == Status.WARN
+    assert "install-everything" in result.reason
+
+
+def test_check_install_synced_warns_when_stale() -> None:
+    result = check_install_everything_synced(
+        installed_version="2.4.0", synced_version="2.3.0"
+    )
+    assert result.status == Status.WARN
+    assert "2.3.0" in result.reason
+    assert "2.4.0" in result.reason
 
 
 # ---------- format_results ----------
