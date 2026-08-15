@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.4.0] - 2026-08-15
+
+### Added
+
+- **`ccst` now nudges an interactive user when `install-everything --apply` hasn't been run for
+  the currently-installed version.** `uv tool install --reinstall`/`--upgrade` (and `pip`/`pipx`
+  equivalents) don't run any code after installing, so nothing previously told a user their
+  skills/hooks/shell functions/scheduled jobs/`CLAUDE.md` config might be out of sync with a new
+  version — the exact gap that let stale `~/.claude/skills/*` symlinks survive a package
+  relocation undetected. `ccst install-everything --apply` now records the version it last
+  succeeded for (a new `install_sync` table in `sessions.db`); any interactive `ccst` invocation
+  (a real TTY on stderr) on a different version prints a nudge and exits, pointing at `ccst
+  install-everything --apply`. Automated callers are never affected: `ccst hooks run <verb>` (the
+  path Claude Code invokes on every tool call in every open session), every scheduled `ccsched`
+  job, and any future non-interactive caller are exempt by construction, since none of them have a
+  TTY. `ccst install-everything`, `ccst doctor`, `ccst repair`, and `ccst migrate` are also always
+  exempt, so a user always has a way to see or fix the state this nudge is protecting against, even
+  when the marker's own store (`sessions.db`) is corrupt.
+- **`ccst doctor` reports install-sync state as a check (`install:synced`).** WARN, not FAIL —
+  always self-recoverable with one command, same severity as the existing `ccsched-job:*` checks.
+
 ## [2.3.0] - 2026-08-14
 
 ### Fixed
