@@ -1,0 +1,60 @@
+"""Tracks the last ccst version for which `ccst install-everything --apply`
+succeeded — lets `main()` nudge an interactive user to re-run it after an
+upgrade, and lets `ccst doctor` report the same fact as a check result.
+
+Backed by the install_sync table in sessions.db, following the same
+established pattern as doctor_mutes.py (see its module docstring and
+sessions_db.py's): small persistent CLI state belongs in the shared
+sessions.db file, not a bespoke JSON/db file per subsystem.
+"""
+from __future__ import annotations
+
+import sqlite3
+from datetime import datetime, timezone
+from pathlib import Path
+
+from cc_session_tools.lib import sessions_db
+
+_SYNCED_VERSION_KEY = "synced_version"
+
+
+def get_synced_version(*, path: Path | None = None) -> str | None:
+    """Return the version `install-everything --apply` last succeeded for,
+    or None if it has never been recorded.
+
+    Covers two distinct "never recorded" states, both returning None: no
+    sessions.db file at all (fresh machine), and a sessions.db that predates
+    this table (every existing installation upgrading to the version that
+    ships this feature — session_tags/sessions/doctor_mutes already exist,
+    but install_sync doesn't yet). connect(readonly=True) skips DDL by
+    design (it must not create/migrate a store it's only meant to read), so
+    the second case reaches the SELECT and must be caught there too, not
+    just around connect() itself.
+    """
+    try:
+        conn = sessions_db.connect(path=path, readonly=True)
+    except sqlite3.OperationalError:
+        return None
+    try:
+        row = conn.execute(
+            "SELECT value FROM install_sync WHERE key = ?", (_SYNCED_VERSION_KEY,)
+        ).fetchone()
+        return row["value"] if row is not None else None
+    except sqlite3.OperationalError:
+        return None  # e.g. "no such table: install_sync" - a pre-upgrade sessions.db
+    finally:
+        conn.close()
+
+
+def record_synced(version: str, *, path: Path | None = None) -> None:
+    """Record that `install-everything --apply` just succeeded for `version`."""
+    conn = sessions_db.connect(path=path)
+    try:
+        conn.execute(
+            "INSERT INTO install_sync (key, value, updated_at) VALUES (?, ?, ?) "
+            "ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at",
+            (_SYNCED_VERSION_KEY, version, datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")),
+        )
+        conn.commit()
+    finally:
+        conn.close()
