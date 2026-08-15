@@ -10,7 +10,6 @@ sessions.db file, not a bespoke JSON/db file per subsystem.
 from __future__ import annotations
 
 import sqlite3
-from datetime import datetime, timezone
 from pathlib import Path
 
 from cc_session_tools.lib import sessions_db
@@ -52,7 +51,7 @@ def get_synced_version(*, path: Path | None = None) -> str | None:
         conn.close()
 
 
-_EXEMPT_NOUNS = frozenset({"install-everything", "doctor"})
+_EXEMPT_NOUNS = frozenset({"install-everything", "doctor", "repair", "migrate"})
 
 
 def should_block_for_unsynced_install(
@@ -69,12 +68,17 @@ def should_block_for_unsynced_install(
     is_interactive must be False for every automated caller (a Claude Code
     hook via `ccst hooks run`, a ccsched job, any future scheduled/scripted
     caller) - this is the primary safety property, checked first. Exempt
-    nouns (install-everything, the fix; doctor, the diagnostic tool) are
-    never blocked regardless of interactivity, so the user always has a way
-    to see or fix the state this function is protecting against. `hooks run`
-    is additionally exempt by name, belt-and-braces alongside is_interactive
-    always being False for it in practice - the one path this function must
-    never block under any circumstance.
+    nouns are never blocked regardless of interactivity, so the user always
+    has a way to see or fix the state this function is protecting against:
+    install-everything (the fix), doctor (the diagnostic tool), repair
+    ("Repair known sessions.db/store corruption" - the exact tool needed
+    when the sync marker's own store is what's broken), and migrate (this
+    repo's own doctor output tells users to run `ccst migrate all` "from a
+    plain terminal" when a legacy-data migration is pending - blocking that
+    instruction would be self-defeating). `hooks run` is additionally exempt
+    by name, belt-and-braces alongside is_interactive always being False for
+    it in practice - the one path this function must never block under any
+    circumstance.
     """
     if not is_interactive:
         return False
@@ -92,7 +96,7 @@ def record_synced(version: str, *, path: Path | None = None) -> None:
         conn.execute(
             "INSERT INTO install_sync (key, value, updated_at) VALUES (?, ?, ?) "
             "ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at",
-            (_SYNCED_VERSION_KEY, version, datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")),
+            (_SYNCED_VERSION_KEY, version, sessions_db._now_iso()),
         )
         conn.commit()
     finally:

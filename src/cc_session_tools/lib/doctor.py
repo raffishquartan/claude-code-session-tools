@@ -484,7 +484,13 @@ def _count_new_store_rows(db_path: Path, tables: tuple[str, ...]) -> int:
         for table in tables:
             try:
                 total += int(conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0])
-            except sqlite3.OperationalError:
+            except sqlite3.DatabaseError:
+                # sqlite3.OperationalError ("no such table") is the common
+                # case; a corrupt file also reaches here, not the connect()
+                # guard above, because sqlite3.connect() opens lazily and
+                # only fails once a statement actually touches the file —
+                # both count as "can't be opened" per this function's
+                # contract, so both return 0 rather than raising.
                 continue
         return total
     finally:

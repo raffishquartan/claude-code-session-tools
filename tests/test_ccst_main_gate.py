@@ -141,6 +141,45 @@ def test_does_not_block_doctor_when_stale(
     dispatched.assert_called_once()
 
 
+def test_does_not_block_repair_when_stale(
+    db_path: Path, monkeypatch: pytest.MonkeyPatch, mocker: MockerFixture
+) -> None:
+    """ccst repair sessions must stay reachable even on a stale/corrupt
+    install - it's the tool that fixes the exact class of store corruption
+    that could otherwise leave a user with no interactive way out."""
+    from cc_session_tools.lib import install_sync
+
+    install_sync.record_synced("0.0.1-not-current", path=db_path)
+    monkeypatch.setattr(ccst.sys, "argv", ["ccst", "repair", "sessions"])
+    mocker.patch("sys.stderr.isatty", return_value=True)
+    dispatched = mocker.patch.object(ccst, "_cmd_repair_sessions", return_value=0)
+
+    with pytest.raises(SystemExit) as exc:
+        ccst.main()
+
+    assert exc.value.code == 0
+    dispatched.assert_called_once()
+
+
+def test_does_not_block_migrate_when_stale(
+    db_path: Path, monkeypatch: pytest.MonkeyPatch, mocker: MockerFixture
+) -> None:
+    """ccst migrate all must stay reachable - this repo's own pending-
+    migration doctor output tells users to run it from a plain terminal."""
+    from cc_session_tools.lib import install_sync
+
+    install_sync.record_synced("0.0.1-not-current", path=db_path)
+    monkeypatch.setattr(ccst.sys, "argv", ["ccst", "migrate", "all"])
+    mocker.patch("sys.stderr.isatty", return_value=True)
+    dispatched = mocker.patch.object(ccst, "_cmd_migrate_all", return_value=0)
+
+    with pytest.raises(SystemExit) as exc:
+        ccst.main()
+
+    assert exc.value.code == 0
+    dispatched.assert_called_once()
+
+
 def test_block_message_mentions_install_everything(
     db_path: Path, monkeypatch: pytest.MonkeyPatch, mocker: MockerFixture, capsys
 ) -> None:

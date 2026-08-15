@@ -1489,8 +1489,25 @@ def _cmd_install_everything(args: argparse.Namespace) -> int:
             overall_rc = rc
 
     if apply and overall_rc == 0:
+        import sqlite3
+
         from cc_session_tools.lib import install_sync
-        install_sync.record_synced(__version__)
+        try:
+            install_sync.record_synced(__version__)
+        except sqlite3.DatabaseError as exc:
+            # A corrupt sessions.db must not erase the five install steps'
+            # already-successful work (and their printed summary) that ran
+            # just above - print a clear warning and continue to the health
+            # check, which surfaces store corruption of its own accord.
+            # Letting this propagate would also be self-defeating: this is
+            # the exact command the interactive gate (main()) tells a user
+            # to run to fix an out-of-sync install.
+            print(
+                f"  warning: could not record the install-everything sync marker "
+                f"({exc}) - sessions.db may be corrupt; run `ccst repair sessions` "
+                "to investigate",
+                file=sys.stderr,
+            )
 
     print(f"\n=== {total_steps}/{total_steps}  Health check ===")
     _cmd_doctor(

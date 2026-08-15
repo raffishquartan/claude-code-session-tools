@@ -129,3 +129,27 @@ def test_does_not_block_doctor() -> None:
         installed_version="2.4.0", synced_version="2.3.0",
         is_interactive=True,
     )
+
+
+def test_does_not_block_repair() -> None:
+    """ccst repair ('Repair known sessions.db/store corruption') must stay
+    reachable even when the sync marker's own store (sessions.db) is what's
+    broken - a corrupt sessions.db degrades get_synced_version() to "never
+    synced", which would otherwise permanently lock repair behind the very
+    tool needed to fix it."""
+    assert not install_sync.should_block_for_unsynced_install(
+        noun="repair", verb="sessions",
+        installed_version="2.4.0", synced_version="2.3.0",
+        is_interactive=True,
+    )
+
+
+def test_does_not_block_migrate() -> None:
+    """This repo's own pending-migration doctor output tells users to run
+    'ccst migrate all' from a plain terminal - blocking that instruction
+    with this gate would be self-defeating."""
+    assert not install_sync.should_block_for_unsynced_install(
+        noun="migrate", verb="all",
+        installed_version="2.4.0", synced_version="2.3.0",
+        is_interactive=True,
+    )

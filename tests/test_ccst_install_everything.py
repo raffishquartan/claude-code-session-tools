@@ -6,6 +6,9 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+from pytest_mock import MockerFixture
+
 
 def _run(*args: str) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
@@ -194,3 +197,70 @@ def test_dry_run_does_not_record_synced_version(tmp_path: Path) -> None:
 
     assert result.returncode == 0
     assert install_sync.get_synced_version(path=tmp_path / "data-home" / "sessions.db") is None
+
+
+def test_apply_survives_a_write_error_recording_the_sync_marker(
+    tmp_path: Path, mocker: MockerFixture, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Found during final review: a corrupt sessions.db previously crashed
+    the whole --apply run at the record_synced() call, after the five
+    install steps had already succeeded - discarding their printed summary
+    and, worse, making install-everything itself (the exact command the
+    interactive gate tells a user to run) unusable on the one machine state
+    that most needs it. The five steps' own success (and exit code) must
+    survive a failure recording the marker; only a warning should be
+    printed.
+
+    Uses a mocked record_synced() rather than an actually-corrupt
+    sessions.db: a genuinely corrupt file also crashes install-everything's
+    trailing health check via several OTHER, pre-existing doctor.py/
+    sessions_db.py read sites this branch doesn't touch (confirmed while
+    writing this test - not something Task 3's fix, scoped only to
+    record_synced() itself, is responsible for curing end-to-end). Mocking
+    isolates exactly the property this branch owns: the write path this
+    branch added must degrade gracefully, tested in-process (this file's
+    usual subprocess convention can't express a mock across the process
+    boundary) against otherwise-real, isolated install steps."""
+    import sqlite3
+
+    from cc_session_tools.cli import ccst as ccst_module
+    from cc_session_tools.lib import install_sync
+
+    # Isolate the trailing health check too - it must run against a fresh,
+    # valid store, not the real ~/.local/share/claude/.
+    monkeypatch.setenv("CCST_DATA_HOME", str(tmp_path / "data-home"))
+    mocker.patch.object(
+        install_sync, "record_synced",
+        side_effect=sqlite3.DatabaseError("file is not a database"),
+    )
+    parser = ccst_module._build_parser()
+    args = parser.parse_args(_isolated_apply_args(tmp_path))
+
+    rc = ccst_module._cmd_install_everything(args)
+
+    assert rc == 0
+
+
+def test_apply_records_synced_version_end_to_end_via_subprocess(tmp_path: Path) -> None:
+    """A real, uncorrupted sessions.db must still work exactly as before -
+    this is the same scenario as test_apply_records_synced_version above,
+    kept as a second, full-subprocess confirmation specifically alongside
+    the in-process mock test, so a change that only satisfies the mock
+    (e.g. swallowing every exception unconditionally) can't pass silently
+    without ever exercising the real write path end-to-end."""
+    from cc_session_tools import __version__ as version
+    from cc_session_tools.lib import install_sync
+
+    env = os.environ.copy()
+    env["CCST_DATA_HOME"] = str(tmp_path / "data-home")
+
+    result = subprocess.run(
+        [sys.executable, "-m", "cc_session_tools.cli.ccst", *_isolated_apply_args(tmp_path)],
+        capture_output=True, text=True, cwd=str(Path(__file__).parent.parent), env=env,
+    )
+
+    assert result.returncode == 0
+    assert "warning: could not record the install-everything sync marker" not in result.stderr
+    assert install_sync.get_synced_version(
+        path=tmp_path / "data-home" / "sessions.db"
+    ) == version
