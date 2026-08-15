@@ -2,9 +2,10 @@
 
 Tiers:
   0.  Trivial allowlist (ls, pwd, git status, ...) - exit silently.
-  0.5 Read-only pre-filter - nontrivial commands with no heuristic flags and
-      no write/network/exec risk patterns - exit silently. Eliminates LLM
-      calls for piped read-only commands like `grep foo | wc -l`.
+  0.5 Read-only pre-filter - any non-Tier-0 command with no heuristic flags
+      and no write/network/exec risk pattern - exit silently, regardless of
+      shell composition or length. Eliminates LLM calls for piped read-only
+      commands like `grep foo | wc -l` and short write-risk-free ones alike.
   1.  Heuristic-flagged (pipe-to-shell, eval, base64 -d, ...) - always claude,
       never cache.
   2.  Cache hit (CCCS_USE_COMMAND_CACHE=1, fresh entry) - emit cached verdict.
@@ -41,19 +42,24 @@ _TRIVIAL_RE = re.compile(
 _GIT_TRIVIAL_RE = re.compile(
     r"^\s*git\s+(status|diff|log|show|branch|rev-parse|config)(\s|$)"
 )
+# Matches only 'uv run <verb>' where <verb> does not itself start with '-' -
+# a uv-level flag between 'run' and the wrapped verb (e.g. `uv run --with foo
+# pytest ...`) is deliberately NOT parsed here; is_trivial() should bail out
+# rather than risk misidentifying what's actually going to execute.
+_UV_RUN_PREFIX_RE = re.compile(r"^\s*uv\s+run\s+(?!-)")
 _NONTRIVIAL_RE = re.compile(r"[|;<]|&&|\|\||\$\(|`|<\(")
 
 # Heuristic patterns from existing bash hook (lines 58-69).
 _HEURISTIC_PATTERNS: list[tuple[re.Pattern[str], str]] = [
     (re.compile(r"\|\s*(sh|bash|zsh)(\s|$)"), "pipe to shell"),
     (re.compile(r"(^|\s)eval(\s|$)"), "eval"),
-    (re.compile(r"base64\s+(-d|--decode)"), "base64 decode"),
-    (re.compile(r"(\.ssh|id_rsa|id_ed25519|\.aws/credentials|\.netrc)"), "credentials path"),
-    (re.compile(r"(printenv|env\s*$|env\s*\|)"), "env dump"),
+    (re.compile(r"\bbase64\s+(-d|--decode)"), "base64 decode"),
+    (re.compile(r"(\.ssh|\bid_rsa|\bid_ed25519|\.aws/credentials|\.netrc)"), "credentials path"),
+    (re.compile(r"(\bprintenv\b|\benv\s*$|\benv\s*\|)"), "env dump"),
     (re.compile(r"chmod\s+\S*s"), "setuid chmod"),
     (re.compile(r"(^|\s)(/etc/|/usr/|/var/|/boot/)"), "system path"),
-    (re.compile(r"(nc|ncat|netcat|socat)\s"), "raw network tool"),
-    (re.compile(r"(wget|curl).*-O\s*/"), "download to absolute path"),
+    (re.compile(r"\b(nc|ncat|netcat|socat)\s"), "raw network tool"),
+    (re.compile(r"\b(wget|curl)\b.*-O\s*/"), "download to absolute path"),
 ]
 
 _VERDICT_RE = re.compile(r"^VERDICT:\s*(safe|suspicious|dangerous)\s*$", re.MULTILINE)
@@ -79,6 +85,15 @@ _WRITE_RISK_RE = re.compile(
     | \b(?:apt|apt-get|yum|dnf|brew)\s+(?:install|remove|purge|uninstall|update|upgrade)\b
     | \bpip3?\s+(?:install|uninstall|remove)\b
     | \bnpm\s+(?:install|uninstall|publish|update|ci)\b
+    # uv sync/build/lock fetch packages over the network and write a
+    # venv/lockfile/wheel to disk, like npm install/pip install above.
+    # run/tool/python are deliberately excluded - their risk depends on
+    # what they wrap, not on the verb itself. pip is excluded because
+    # `uv pip install` has different safety semantics from a bare `pip
+    # install` and isn't handled by this pattern. export/tree/version are
+    # excluded because they don't fetch or write new content, matching how
+    # npm build/npm test/cargo build are also absent from this pattern.
+    | \buv\s+(?:sync|build|lock)\b
     # System service control
     | \b(?:systemctl|service)\b
     # Cron modification
@@ -121,12 +136,21 @@ def parse_input(raw: str) -> HookInput | None:
 
 
 def is_trivial(command: str) -> bool:
-    """True if the command is on the trivial allowlist with no shell composition."""
-    if not (_TRIVIAL_RE.match(command) or _GIT_TRIVIAL_RE.match(command)):
+    """True if the command is on the trivial allowlist with no shell composition.
+
+    A leading 'uv run ' is stripped first (when not followed by a uv-level
+    flag) so a uv-wrapped invocation of an already-trusted verb - e.g.
+    `uv run pytest ...`, `uv run python -m ...` - gets the exact same trust
+    decision the bare verb already gets. This is not a new trust decision:
+    every verb this can newly match was already unconditionally trusted by
+    _TRIVIAL_RE before this function is ever reached.
+    """
+    checked = _UV_RUN_PREFIX_RE.sub("", command, count=1)
+    if not (_TRIVIAL_RE.match(checked) or _GIT_TRIVIAL_RE.match(checked)):
         return False
-    if _NONTRIVIAL_RE.search(command):
+    if _NONTRIVIAL_RE.search(checked):
         return False
-    if len(command) >= 120:
+    if len(checked) >= 120:
         return False
     return True
 
@@ -296,32 +320,14 @@ def run(stdin_text: str) -> int:
     norm_form = norm_mod.normalise(command) if not skip_cache else None
     norm_sha  = cache_mod.sha256_command(norm_form) if norm_form else None
 
-    # Only "non-trivial" commands continue past this gate to claude. The bash
-    # original short-circuits when the command is borderline. Mirror that:
-    nontrivial = (
-        bool(hits)
-        or _NONTRIVIAL_RE.search(command) is not None
-        or len(command) > 120
-    )
-    if not nontrivial:
-        _emit_telemetry(
-            hi=hi, decision="allow", cache_state="none", verdict="trivial", sha=sha
-        )
-        cache_mod.invocations_record(
-            exit_tier=0,
-            verdict="allow",
-            session_id=hi.session_id or None,
-            tool_name=hi.tool_name,
-            exact_hash=sha,
-        )
-        return 0
-
     # ---- Tier 0.5: read-only pre-filter ----
-    # At this point the command is nontrivial (has shell composition, heuristic
-    # flags, or exceeds the length threshold). If there are no heuristic flags
-    # and no write/network/exec risk patterns, the command is safe to skip
-    # regardless of shell composition — piped read-only chains like
-    # `grep foo | wc -l` or `git log | head -20` carry no meaningful risk.
+    # Any command that reaches here (past Tier 0's trivial allowlist) is safe
+    # to skip if it has no heuristic flags and no write/network/exec risk
+    # pattern — regardless of shell composition or length. A piped read-only
+    # chain like `grep foo | wc -l` carries no meaningful risk, and neither
+    # does a short one like `grep foo bar.txt` alone: has_write_risk() must
+    # be consulted for every command that reaches this point, not only ones
+    # with shell composition or over the length threshold.
     if not hits and not has_write_risk(command):
         _emit_telemetry(
             hi=hi, decision="allow", cache_state="none", verdict="read-only", sha=sha

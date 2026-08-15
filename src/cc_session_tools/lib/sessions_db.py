@@ -57,6 +57,12 @@ CREATE TABLE IF NOT EXISTS doctor_mutes (
     name     TEXT PRIMARY KEY,
     muted_at TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS install_sync (
+    key        TEXT PRIMARY KEY,
+    value      TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
 """
 
 

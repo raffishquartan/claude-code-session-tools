@@ -653,6 +653,7 @@ def _cmd_doctor(args: argparse.Namespace) -> int:
 
     from cc_session_tools.lib.pdata import verify as _pdata_verify
     from cc_session_tools.lib.pdata.init_paths import default_projects_root
+    from cc_session_tools.lib import install_sync
 
     results = run_all_checks(
         installed_version=__version__,
@@ -667,6 +668,7 @@ def _cmd_doctor(args: argparse.Namespace) -> int:
         projects_root=default_projects_root(),
         pdata_verify_projects=_pdata_verify.discover_projects(),
         sessions_db_path=store_paths["sessions"],
+        synced_version=install_sync.get_synced_version(),
     )
 
     if args.drift or getattr(args, "mode", None) == "drift":
@@ -677,7 +679,7 @@ def _cmd_doctor(args: argparse.Namespace) -> int:
             print(report)
         return 1 if unmuted else 0
 
-    print(format_results(results))
+    print(format_results(results, show_all=getattr(args, "all", False)))
 
     any_issue = any(r.status in (Status.WARN, Status.FAIL) for r in results)
     return 1 if any_issue else 0
@@ -1239,6 +1241,8 @@ def _cmd_sessions_list(args: argparse.Namespace) -> int:
 
 
 def _cmd_repair_sessions(args: argparse.Namespace) -> int:
+    import sqlite3
+
     from cc_session_tools.lib import db as db_lib
     from cc_session_tools.lib import sessions_db, sessions_repair
     from cc_session_tools.lib.roots import RootsConfigError, load_session_roots
@@ -1250,21 +1254,32 @@ def _cmd_repair_sessions(args: argparse.Namespace) -> int:
         print(str(e), file=sys.stderr)
         return 1
 
-    if args.execute:
-        if not db_path.exists():
-            # sqlite3.connect() auto-creates an empty file, so without this check
-            # db_lib.backup_to() below would silently back up (and repair() would open)
-            # a brand-new, empty sessions.db instead of failing loudly on the mistake.
-            print(f"No sessions.db found at {db_path} — nothing to back up or repair.", file=sys.stderr)
-            return 1
-        backup_dir = db_path.parent / "repair-backups"
-        backup_dir.mkdir(parents=True, exist_ok=True)
-        stamp = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-        backup_path = backup_dir / f"sessions-{stamp}.db"
-        db_lib.backup_to(db_path, backup_path)
-        print(f"Backed up sessions.db to {backup_path}")
+    # sqlite3.connect() (and the online backup API below) open lazily and
+    # only fail once a statement actually touches the file, so a corrupt-
+    # but-existing sessions.db reaches this try, not the exists() check
+    # above. This is the tool users are told to run to fix store corruption
+    # - both the backup step and the repair itself must fail loudly with a
+    # clear message here, not a raw traceback.
+    try:
+        if args.execute:
+            if not db_path.exists():
+                # sqlite3.connect() auto-creates an empty file, so without this
+                # check db_lib.backup_to() below would silently back up (and
+                # repair() would open) a brand-new, empty sessions.db instead
+                # of failing loudly on the mistake.
+                print(f"No sessions.db found at {db_path} — nothing to back up or repair.", file=sys.stderr)
+                return 1
+            backup_dir = db_path.parent / "repair-backups"
+            backup_dir.mkdir(parents=True, exist_ok=True)
+            stamp = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+            backup_path = backup_dir / f"sessions-{stamp}.db"
+            db_lib.backup_to(db_path, backup_path)
+            print(f"Backed up sessions.db to {backup_path}")
 
-    report = sessions_repair.repair(roots, path=db_path, dry_run=not args.execute)
+        report = sessions_repair.repair(roots, path=db_path, dry_run=not args.execute)
+    except sqlite3.DatabaseError as exc:
+        print(f"{db_path} exists but failed to open: {exc}", file=sys.stderr)
+        return 1
     if not any((report.repaired, report.unresolved, report.ambiguous, report.conflicts)):
         print("No non-absolute project_dir rows found in sessions.db.")
         return 0
@@ -1486,6 +1501,27 @@ def _cmd_install_everything(args: argparse.Namespace) -> int:
         if rc != 0:
             overall_rc = rc
 
+    if apply and overall_rc == 0:
+        import sqlite3
+
+        from cc_session_tools.lib import install_sync
+        try:
+            install_sync.record_synced(__version__)
+        except sqlite3.DatabaseError as exc:
+            # A corrupt sessions.db must not erase the five install steps'
+            # already-successful work (and their printed summary) that ran
+            # just above - print a clear warning and continue to the health
+            # check, which surfaces store corruption of its own accord.
+            # Letting this propagate would also be self-defeating: this is
+            # the exact command the interactive gate (main()) tells a user
+            # to run to fix an out-of-sync install.
+            print(
+                f"  warning: could not record the install-everything sync marker "
+                f"({exc}) - sessions.db may be corrupt; run `ccst repair sessions` "
+                "to investigate",
+                file=sys.stderr,
+            )
+
     print(f"\n=== {total_steps}/{total_steps}  Health check ===")
     _cmd_doctor(
         argparse.Namespace(
@@ -1673,6 +1709,11 @@ def _build_parser() -> argparse.ArgumentParser:
         "--no-pypi",
         action="store_true",
         help="Skip the PyPI version-drift check",
+    )
+    doctor_parser.add_argument(
+        "--all",
+        action="store_true",
+        help="Show every check result, including OK (default: only non-OK)",
     )
     doctor_parser.add_argument(
         "--drift",
@@ -2179,6 +2220,37 @@ def main() -> None:
 
     if args.noun is None:
         parser.print_help(sys.stderr)
+        sys.exit(1)
+
+    from cc_session_tools.lib import install_sync
+
+    is_interactive = sys.stderr.isatty()
+    # Read the marker only when interactive: `ccst hooks run <verb>` fires on
+    # every single tool call in every open Claude Code session, and ccsched
+    # jobs run on a schedule - neither has a TTY on stderr, and neither
+    # should pay a SQLite open/close on every invocation just to compute a
+    # value should_block_for_unsynced_install would immediately discard
+    # anyway (its own is_interactive=False check returns False before ever
+    # looking at synced_version).
+    synced_version = install_sync.get_synced_version() if is_interactive else None
+    if install_sync.should_block_for_unsynced_install(
+        noun=args.noun,
+        verb=getattr(args, "verb", None),
+        installed_version=__version__,
+        synced_version=synced_version,
+        is_interactive=is_interactive,
+    ):
+        if synced_version is None:
+            state = "install-everything has never been run for this installation"
+        else:
+            state = f"install-everything was last synced at {synced_version}"
+        print(
+            f"ccst is installed at {__version__}, but {state}.\n"
+            "Skills, hooks, shell functions, scheduled jobs, and CLAUDE.md config may be "
+            "out of sync with this version.\n\n"
+            "Run: ccst install-everything --apply\n",
+            file=sys.stderr,
+        )
         sys.exit(1)
 
     if args.noun == "hooks":

@@ -25,7 +25,16 @@ def default_mutes_path() -> Path:
 
 def load_mutes(path: Path) -> dict[str, str]:
     """Return the mute map (check name -> ISO date). Empty if the store has
-    never been written to."""
+    never been written to, or is corrupt.
+
+    connect(readonly=True) skips DDL by design, so a sessions.db that
+    predates the doctor_mutes table reaches the SELECT and must be caught
+    there too, not just around connect() itself - and connect() opens
+    lazily, so a corrupt (not-a-valid-SQLite-file) db only fails on the
+    SELECT as sqlite3.DatabaseError, not on connect() as OperationalError.
+    `ccst doctor --list-mutes`/`--drift` must never crash on this - doctor
+    is exempt from the install-sync gate specifically so it always works.
+    """
     try:
         conn = sessions_db.connect(path=path, readonly=True)
     except sqlite3.OperationalError:
@@ -33,6 +42,8 @@ def load_mutes(path: Path) -> dict[str, str]:
     try:
         rows = conn.execute("SELECT name, muted_at FROM doctor_mutes").fetchall()
         return {r["name"]: r["muted_at"] for r in rows}
+    except sqlite3.DatabaseError:
+        return {}
     finally:
         conn.close()
 
