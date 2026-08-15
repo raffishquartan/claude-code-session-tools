@@ -51,3 +51,66 @@ def test_get_synced_version_on_pre_upgrade_db_missing_table_returns_none(db_path
     conn.close()
 
     assert install_sync.get_synced_version(path=db_path) is None
+
+
+# ---------- should_block_for_unsynced_install ----------
+
+def test_blocks_when_versions_differ_and_interactive() -> None:
+    assert install_sync.should_block_for_unsynced_install(
+        noun="pdata", verb="list",
+        installed_version="2.4.0", synced_version="2.3.0",
+        is_interactive=True,
+    )
+
+
+def test_blocks_when_never_synced_and_interactive() -> None:
+    assert install_sync.should_block_for_unsynced_install(
+        noun="skills", verb="install",
+        installed_version="2.4.0", synced_version=None,
+        is_interactive=True,
+    )
+
+
+def test_does_not_block_when_versions_match() -> None:
+    assert not install_sync.should_block_for_unsynced_install(
+        noun="pdata", verb="list",
+        installed_version="2.4.0", synced_version="2.4.0",
+        is_interactive=True,
+    )
+
+
+def test_does_not_block_when_not_interactive() -> None:
+    """The core safety property: a stale install must never block a
+    non-interactive caller (a hook, a ccsched job, any future automation),
+    regardless of noun/verb."""
+    assert not install_sync.should_block_for_unsynced_install(
+        noun="pdata", verb="verify",
+        installed_version="2.4.0", synced_version="2.3.0",
+        is_interactive=False,
+    )
+
+
+def test_does_not_block_hooks_run_even_if_somehow_interactive() -> None:
+    """Belt-and-braces: hooks run is exempt by name too, not just by the
+    is_interactive=False it will always actually see in practice."""
+    assert not install_sync.should_block_for_unsynced_install(
+        noun="hooks", verb="run",
+        installed_version="2.4.0", synced_version="2.3.0",
+        is_interactive=True,
+    )
+
+
+def test_does_not_block_install_everything_itself() -> None:
+    assert not install_sync.should_block_for_unsynced_install(
+        noun="install-everything", verb=None,
+        installed_version="2.4.0", synced_version="2.3.0",
+        is_interactive=True,
+    )
+
+
+def test_does_not_block_doctor() -> None:
+    assert not install_sync.should_block_for_unsynced_install(
+        noun="doctor", verb=None,
+        installed_version="2.4.0", synced_version="2.3.0",
+        is_interactive=True,
+    )

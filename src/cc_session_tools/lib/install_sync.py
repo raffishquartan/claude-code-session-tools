@@ -46,6 +46,39 @@ def get_synced_version(*, path: Path | None = None) -> str | None:
         conn.close()
 
 
+_EXEMPT_NOUNS = frozenset({"install-everything", "doctor"})
+
+
+def should_block_for_unsynced_install(
+    *,
+    noun: str | None,
+    verb: str | None,
+    installed_version: str,
+    synced_version: str | None,
+    is_interactive: bool,
+) -> bool:
+    """True if main() should abort this invocation with an install-everything
+    nudge instead of dispatching it.
+
+    is_interactive must be False for every automated caller (a Claude Code
+    hook via `ccst hooks run`, a ccsched job, any future scheduled/scripted
+    caller) - this is the primary safety property, checked first. Exempt
+    nouns (install-everything, the fix; doctor, the diagnostic tool) are
+    never blocked regardless of interactivity, so the user always has a way
+    to see or fix the state this function is protecting against. `hooks run`
+    is additionally exempt by name, belt-and-braces alongside is_interactive
+    always being False for it in practice - the one path this function must
+    never block under any circumstance.
+    """
+    if not is_interactive:
+        return False
+    if noun in _EXEMPT_NOUNS:
+        return False
+    if noun == "hooks" and verb == "run":
+        return False
+    return synced_version != installed_version
+
+
 def record_synced(version: str, *, path: Path | None = None) -> None:
     """Record that `install-everything --apply` just succeeded for `version`."""
     conn = sessions_db.connect(path=path)
