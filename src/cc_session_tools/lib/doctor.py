@@ -919,17 +919,30 @@ def _extract_bundle_hook_names(bundle_path: Path) -> list[str]:
     return names
 
 
-def format_results(results: list[CheckResult]) -> str:
-    """Return a human-readable table of check results."""
+def format_results(results: list[CheckResult], *, show_all: bool = False) -> str:
+    """Return a human-readable table of check results.
+
+    By default (show_all=False) only WARN/FAIL results are printed, with a
+    hint on how to see the rest — a clean machine's `ccst doctor` output is
+    otherwise dozens of [OK] lines a user has to scroll past to find the one
+    thing that needs attention. show_all=True reproduces the full table this
+    function always printed before this parameter existed.
+    """
     if not results:
         return "(no checks ran)"
-    name_w = max(len(r.name) for r in results)
+    shown = results if show_all else [r for r in results if r.status is not Status.OK]
     lines = []
-    for r in results:
-        lines.append(f"[{r.status.value:<4}] {r.name:<{name_w}}  {r.reason}")
+    if shown:
+        name_w = max(len(r.name) for r in shown)
+        for r in shown:
+            lines.append(f"[{r.status.value:<4}] {r.name:<{name_w}}  {r.reason}")
+    elif not show_all:
+        lines.append(f"All {len(results)} checks OK.")
     has_issues = any(r.status in (Status.WARN, Status.FAIL) for r in results)
     if has_issues:
         lines.append("\nTip: run `ccst install-everything --apply` to sync skills, hooks, shell, and CLAUDE.md")
+    if not show_all:
+        lines.append("\nTo see full doctor output use --all argument")
     return "\n".join(lines)
 
 

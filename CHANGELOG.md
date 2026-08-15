@@ -31,6 +31,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   zero-review trust as the bare verb. `uv sync`/`build`/`lock` are now recognised as write-risk and
   cached after one real review, matching `npm install`/`cargo build`.
 
+### Changed
+
+- **`ccst doctor` now prints only WARN/FAIL results by default**, with a hint pointing at the new
+  `--all` flag to see the full check list. A clean machine's `ccst doctor` output was otherwise
+  dozens of `[OK]` lines a user had to scroll past to find the one thing that needed attention.
+  `ccst doctor --all` reproduces the previous, always-print-everything behaviour. `--drift` mode
+  (already WARN/FAIL-only, plus mute-aware) is unaffected.
+
 ### Fixed
 
 - **`ccst doctor`/`repair`/`install-everything`'s health check could traceback on a corrupt
