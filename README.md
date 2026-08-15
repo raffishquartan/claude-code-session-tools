@@ -87,6 +87,12 @@ It runs `ccst doctor` at the end so you can see the health check immediately. Re
 
 > **Note:** `install-everything.sh` handles steps 1–5 of setup. Step 6 — adding broader CCST guidance to your global `~/.claude/CLAUDE.md` (session management, 8-digit gate, etc.) — is interactive and must be run separately afterwards. See [Configure your global CLAUDE.md](#configure-your-global-claudemd) below.
 
+> **After upgrading** (`uv tool install --reinstall`/`--upgrade`, or `pip`/`pipx` equivalents):
+> re-run `ccst install-everything --apply` so skills/hooks/shell functions/scheduled jobs stay in
+> sync with the new version. If you forget, `ccst` itself will remind you — any interactive
+> command run from a real terminal on a version that hasn't been synced prints a nudge and exits
+> until you do (automated callers like Claude Code's own hooks are never affected).
+
 **Manual path — step by step:**
 
 ```sh
@@ -827,8 +833,9 @@ ccst claude-md uninstall --apply
 
 Run a full health check: PATH for all six CLIs, env vars (`REPO_ROOT`/`PROJ_ROOT`),
 `~/.claude/settings.json` JSON validity, expected hook registrations present,
-skill symlinks correct and pointing at the installed source, version drift
-between installed `ccst` and the latest release on PyPI.
+skill symlinks correct and pointing at the installed source, whether
+`install-everything --apply` has been run for the currently-installed version,
+and version drift between installed `ccst` and the latest release on PyPI.
 
 ```sh
 ccst doctor           # checks everything, including PyPI version check
