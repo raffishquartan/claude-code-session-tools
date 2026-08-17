@@ -40,6 +40,12 @@ and silently skips the build, leaving the old binary in place.
 This rebuilds the wheel from the current `main` and updates all four shims
 (ccd, ccr, ccs, claude-code-usage).
 
+No follow-up `ccst install-everything --apply` is needed: the reinstall changes the installed
+version, and the next `ccst` command notices the mismatch and syncs skills, hooks, shell
+functions, `CLAUDE.md` and scheduled jobs itself. Run it by hand only to see the full five-step
+output, or when `ccst doctor` FAILs `install:synced` (which means an automatic sync already tried
+and failed).
+
 ## Data store conventions
 
 Any new Chris-added data store in this repo (or moved here from elsewhere) must:
