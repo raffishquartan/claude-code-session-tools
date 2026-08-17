@@ -129,6 +129,39 @@ def get_synced_version(*, path: Path | None = None) -> str | None:
 
 _EXEMPT_NOUNS = frozenset({"install-everything", "doctor", "repair", "migrate"})
 
+_EXEMPT_VERBS = frozenset({"install", "uninstall"})
+
+AUTO_SYNC_OPT_OUT_ENV = "CCST_NO_AUTO_SYNC"
+
+
+def is_auto_sync_exempt(*, noun: str | None, verb: str | None, opted_out: bool) -> bool:
+    """True if this invocation must not trigger an auto-apply.
+
+    Pure, argv-and-env only - deliberately answerable without touching
+    sessions.db, so ensure_synced can short-circuit an exempt caller before
+    any marker read. `ccst hooks run <verb>` is the reason that property
+    matters: it fires on every tool call in every open Claude Code session,
+    and the 0.56 ms marker read is a cost measured per invocation, not per
+    command.
+
+    Exemptions, in order: the env opt-out (CI, bisecting, and this repo's own
+    test suite); `hooks run`, which must never rewrite settings.json from
+    inside a hook Claude Code invoked from settings.json mid-session;
+    install-everything (would recurse), doctor (must be able to report the
+    out-of-sync state rather than silently erasing it), and repair/migrate
+    (the recovery tools for a broken store, which must run under any store
+    state); and any `install`/`uninstall` verb, where the user is driving
+    install state by hand with their own --target/--source/--hook and a
+    default-target auto-apply underneath them would be self-contradictory.
+    """
+    if opted_out:
+        return True
+    if noun == "hooks" and verb == "run":
+        return True
+    if noun in _EXEMPT_NOUNS:
+        return True
+    return verb in _EXEMPT_VERBS
+
 
 def should_block_for_unsynced_install(
     *,

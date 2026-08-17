@@ -228,3 +228,53 @@ def test_conftest_opts_every_test_out_of_auto_sync() -> None:
     import os
 
     assert os.environ.get("CCST_NO_AUTO_SYNC") == "1"
+
+
+# ---------- is_auto_sync_exempt ----------
+
+def test_hooks_run_is_exempt() -> None:
+    """The hot path: fires on every tool call in every open Claude Code
+    session. Must never apply (rewriting settings.json from inside a hook
+    Claude Code invoked from settings.json is a race no atomic write makes
+    tidy) and must never pay for the check."""
+    assert install_sync.is_auto_sync_exempt(noun="hooks", verb="run", opted_out=False)
+
+
+@pytest.mark.parametrize("noun", ["install-everything", "doctor", "repair", "migrate"])
+def test_exempt_nouns(noun: str) -> None:
+    """install-everything would recurse; doctor must stay able to REPORT the
+    out-of-sync state rather than silently erasing it; repair and migrate are
+    the recovery tools for a broken store and must run under any store state."""
+    assert install_sync.is_auto_sync_exempt(noun=noun, verb=None, opted_out=False)
+
+
+@pytest.mark.parametrize(
+    "noun,verb",
+    [
+        ("skills", "install"),
+        ("skills", "uninstall"),
+        ("hooks", "install"),
+        ("hooks", "uninstall"),
+        ("shell", "install"),
+        ("claude-md", "install"),
+        ("ccsched-jobs", "install"),
+    ],
+)
+def test_install_and_uninstall_verbs_are_exempt(noun: str, verb: str) -> None:
+    """The user is driving install state by hand. Running a full
+    default-target auto-apply underneath them is both surprising and
+    self-contradictory - `ccst skills install --target /tmp/x` must not also
+    symlink into ~/.claude/skills."""
+    assert install_sync.is_auto_sync_exempt(noun=noun, verb=verb, opted_out=False)
+
+
+def test_env_opt_out_exempts_everything() -> None:
+    assert install_sync.is_auto_sync_exempt(noun="pdata", verb="list", opted_out=True)
+
+
+@pytest.mark.parametrize(
+    "noun,verb",
+    [("pdata", "list"), ("sessions", "list"), ("telemetry", "trim"), ("gc", "report")],
+)
+def test_carriers_are_not_exempt(noun: str, verb: str) -> None:
+    assert not install_sync.is_auto_sync_exempt(noun=noun, verb=verb, opted_out=False)
