@@ -19,7 +19,7 @@
 #
 # For FUTURE UPGRADES (once the CLIs are already installed), you only need:
 #   uv tool install cc-session-tools --upgrade
-#   ccst install-everything --apply
+# ccst syncs its own config on the next command you run.
 
 set -euo pipefail
 
@@ -43,7 +43,7 @@ REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 step() { echo ""; echo "=== $* ==="; }
 
 # ── Step 1: Install / upgrade CLIs ──────────────────────────────────────────
-step "1/6  CLIs"
+step "1/3  CLIs"
 if command -v uv >/dev/null 2>&1; then
     if [[ $FROM_SOURCE -eq 1 ]]; then
         echo "Installing from source: $REPO_DIR"
@@ -66,24 +66,12 @@ else
     exit 1
 fi
 
-# ── Step 2: Skills ───────────────────────────────────────────────────────────
-step "2/6  Skills"
-ccst skills install --apply
+# ── Step 2: Skills, hooks, shell helpers, CLAUDE.md, scheduled jobs ──────────
+step "2/3  Install config"
+ccst install-everything --apply
 
-# ── Step 3: Hooks ────────────────────────────────────────────────────────────
-step "3/6  Hooks"
-ccst hooks install --apply
-
-# ── Step 4: Shell helpers (ccl) ──────────────────────────────────────────────
-step "4/6  Shell helpers"
-ccst shell install --apply
-
-# ── Step 5: Global CLAUDE.md messaging block ─────────────────────────────────
-step "5/6  Global CLAUDE.md"
-ccst claude-md install --apply
-
-# ── Step 6: Health check ─────────────────────────────────────────────────────
-step "6/6  Health check"
+# ── Step 3: Health check ─────────────────────────────────────────────────────
+step "3/3  Health check"
 ccst doctor
 
 echo ""
@@ -92,4 +80,5 @@ echo "Restart your shell (or: source ~/.bashrc  /  source ~/.zshrc)"
 echo "to start using 'ccl' and 'ccl --global'."
 echo ""
 echo "For future upgrades, you only need:"
-echo "  uv tool install cc-session-tools --upgrade && ccst install-everything --apply"
+echo "  uv tool install cc-session-tools --upgrade"
+echo "  (ccst syncs its own config on the next command you run.)"
