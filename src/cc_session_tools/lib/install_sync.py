@@ -1,6 +1,11 @@
-"""Tracks the last ccst version for which `ccst install-everything --apply`
-succeeded — lets `main()` nudge an interactive user to re-run it after an
-upgrade, and lets `ccst doctor` report the same fact as a check result.
+"""Tracks whether ~/.claude's registration matches the installed ccst version,
+and brings it back into line when it doesn't.
+
+`ccst install-everything --apply` (explicit, or the automatic one main() runs
+through ensure_synced) records the version it last succeeded for; a failed
+automatic attempt records the version, timestamp and rc so it backs off for
+six hours instead of retrying on every invocation. `ccst doctor` reports both
+facts as one check result.
 
 Backed by the install_sync table in sessions.db, following the same
 established pattern as doctor_mutes.py (see its module docstring and

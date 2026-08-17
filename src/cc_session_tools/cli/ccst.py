@@ -2215,7 +2215,10 @@ def _build_parser() -> argparse.ArgumentParser:
         "install-everything",
         help=(
             "Run all install steps (skills, hooks, shell, claude-md, scheduled jobs) then "
-            "health-check. Dry run by default; pass --apply to write changes."
+            "health-check. Dry run by default; pass --apply to write changes. ccst runs "
+            "this for you automatically after an upgrade — use it directly to preview the "
+            "changes, to pass per-category target overrides, or to see why an automatic "
+            "sync failed."
         ),
     )
     ie_parser.add_argument(
