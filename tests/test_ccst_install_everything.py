@@ -291,3 +291,85 @@ def test_apply_survives_a_corrupt_sessions_db_end_to_end(tmp_path: Path) -> None
     assert result.returncode == 0
     assert "Traceback" not in result.stderr
     assert "warning: could not record the install-everything sync marker" in result.stderr
+
+
+# ---------- run_install_everything core ----------
+
+
+def test_health_check_false_does_not_run_doctor(tmp_path: Path, mocker: MockerFixture) -> None:
+    """Guards against auto-apply silently acquiring doctor's ~1.5 s PyPI
+    dependency. The five install steps are 16.8 ms; the trailing health check
+    is 1.55 s of it, dominated by a network call. Auto-apply is not a
+    diagnostic run and must not pay that on someone else's command."""
+    import io
+
+    from cc_session_tools.cli import ccst
+
+    doctor = mocker.patch.object(ccst, "_cmd_doctor", return_value=0)
+    buf = io.StringIO()
+
+    rc = ccst.run_install_everything(
+        apply=False,
+        stream=buf,
+        health_check=False,
+        skills_target=str(tmp_path / "skills"),
+        hooks_target=str(tmp_path / "settings.json"),
+        fragments_dir=str(tmp_path / "shellrc.d"),
+        claude_md_target=str(tmp_path / "CLAUDE.md"),
+    )
+
+    assert rc == 0
+    doctor.assert_not_called()
+
+
+def test_health_check_true_runs_doctor(tmp_path: Path, mocker: MockerFixture) -> None:
+    """The _cmd_install_everything adapter path keeps the health check."""
+    import io
+
+    from cc_session_tools.cli import ccst
+
+    doctor = mocker.patch.object(ccst, "_cmd_doctor", return_value=0)
+    buf = io.StringIO()
+
+    ccst.run_install_everything(
+        apply=False,
+        stream=buf,
+        health_check=True,
+        no_pypi=True,
+        skills_target=str(tmp_path / "skills"),
+        hooks_target=str(tmp_path / "settings.json"),
+        fragments_dir=str(tmp_path / "shellrc.d"),
+        claude_md_target=str(tmp_path / "CLAUDE.md"),
+    )
+
+    doctor.assert_called_once()
+
+
+def test_step_output_goes_to_the_stream_not_stdout(
+    tmp_path: Path, mocker: MockerFixture, capsys
+) -> None:
+    """Section 4's hard requirement: `ccst sessions list --json` emits
+    machine-readable stdout, and scheduler/worker.py carries a job's stdout
+    into the ledger as its recorded findings. Interleaving install chatter
+    there is a correctness bug, not a cosmetic one."""
+    import io
+
+    from cc_session_tools.cli import ccst
+
+    mocker.patch.object(ccst, "_cmd_doctor", return_value=0)
+    buf = io.StringIO()
+
+    ccst.run_install_everything(
+        apply=False,
+        stream=buf,
+        health_check=False,
+        skills_target=str(tmp_path / "skills"),
+        hooks_target=str(tmp_path / "settings.json"),
+        fragments_dir=str(tmp_path / "shellrc.d"),
+        claude_md_target=str(tmp_path / "CLAUDE.md"),
+    )
+
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert "Skills" in buf.getvalue()
+    assert "Scheduled jobs" in buf.getvalue()

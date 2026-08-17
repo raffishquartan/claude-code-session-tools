@@ -63,6 +63,7 @@ Current subcommands:
 from __future__ import annotations
 
 import argparse
+import contextlib
 import datetime
 import importlib
 import json
@@ -70,7 +71,7 @@ import os
 import sys
 from enum import Enum
 from pathlib import Path
-from typing import Any, cast
+from typing import Any, TextIO, cast
 
 from cc_session_tools import __version__
 from cc_session_tools.hooks_install import (
@@ -1436,17 +1437,38 @@ def _cmd_ccsched_jobs_install(args: argparse.Namespace) -> int:
 # ---------- install-everything ----------
 
 
-def _cmd_install_everything(args: argparse.Namespace) -> int:
-    """Run all install steps in sequence, then health-check."""
-    apply: bool = args.apply
-    no_pypi: bool = args.no_pypi
+def run_install_everything(
+    *,
+    apply: bool,
+    stream: TextIO,
+    health_check: bool,
+    no_pypi: bool = False,
+    skills_target: str | None = None,
+    hooks_target: str | None = None,
+    fragments_dir: str | None = None,
+    claude_md_target: str | None = None,
+) -> int:
+    """Run the five install steps, optionally followed by a health check.
 
-    skills_target = getattr(args, "skills_target", None)
-    hooks_target = getattr(args, "hooks_target", None) or str(
-        Path.home() / ".claude" / "settings.json"
-    )
-    fragments_dir = getattr(args, "fragments_dir", None)
-    claude_md_target = getattr(args, "claude_md_target", None)
+    Returns the worst rc the five steps produced; the health check's own rc is
+    deliberately not part of it, matching the diagnostic-not-gate role it has
+    always had here.
+
+    `stream` receives every step's progress output. The five step functions
+    print to stdout directly, so the loop runs under
+    contextlib.redirect_stdout(stream): the CLI adapter passes sys.stdout (a
+    no-op passthrough) and install_sync.ensure_synced passes a StringIO it
+    discards on success. Auto-apply must not write to stdout at all -
+    `ccst sessions list --json` emits machine-readable stdout, and
+    scheduler/worker.py carries a job's stdout into the ledger as its recorded
+    findings.
+
+    `health_check=False` is what auto-apply uses: the five steps are 16.8 ms,
+    the trailing `ccst doctor` is ~1.55 s dominated by its PyPI network call.
+    An auto-apply is not a diagnostic run and must not take a network
+    dependency on someone else's command.
+    """
+    hooks_target = hooks_target or str(Path.home() / ".claude" / "settings.json")
 
     steps: list[tuple[str, str, object]] = [
         (
@@ -1492,56 +1514,71 @@ def _cmd_install_everything(args: argparse.Namespace) -> int:
         "ccsched-jobs": _cmd_ccsched_jobs_install,
     }
 
-    # +1 accounts for the trailing health check below, which isn't itself a `steps` entry.
-    total_steps = len(steps) + 1
+    # +1 accounts for the trailing health check, which isn't itself a `steps` entry.
+    total_steps = len(steps) + (1 if health_check else 0)
     overall_rc = 0
-    for i, (label, key, step_args) in enumerate(steps, start=1):
-        print(f"\n=== {i}/{total_steps}  {label} ===")
-        rc = dispatch[key](step_args)  # type: ignore[operator]
-        if rc != 0:
-            overall_rc = rc
+    with contextlib.redirect_stdout(stream):
+        for i, (label, key, step_args) in enumerate(steps, start=1):
+            print(f"\n=== {i}/{total_steps}  {label} ===")
+            rc = dispatch[key](step_args)  # type: ignore[operator]
+            if rc != 0:
+                overall_rc = rc
 
-    if apply and overall_rc == 0:
-        import sqlite3
+        if apply and overall_rc == 0:
+            import sqlite3
 
-        from cc_session_tools.lib import install_sync
-        try:
-            install_sync.record_synced(__version__)
-        except sqlite3.DatabaseError as exc:
-            # A corrupt sessions.db must not erase the five install steps'
-            # already-successful work (and their printed summary) that ran
-            # just above - print a clear warning and continue to the health
-            # check, which surfaces store corruption of its own accord.
-            # Letting this propagate would also be self-defeating: this is
-            # the exact command the interactive gate (main()) tells a user
-            # to run to fix an out-of-sync install.
-            print(
-                f"  warning: could not record the install-everything sync marker "
-                f"({exc}) - sessions.db may be corrupt; run `ccst repair sessions` "
-                "to investigate",
-                file=sys.stderr,
+            from cc_session_tools.lib import install_sync
+            try:
+                install_sync.record_synced(__version__)
+            except sqlite3.DatabaseError as exc:
+                # A corrupt sessions.db must not erase the five install steps'
+                # already-successful work (and their printed summary) that ran
+                # just above - print a clear warning and continue. Letting this
+                # propagate would also be self-defeating: this is the exact
+                # command the out-of-sync warning tells a user to run.
+                print(
+                    f"  warning: could not record the install-everything sync marker "
+                    f"({exc}) - sessions.db may be corrupt; run `ccst repair sessions` "
+                    "to investigate",
+                    file=sys.stderr,
+                )
+
+        if health_check:
+            print(f"\n=== {total_steps}/{total_steps}  Health check ===")
+            _cmd_doctor(
+                argparse.Namespace(
+                    settings=None,
+                    skills_dir=None,
+                    no_pypi=no_pypi,
+                    drift=False,
+                    mute=None,
+                    unmute=None,
+                    list_mutes=False,
+                    mutes_file=None,
+                    mode=None,
+                )
             )
 
-    print(f"\n=== {total_steps}/{total_steps}  Health check ===")
-    _cmd_doctor(
-        argparse.Namespace(
-            settings=None,
-            skills_dir=None,
-            no_pypi=no_pypi,
-            drift=False,
-            mute=None,
-            unmute=None,
-            list_mutes=False,
-            mutes_file=None,
-            mode=None,
-        )
-    )
-
-    if not apply:
-        print("\nDry run complete — re-run with --apply to write all changes.")
-    else:
-        print("\nAll install steps complete.")
+        if not apply:
+            print("\nDry run complete — re-run with --apply to write all changes.")
+        else:
+            print("\nAll install steps complete.")
     return overall_rc
+
+
+def _cmd_install_everything(args: argparse.Namespace) -> int:
+    """argparse adapter for run_install_everything: the interactive CLI path,
+    which streams to stdout and always ends with the health check."""
+    return run_install_everything(
+        apply=args.apply,
+        stream=sys.stdout,
+        health_check=True,
+        no_pypi=args.no_pypi,
+        skills_target=getattr(args, "skills_target", None),
+        hooks_target=getattr(args, "hooks_target", None),
+        fragments_dir=getattr(args, "fragments_dir", None),
+        claude_md_target=getattr(args, "claude_md_target", None),
+    )
 
 
 # ---------- arg parser ----------
