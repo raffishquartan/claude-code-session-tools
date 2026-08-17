@@ -63,6 +63,7 @@ Current subcommands:
 from __future__ import annotations
 
 import argparse
+import contextlib
 import datetime
 import importlib
 import json
@@ -70,7 +71,7 @@ import os
 import sys
 from enum import Enum
 from pathlib import Path
-from typing import Any, cast
+from typing import Any, TextIO, cast
 
 from cc_session_tools import __version__
 from cc_session_tools.hooks_install import (
@@ -669,6 +670,7 @@ def _cmd_doctor(args: argparse.Namespace) -> int:
         pdata_verify_projects=_pdata_verify.discover_projects(),
         sessions_db_path=store_paths["sessions"],
         synced_version=install_sync.get_synced_version(),
+        failed_attempt=install_sync.get_failed_attempt(),
     )
 
     if args.drift or getattr(args, "mode", None) == "drift":
@@ -1436,17 +1438,38 @@ def _cmd_ccsched_jobs_install(args: argparse.Namespace) -> int:
 # ---------- install-everything ----------
 
 
-def _cmd_install_everything(args: argparse.Namespace) -> int:
-    """Run all install steps in sequence, then health-check."""
-    apply: bool = args.apply
-    no_pypi: bool = args.no_pypi
+def run_install_everything(
+    *,
+    apply: bool,
+    stream: TextIO,
+    health_check: bool,
+    no_pypi: bool = False,
+    skills_target: str | None = None,
+    hooks_target: str | None = None,
+    fragments_dir: str | None = None,
+    claude_md_target: str | None = None,
+) -> int:
+    """Run the five install steps, optionally followed by a health check.
 
-    skills_target = getattr(args, "skills_target", None)
-    hooks_target = getattr(args, "hooks_target", None) or str(
-        Path.home() / ".claude" / "settings.json"
-    )
-    fragments_dir = getattr(args, "fragments_dir", None)
-    claude_md_target = getattr(args, "claude_md_target", None)
+    Returns the worst rc the five steps produced; the health check's own rc is
+    deliberately not part of it, matching the diagnostic-not-gate role it has
+    always had here.
+
+    `stream` receives every step's progress output. The five step functions
+    print to stdout directly, so the loop runs under
+    contextlib.redirect_stdout(stream): the CLI adapter passes sys.stdout (a
+    no-op passthrough) and install_sync.ensure_synced passes a StringIO it
+    discards on success. Auto-apply must not write to stdout at all -
+    `ccst sessions list --json` emits machine-readable stdout, and
+    scheduler/worker.py carries a job's stdout into the ledger as its recorded
+    findings.
+
+    `health_check=False` is what auto-apply uses: the five steps are 16.8 ms,
+    the trailing `ccst doctor` is ~1.55 s dominated by its PyPI network call.
+    An auto-apply is not a diagnostic run and must not take a network
+    dependency on someone else's command.
+    """
+    hooks_target = hooks_target or str(Path.home() / ".claude" / "settings.json")
 
     steps: list[tuple[str, str, object]] = [
         (
@@ -1492,56 +1515,71 @@ def _cmd_install_everything(args: argparse.Namespace) -> int:
         "ccsched-jobs": _cmd_ccsched_jobs_install,
     }
 
-    # +1 accounts for the trailing health check below, which isn't itself a `steps` entry.
-    total_steps = len(steps) + 1
+    # +1 accounts for the trailing health check, which isn't itself a `steps` entry.
+    total_steps = len(steps) + (1 if health_check else 0)
     overall_rc = 0
-    for i, (label, key, step_args) in enumerate(steps, start=1):
-        print(f"\n=== {i}/{total_steps}  {label} ===")
-        rc = dispatch[key](step_args)  # type: ignore[operator]
-        if rc != 0:
-            overall_rc = rc
+    with contextlib.redirect_stdout(stream):
+        for i, (label, key, step_args) in enumerate(steps, start=1):
+            print(f"\n=== {i}/{total_steps}  {label} ===")
+            rc = dispatch[key](step_args)  # type: ignore[operator]
+            if rc != 0:
+                overall_rc = rc
 
-    if apply and overall_rc == 0:
-        import sqlite3
+        if apply and overall_rc == 0:
+            import sqlite3
 
-        from cc_session_tools.lib import install_sync
-        try:
-            install_sync.record_synced(__version__)
-        except sqlite3.DatabaseError as exc:
-            # A corrupt sessions.db must not erase the five install steps'
-            # already-successful work (and their printed summary) that ran
-            # just above - print a clear warning and continue to the health
-            # check, which surfaces store corruption of its own accord.
-            # Letting this propagate would also be self-defeating: this is
-            # the exact command the interactive gate (main()) tells a user
-            # to run to fix an out-of-sync install.
-            print(
-                f"  warning: could not record the install-everything sync marker "
-                f"({exc}) - sessions.db may be corrupt; run `ccst repair sessions` "
-                "to investigate",
-                file=sys.stderr,
+            from cc_session_tools.lib import install_sync
+            try:
+                install_sync.record_synced(__version__)
+            except sqlite3.DatabaseError as exc:
+                # A corrupt sessions.db must not erase the five install steps'
+                # already-successful work (and their printed summary) that ran
+                # just above - print a clear warning and continue. Letting this
+                # propagate would also be self-defeating: this is the exact
+                # command the out-of-sync warning tells a user to run.
+                print(
+                    f"  warning: could not record the install-everything sync marker "
+                    f"({exc}) - sessions.db may be corrupt; run `ccst repair sessions` "
+                    "to investigate",
+                    file=sys.stderr,
+                )
+
+        if health_check:
+            print(f"\n=== {total_steps}/{total_steps}  Health check ===")
+            _cmd_doctor(
+                argparse.Namespace(
+                    settings=None,
+                    skills_dir=None,
+                    no_pypi=no_pypi,
+                    drift=False,
+                    mute=None,
+                    unmute=None,
+                    list_mutes=False,
+                    mutes_file=None,
+                    mode=None,
+                )
             )
 
-    print(f"\n=== {total_steps}/{total_steps}  Health check ===")
-    _cmd_doctor(
-        argparse.Namespace(
-            settings=None,
-            skills_dir=None,
-            no_pypi=no_pypi,
-            drift=False,
-            mute=None,
-            unmute=None,
-            list_mutes=False,
-            mutes_file=None,
-            mode=None,
-        )
-    )
-
-    if not apply:
-        print("\nDry run complete — re-run with --apply to write all changes.")
-    else:
-        print("\nAll install steps complete.")
+        if not apply:
+            print("\nDry run complete — re-run with --apply to write all changes.")
+        else:
+            print("\nAll install steps complete.")
     return overall_rc
+
+
+def _cmd_install_everything(args: argparse.Namespace) -> int:
+    """argparse adapter for run_install_everything: the interactive CLI path,
+    which streams to stdout and always ends with the health check."""
+    return run_install_everything(
+        apply=args.apply,
+        stream=sys.stdout,
+        health_check=True,
+        no_pypi=args.no_pypi,
+        skills_target=getattr(args, "skills_target", None),
+        hooks_target=getattr(args, "hooks_target", None),
+        fragments_dir=getattr(args, "fragments_dir", None),
+        claude_md_target=getattr(args, "claude_md_target", None),
+    )
 
 
 # ---------- arg parser ----------
@@ -2177,7 +2215,10 @@ def _build_parser() -> argparse.ArgumentParser:
         "install-everything",
         help=(
             "Run all install steps (skills, hooks, shell, claude-md, scheduled jobs) then "
-            "health-check. Dry run by default; pass --apply to write changes."
+            "health-check. Dry run by default; pass --apply to write changes. ccst runs "
+            "this for you automatically after an upgrade — use it directly to preview the "
+            "changes, to pass per-category target overrides, or to see why an automatic "
+            "sync failed."
         ),
     )
     ie_parser.add_argument(
@@ -2224,34 +2265,32 @@ def main() -> None:
 
     from cc_session_tools.lib import install_sync
 
-    is_interactive = sys.stderr.isatty()
-    # Read the marker only when interactive: `ccst hooks run <verb>` fires on
-    # every single tool call in every open Claude Code session, and ccsched
-    # jobs run on a schedule - neither has a TTY on stderr, and neither
-    # should pay a SQLite open/close on every invocation just to compute a
-    # value should_block_for_unsynced_install would immediately discard
-    # anyway (its own is_interactive=False check returns False before ever
-    # looking at synced_version).
-    synced_version = install_sync.get_synced_version() if is_interactive else None
-    if install_sync.should_block_for_unsynced_install(
+    # Bring ~/.claude's registration into line with the installed version
+    # before dispatching. What goes stale on an upgrade is registration, not
+    # code: skills symlinks and `ccst hooks run`'s dynamic import both resolve
+    # into the uv tools path that --reinstall reuses in place, but a hook or
+    # skill added in a newer version isn't wired into settings.json /
+    # ~/.claude/skills until install-everything runs, so it silently never
+    # fires. Wheels have no post-install hook, so the first ccst process after
+    # an upgrade is the earliest possible moment.
+    #
+    # Cost on a carrier invocation is one readonly SQLite open/read/close,
+    # 0.56 ms against a 94 ms bare process start. `ccst hooks run <verb>` is
+    # exempt and doesn't pay even that - not for the per-call cost but for the
+    # invocation count (every tool call in every open session) and because
+    # rewriting settings.json from inside a hook Claude Code invoked from
+    # settings.json is a race no atomic write makes tidy. See
+    # install_sync.is_auto_sync_exempt for the full exempt set.
+    #
+    # Placement is after parse_args and after the usage check on purpose: an
+    # invalid command line still fails at argparse without triggering an
+    # apply, --version/--help/bare ccst never trigger one, and a successful
+    # apply is in place before the requested command runs.
+    install_sync.ensure_synced(
         noun=args.noun,
         verb=getattr(args, "verb", None),
         installed_version=__version__,
-        synced_version=synced_version,
-        is_interactive=is_interactive,
-    ):
-        if synced_version is None:
-            state = "install-everything has never been run for this installation"
-        else:
-            state = f"install-everything was last synced at {synced_version}"
-        print(
-            f"ccst is installed at {__version__}, but {state}.\n"
-            "Skills, hooks, shell functions, scheduled jobs, and CLAUDE.md config may be "
-            "out of sync with this version.\n\n"
-            "Run: ccst install-everything --apply\n",
-            file=sys.stderr,
-        )
-        sys.exit(1)
+    )
 
     if args.noun == "hooks":
         if args.verb == "install":

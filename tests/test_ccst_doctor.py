@@ -349,6 +349,91 @@ def test_check_install_synced_warns_when_stale() -> None:
     assert "2.4.0" in result.reason
 
 
+def test_check_install_synced_warn_says_it_will_self_apply() -> None:
+    result = check_install_everything_synced(
+        installed_version="2.5.0", synced_version="2.4.0", failed_attempt=None
+    )
+    assert result.status == Status.WARN
+    assert "automatically" in result.reason
+
+
+def test_check_install_synced_fails_when_auto_apply_already_failed() -> None:
+    """Not self-recoverable: auto-apply has already tried for this exact
+    version and will keep failing until a human intervenes. That is the
+    WARN/FAIL criterion this check's own docstring states."""
+    from datetime import datetime, timezone
+
+    from cc_session_tools.lib.install_sync import FailedAttempt
+
+    result = check_install_everything_synced(
+        installed_version="2.5.0",
+        synced_version="2.4.0",
+        failed_attempt=FailedAttempt(
+            version="2.5.0", at=datetime(2026, 8, 15, 9, 12, 4, tzinfo=timezone.utc), rc=1
+        ),
+    )
+    assert result.status == Status.FAIL
+    assert "rc 1" in result.reason
+    assert "2026-08-15T09:12:04Z" in result.reason
+
+
+def test_check_install_synced_warns_when_the_failure_is_for_another_version() -> None:
+    """A newer release may well fix the failing step, so a failure recorded
+    against a different version must not FAIL the current one."""
+    from datetime import datetime, timezone
+
+    from cc_session_tools.lib.install_sync import FailedAttempt
+
+    result = check_install_everything_synced(
+        installed_version="2.5.0",
+        synced_version="2.4.0",
+        failed_attempt=FailedAttempt(
+            version="2.4.0", at=datetime(2026, 8, 15, 9, 12, 4, tzinfo=timezone.utc), rc=1
+        ),
+    )
+    assert result.status == Status.WARN
+
+
+def test_check_install_synced_ok_ignores_a_stale_failure_record() -> None:
+    from datetime import datetime, timezone
+
+    from cc_session_tools.lib.install_sync import FailedAttempt
+
+    result = check_install_everything_synced(
+        installed_version="2.5.0",
+        synced_version="2.5.0",
+        failed_attempt=FailedAttempt(
+            version="2.5.0", at=datetime(2026, 8, 15, 9, 12, 4, tzinfo=timezone.utc), rc=1
+        ),
+    )
+    assert result.status == Status.OK
+
+
+def test_run_all_checks_threads_the_failed_attempt_through(tmp_path: Path) -> None:
+    """Wiring test: the unit tests above prove the branch, this proves doctor
+    actually reaches it."""
+    from datetime import datetime, timezone
+
+    from cc_session_tools.lib.install_sync import FailedAttempt
+
+    results = run_all_checks(
+        installed_version="2.5.0",
+        settings_path=tmp_path / "settings.json",
+        bundle_path=tmp_path / "hooks-bundle.json",
+        skills_source_dir=None,
+        skills_target_dir=tmp_path / "skills",
+        env={},
+        skip_pypi=True,
+        synced_version="2.4.0",
+        failed_attempt=FailedAttempt(
+            version="2.5.0", at=datetime(2026, 8, 15, 9, 12, 4, tzinfo=timezone.utc), rc=1
+        ),
+    )
+    synced = [r for r in results if r.name == "install:synced"]
+    assert len(synced) == 1
+    assert synced[0].status == Status.FAIL
+
+
 # ---------- format_results ----------
 
 def test_format_results_shows_status_and_name() -> None:

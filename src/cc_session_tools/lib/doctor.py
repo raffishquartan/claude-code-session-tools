@@ -18,7 +18,7 @@ import time
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from cc_session_tools.lib.db import connect as _db_connect
 from cc_session_tools.lib.hook_registry import HOOK_VERBS, hook_name_from_command
@@ -26,6 +26,9 @@ from cc_session_tools.lib.pdata.init_paths import (
     MIGRATED_ARCHIVE_DIRNAME,
     MIGRATED_MANIFEST_FILENAME,
 )
+
+if TYPE_CHECKING:
+    from cc_session_tools.lib.install_sync import FailedAttempt
 
 
 class Status(str, Enum):
@@ -294,31 +297,54 @@ def check_pypi_version(installed_version: str, timeout: float = 3.0) -> CheckRes
 
 
 def check_install_everything_synced(
-    installed_version: str, synced_version: str | None
+    installed_version: str,
+    synced_version: str | None,
+    failed_attempt: FailedAttempt | None = None,
 ) -> CheckResult:
-    """WARN (not FAIL - always self-recoverable with one command, same
-    severity rationale as check_ccsched_job_registered) if the running ccst
-    version doesn't match the version 'install-everything --apply' last
-    succeeded for."""
+    """OK when the recorded sync marker matches the running ccst version.
+
+    WARN when it doesn't: the next non-exempt `ccst` command auto-applies it,
+    so this is self-recoverable with no user action at all - same severity
+    rationale as check_ccsched_job_registered.
+
+    FAIL when an auto-apply has already been attempted and failed for this
+    exact version. That state is not self-recoverable: it will keep failing
+    identically on every retry (a real ~/.claude/skills/<name> directory
+    blocking a symlink, unbalanced CLAUDE.md sentinels) until a human looks at
+    it. doctor is exempt from auto-applying, so it can always report this
+    rather than silently erasing it.
+    """
     name = "install:synced"
     if synced_version == installed_version:
         return CheckResult(
             name=name, status=Status.OK,
             reason=f"install-everything last synced at {installed_version}",
         )
+    if failed_attempt is not None and failed_attempt.version == installed_version:
+        return CheckResult(
+            name=name, status=Status.FAIL,
+            reason=(
+                f"installed {installed_version}, and the automatic install sync already "
+                f"failed for this version (rc {failed_attempt.rc} at "
+                f"{failed_attempt.at.strftime('%Y-%m-%dT%H:%M:%SZ')}) — "
+                "run `ccst install-everything --apply` to see why"
+            ),
+        )
     if synced_version is None:
         return CheckResult(
             name=name, status=Status.WARN,
             reason=(
                 f"installed {installed_version}, install-everything has never been run — "
-                "run `ccst install-everything --apply`"
+                "it will be applied automatically on the next `ccst` command; run "
+                "`ccst install-everything --apply` to do it now"
             ),
         )
     return CheckResult(
         name=name, status=Status.WARN,
         reason=(
             f"installed {installed_version}, install-everything last synced at "
-            f"{synced_version} — run `ccst install-everything --apply`"
+            f"{synced_version} — it will be applied automatically on the next `ccst` "
+            "command; run `ccst install-everything --apply` to do it now"
         ),
     )
 
@@ -770,6 +796,7 @@ def run_all_checks(
     pdata_verify_projects: list[str] | None = None,
     sessions_db_path: Path | None = None,
     synced_version: str | None = None,
+    failed_attempt: FailedAttempt | None = None,
 ) -> list[CheckResult]:
     """Run the full doctor suite and return results.
 
@@ -809,6 +836,9 @@ def run_all_checks(
     synced_version:
         The version ``install-everything --apply`` last succeeded for, or
         None if it has never been recorded.
+    failed_attempt:
+        The most recently recorded auto-apply failure, or None if the last
+        attempt succeeded (or none has been recorded).
     """
     results: list[CheckResult] = []
 
@@ -887,7 +917,7 @@ def run_all_checks(
 
     # Install-everything sync state
     results.append(
-        check_install_everything_synced(installed_version, synced_version)
+        check_install_everything_synced(installed_version, synced_version, failed_attempt)
     )
 
     return results

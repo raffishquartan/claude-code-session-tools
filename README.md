@@ -85,13 +85,16 @@ It runs `ccst doctor` at the end so you can see the health check immediately. Re
 > **Options:** `--from-source` reinstalls from the local clone rather than
 > PyPI. `--upgrade` forces an upgrade of an existing install.
 
-> **Note:** `install-everything.sh` handles steps 1–5 of setup. Step 6 — adding broader CCST guidance to your global `~/.claude/CLAUDE.md` (session management, 8-digit gate, etc.) — is interactive and must be run separately afterwards. See [Configure your global CLAUDE.md](#configure-your-global-claudemd) below.
+> **Note:** `install-everything.sh` does everything except one interactive step — adding broader
+> CCST guidance to your global `~/.claude/CLAUDE.md` (session management, 8-digit gate, etc.),
+> which must be run separately afterwards. See [Configure your global
+> CLAUDE.md](#configure-your-global-claudemd) below.
 
 > **After upgrading** (`uv tool install --reinstall`/`--upgrade`, or `pip`/`pipx` equivalents):
-> re-run `ccst install-everything --apply` so skills/hooks/shell functions/scheduled jobs stay in
-> sync with the new version. If you forget, `ccst` itself will remind you — any interactive
-> command run from a real terminal on a version that hasn't been synced prints a nudge and exits
-> until you do (automated callers like Claude Code's own hooks are never affected).
+> nothing to do. The next `ccst` command notices that the installed version doesn't match the
+> version your config was last synced to, runs `install-everything --apply` itself, and tells you
+> on stderr that it did. See [Automatic install sync](#automatic-install-sync) below for the exempt
+> commands, the `CCST_NO_AUTO_SYNC=1` escape hatch, and what happens when the sync fails.
 
 **Manual path — step by step:**
 
@@ -100,11 +103,9 @@ It runs `ccst doctor` at the end so you can see the health check immediately. Re
 uv tool install cc-session-tools          # recommended
 # pipx install cc-session-tools           # alternative
 
-# 2. Install bundled skills, hooks, and the ccl shell function (each command is
-#    idempotent — safe to re-run after upgrades)
-ccst skills install --apply               # symlinks skills into ~/.claude/skills/
-ccst hooks install --apply                # merges all bundled hooks into ~/.claude/settings.json
-ccst shell install --apply                # writes ccl() to ~/.shellrc.d/ccl.sh
+# 2. Install bundled skills, hooks, the ccl shell function, the CLAUDE.md
+#    messaging block and the scheduled jobs (idempotent — safe to re-run)
+ccst install-everything --apply
 
 # 3. Verify everything is wired up
 ccst doctor
@@ -144,10 +145,8 @@ shell (or re-source your rc file) to activate `ccl`.
 uv tool upgrade cc-session-tools          # recommended
 # pipx upgrade cc-session-tools           # alternative
 
-# 2. Pick up any new bundled skills, hooks, and shell helpers
-ccst skills install --apply
-ccst hooks install --apply
-ccst shell install --apply
+# 2. Optional — the next ccst command does this for you automatically
+ccst install-everything --apply
 
 # 3. Verify
 ccst doctor
@@ -161,6 +160,40 @@ updated `ccl()` function:
 source ~/.bashrc   # bash
 source ~/.zshrc    # zsh
 ```
+
+### Automatic install sync
+
+`uv`, `pip` and `pipx` run no code after unpacking a wheel, so nothing at install time can wire a
+newly-added skill or hook into `~/.claude`. Code is fine — skills symlinks and `ccst hooks run`
+resolve into the tools path the installer reuses in place — but *registration* isn't: a hook added
+in a newer version isn't in `settings.json` until `install-everything` runs, so it silently never
+fires.
+
+`ccst` closes that gap itself. Before dispatching any command, it compares the installed version
+against the version your config was last synced to. On a mismatch it runs the five install steps
+(skills, hooks, shell, CLAUDE.md, scheduled jobs), prints two lines to **stderr**, and then runs
+the command you actually asked for:
+
+```
+ccst: install config is out of sync (installed 2.5.0, last synced 2.4.0) — syncing…
+ccst: install config synced to 2.5.0.
+```
+
+- **Nothing is written to stdout**, so `--json` output and scripted callers are unaffected, and
+  **your command's exit code is never changed** by the sync.
+- **Exempt commands** (never trigger a sync): `ccst hooks run <verb>` (fires on every tool call in
+  every open Claude Code session), `install-everything`, `doctor`, `repair`, `migrate`, and any
+  `install`/`uninstall` verb — those are you driving install state by hand, possibly with your own
+  `--target`, and a default-target sync underneath them would be self-contradictory.
+- **`CCST_NO_AUTO_SYNC=1`** disables it entirely, for CI, bisecting, or any environment where
+  `~/.claude` must not be touched.
+- **If a sync fails** (for example `~/.claude/skills/<name>` exists as a real directory rather than
+  a symlink), the full step output is printed to stderr, the failure is remembered, and it backs
+  off for six hours rather than retrying on every command — printing one warning line each time
+  instead. `ccst doctor` reports that state as a **FAIL**, since it will not recover on its own.
+  Run `ccst install-everything --apply` to see the whole thing and fix it.
+- **If you never run `ccst` by hand**, the bundled daily `pdata-verify-all` scheduled job does, so
+  a machine syncs itself within about 24 hours with no user action.
 
 ## Configure your global CLAUDE.md
 
@@ -457,7 +490,7 @@ The `send-session-message` skill guides you through choosing a recipient, compos
 
 `ccst claude-md install --apply` adds a managed proactive-messaging block to your global `~/.claude/CLAUDE.md`, telling every Claude Code session how to recognise and act on incoming message digests. `ccst claude-md uninstall --apply` removes it. Both commands are idempotent.
 
-The `install-everything.sh` script runs `ccst claude-md install --apply` automatically as part of the standard installation sequence.
+The `install-everything.sh` script runs this step for you, via `ccst install-everything --apply`, as part of the standard installation sequence.
 
 ## Scheduled-task catch-up
 
@@ -691,6 +724,10 @@ The `ccst` umbrella CLI provides hook and skill management, shell helper install
 
 ### `ccst hooks install`
 
+> You normally don't need this: `ccst install-everything --apply` runs it, and `ccst` runs that
+> for you automatically after an upgrade. Use it directly for a custom `--source`/`--hook`/
+> `--target`, or to dry-run one category on its own.
+
 Brings `~/.claude/settings.json` into line with a source `settings.json`: adds
 the hooks it is missing, and removes any entry naming a hook this build of CCST
 cannot run. With no `--source`, auto-discovers the bundled
@@ -743,6 +780,10 @@ Run a Claude Code hook by name. See the table above for the supported names.
 
 ### `ccst skills install`
 
+> You normally don't need this: `ccst install-everything --apply` runs it, and `ccst` runs that
+> for you automatically after an upgrade. Use it directly for a custom `--source`/`--target`/
+> `--force`, or to dry-run one category on its own.
+
 Symlink all bundled skills into `~/.claude/skills/`.
 
 ```sh
@@ -773,6 +814,10 @@ ccst skills uninstall --skill move-session --apply
 ```
 
 ### `ccst shell install`
+
+> You normally don't need this: `ccst install-everything --apply` runs it, and `ccst` runs that
+> for you automatically after an upgrade. Use it directly for a custom `--fragments-dir`, or to
+> dry-run one category on its own.
 
 Write a `ccl()` shell function fragment to `~/.shellrc.d/ccl.sh` (or
 `--fragments-dir`). ccst does not edit `~/.bashrc`/`~/.zshrc` directly — those
@@ -811,6 +856,10 @@ ccst shell uninstall --apply
 
 ### `ccst claude-md install`
 
+> You normally don't need this: `ccst install-everything --apply` runs it, and `ccst` runs that
+> for you automatically after an upgrade. Use it directly for a custom `--target`, or to dry-run
+> one category on its own.
+
 Add or update the inter-session-messaging block in the global `~/.claude/CLAUDE.md`. Idempotent — re-running replaces the existing block rather than appending.
 
 ```sh
@@ -833,9 +882,11 @@ ccst claude-md uninstall --apply
 
 Run a full health check: PATH for all six CLIs, env vars (`REPO_ROOT`/`PROJ_ROOT`),
 `~/.claude/settings.json` JSON validity, expected hook registrations present,
-skill symlinks correct and pointing at the installed source, whether
-`install-everything --apply` has been run for the currently-installed version,
-and version drift between installed `ccst` and the latest release on PyPI.
+skill symlinks correct and pointing at the installed source, whether your
+config is in sync with the installed version (WARN if not — the next `ccst`
+command fixes it; FAIL if an automatic sync already tried and failed, which
+needs you), and version drift between installed `ccst` and the latest release
+on PyPI.
 
 ```sh
 ccst doctor           # checks everything, including PyPI version check

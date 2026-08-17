@@ -1,4 +1,10 @@
-"""Tests for the install-sync interactive gate in ccst.cli.ccst.main()."""
+"""Tests for the install-sync auto-apply call site in ccst.cli.ccst.main().
+
+Task-level counterpart to tests/test_install_sync.py: those prove the decision
+functions and the executor are right in isolation; these prove main() calls
+ensure_synced with the right noun/verb, at the right point, and dispatches the
+requested command regardless of what auto-sync did.
+"""
 from __future__ import annotations
 
 from pathlib import Path
@@ -10,188 +16,145 @@ from cc_session_tools.cli import ccst
 
 
 @pytest.fixture
-def db_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    p = tmp_path / "sessions.db"
+def sandbox(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     monkeypatch.setenv("CCST_SESSIONS_DIR", str(tmp_path))
-    return p
+    monkeypatch.setenv("CCST_DATA_HOME", str(tmp_path / "data-home"))
+    return tmp_path
 
 
-def test_blocks_interactive_command_on_stale_install(
-    db_path: Path, monkeypatch: pytest.MonkeyPatch, mocker: MockerFixture
+def test_main_calls_ensure_synced_with_the_parsed_noun_and_verb(
+    sandbox: Path, monkeypatch: pytest.MonkeyPatch, mocker: MockerFixture
 ) -> None:
     from cc_session_tools.lib import install_sync
 
-    install_sync.record_synced("0.0.1-not-current", path=db_path)
-    # doctor itself is exempt (see test_does_not_block_doctor_when_stale below) -
-    # use a non-exempt noun/verb here:
+    ensure = mocker.patch.object(install_sync, "ensure_synced")
     monkeypatch.setattr(ccst.sys, "argv", ["ccst", "skills", "install"])
-    mocker.patch("sys.stderr.isatty", return_value=True)
-    dispatched = mocker.patch.object(ccst, "_cmd_skills_install")
-
-    with pytest.raises(SystemExit) as exc:
-        ccst.main()
-
-    assert exc.value.code == 1
-    dispatched.assert_not_called()
-
-
-def test_blocks_interactive_command_when_never_synced(
-    db_path: Path, monkeypatch: pytest.MonkeyPatch, mocker: MockerFixture
-) -> None:
-    """The branch every existing installation hits on its first ccst
-    invocation after upgrading to a version that ships this feature: no
-    record_synced() call has ever happened, so get_synced_version() returns
-    None rather than a stale-but-present version string - distinct from
-    test_blocks_interactive_command_on_stale_install's mismatched-but-present
-    case, and the only case that exercises the "has never been run" message
-    branch rather than the "was last synced at {version}" one."""
-    monkeypatch.setattr(ccst.sys, "argv", ["ccst", "skills", "install"])
-    mocker.patch("sys.stderr.isatty", return_value=True)
-    dispatched = mocker.patch.object(ccst, "_cmd_skills_install")
-
-    with pytest.raises(SystemExit) as exc:
-        ccst.main()
-
-    assert exc.value.code == 1
-    dispatched.assert_not_called()
-
-
-def test_does_not_block_when_synced(
-    db_path: Path, monkeypatch: pytest.MonkeyPatch, mocker: MockerFixture
-) -> None:
-    from cc_session_tools.lib import install_sync
-
-    install_sync.record_synced(ccst.__version__, path=db_path)
-    monkeypatch.setattr(ccst.sys, "argv", ["ccst", "skills", "install"])
-    mocker.patch("sys.stderr.isatty", return_value=True)
-    dispatched = mocker.patch.object(ccst, "_cmd_skills_install", return_value=0)
-
-    with pytest.raises(SystemExit) as exc:
-        ccst.main()
-
-    assert exc.value.code == 0
-    dispatched.assert_called_once()
-
-
-def test_does_not_block_when_not_interactive(
-    db_path: Path, monkeypatch: pytest.MonkeyPatch, mocker: MockerFixture
-) -> None:
-    from cc_session_tools.lib import install_sync
-
-    install_sync.record_synced("0.0.1-not-current", path=db_path)
-    monkeypatch.setattr(ccst.sys, "argv", ["ccst", "skills", "install"])
-    mocker.patch("sys.stderr.isatty", return_value=False)
-    dispatched = mocker.patch.object(ccst, "_cmd_skills_install", return_value=0)
-
-    with pytest.raises(SystemExit) as exc:
-        ccst.main()
-
-    assert exc.value.code == 0
-    dispatched.assert_called_once()
-
-
-def test_does_not_block_hooks_run_even_when_stale_and_interactive(
-    db_path: Path, monkeypatch: pytest.MonkeyPatch, mocker: MockerFixture
-) -> None:
-    from cc_session_tools.lib import install_sync
-
-    install_sync.record_synced("0.0.1-not-current", path=db_path)
-    monkeypatch.setattr(ccst.sys, "argv", ["ccst", "hooks", "run", "some-hook"])
-    mocker.patch("sys.stderr.isatty", return_value=True)
-    dispatched = mocker.patch.object(ccst, "_cmd_hooks_run", return_value=0)
-
-    with pytest.raises(SystemExit) as exc:
-        ccst.main()
-
-    assert exc.value.code == 0
-    dispatched.assert_called_once()
-
-
-def test_does_not_block_install_everything_when_stale(
-    db_path: Path, monkeypatch: pytest.MonkeyPatch, mocker: MockerFixture
-) -> None:
-    from cc_session_tools.lib import install_sync
-
-    install_sync.record_synced("0.0.1-not-current", path=db_path)
-    monkeypatch.setattr(ccst.sys, "argv", ["ccst", "install-everything"])
-    mocker.patch("sys.stderr.isatty", return_value=True)
-    dispatched = mocker.patch.object(ccst, "_cmd_install_everything", return_value=0)
-
-    with pytest.raises(SystemExit) as exc:
-        ccst.main()
-
-    assert exc.value.code == 0
-    dispatched.assert_called_once()
-
-
-def test_does_not_block_doctor_when_stale(
-    db_path: Path, monkeypatch: pytest.MonkeyPatch, mocker: MockerFixture
-) -> None:
-    from cc_session_tools.lib import install_sync
-
-    install_sync.record_synced("0.0.1-not-current", path=db_path)
-    monkeypatch.setattr(ccst.sys, "argv", ["ccst", "doctor"])
-    mocker.patch("sys.stderr.isatty", return_value=True)
-    dispatched = mocker.patch.object(ccst, "_cmd_doctor", return_value=0)
-
-    with pytest.raises(SystemExit) as exc:
-        ccst.main()
-
-    assert exc.value.code == 0
-    dispatched.assert_called_once()
-
-
-def test_does_not_block_repair_when_stale(
-    db_path: Path, monkeypatch: pytest.MonkeyPatch, mocker: MockerFixture
-) -> None:
-    """ccst repair sessions must stay reachable even on a stale/corrupt
-    install - it's the tool that fixes the exact class of store corruption
-    that could otherwise leave a user with no interactive way out."""
-    from cc_session_tools.lib import install_sync
-
-    install_sync.record_synced("0.0.1-not-current", path=db_path)
-    monkeypatch.setattr(ccst.sys, "argv", ["ccst", "repair", "sessions"])
-    mocker.patch("sys.stderr.isatty", return_value=True)
-    dispatched = mocker.patch.object(ccst, "_cmd_repair_sessions", return_value=0)
-
-    with pytest.raises(SystemExit) as exc:
-        ccst.main()
-
-    assert exc.value.code == 0
-    dispatched.assert_called_once()
-
-
-def test_does_not_block_migrate_when_stale(
-    db_path: Path, monkeypatch: pytest.MonkeyPatch, mocker: MockerFixture
-) -> None:
-    """ccst migrate all must stay reachable - this repo's own pending-
-    migration doctor output tells users to run it from a plain terminal."""
-    from cc_session_tools.lib import install_sync
-
-    install_sync.record_synced("0.0.1-not-current", path=db_path)
-    monkeypatch.setattr(ccst.sys, "argv", ["ccst", "migrate", "all"])
-    mocker.patch("sys.stderr.isatty", return_value=True)
-    dispatched = mocker.patch.object(ccst, "_cmd_migrate_all", return_value=0)
-
-    with pytest.raises(SystemExit) as exc:
-        ccst.main()
-
-    assert exc.value.code == 0
-    dispatched.assert_called_once()
-
-
-def test_block_message_mentions_install_everything(
-    db_path: Path, monkeypatch: pytest.MonkeyPatch, mocker: MockerFixture, capsys
-) -> None:
-    from cc_session_tools.lib import install_sync
-
-    install_sync.record_synced("0.0.1-not-current", path=db_path)
-    monkeypatch.setattr(ccst.sys, "argv", ["ccst", "skills", "install"])
-    mocker.patch("sys.stderr.isatty", return_value=True)
-    mocker.patch.object(ccst, "_cmd_skills_install")
+    mocker.patch.object(ccst, "_cmd_skills_install", return_value=0)
 
     with pytest.raises(SystemExit):
         ccst.main()
 
-    err = capsys.readouterr().err
-    assert "install-everything --apply" in err
+    ensure.assert_called_once_with(
+        noun="skills", verb="install", installed_version=ccst.__version__
+    )
+
+
+def test_main_dispatches_regardless_of_ensure_synced_mock(
+    sandbox: Path, monkeypatch: pytest.MonkeyPatch, mocker: MockerFixture
+) -> None:
+    """ensure_synced is mocked here, so this only proves main() still reaches
+    dispatch when the call succeeds - it does not exercise a real apply.
+    End-to-end apply behaviour (including what happens when an apply actually
+    runs) is covered in test_install_sync.py."""
+    from cc_session_tools.lib import install_sync
+
+    mocker.patch.object(install_sync, "ensure_synced")
+    monkeypatch.setattr(ccst.sys, "argv", ["ccst", "sessions", "list"])
+    dispatched = mocker.patch.object(ccst, "_cmd_sessions_list", return_value=0)
+
+    with pytest.raises(SystemExit) as exc:
+        ccst.main()
+
+    assert exc.value.code == 0
+    dispatched.assert_called_once()
+
+
+@pytest.mark.parametrize("rc", [0, 1, 3])
+def test_exit_code_is_the_commands_own_with_ensure_synced_mocked(
+    sandbox: Path, monkeypatch: pytest.MonkeyPatch, mocker: MockerFixture, rc: int
+) -> None:
+    """ensure_synced is mocked here, so this proves main() propagates the
+    dispatched command's own return code rather than anything from
+    install-sync - not that an install-sync failure/backoff actually leaves
+    $? untouched (ccsched's ledger auto-suspends a job after 10 consecutive
+    failures, so that matters). That end-to-end behaviour is covered in
+    test_install_sync.py."""
+    from cc_session_tools.lib import install_sync
+
+    mocker.patch.object(install_sync, "ensure_synced")
+    monkeypatch.setattr(ccst.sys, "argv", ["ccst", "sessions", "list"])
+    mocker.patch.object(ccst, "_cmd_sessions_list", return_value=rc)
+
+    with pytest.raises(SystemExit) as exc:
+        ccst.main()
+
+    assert exc.value.code == rc
+
+
+def test_ensure_synced_runs_before_the_command_dispatches(
+    sandbox: Path, monkeypatch: pytest.MonkeyPatch, mocker: MockerFixture
+) -> None:
+    """Ordering matters: a hook or skill registered by the apply must be in
+    place before the requested command runs, not after."""
+    from cc_session_tools.lib import install_sync
+
+    order: list[str] = []
+    mocker.patch.object(
+        install_sync, "ensure_synced", side_effect=lambda **kw: order.append("sync")
+    )
+    monkeypatch.setattr(ccst.sys, "argv", ["ccst", "skills", "install"])
+    mocker.patch.object(
+        ccst, "_cmd_skills_install", side_effect=lambda a: (order.append("cmd"), 0)[1]
+    )
+
+    with pytest.raises(SystemExit):
+        ccst.main()
+
+    assert order == ["sync", "cmd"]
+
+
+def test_bare_ccst_exits_on_usage_without_calling_ensure_synced(
+    sandbox: Path, monkeypatch: pytest.MonkeyPatch, mocker: MockerFixture
+) -> None:
+    """The usage check runs first, so `ccst` with no arguments never triggers
+    an apply."""
+    from cc_session_tools.lib import install_sync
+
+    ensure = mocker.patch.object(install_sync, "ensure_synced")
+    monkeypatch.setattr(ccst.sys, "argv", ["ccst"])
+
+    with pytest.raises(SystemExit) as exc:
+        ccst.main()
+
+    assert exc.value.code == 1
+    ensure.assert_not_called()
+
+
+def test_version_exits_via_argparse_without_calling_ensure_synced(
+    sandbox: Path, monkeypatch: pytest.MonkeyPatch, mocker: MockerFixture
+) -> None:
+    """argparse's own action="version" exits inside parse_args(), before
+    main() ever reaches the ensure_synced call site."""
+    from cc_session_tools.lib import install_sync
+
+    ensure = mocker.patch.object(install_sync, "ensure_synced")
+    monkeypatch.setattr(ccst.sys, "argv", ["ccst", "--version"])
+
+    with pytest.raises(SystemExit):
+        ccst.main()
+
+    ensure.assert_not_called()
+
+
+def test_help_exits_via_argparse_without_calling_ensure_synced(
+    sandbox: Path, monkeypatch: pytest.MonkeyPatch, mocker: MockerFixture
+) -> None:
+    """argparse's built-in -h/--help handling exits inside parse_args(),
+    before main() ever reaches the ensure_synced call site."""
+    from cc_session_tools.lib import install_sync
+
+    ensure = mocker.patch.object(install_sync, "ensure_synced")
+    monkeypatch.setattr(ccst.sys, "argv", ["ccst", "--help"])
+
+    with pytest.raises(SystemExit):
+        ccst.main()
+
+    ensure.assert_not_called()
+
+
+def test_should_block_for_unsynced_install_is_gone() -> None:
+    """Deleted outright rather than deprecated - it had one production caller
+    (this call site) and its own tests, and 'deleting code is a feature'."""
+    from cc_session_tools.lib import install_sync
+
+    assert not hasattr(install_sync, "should_block_for_unsynced_install")
