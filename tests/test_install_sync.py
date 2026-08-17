@@ -153,3 +153,17 @@ def test_does_not_block_migrate() -> None:
         installed_version="2.4.0", synced_version="2.3.0",
         is_interactive=True,
     )
+
+
+# ---------- test-suite safety ----------
+
+def test_conftest_opts_every_test_out_of_auto_sync() -> None:
+    """The autouse fixture in tests/conftest.py must set CCST_NO_AUTO_SYNC=1
+    for every test in this suite. Without it, any test that reaches ccst's
+    main() - in-process or via subprocess - runs a real five-step install
+    against the developer's live ~/.claude. Tests that genuinely exercise
+    auto-sync delete this var themselves and redirect HOME/CCST_DATA_HOME/
+    CCST_SESSIONS_DIR to tmp_path first."""
+    import os
+
+    assert os.environ.get("CCST_NO_AUTO_SYNC") == "1"
