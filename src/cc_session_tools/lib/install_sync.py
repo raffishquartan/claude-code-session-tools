@@ -11,7 +11,8 @@ from __future__ import annotations
 
 import sqlite3
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
+from enum import Enum
 from pathlib import Path
 
 from cc_session_tools.lib import sessions_db
@@ -161,6 +162,46 @@ def is_auto_sync_exempt(*, noun: str | None, verb: str | None, opted_out: bool) 
     if noun in _EXEMPT_NOUNS:
         return True
     return verb in _EXEMPT_VERBS
+
+
+FAILURE_BACKOFF = timedelta(hours=6)
+
+
+class AutoSyncAction(str, Enum):
+    SKIP_SYNCED = "skip-synced"
+    SKIP_BACKOFF = "skip-backoff"
+    APPLY = "apply"
+
+
+def decide_auto_sync(
+    *,
+    installed_version: str,
+    synced_version: str | None,
+    last_failure: FailedAttempt | None,
+    now: datetime,
+) -> AutoSyncAction:
+    """What ensure_synced should do, given the markers.
+
+    Pure - no I/O, `now` injected - so every branch is directly unit-testable.
+
+    SKIP_BACKOFF exists because the two reachable failure modes
+    (_cmd_skills_install refusing a real ~/.claude/skills/<name> directory
+    without --force, _cmd_claude_md_install raising MalformedBlockError on
+    unbalanced sentinels) are persistent: they fail identically on every retry
+    until a human intervenes. Without the window, an unasked-for side effect
+    would reprint a failing five-step install on every ccst invocation. The
+    failure record is version-scoped, so installing a different version resets
+    it - a new release may well fix the failing step.
+    """
+    if synced_version == installed_version:
+        return AutoSyncAction.SKIP_SYNCED
+    if (
+        last_failure is not None
+        and last_failure.version == installed_version
+        and now - last_failure.at < FAILURE_BACKOFF
+    ):
+        return AutoSyncAction.SKIP_BACKOFF
+    return AutoSyncAction.APPLY
 
 
 def should_block_for_unsynced_install(

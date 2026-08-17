@@ -1,6 +1,7 @@
 """Tests for cc_session_tools.lib.install_sync — the install-everything sync marker."""
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -278,3 +279,66 @@ def test_env_opt_out_exempts_everything() -> None:
 )
 def test_carriers_are_not_exempt(noun: str, verb: str) -> None:
     assert not install_sync.is_auto_sync_exempt(noun=noun, verb=verb, opted_out=False)
+
+
+# ---------- decide_auto_sync ----------
+
+_NOW = datetime(2026, 8, 15, 12, 0, 0, tzinfo=timezone.utc)
+
+
+def test_synced_skips() -> None:
+    assert install_sync.decide_auto_sync(
+        installed_version="2.5.0", synced_version="2.5.0", last_failure=None, now=_NOW
+    ) is install_sync.AutoSyncAction.SKIP_SYNCED
+
+
+def test_stale_applies() -> None:
+    assert install_sync.decide_auto_sync(
+        installed_version="2.5.0", synced_version="2.4.0", last_failure=None, now=_NOW
+    ) is install_sync.AutoSyncAction.APPLY
+
+
+def test_never_synced_applies() -> None:
+    assert install_sync.decide_auto_sync(
+        installed_version="2.5.0", synced_version=None, last_failure=None, now=_NOW
+    ) is install_sync.AutoSyncAction.APPLY
+
+
+def test_recent_failure_for_this_version_backs_off() -> None:
+    failure = install_sync.FailedAttempt(
+        version="2.5.0", at=_NOW - timedelta(hours=1), rc=1
+    )
+    assert install_sync.decide_auto_sync(
+        installed_version="2.5.0", synced_version="2.4.0", last_failure=failure, now=_NOW
+    ) is install_sync.AutoSyncAction.SKIP_BACKOFF
+
+
+def test_failure_outside_the_window_retries_once() -> None:
+    failure = install_sync.FailedAttempt(
+        version="2.5.0", at=_NOW - timedelta(hours=7), rc=1
+    )
+    assert install_sync.decide_auto_sync(
+        installed_version="2.5.0", synced_version="2.4.0", last_failure=failure, now=_NOW
+    ) is install_sync.AutoSyncAction.APPLY
+
+
+def test_failure_for_a_different_version_does_not_back_off() -> None:
+    """The key is version-scoped on purpose: a new release may well fix the
+    failing step, so installing a different version resets the backoff."""
+    failure = install_sync.FailedAttempt(
+        version="2.4.0", at=_NOW - timedelta(minutes=5), rc=1
+    )
+    assert install_sync.decide_auto_sync(
+        installed_version="2.5.0", synced_version="2.4.0", last_failure=failure, now=_NOW
+    ) is install_sync.AutoSyncAction.APPLY
+
+
+def test_synced_wins_over_a_stale_failure_record() -> None:
+    """Belt-and-braces on the check order: if the marker says we're synced,
+    a leftover failure row must not produce a spurious backoff warning."""
+    failure = install_sync.FailedAttempt(
+        version="2.5.0", at=_NOW - timedelta(minutes=5), rc=1
+    )
+    assert install_sync.decide_auto_sync(
+        installed_version="2.5.0", synced_version="2.5.0", last_failure=failure, now=_NOW
+    ) is install_sync.AutoSyncAction.SKIP_SYNCED
