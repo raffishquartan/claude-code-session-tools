@@ -1,10 +1,12 @@
 """Tests for cc_session_tools.lib.install_sync — the install-everything sync marker."""
 from __future__ import annotations
 
+import sqlite3
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
+from pytest_mock import MockerFixture
 
 from cc_session_tools.lib import install_sync, sessions_db
 
@@ -342,3 +344,226 @@ def test_synced_wins_over_a_stale_failure_record() -> None:
     assert install_sync.decide_auto_sync(
         installed_version="2.5.0", synced_version="2.5.0", last_failure=failure, now=_NOW
     ) is install_sync.AutoSyncAction.SKIP_SYNCED
+
+
+# ---------- ensure_synced (end-to-end, sandboxed) ----------
+
+@pytest.fixture
+def auto_sync_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """Everything ensure_synced touches, redirected under tmp_path, and the
+    suite-wide CCST_NO_AUTO_SYNC opt-out removed so the real code path runs.
+    Returns the sandboxed HOME."""
+    home = tmp_path / "home"
+    (home / ".claude").mkdir(parents=True)
+    (home / ".claude" / "settings.json").write_text("{}")
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("CCST_DATA_HOME", str(tmp_path / "data-home"))
+    monkeypatch.setenv("CCST_SESSIONS_DIR", str(tmp_path / "sessions"))
+    monkeypatch.setenv("CC_SCHEDULER_DIR", str(tmp_path / "scheduler"))
+    monkeypatch.delenv("CCST_NO_AUTO_SYNC", raising=False)
+    monkeypatch.setattr(install_sync, "_auto_sync_attempted", False)
+    return home
+
+
+def test_exempt_caller_never_opens_sessions_db(
+    auto_sync_env: Path, mocker: MockerFixture
+) -> None:
+    """The property section 2's hot-path exemption depends on: `ccst hooks run
+    <verb>` fires on every tool call in every open session and must not pay
+    the 0.56 ms marker read, let alone the apply."""
+    spy = mocker.patch.object(install_sync, "get_synced_version")
+
+    install_sync.ensure_synced(noun="hooks", verb="run", installed_version="2.5.0")
+
+    spy.assert_not_called()
+
+
+def test_env_opt_out_never_opens_sessions_db(
+    auto_sync_env: Path, monkeypatch: pytest.MonkeyPatch, mocker: MockerFixture
+) -> None:
+    monkeypatch.setenv("CCST_NO_AUTO_SYNC", "1")
+    spy = mocker.patch.object(install_sync, "get_synced_version")
+
+    install_sync.ensure_synced(noun="pdata", verb="list", installed_version="2.5.0")
+
+    spy.assert_not_called()
+
+
+def test_applies_and_advances_the_marker(auto_sync_env: Path, capsys) -> None:
+    from cc_session_tools import __version__ as version
+
+    install_sync.ensure_synced(noun="pdata", verb="list", installed_version=version)
+
+    assert install_sync.get_synced_version() == version
+    captured = capsys.readouterr()
+    assert captured.out == ""  # section 4: never stdout
+    assert "out of sync" in captured.err
+    assert f"synced to {version}" in captured.err
+
+
+def test_already_synced_prints_nothing_and_does_not_apply(
+    auto_sync_env: Path, mocker: MockerFixture, capsys
+) -> None:
+    install_sync.record_synced("2.5.0")
+    capsys.readouterr()
+    from cc_session_tools.cli import ccst
+
+    runner = mocker.patch.object(ccst, "run_install_everything", return_value=0)
+
+    install_sync.ensure_synced(noun="pdata", verb="list", installed_version="2.5.0")
+
+    runner.assert_not_called()
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert captured.err == ""
+
+
+def test_failed_apply_records_all_three_keys_and_does_not_advance_the_marker(
+    auto_sync_env: Path, mocker: MockerFixture, capsys
+) -> None:
+    from cc_session_tools.cli import ccst
+
+    mocker.patch.object(ccst, "run_install_everything", return_value=1)
+
+    install_sync.ensure_synced(noun="pdata", verb="list", installed_version="2.5.0")
+
+    assert install_sync.get_synced_version() is None
+    attempt = install_sync.get_failed_attempt()
+    assert attempt is not None
+    assert (attempt.version, attempt.rc) == ("2.5.0", 1)
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert "install-everything --apply" in captured.err
+
+
+def test_failed_apply_emits_the_buffered_step_output_on_stderr(
+    auto_sync_env: Path, mocker: MockerFixture, capsys
+) -> None:
+    """Section 4: on failure the buffered step output is emitted verbatim, so
+    a user can see WHICH step failed without re-running anything."""
+    from cc_session_tools.cli import ccst
+
+    def failing(**kwargs: object) -> int:
+        stream = kwargs["stream"]
+        stream.write("=== 1/5  Skills ===\nerror: something specific\n")  # type: ignore[union-attr]
+        return 1
+
+    mocker.patch.object(ccst, "run_install_everything", side_effect=failing)
+
+    install_sync.ensure_synced(noun="pdata", verb="list", installed_version="2.5.0")
+
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert "error: something specific" in captured.err
+
+
+def test_backoff_prints_one_line_and_does_not_apply(
+    auto_sync_env: Path, mocker: MockerFixture, capsys
+) -> None:
+    install_sync.record_failed_attempt("2.5.0", rc=1)
+    capsys.readouterr()
+    from cc_session_tools.cli import ccst
+
+    runner = mocker.patch.object(ccst, "run_install_everything", return_value=0)
+
+    install_sync.ensure_synced(noun="pdata", verb="list", installed_version="2.5.0")
+
+    runner.assert_not_called()
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert len([line for line in captured.err.splitlines() if line.strip()]) == 1
+    assert "last auto-sync failed" in captured.err
+
+
+def test_successful_apply_clears_a_stale_failure_record(
+    auto_sync_env: Path, capsys
+) -> None:
+    from cc_session_tools import __version__ as version
+
+    install_sync.record_failed_attempt("0.0.0-stale", rc=1)  # different version, no backoff
+
+    install_sync.ensure_synced(noun="pdata", verb="list", installed_version=version)
+
+    assert install_sync.get_synced_version() == version
+    assert install_sync.get_failed_attempt() is None
+
+
+def test_lock_contention_skips_the_apply_silently(
+    auto_sync_env: Path, tmp_path: Path, mocker: MockerFixture, capsys
+) -> None:
+    """Try-once, do not wait: blocking an unrelated CLI call on a lock would
+    make auto-apply a latency hazard, and skipping is harmless - the winner is
+    applying the same thing."""
+    import json
+    import os
+
+    lock = tmp_path / "data-home" / ".install-sync.lock"
+    lock.parent.mkdir(parents=True, exist_ok=True)
+    lock.write_text(json.dumps({"pid": os.getpid(), "started": "x"}))  # live pid
+    from cc_session_tools.cli import ccst
+
+    runner = mocker.patch.object(ccst, "run_install_everything", return_value=0)
+
+    install_sync.ensure_synced(noun="pdata", verb="list", installed_version="2.5.0")
+
+    runner.assert_not_called()
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert captured.err == ""
+
+
+def test_dead_pid_lock_is_reclaimed_and_the_apply_proceeds(
+    auto_sync_env: Path, tmp_path: Path
+) -> None:
+    import json
+
+    from cc_session_tools import __version__ as version
+
+    lock = tmp_path / "data-home" / ".install-sync.lock"
+    lock.parent.mkdir(parents=True, exist_ok=True)
+    lock.write_text(json.dumps({"pid": 2_000_000_000, "started": "x"}))
+
+    install_sync.ensure_synced(noun="pdata", verb="list", installed_version=version)
+
+    assert install_sync.get_synced_version() == version
+
+
+def test_second_call_in_the_same_process_does_not_reapply(
+    auto_sync_env: Path, mocker: MockerFixture
+) -> None:
+    """Section 5's degenerate case: when the marker store itself is unwritable,
+    nothing the first attempt records survives, so the decision comes out
+    APPLY again. A single ccst process must never retry.
+
+    record_failed_attempt is stubbed out precisely so the backoff can't be
+    what makes this pass - without the stub, the second call would take the
+    SKIP_BACKOFF branch and the in-process flag would be untested."""
+    from cc_session_tools.cli import ccst
+
+    runner = mocker.patch.object(ccst, "run_install_everything", return_value=1)
+    mocker.patch.object(install_sync, "record_failed_attempt")
+
+    install_sync.ensure_synced(noun="pdata", verb="list", installed_version="2.5.0")
+    install_sync.ensure_synced(noun="pdata", verb="list", installed_version="2.5.0")
+
+    assert runner.call_count == 1
+    assert install_sync.get_failed_attempt() is None  # the stub really did no-op
+
+
+def test_never_raises_when_the_failure_record_cannot_be_written(
+    auto_sync_env: Path, tmp_path: Path, mocker: MockerFixture, capsys
+) -> None:
+    """Auto-apply is a side effect, never fatal: if even the bookkeeping
+    fails, the caller's command must still run."""
+    from cc_session_tools.cli import ccst
+
+    mocker.patch.object(ccst, "run_install_everything", return_value=1)
+    mocker.patch.object(
+        install_sync, "record_failed_attempt", side_effect=sqlite3.DatabaseError("corrupt")
+    )
+
+    install_sync.ensure_synced(noun="pdata", verb="list", installed_version="2.5.0")
+
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert "ccst repair sessions" in captured.err

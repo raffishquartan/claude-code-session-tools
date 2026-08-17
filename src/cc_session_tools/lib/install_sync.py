@@ -9,7 +9,10 @@ sessions.db file, not a bespoke JSON/db file per subsystem.
 """
 from __future__ import annotations
 
+import io
+import os
 import sqlite3
+import sys
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from enum import Enum
@@ -261,3 +264,117 @@ def record_synced(version: str, *, path: Path | None = None) -> None:
         conn.commit()
     finally:
         conn.close()
+
+
+# Set once an apply has been attempted in this process. The degenerate case
+# section 5 describes - a sessions.db so broken that neither the sync marker
+# nor the failure keys can be written - would otherwise re-decide APPLY every
+# time ensure_synced is called, since nothing on disk changed.
+_auto_sync_attempted = False
+
+
+def ensure_synced(*, noun: str | None, verb: str | None, installed_version: str) -> None:
+    """Bring ~/.claude's registration into line with the installed version,
+    then return so the requested command can run.
+
+    Called from ccst.main() before dispatch, for every non-exempt invocation.
+    Three invariants, in order of how badly breaking them would hurt:
+
+    1. It never raises and never refuses to dispatch. Auto-apply is a side
+       effect, not the command.
+    2. It never changes the invocation's exit code. ccsched's ledger
+       auto-suspends a job after 10 consecutive failures; an install failure
+       leaking into $? would start suspending healthy jobs.
+    3. It never writes to stdout. `ccst sessions list --json` is
+       machine-readable, and scheduler/worker.py files a job's stdout as its
+       recorded findings.
+
+    An exempt caller returns before any marker read - see is_auto_sync_exempt.
+    A contender that finds a live lock holder skips silently rather than
+    waiting: the winner is applying the same thing, and blocking an unrelated
+    CLI call on a lock would make this a latency hazard.
+    """
+    global _auto_sync_attempted
+
+    if is_auto_sync_exempt(
+        noun=noun,
+        verb=verb,
+        opted_out=os.environ.get(AUTO_SYNC_OPT_OUT_ENV) == "1",
+    ):
+        return
+    if _auto_sync_attempted:
+        return
+
+    synced_version = get_synced_version()
+    last_failure = get_failed_attempt()
+    action = decide_auto_sync(
+        installed_version=installed_version,
+        synced_version=synced_version,
+        last_failure=last_failure,
+        now=datetime.now(timezone.utc),
+    )
+    if action is AutoSyncAction.SKIP_SYNCED:
+        return
+
+    state = "never synced" if synced_version is None else f"last synced {synced_version}"
+
+    if action is AutoSyncAction.SKIP_BACKOFF:
+        if last_failure is None:
+            raise AssertionError(
+                "decide_auto_sync returned SKIP_BACKOFF without a failed attempt"
+            )
+        print(
+            f"ccst: install config is out of sync (installed {installed_version}, {state}) "
+            f"and the last auto-sync failed at {last_failure.at.strftime(_TS_FORMAT)} — "
+            "run `ccst install-everything --apply` to see why.",
+            file=sys.stderr,
+        )
+        return
+
+    _auto_sync_attempted = True
+
+    # Function-local imports: ccst.py already imports this module, and this is
+    # the lazy-import convention ccst.py itself uses throughout (_cmd_doctor,
+    # _cmd_install_everything, _cmd_ccsched_jobs_install all import their
+    # dependencies inside the function body).
+    from cc_session_tools.cli.ccst import run_install_everything
+    from cc_session_tools.lib.paths import data_home
+    from cc_session_tools.lib.proc_lock import LockHeld, exclusive_lock
+
+    buffer = io.StringIO()
+    try:
+        with exclusive_lock(data_home() / ".install-sync.lock"):
+            print(
+                f"ccst: install config is out of sync (installed {installed_version}, "
+                f"{state}) — syncing…",
+                file=sys.stderr,
+            )
+            rc = run_install_everything(apply=True, stream=buffer, health_check=False)
+    except LockHeld:
+        return
+
+    if rc == 0:
+        print(f"ccst: install config synced to {installed_version}.", file=sys.stderr)
+        return
+
+    # Failure: the buffered per-step detail is the only place the reason
+    # appears, so it goes out verbatim rather than being discarded.
+    sys.stderr.write(buffer.getvalue())
+    print(
+        f"ccst: install config auto-sync failed (rc {rc}) — "
+        "run `ccst install-everything --apply` to see why.",
+        file=sys.stderr,
+    )
+    try:
+        record_failed_attempt(installed_version, rc=rc)
+    except sqlite3.DatabaseError as exc:
+        # Never fatal: the caller's command must still run even when the
+        # backoff bookkeeping itself can't be written. Backoff can't help when
+        # the backoff store is the broken thing, so this invocation warns and
+        # every subsequent process re-runs the 16.8 ms apply until the store is
+        # repaired. `ccst repair sessions` is exempt, so the fix stays reachable.
+        print(
+            f"  warning: could not record the failed auto-sync ({exc}) - sessions.db "
+            "may be corrupt; run `ccst repair sessions` to investigate",
+            file=sys.stderr,
+        )
