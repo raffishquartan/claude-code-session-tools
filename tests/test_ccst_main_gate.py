@@ -39,16 +39,18 @@ def test_main_calls_ensure_synced_with_the_parsed_noun_and_verb(
     )
 
 
-def test_main_dispatches_even_when_auto_sync_applies(
+def test_main_dispatches_regardless_of_ensure_synced_mock(
     sandbox: Path, monkeypatch: pytest.MonkeyPatch, mocker: MockerFixture
 ) -> None:
-    """The whole point of replacing the 2.4.0 gate: a stale install no longer
-    refuses to run the requested command."""
+    """ensure_synced is mocked here, so this only proves main() still reaches
+    dispatch when the call succeeds - it does not exercise a real apply.
+    End-to-end apply behaviour (including what happens when an apply actually
+    runs) is covered in test_install_sync.py."""
     from cc_session_tools.lib import install_sync
 
     mocker.patch.object(install_sync, "ensure_synced")
-    monkeypatch.setattr(ccst.sys, "argv", ["ccst", "skills", "install"])
-    dispatched = mocker.patch.object(ccst, "_cmd_skills_install", return_value=0)
+    monkeypatch.setattr(ccst.sys, "argv", ["ccst", "sessions", "list"])
+    dispatched = mocker.patch.object(ccst, "_cmd_sessions_list", return_value=0)
 
     with pytest.raises(SystemExit) as exc:
         ccst.main()
@@ -58,16 +60,20 @@ def test_main_dispatches_even_when_auto_sync_applies(
 
 
 @pytest.mark.parametrize("rc", [0, 1, 3])
-def test_exit_code_is_the_commands_own_regardless_of_auto_sync(
+def test_exit_code_is_the_commands_own_with_ensure_synced_mocked(
     sandbox: Path, monkeypatch: pytest.MonkeyPatch, mocker: MockerFixture, rc: int
 ) -> None:
-    """ccsched's ledger auto-suspends a job after 10 consecutive failures. An
-    install-sync failure leaking into $? would start suspending healthy jobs."""
+    """ensure_synced is mocked here, so this proves main() propagates the
+    dispatched command's own return code rather than anything from
+    install-sync - not that an install-sync failure/backoff actually leaves
+    $? untouched (ccsched's ledger auto-suspends a job after 10 consecutive
+    failures, so that matters). That end-to-end behaviour is covered in
+    test_install_sync.py."""
     from cc_session_tools.lib import install_sync
 
     mocker.patch.object(install_sync, "ensure_synced")
-    monkeypatch.setattr(ccst.sys, "argv", ["ccst", "skills", "install"])
-    mocker.patch.object(ccst, "_cmd_skills_install", return_value=rc)
+    monkeypatch.setattr(ccst.sys, "argv", ["ccst", "sessions", "list"])
+    mocker.patch.object(ccst, "_cmd_sessions_list", return_value=rc)
 
     with pytest.raises(SystemExit) as exc:
         ccst.main()
@@ -111,6 +117,38 @@ def test_bare_ccst_exits_on_usage_without_calling_ensure_synced(
         ccst.main()
 
     assert exc.value.code == 1
+    ensure.assert_not_called()
+
+
+def test_version_exits_via_argparse_without_calling_ensure_synced(
+    sandbox: Path, monkeypatch: pytest.MonkeyPatch, mocker: MockerFixture
+) -> None:
+    """argparse's own action="version" exits inside parse_args(), before
+    main() ever reaches the ensure_synced call site."""
+    from cc_session_tools.lib import install_sync
+
+    ensure = mocker.patch.object(install_sync, "ensure_synced")
+    monkeypatch.setattr(ccst.sys, "argv", ["ccst", "--version"])
+
+    with pytest.raises(SystemExit):
+        ccst.main()
+
+    ensure.assert_not_called()
+
+
+def test_help_exits_via_argparse_without_calling_ensure_synced(
+    sandbox: Path, monkeypatch: pytest.MonkeyPatch, mocker: MockerFixture
+) -> None:
+    """argparse's built-in -h/--help handling exits inside parse_args(),
+    before main() ever reaches the ensure_synced call site."""
+    from cc_session_tools.lib import install_sync
+
+    ensure = mocker.patch.object(install_sync, "ensure_synced")
+    monkeypatch.setattr(ccst.sys, "argv", ["ccst", "--help"])
+
+    with pytest.raises(SystemExit):
+        ccst.main()
+
     ensure.assert_not_called()
 
 
