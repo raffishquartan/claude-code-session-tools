@@ -670,6 +670,7 @@ def _cmd_doctor(args: argparse.Namespace) -> int:
         pdata_verify_projects=_pdata_verify.discover_projects(),
         sessions_db_path=store_paths["sessions"],
         synced_version=install_sync.get_synced_version(),
+        failed_attempt=install_sync.get_failed_attempt(),
     )
 
     if args.drift or getattr(args, "mode", None) == "drift":
