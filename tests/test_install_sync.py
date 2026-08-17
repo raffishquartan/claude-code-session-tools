@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from cc_session_tools.lib import install_sync
+from cc_session_tools.lib import install_sync, sessions_db
 
 
 @pytest.fixture
@@ -153,6 +153,67 @@ def test_does_not_block_migrate() -> None:
         installed_version="2.4.0", synced_version="2.3.0",
         is_interactive=True,
     )
+
+
+# ---------- failed-attempt keys ----------
+
+def test_get_failed_attempt_returns_none_when_never_recorded(db_path: Path) -> None:
+    assert install_sync.get_failed_attempt(path=db_path) is None
+
+
+def test_record_then_get_failed_attempt_round_trips(db_path: Path) -> None:
+    install_sync.record_failed_attempt("2.5.0", rc=1, path=db_path)
+    attempt = install_sync.get_failed_attempt(path=db_path)
+    assert attempt is not None
+    assert attempt.version == "2.5.0"
+    assert attempt.rc == 1
+    assert attempt.at.tzinfo is not None  # aware, so decide_auto_sync can subtract
+
+
+def test_record_failed_attempt_overwrites_a_previous_one(db_path: Path) -> None:
+    install_sync.record_failed_attempt("2.5.0", rc=1, path=db_path)
+    install_sync.record_failed_attempt("2.6.0", rc=2, path=db_path)
+    attempt = install_sync.get_failed_attempt(path=db_path)
+    assert attempt is not None
+    assert (attempt.version, attempt.rc) == ("2.6.0", 2)
+
+
+def test_record_synced_clears_the_failure_keys(db_path: Path) -> None:
+    """Spec section 5: cleared on ANY successful record_synced(), including
+    the one an explicit `ccst install-everything --apply` writes - otherwise a
+    user who fixes the broken step by hand still sees doctor FAIL forever."""
+    install_sync.record_failed_attempt("2.5.0", rc=1, path=db_path)
+    install_sync.record_synced("2.5.0", path=db_path)
+    assert install_sync.get_failed_attempt(path=db_path) is None
+    assert install_sync.get_synced_version(path=db_path) == "2.5.0"
+
+
+def test_get_failed_attempt_on_nonexistent_db_returns_none(db_path: Path) -> None:
+    assert install_sync.get_failed_attempt(path=db_path) is None
+    assert not db_path.exists()
+
+
+def test_get_failed_attempt_on_corrupt_db_returns_none(db_path: Path) -> None:
+    """Same graceful degradation as get_synced_version: this is read on every
+    non-exempt ccst invocation, so it must never be the thing that crashes a
+    user's unrelated command."""
+    db_path.write_bytes(b"this is not a sqlite database file")
+    assert install_sync.get_failed_attempt(path=db_path) is None
+
+
+def test_get_failed_attempt_with_an_unparseable_row_returns_none(db_path: Path) -> None:
+    """The KV table is hand-editable with any sqlite3 shell, and a bad value
+    would otherwise raise on every ccst invocation. Degrading to "no failed
+    attempt" retries the apply, which is the safe direction."""
+    install_sync.record_failed_attempt("2.5.0", rc=1, path=db_path)
+    conn = sessions_db.connect(path=db_path)
+    conn.execute(
+        "UPDATE install_sync SET value = ? WHERE key = 'last_attempt_at'", ("not-a-timestamp",)
+    )
+    conn.commit()
+    conn.close()
+
+    assert install_sync.get_failed_attempt(path=db_path) is None
 
 
 # ---------- test-suite safety ----------

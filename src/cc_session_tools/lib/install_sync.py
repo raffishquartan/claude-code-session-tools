@@ -10,11 +10,87 @@ sessions.db file, not a bespoke JSON/db file per subsystem.
 from __future__ import annotations
 
 import sqlite3
+from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 
 from cc_session_tools.lib import sessions_db
 
 _SYNCED_VERSION_KEY = "synced_version"
+
+_LAST_ATTEMPT_VERSION_KEY = "last_attempt_version"
+_LAST_ATTEMPT_AT_KEY = "last_attempt_at"
+_LAST_ATTEMPT_RC_KEY = "last_attempt_rc"
+_FAILURE_KEYS = (_LAST_ATTEMPT_VERSION_KEY, _LAST_ATTEMPT_AT_KEY, _LAST_ATTEMPT_RC_KEY)
+
+_TS_FORMAT = "%Y-%m-%dT%H:%M:%SZ"  # matches sessions_db._now_iso()
+
+
+@dataclass(frozen=True, slots=True)
+class FailedAttempt:
+    """A recorded auto-apply failure: which version was attempted, when, and
+    the non-zero rc the five install steps produced."""
+
+    version: str
+    at: datetime
+    rc: int
+
+
+def get_failed_attempt(*, path: Path | None = None) -> FailedAttempt | None:
+    """Return the last recorded failed auto-apply, or None if there isn't one.
+
+    Read on every non-exempt ccst invocation, so it degrades to None rather
+    than raising for every way the store can be unusable: no file, a
+    pre-upgrade db with no install_sync table, a corrupt file (all
+    sqlite3.DatabaseError, exactly as get_synced_version handles them), and a
+    hand-edited row whose timestamp or rc doesn't parse. Degrading to "no
+    failed attempt" means the next invocation retries the apply, which is the
+    safe direction: at worst one extra 16.8 ms attempt.
+    """
+    try:
+        conn = sessions_db.connect(path=path, readonly=True)
+    except sqlite3.OperationalError:
+        return None
+    try:
+        rows = conn.execute(
+            "SELECT key, value FROM install_sync WHERE key IN (?, ?, ?)", _FAILURE_KEYS
+        ).fetchall()
+    except sqlite3.DatabaseError:
+        return None
+    finally:
+        conn.close()
+
+    values = {row["key"]: row["value"] for row in rows}
+    if len(values) != len(_FAILURE_KEYS):
+        return None
+    try:
+        at = datetime.strptime(values[_LAST_ATTEMPT_AT_KEY], _TS_FORMAT).replace(
+            tzinfo=timezone.utc
+        )
+        rc = int(values[_LAST_ATTEMPT_RC_KEY])
+    except ValueError:
+        return None
+    return FailedAttempt(version=values[_LAST_ATTEMPT_VERSION_KEY], at=at, rc=rc)
+
+
+def record_failed_attempt(version: str, *, rc: int, path: Path | None = None) -> None:
+    """Record that an auto-apply of `version` failed with `rc`, so
+    decide_auto_sync can back off instead of retrying on every invocation."""
+    now = sessions_db._now_iso()
+    conn = sessions_db.connect(path=path)
+    try:
+        conn.executemany(
+            "INSERT INTO install_sync (key, value, updated_at) VALUES (?, ?, ?) "
+            "ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at",
+            [
+                (_LAST_ATTEMPT_VERSION_KEY, version, now),
+                (_LAST_ATTEMPT_AT_KEY, now, now),
+                (_LAST_ATTEMPT_RC_KEY, str(rc), now),
+            ],
+        )
+        conn.commit()
+    finally:
+        conn.close()
 
 
 def get_synced_version(*, path: Path | None = None) -> str | None:
@@ -90,13 +166,23 @@ def should_block_for_unsynced_install(
 
 
 def record_synced(version: str, *, path: Path | None = None) -> None:
-    """Record that `install-everything --apply` just succeeded for `version`."""
+    """Record that `install-everything --apply` just succeeded for `version`,
+    and clear any recorded failed auto-apply.
+
+    Clearing here rather than in ensure_synced is deliberate: an explicit
+    `ccst install-everything --apply` that succeeds must also clear the
+    backoff, otherwise a user who fixes the broken step by hand keeps seeing
+    doctor FAIL and the once-per-6h retry.
+    """
     conn = sessions_db.connect(path=path)
     try:
         conn.execute(
             "INSERT INTO install_sync (key, value, updated_at) VALUES (?, ?, ?) "
             "ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at",
             (_SYNCED_VERSION_KEY, version, sessions_db._now_iso()),
+        )
+        conn.execute(
+            "DELETE FROM install_sync WHERE key IN (?, ?, ?)", _FAILURE_KEYS
         )
         conn.commit()
     finally:
