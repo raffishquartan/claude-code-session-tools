@@ -7,6 +7,54 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.5.0] - 2026-08-17
+
+### Changed
+
+- **`ccst` now syncs its own install config automatically instead of nudging you to.** After an
+  upgrade, the next non-exempt `ccst` command runs `install-everything --apply` itself, prints two
+  lines to stderr saying it did, and then runs the command you asked for. 2.4.0's nudge-and-block
+  gate is gone: it was guarded by `sys.stderr.isatty()`, and neither Claude Code's Bash tool nor a
+  scheduled `ccsched` job has a TTY, so it never fired for the automated workflows that motivated
+  it — and a nudge was the wrong remedy anyway, since what goes stale on an upgrade is
+  *registration* (a new hook isn't in `settings.json` until `install-everything` runs) and that is
+  one idempotent command the tool can run itself. `is_interactive` no longer gates anything
+  anywhere.
+- The auto-sync never writes to stdout and never changes the invocation's exit code. `--json`
+  output stays machine-readable, and `ccsched`'s failure ledger can't mistake an install problem
+  for a job failure.
+- **`ccst doctor`'s `install:synced` WARN** now says the config will be applied automatically on
+  the next `ccst` command, rather than telling you to run it.
+- `install-everything.sh` runs `ccst install-everything --apply` instead of four separate partial
+  install commands (which also means it now registers the bundled scheduled jobs, which it was
+  silently skipping). README's recommended flows do the same; the five partial `install`
+  subcommands are unchanged and still documented, now marked as advanced use for custom
+  `--target`/`--source`/`--hook` and single-category dry runs.
+
+### Added
+
+- **`CCST_NO_AUTO_SYNC=1`** disables the automatic sync entirely — for CI, for bisecting, and for
+  any environment where `~/.claude` must not be touched.
+- **Failure backoff.** A sync that fails does so persistently (a real `~/.claude/skills/<name>`
+  directory where a symlink belongs, unbalanced `CLAUDE.md` sentinels), so the version, timestamp
+  and rc are recorded and it backs off for six hours rather than reprinting a failing five-step
+  install on every command. Installing a different version resets it. The record is cleared by any
+  successful sync, including an explicit `ccst install-everything --apply`.
+- **`ccst doctor` FAILs `install:synced`** when an automatic sync has already tried and failed for
+  the installed version, naming the rc and timestamp. That state is not self-recoverable, which is
+  this check's own WARN/FAIL criterion.
+- An exclusive, try-once apply lock (`~/.local/share/claude/.install-sync.lock`) so a scheduled job
+  and an interactive command can't apply concurrently. A contender skips rather than waiting — the
+  winner is applying the same thing.
+
+### Exempt from the automatic sync
+
+`ccst hooks run <verb>` (fires on every tool call in every open session, and must not rewrite
+`settings.json` mid-session from inside a hook Claude Code invoked from `settings.json`),
+`install-everything`, `doctor`, `repair`, `migrate`, any `install`/`uninstall` verb, and anything
+run with `CCST_NO_AUTO_SYNC=1`. Machines where nobody ever types a `ccst` command still self-heal
+within ~24h via the bundled daily `pdata-verify-all` scheduled job.
+
 ## [2.4.0] - 2026-08-15
 
 ### Added
