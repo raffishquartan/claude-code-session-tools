@@ -343,38 +343,57 @@ def ensure_synced(*, noun: str | None, verb: str | None, installed_version: str)
 
     buffer = io.StringIO()
     try:
-        with exclusive_lock(data_home() / ".install-sync.lock"):
+        try:
+            with exclusive_lock(data_home() / ".install-sync.lock"):
+                print(
+                    f"ccst: install config is out of sync (installed {installed_version}, "
+                    f"{state}) — syncing…",
+                    file=sys.stderr,
+                )
+                rc = run_install_everything(apply=True, stream=buffer, health_check=False)
+        except LockHeld:
+            return
+
+        if rc == 0:
+            print(f"ccst: install config synced to {installed_version}.", file=sys.stderr)
+            return
+
+        # Failure: the buffered per-step detail is the only place the reason
+        # appears, so it goes out verbatim rather than being discarded.
+        sys.stderr.write(buffer.getvalue())
+        print(
+            f"ccst: install config auto-sync failed (rc {rc}) — "
+            "run `ccst install-everything --apply` to see why.",
+            file=sys.stderr,
+        )
+        try:
+            record_failed_attempt(installed_version, rc=rc)
+        except sqlite3.DatabaseError as exc:
+            # Never fatal: the caller's command must still run even when the
+            # backoff bookkeeping itself can't be written. Backoff can't help
+            # when the backoff store is the broken thing, so this invocation
+            # warns and every subsequent process re-runs the 16.8 ms apply
+            # until the store is repaired. `ccst repair sessions` is exempt,
+            # so the fix stays reachable.
             print(
-                f"ccst: install config is out of sync (installed {installed_version}, "
-                f"{state}) — syncing…",
+                f"  warning: could not record the failed auto-sync ({exc}) - sessions.db "
+                "may be corrupt; run `ccst repair sessions` to investigate",
                 file=sys.stderr,
             )
-            rc = run_install_everything(apply=True, stream=buffer, health_check=False)
-    except LockHeld:
-        return
-
-    if rc == 0:
-        print(f"ccst: install config synced to {installed_version}.", file=sys.stderr)
-        return
-
-    # Failure: the buffered per-step detail is the only place the reason
-    # appears, so it goes out verbatim rather than being discarded.
-    sys.stderr.write(buffer.getvalue())
-    print(
-        f"ccst: install config auto-sync failed (rc {rc}) — "
-        "run `ccst install-everything --apply` to see why.",
-        file=sys.stderr,
-    )
-    try:
-        record_failed_attempt(installed_version, rc=rc)
-    except sqlite3.DatabaseError as exc:
-        # Never fatal: the caller's command must still run even when the
-        # backoff bookkeeping itself can't be written. Backoff can't help when
-        # the backoff store is the broken thing, so this invocation warns and
-        # every subsequent process re-runs the 16.8 ms apply until the store is
-        # repaired. `ccst repair sessions` is exempt, so the fix stays reachable.
+    except Exception:
+        # Section 1's invariant, belt-and-braces: exclusive_lock can raise
+        # plain OSError (permission denied, read-only filesystem, disk full)
+        # from mkdir/os.open, not just LockHeld; the five install steps
+        # themselves are not exception-safe (e.g. a hand-edited
+        # ~/.claude/settings.json makes _cmd_hooks_install's json.load raise
+        # json.JSONDecodeError; skills install can raise OSError from
+        # mkdir/rename/symlink_to); and record_failed_attempt's own
+        # sessions_db.connect can raise plain OSError, not just
+        # sqlite3.DatabaseError. None of that may ever reach the caller -
+        # auto-apply is a side effect, and the requested command must still
+        # run no matter what went wrong trying to sync it.
         print(
-            f"  warning: could not record the failed auto-sync ({exc}) - sessions.db "
-            "may be corrupt; run `ccst repair sessions` to investigate",
+            "ccst: install config auto-sync hit an unexpected error — "
+            "run `ccst install-everything --apply` to see why.",
             file=sys.stderr,
         )

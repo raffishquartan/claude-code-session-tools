@@ -567,3 +567,43 @@ def test_never_raises_when_the_failure_record_cannot_be_written(
     captured = capsys.readouterr()
     assert captured.out == ""
     assert "ccst repair sessions" in captured.err
+
+
+def test_never_raises_when_an_install_step_raises_a_plain_exception(
+    auto_sync_env: Path, mocker: MockerFixture, capsys
+) -> None:
+    """Section 1's core invariant: run_install_everything's five install steps
+    are not exception-safe (e.g. _cmd_hooks_install's bare json.load raises
+    json.JSONDecodeError on a hand-edited settings.json, skills install can
+    raise OSError from mkdir/rename/symlink_to). None of that may escape
+    ensure_synced - the requested command must still run."""
+    from cc_session_tools.cli import ccst
+
+    mocker.patch.object(
+        ccst, "run_install_everything", side_effect=OSError("disk full")
+    )
+
+    install_sync.ensure_synced(noun="pdata", verb="list", installed_version="2.5.0")
+
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert "install-everything --apply" in captured.err
+
+
+def test_never_raises_when_the_lock_itself_raises_os_error(
+    auto_sync_env: Path, mocker: MockerFixture, capsys
+) -> None:
+    """exclusive_lock can raise plain OSError (permission denied, read-only
+    filesystem) from mkdir/os.open - distinct from LockHeld, which is a
+    normal, expected outcome and must stay silently skipped."""
+    from cc_session_tools.lib import proc_lock
+
+    mocker.patch.object(
+        proc_lock, "exclusive_lock", side_effect=OSError("permission denied")
+    )
+
+    install_sync.ensure_synced(noun="pdata", verb="list", installed_version="2.5.0")
+
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert "install-everything --apply" in captured.err
