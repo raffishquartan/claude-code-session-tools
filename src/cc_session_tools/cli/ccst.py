@@ -59,6 +59,9 @@ Current subcommands:
   install-everything             Run all install steps (skills, hooks, shell,
                                  claude-md, scheduled jobs) then health-check.
                                  Dry run by default; pass --apply to write changes.
+  context-override [on|off|status]  Toggle the /context-override flag for the current
+                                 session (default: on). See ccst hooks run
+                                 context-window-warning.
 """
 from __future__ import annotations
 
@@ -1582,6 +1585,38 @@ def _cmd_install_everything(args: argparse.Namespace) -> int:
     )
 
 
+def _cmd_context_override(args: argparse.Namespace) -> int:
+    """ccst context-override [on|off|status] - the CLI half of the /context-override
+    skill. Reads CLAUDE_CODE_SESSION_ID exactly as the ported bash script did."""
+    from cc_session_tools.lib import context_overrides
+
+    session_id = os.environ.get("CLAUDE_CODE_SESSION_ID", "")
+    if not session_id:
+        print(
+            "context-override: CLAUDE_CODE_SESSION_ID is not set; cannot key the flag to this session.",
+            file=sys.stderr,
+        )
+        return 1
+
+    action = args.action
+    if action == "on":
+        context_overrides.set_override(session_id, "on")
+        print("Context-window override ON for this session.")
+        print("The 100k/150k warnings are silenced until you run /context-override off or the session ends.")
+        return 0
+    if action == "off":
+        context_overrides.set_override(session_id, "off")
+        print("Context-window override OFF. The 100k/150k warnings will appear again.")
+        return 0
+    if action == "status":
+        state = "ON" if context_overrides.get_override(session_id) else "OFF"
+        print(f"Context-window override is {state} for this session.")
+        return 0
+
+    print(f"context-override: unknown action {action!r} (expected on|off|status).", file=sys.stderr)
+    return 1
+
+
 # ---------- arg parser ----------
 
 
@@ -2252,6 +2287,15 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Override the global CLAUDE.md target (default: ~/.claude/CLAUDE.md)",
     )
 
+    # ---- context-override ----
+    p_context_override = sub.add_parser(
+        "context-override",
+        help="Toggle the /context-override flag for the current session.",
+    )
+    p_context_override.add_argument(
+        "action", nargs="?", default="on", choices=["on", "off", "status"]
+    )
+
     return parser
 
 
@@ -2386,6 +2430,9 @@ def main() -> None:
 
     if args.noun == "install-everything":
         sys.exit(_cmd_install_everything(args))
+
+    if args.noun == "context-override":
+        sys.exit(_cmd_context_override(args))
 
 
 if __name__ == "__main__":
