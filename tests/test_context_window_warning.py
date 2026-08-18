@@ -163,3 +163,20 @@ def test_unreadable_transcript_surfaces_error_nonblocking(tmp_path, monkeypatch,
     assert rc == 1
     assert out.out == ""
     assert "context-window-warning" in out.err
+
+
+def test_override_end_to_end_via_real_store(tmp_path, monkeypatch, capsys):
+    from cc_session_tools.lib import context_overrides
+
+    db = tmp_path / "sessions.db"
+    monkeypatch.setenv("CCST_SESSIONS_DIR", str(tmp_path))
+    context_overrides.set_override("s1", "on", path=db)
+
+    p = tmp_path / "t.jsonl"
+    _write_transcript(p, [{"type": "assistant", "message": {"model": "claude-sonnet-5",
+        "usage": {"input_tokens": 200000, "cache_creation_input_tokens": 0, "cache_read_input_tokens": 0}}}])
+    monkeypatch.setattr("sys.stdin", io.StringIO(json.dumps({"transcript_path": str(p), "session_id": "s1"})))
+    rc = cww.main([])
+    out = capsys.readouterr()
+    assert rc == 0
+    assert out.out == ""

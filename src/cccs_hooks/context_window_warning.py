@@ -119,9 +119,15 @@ def _format_cost(*, tokens: int, price_per_mtok: float) -> str:
 
 
 def _is_overridden(session_id: str) -> bool:
-    """Stubbed until a later task lands lib.context_overrides; always False so
-    every threshold/message test in this task is independent of the store."""
-    return False
+    """True if /context-override has silenced warnings for this session.
+    Function-local import: this is only reached past the 150k-token branch
+    (the uncommon case for most Stop events), so keeping the sessions.db
+    import off the common/silent path matches the lazy-import rationale
+    used elsewhere in cccs_hooks for rarely-taken branches (e.g.
+    pending_migration.py's _log_failure/_default_legacy_paths)."""
+    from cc_session_tools.lib import context_overrides
+
+    return context_overrides.get_override(session_id)
 
 
 def _reason(*, tokens: int, window: int, price: float, name: str, now: str, red: bool) -> str:
