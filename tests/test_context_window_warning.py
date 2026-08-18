@@ -90,3 +90,76 @@ def test_k_and_pct_integer_arithmetic():
 def test_window_label():
     assert cww._window_label(1_000_000) == "1M"
     assert cww._window_label(200_000) == "200k"
+
+
+import io
+
+
+def _run_main(monkeypatch, capsys, stdin_obj):
+    monkeypatch.setattr("sys.stdin", io.StringIO(json.dumps(stdin_obj)))
+    rc = cww.main([])
+    return rc, capsys.readouterr()
+
+
+def test_no_transcript_path_is_silent(monkeypatch, capsys):
+    rc, out = _run_main(monkeypatch, capsys, {})
+    assert rc == 0
+    assert out.out == ""
+
+
+def test_stop_hook_active_is_silent(monkeypatch, capsys):
+    rc, out = _run_main(monkeypatch, capsys, {"transcript_path": "/x", "stop_hook_active": True})
+    assert rc == 0
+    assert out.out == ""
+
+
+def test_below_orange_threshold_is_silent(tmp_path, monkeypatch, capsys):
+    p = tmp_path / "t.jsonl"
+    _write_transcript(p, [{"type": "assistant", "message": {"model": "claude-sonnet-5",
+        "usage": {"input_tokens": 1000, "cache_creation_input_tokens": 0, "cache_read_input_tokens": 0}}}])
+    monkeypatch.setattr(cww, "_is_overridden", lambda session_id: False)
+    rc, out = _run_main(monkeypatch, capsys, {"transcript_path": str(p), "session_id": "s1"})
+    assert rc == 0
+    assert out.out == ""
+
+
+def test_orange_band_emits_block_decision(tmp_path, monkeypatch, capsys):
+    p = tmp_path / "t.jsonl"
+    _write_transcript(p, [{"type": "assistant", "message": {"model": "claude-sonnet-5",
+        "usage": {"input_tokens": 155000, "cache_creation_input_tokens": 0, "cache_read_input_tokens": 0}}}])
+    monkeypatch.setattr(cww, "_is_overridden", lambda session_id: False)
+    rc, out = _run_main(monkeypatch, capsys, {"transcript_path": str(p), "session_id": "s1"})
+    assert rc == 0
+    payload = json.loads(out.out)
+    assert payload["decision"] == "block"
+    assert "🟠 CONTEXT" in payload["reason"]
+    assert "~155k tokens" in payload["reason"]
+    assert "~$0.04/turn" in payload["reason"]
+
+
+def test_red_band_emits_red_decision(tmp_path, monkeypatch, capsys):
+    p = tmp_path / "t.jsonl"
+    _write_transcript(p, [{"type": "assistant", "message": {"model": "claude-sonnet-5",
+        "usage": {"input_tokens": 200000, "cache_creation_input_tokens": 0, "cache_read_input_tokens": 0}}}])
+    monkeypatch.setattr(cww, "_is_overridden", lambda session_id: False)
+    rc, out = _run_main(monkeypatch, capsys, {"transcript_path": str(p), "session_id": "s1"})
+    payload = json.loads(out.out)
+    assert "🔴 CONTEXT" in payload["reason"]
+
+
+def test_override_silences_even_above_threshold(tmp_path, monkeypatch, capsys):
+    p = tmp_path / "t.jsonl"
+    _write_transcript(p, [{"type": "assistant", "message": {"model": "claude-sonnet-5",
+        "usage": {"input_tokens": 200000, "cache_creation_input_tokens": 0, "cache_read_input_tokens": 0}}}])
+    monkeypatch.setattr(cww, "_is_overridden", lambda session_id: True)
+    rc, out = _run_main(monkeypatch, capsys, {"transcript_path": str(p), "session_id": "s1"})
+    assert rc == 0
+    assert out.out == ""
+
+
+def test_unreadable_transcript_surfaces_error_nonblocking(tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(cww, "_is_overridden", lambda session_id: False)
+    rc, out = _run_main(monkeypatch, capsys, {"transcript_path": str(tmp_path / "nope.jsonl"), "session_id": "s1"})
+    assert rc == 1
+    assert out.out == ""
+    assert "context-window-warning" in out.err

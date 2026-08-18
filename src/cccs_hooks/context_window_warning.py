@@ -24,9 +24,16 @@ genuine transcript-read error is surfaced to the user on stderr, non-blocking
 """
 from __future__ import annotations
 
+import datetime
 import json
+import sys
 from decimal import ROUND_DOWN, Decimal
 from pathlib import Path
+
+from cccs_hooks import model_info
+
+THRESHOLD_ORANGE = 150_000
+THRESHOLD_RED = 200_000
 
 
 class TranscriptError(Exception):
@@ -109,3 +116,65 @@ def _format_cost(*, tokens: int, price_per_mtok: float) -> str:
     """
     raw = Decimal(tokens) / Decimal(1_000_000) * Decimal(str(price_per_mtok)) * Decimal("0.1")
     return str(raw.quantize(Decimal("0.01"), rounding=ROUND_DOWN))
+
+
+def _is_overridden(session_id: str) -> bool:
+    """Stubbed until a later task lands lib.context_overrides; always False so
+    every threshold/message test in this task is independent of the store."""
+    return False
+
+
+def _reason(*, tokens: int, window: int, price: float, name: str, now: str, red: bool) -> str:
+    k = _k_tokens(tokens)
+    pct = _pct_of_window(tokens, window)
+    label = _window_label(window)
+    cost = _format_cost(tokens=tokens, price_per_mtok=price)
+    emoji = "🔴" if red else "🟠"
+    when = "when you get a natural break" if red else "whenever convenient"
+    return (
+        f"The context window has passed {k}k tokens - about {pct}% of {name}'s "
+        f"{label}-token window. THIS IS A WARNING ONLY - output the two lines below at the "
+        f"start of your response, then end your turn as you normally would. Do not restart "
+        f"or repeat any work.\n"
+        f"'{emoji} CONTEXT ({now}): ~{k}k tokens - ~{pct}% of the {label}-token window "
+        f"({name}, ~${cost}/turn in cache reads). This is a nudge, not a limit - keep going; "
+        f"/compact {when}.'\n"
+        f"'(To silence this warning for the rest of the session, run /context-override.)'"
+    )
+
+
+def main(argv: list[str] | None = None) -> int:
+    try:
+        stdin_obj = json.loads(sys.stdin.read() or "{}")
+    except json.JSONDecodeError:
+        stdin_obj = {}
+
+    if stdin_obj.get("stop_hook_active"):
+        return 0
+
+    transcript_path_str = stdin_obj.get("transcript_path") or ""
+    if not transcript_path_str:
+        return 0
+
+    session_id = stdin_obj.get("session_id") or Path(transcript_path_str).stem
+
+    try:
+        tokens, model_id = _current_context_tokens(Path(transcript_path_str))
+    except TranscriptError as exc:
+        print(f"context-window-warning: {exc}", file=sys.stderr)
+        return 1
+
+    if tokens < THRESHOLD_ORANGE:
+        return 0
+    if _is_overridden(session_id):
+        return 0
+
+    window = model_info.context_window(model_id)
+    price = model_info.input_price_per_mtok(model_id)
+    name = model_info.display_name(model_id)
+    now = datetime.datetime.now().strftime("%H:%M")
+    red = tokens >= THRESHOLD_RED
+
+    reason = _reason(tokens=tokens, window=window, price=price, name=name, now=now, red=red)
+    print(json.dumps({"decision": "block", "reason": reason}))
+    return 0
