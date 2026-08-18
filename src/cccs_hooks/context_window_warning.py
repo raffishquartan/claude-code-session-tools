@@ -25,6 +25,7 @@ genuine transcript-read error is surfaced to the user on stderr, non-blocking
 from __future__ import annotations
 
 import json
+import math
 from pathlib import Path
 
 
@@ -78,3 +79,26 @@ def _current_context_tokens(transcript_path: Path) -> tuple[int, str]:
         + int(last_usage.get("cache_read_input_tokens", 0) or 0)
     )
     return tokens, last_model
+
+
+def _k_tokens(tokens: int) -> int:
+    return (tokens + 500) // 1000
+
+
+def _pct_of_window(tokens: int, window: int) -> int:
+    return (tokens * 100 + window // 2) // window
+
+
+def _window_label(window: int) -> str:
+    if window >= 1_000_000:
+        return f"{window // 1_000_000}M"
+    return f"{(window + 500) // 1000}k"
+
+
+def _format_cost(*, tokens: int, price_per_mtok: float) -> str:
+    """Cache-read cost, ~0.1x the model's standard input price, truncated
+    (not rounded) to 2dp - matches `bc`'s `scale=2` semantics from the bash
+    original. f'{x:.2f}' rounds and would silently drift from it."""
+    raw = tokens / 1_000_000 * price_per_mtok * 0.1
+    truncated = math.floor(raw * 100) / 100
+    return f"{truncated:.2f}"

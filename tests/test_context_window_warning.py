@@ -54,3 +54,30 @@ def test_corrupt_transcript_raises(tmp_path: Path):
     p.write_text("not json at all\nstill not json\n")
     with pytest.raises(cww.TranscriptError):
         cww._current_context_tokens(p)
+
+
+def test_golden_cost_case_matches_the_pasted_warning():
+    """tokens=155000, Sonnet 5 ($3.00/MTok) is the exact figure from the
+    context-warning message pasted at the top of the session that started
+    this migration: '~155k tokens ... ~$0.04/turn in cache reads'."""
+    assert cww._format_cost(tokens=155_000, price_per_mtok=3.00) == "0.04"
+
+
+def test_cost_truncates_not_rounds():
+    """tokens=199_000, price=3.00 -> 0.199*3.00*0.1 = 0.0597 -> bc truncates
+    to "0.05"; a naive f'{x:.2f}' would round to "0.06". Chosen specifically
+    because truncation and rounding clearly disagree on this input."""
+    assert cww._format_cost(tokens=199_000, price_per_mtok=3.00) == "0.05"
+
+
+def test_k_and_pct_integer_arithmetic():
+    assert cww._k_tokens(155_000) == 155
+    assert cww._k_tokens(155_499) == 155  # (155499+500)//1000 == 155
+    assert cww._k_tokens(155_500) == 156  # (155500+500)//1000 == 156
+    assert cww._pct_of_window(155_000, 1_000_000) == 16  # (15500000+500000)//1000000
+    assert cww._pct_of_window(200_000, 200_000) == 100
+
+
+def test_window_label():
+    assert cww._window_label(1_000_000) == "1M"
+    assert cww._window_label(200_000) == "200k"
