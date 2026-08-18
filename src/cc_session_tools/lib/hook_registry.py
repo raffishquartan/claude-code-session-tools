@@ -31,6 +31,7 @@ HOOK_VERBS: dict[str, str] = {
     "messaging-deliver": "cccs_hooks.messaging_deliver",
     "catchup": "cccs_hooks.catchup",
     "pending-migration": "cccs_hooks.pending_migration",
+    "context-window-warning": "cccs_hooks.context_window_warning",
 }
 
 
@@ -46,6 +47,7 @@ HOOK_DESCRIPTIONS: dict[str, str] = {
     "messaging-deliver": "Delivers inter-session messages (digest + auto-read + receipts) on session start and each prompt",
     "catchup": "Reconciles+launches missed scheduled jobs (ccsched) detached and surfaces a catch-up digest (SessionStart + UserPromptSubmit)",
     "pending-migration": "Detects legacy pre-1.0.0 flat-file data left unmigrated (ccmsg/ccsched/sessions/telemetry) and surfaces a FAIL digest pointing at `ccst migrate all`; honours `ccst doctor --mute` (SessionStart)",
+    "context-window-warning": "Nudges toward /compact when the context window passes 150k/200k tokens; silenced for the session by /context-override (Stop)",
 }
 
 # Every settings.json hook entry CCST owns is spelled `ccst hooks run <name>`.
