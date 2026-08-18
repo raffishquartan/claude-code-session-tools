@@ -25,7 +25,7 @@ genuine transcript-read error is surfaced to the user on stderr, non-blocking
 from __future__ import annotations
 
 import json
-import math
+from decimal import ROUND_DOWN, Decimal
 from pathlib import Path
 
 
@@ -98,7 +98,14 @@ def _window_label(window: int) -> str:
 def _format_cost(*, tokens: int, price_per_mtok: float) -> str:
     """Cache-read cost, ~0.1x the model's standard input price, truncated
     (not rounded) to 2dp - matches `bc`'s `scale=2` semantics from the bash
-    original. f'{x:.2f}' rounds and would silently drift from it."""
-    raw = tokens / 1_000_000 * price_per_mtok * 0.1
-    truncated = math.floor(raw * 100) / 100
-    return f"{truncated:.2f}"
+    original. Uses Decimal rather than native float arithmetic: a naive
+    math.floor(raw * 100) / 100 on a float hits representation error for
+    ordinary inputs (e.g. tokens=700_000, price=3.00 evaluates to
+    0.20999999999999996 in float, one cent short of the correct 0.21) -
+    caught by adversarial code review on this exact function, not
+    hypothetical. Decimal(str(price_per_mtok)) avoids reintroducing the same
+    float-representation problem by round-tripping the price through its
+    float form first.
+    """
+    raw = Decimal(tokens) / Decimal(1_000_000) * Decimal(str(price_per_mtok)) * Decimal("0.1")
+    return str(raw.quantize(Decimal("0.01"), rounding=ROUND_DOWN))

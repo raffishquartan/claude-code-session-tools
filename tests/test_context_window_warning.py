@@ -70,6 +70,15 @@ def test_cost_truncates_not_rounds():
     assert cww._format_cost(tokens=199_000, price_per_mtok=3.00) == "0.05"
 
 
+def test_cost_does_not_lose_a_cent_to_float_representation_error():
+    """math.floor(raw * 100) / 100 on a native float loses a cent here:
+    700000/1e6 * 3.00 * 0.1 evaluates to 0.20999999999999996 in float, not
+    exactly 0.21, so a naive floor gives "0.20". Found by adversarial code
+    review - not a contrived edge case: 700k tokens is 70% of a Sonnet 5
+    1M-token window, an entirely ordinary state for this hook."""
+    assert cww._format_cost(tokens=700_000, price_per_mtok=3.00) == "0.21"
+
+
 def test_k_and_pct_integer_arithmetic():
     assert cww._k_tokens(155_000) == 155
     assert cww._k_tokens(155_499) == 155  # (155499+500)//1000 == 155
