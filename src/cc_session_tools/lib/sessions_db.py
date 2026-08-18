@@ -63,6 +63,12 @@ CREATE TABLE IF NOT EXISTS install_sync (
     value      TEXT NOT NULL,
     updated_at TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS context_overrides (
+    session_id TEXT PRIMARY KEY,
+    state      TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
 """
 
 
