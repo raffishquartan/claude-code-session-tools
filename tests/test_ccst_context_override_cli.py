@@ -57,5 +57,9 @@ def test_missing_session_id_errors(base_env):
 
 
 def test_unknown_action_errors(base_env):
+    """The subparser's choices=["on", "off", "status"] rejects this before
+    _cmd_context_override ever runs - this documents that, not a branch in
+    the handler (there isn't one; argparse owns this rejection entirely)."""
     result = _run(base_env, "bogus")
-    assert result.returncode != 0
+    assert result.returncode == 2
+    assert "invalid choice" in result.stderr

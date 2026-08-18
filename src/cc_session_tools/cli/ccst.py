@@ -1608,13 +1608,12 @@ def _cmd_context_override(args: argparse.Namespace) -> int:
         context_overrides.set_override(session_id, "off")
         print("Context-window override OFF. The 100k/150k warnings will appear again.")
         return 0
-    if action == "status":
-        state = "ON" if context_overrides.get_override(session_id) else "OFF"
-        print(f"Context-window override is {state} for this session.")
-        return 0
-
-    print(f"context-override: unknown action {action!r} (expected on|off|status).", file=sys.stderr)
-    return 1
+    # action == "status" - the only remaining choice. The subparser's
+    # choices=["on", "off", "status"] already rejects anything else before
+    # this function ever runs, so there is no unknown-action branch here.
+    state = "ON" if context_overrides.get_override(session_id) else "OFF"
+    print(f"Context-window override is {state} for this session.")
+    return 0
 
 
 # ---------- arg parser ----------
