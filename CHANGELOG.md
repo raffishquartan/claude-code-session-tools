@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.6.0] - 2026-08-18
+
+### Added
+
+- **`ccst hooks run context-window-warning`** and **`ccst context-override [on|off|status]`** —
+  the context-window Stop-hook nudge and its override skill, previously owned by
+  `claude-code-config-sync`, now live natively in CCST with identical behaviour (same 150k/200k
+  thresholds, same message wording). The override flag moved from a
+  `~/.claude/context-overrides/<session_id>` file to a `context_overrides` row in the shared
+  `sessions.db`.
+
 ## [2.5.0] - 2026-08-17
 
 ### Changed

@@ -454,6 +454,10 @@ Note: the 8-digit confirmation in `delete-sessions` is an inline prompt (not a r
 
 Measures the persistent context — everything loaded into every session before the user types anything (CLAUDE.md files, skill descriptions, MCP tool names, hooks, harness baseline) — attributes token cost per contributor, ranks reduction candidates by token-saved-per-risk, and applies approved reductions behind per-item 8-digit confirmation. Triggers on "reduce context", "what's eating my context window", "shrink persistent context", "audit my context footprint", "trim startup overhead". CLAUDE.md files and SKILL.md frontmatter are read straight from disk by `scripts/analyze_context.py`; only the harness system-prompt baseline is an estimate, flagged `(estimated)` in the report. See `skills/reduce-persistent-context/CALIBRATION.md` for how that estimate was derived and how to re-derive it if the harness changes.
 
+### `context-override`
+
+Silences the `context-window-warning` Stop hook's 150k/200k nudges entirely for the current session. Triggers on `/context-override`, "stop the context warnings", "silence the compact nag", "I know about the context, stop warning me". Runs `ccst context-override <on|off|status>` (default `on`); the flag is keyed to the session and does not persist once it ends.
+
 See `docs/design.md` for the full design and CLI contract.
 
 ## Inter-session messaging
@@ -598,6 +602,8 @@ to make the hook library available. Hooks are invoked through `ccst hooks run <n
 | `cccs_hooks.last_screenshot` | UserPromptSubmit | Resolves the newest screenshot for the `>lss` token and injects its path (see [Last screenshot hook](#last-screenshot-hook)). |
 | `cccs_hooks.messaging_deliver` | SessionStart + UserPromptSubmit | Sweeps `ccmsg.db` for messages addressed to this session and injects a compact digest as additional context (see [Inter-session messaging](#inter-session-messaging)). |
 | `cccs_hooks.catchup` | SessionStart + UserPromptSubmit | Reconciles + launches scheduled jobs detached, then surfaces completed runs as a digest (see [Scheduled-task catch-up](#scheduled-task-catch-up)). |
+| `cccs_hooks.context_window_warning` | Stop | Nudges toward /compact when the context window passes 150k/200k tokens; silenced by /context-override. |
+| `cccs_hooks.model_info` | — | Model id → context window / price / display name lookup; used by `context_window_warning`. |
 
 ### Running hooks via `ccst hooks run <name>`
 
@@ -623,6 +629,7 @@ Where `<name>` is one of:
 | `last-screenshot` | `cccs_hooks.last_screenshot` |
 | `messaging-deliver` | `cccs_hooks.messaging_deliver` |
 | `catchup` | `cccs_hooks.catchup` |
+| `context-window-warning` | `cccs_hooks.context_window_warning` |
 
 The dispatcher reads the event payload from stdin, calls the matching module's
 `main()`, and propagates its exit code.
@@ -777,6 +784,20 @@ ccst hooks uninstall --hook session-tag --apply
 ### `ccst hooks run <name>`
 
 Run a Claude Code hook by name. See the table above for the supported names.
+
+### `ccst context-override [on|off|status]`
+
+Toggle the per-session flag that the `context-window-warning` Stop hook checks. The hook's
+150k/200k nudges are always non-blocking - work continues either way; ON just silences the
+nudge messages entirely instead of showing them. The flag is a `context_overrides` row in
+`sessions.db` keyed by `$CLAUDE_CODE_SESSION_ID`; it does not persist once the session ends.
+This is the CLI half of the `context-override` skill.
+
+```sh
+ccst context-override          # same as "on" - silence the warnings
+ccst context-override off      # re-enable the warnings
+ccst context-override status   # report the current state
+```
 
 ### `ccst skills install`
 

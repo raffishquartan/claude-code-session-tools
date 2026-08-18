@@ -94,6 +94,12 @@
         "hooks": [
           {
             "type": "command",
+            "command": "ccst hooks run context-window-warning",
+            "timeout": 5,
+            "statusMessage": "Checking context-window size..."
+          },
+          {
+            "type": "command",
             "command": "ccst hooks run after-response",
             "timeout": 10,
             "statusMessage": "Recording session activity..."

@@ -68,5 +68,6 @@ def test_hook_verbs_covers_every_shim_module() -> None:
         "messaging-deliver",
         "catchup",
         "pending-migration",
+        "context-window-warning",
     }
     assert set(HOOK_VERBS) == expected
