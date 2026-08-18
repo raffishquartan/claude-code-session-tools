@@ -178,3 +178,7 @@ def main(argv: list[str] | None = None) -> int:
     reason = _reason(tokens=tokens, window=window, price=price, name=name, now=now, red=red)
     print(json.dumps({"decision": "block", "reason": reason}))
     return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
