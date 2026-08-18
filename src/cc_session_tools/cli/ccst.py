@@ -1602,11 +1602,11 @@ def _cmd_context_override(args: argparse.Namespace) -> int:
     if action == "on":
         context_overrides.set_override(session_id, "on")
         print("Context-window override ON for this session.")
-        print("The 100k/150k warnings are silenced until you run /context-override off or the session ends.")
+        print("The 150k/200k warnings are silenced until you run /context-override off or the session ends.")
         return 0
     if action == "off":
         context_overrides.set_override(session_id, "off")
-        print("Context-window override OFF. The 100k/150k warnings will appear again.")
+        print("Context-window override OFF. The 150k/200k warnings will appear again.")
         return 0
     # action == "status" - the only remaining choice. The subparser's
     # choices=["on", "off", "status"] already rejects anything else before

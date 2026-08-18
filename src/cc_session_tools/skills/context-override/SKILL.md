@@ -1,6 +1,6 @@
 ---
 name: context-override
-description: Silence the context-window-warning Stop hook's 100k/150k warnings entirely for the current session. Use when the user runs /context-override, or says "stop the context warnings", "silence the compact nag", "I know about the context, stop warning me". By default the warnings are visible but non-blocking; this makes them silent. Run with "off" to re-enable warnings, "status" to check.
+description: Silence the context-window-warning Stop hook's 150k/200k warnings entirely for the current session. Use when the user runs /context-override, or says "stop the context warnings", "silence the compact nag", "I know about the context, stop warning me". By default the warnings are visible but non-blocking; this makes them silent. Run with "off" to re-enable warnings, "status" to check.
 ---
 
 # context-override
@@ -8,7 +8,7 @@ description: Silence the context-window-warning Stop hook's 100k/150k warnings e
 Toggles a per-session flag that the `context-window-warning` Stop hook checks.
 When ON, the hook still surfaces a gentle "⚠ Context ~Xk" reminder each turn but
 never pauses work, so file reads and other tool calls proceed normally past the
-100k/150k thresholds.
+150k/200k thresholds.
 
 ## When to use
 
