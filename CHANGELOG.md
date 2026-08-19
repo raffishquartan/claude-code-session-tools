@@ -52,6 +52,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   still escapes unhandled - to a new `ccst-pdata-init-write.log` file inside the project,
   flushed after every line.
 
+- **`ccst hooks run pending-rename`** — the move-session skill's SessionStart marker check is now
+  registered through CCST's own `config/hooks-bundle.json` (timeout 10s) instead of by hand in
+  `claude-code-config-sync`'s settings.json, so CCST owns every hook it ships.
+
+### Fixed
+
+- **The pending-rename SessionStart hook no longer dies silently on a slow filesystem.** It
+  canonicalises its scan root once (`cd -P`), so a project reached through a symlink — e.g.
+  `~/cc/<project>` pointing at a 9p-mounted Windows drive — is walked by its real path, and it
+  enforces its own 5s soft deadline (`CCST_PENDING_RENAME_SOFT_TIMEOUT`) inside a 10s registered
+  timeout. Overrunning now prints a short notice plus the manual command; previously the harness
+  killed the hook with zero output, losing the entire remediation block. The registered timeout is
+  10s rather than the 7s a 5s deadline would suggest because WSL2 returns from a bare `sleep 5`
+  after ~8s in roughly one run in five (measured), and every timing primitive inherits that slack.
+- **Stale pending-rename markers no longer nag.** A marker whose `/rename` has already been applied
+  (the session transcript's `custom-title` equals the marker's `tag`) is left out of the report;
+  the marker file itself is untouched, since deleting files stays a user action. Above three
+  genuinely pending markers the per-marker dump collapses to a count plus the two bulk-clear
+  commands.
+
 ## [2.6.0] - 2026-08-18
 
 ### Added

@@ -630,6 +630,8 @@ Where `<name>` is one of:
 | `messaging-deliver` | `cccs_hooks.messaging_deliver` |
 | `catchup` | `cccs_hooks.catchup` |
 | `context-window-warning` | `cccs_hooks.context_window_warning` |
+| `pending-migration` | `cccs_hooks.pending_migration` |
+| `pending-rename` | `cccs_hooks.pending_rename` |
 
 The dispatcher reads the event payload from stdin, calls the matching module's
 `main()`, and propagates its exit code.
@@ -738,7 +740,7 @@ The `ccst` umbrella CLI provides hook and skill management, shell helper install
 Brings `~/.claude/settings.json` into line with a source `settings.json`: adds
 the hooks it is missing, and removes any entry naming a hook this build of CCST
 cannot run. With no `--source`, auto-discovers the bundled
-`config/hooks-bundle.json` and installs all eleven default hooks.
+`config/hooks-bundle.json` and installs all thirteen default hooks.
 
 ```sh
 # Dry run (default) - shows what would be added
