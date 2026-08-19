@@ -129,6 +129,54 @@ def test_create_backup_includes_project_db_snapshot(monkeypatch, tmp_path):
     assert verify_conn.execute("SELECT x FROM t").fetchall() == [(1,)]
 
 
+def test_create_backup_wraps_sqlite_error_during_db_snapshot(monkeypatch, tmp_path):
+    """sqlite3.OperationalError is NOT a subclass of OSError, so a locked/corrupt .db hit
+    during the sqlite3 backup API call in _snapshot_db_into_tar must be handled exactly like
+    an OSError by create_backup(): wrapped into BackupError (not left to propagate raw,
+    which would bypass Task 3's `except backup.BackupError` in init_service.write()),
+    retried per _MAX_ATTEMPTS/backoff, and cleaned up with no leftover .tmp file."""
+    from cc_session_tools.lib.pdata import store
+
+    monkeypatch.setenv(backup.BACKUP_DIR_ENV, str(tmp_path / "backups"))
+    monkeypatch.setenv(store.PROJECT_DB_DIR_ENV, str(tmp_path / "dbs"))
+    monkeypatch.setattr(backup.time, "sleep", lambda _seconds: None)
+    project_root = tmp_path / "demo"
+    project_root.mkdir()
+    (project_root / "ideas.csv").write_text("idea\nfirst\n")
+
+    db_path = store.db_path("demo")
+    db_path.parent.mkdir(parents=True)
+    conn = sqlite3.connect(db_path)
+    conn.execute("CREATE TABLE t (x INTEGER)")
+    conn.commit()
+    conn.close()
+
+    calls = {"n": 0}
+
+    class LockedConnection:
+        """Stands in for the real readonly sqlite3.Connection db.connect() returns, so
+        .backup() can be forced to raise sqlite3.OperationalError — sqlite3.Connection
+        is a C-level immutable type and its methods can't be monkeypatched directly."""
+
+        def backup(self, *args, **kwargs):
+            calls["n"] += 1
+            raise sqlite3.OperationalError("database is locked")
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(backup.db, "connect", lambda *args, **kwargs: LockedConnection())
+
+    with pytest.raises(backup.BackupError, match="demo"):
+        backup.create_backup(project="demo", project_root=project_root)
+
+    assert calls["n"] == backup._MAX_ATTEMPTS
+
+    backups_dir = tmp_path / "backups"
+    assert list(backups_dir.glob("demo-*.tar.gz")) == []
+    assert list(backups_dir.glob("*.tmp")) == []
+
+
 def test_create_backup_skips_db_entry_when_no_db_exists(monkeypatch, tmp_path):
     from cc_session_tools.lib.pdata import store
 

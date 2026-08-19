@@ -71,13 +71,19 @@ def create_backup(*, project: str, project_root: Path) -> Path:
     a failed or interrupted run never leaves a corrupt file at the name a valid backup would
     use. Transient OSErrors (e.g. a flaky network/DrvFS-backed project_root) are retried a
     bounded number of times before raising BackupError.
+
+    sqlite3.Error is caught alongside OSError because it is NOT an OSError subclass, yet
+    _snapshot_db_into_tar's sqlite3 backup-API call can raise one (e.g. sqlite3.OperationalError
+    once db.connect()'s 5s busy-timeout is exceeded against a locked source .db, or a disk I/O
+    error surfacing through the sqlite3 backup API) — without this it would escape unwrapped,
+    skip the retry/backoff below, and leave tmp_path behind.
     """
     target_dir = backup_dir()
     target_dir.mkdir(parents=True, exist_ok=True)
     final_path = target_dir / f"{project}-{int(time.time())}.tar.gz"
     tmp_path = final_path.parent / (final_path.name + ".tmp")
 
-    last_exc: OSError | None = None
+    last_exc: OSError | sqlite3.Error | None = None
     for attempt in range(1, _MAX_ATTEMPTS + 1):
         try:
             with tarfile.open(tmp_path, "w:gz") as tar:
@@ -85,7 +91,7 @@ def create_backup(*, project: str, project_root: Path) -> Path:
                 tar.add(project_root, arcname=project)
             os.replace(tmp_path, final_path)
             return final_path
-        except OSError as exc:
+        except (OSError, sqlite3.Error) as exc:
             last_exc = exc
             tmp_path.unlink(missing_ok=True)
             if attempt < _MAX_ATTEMPTS:
