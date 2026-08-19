@@ -104,3 +104,20 @@ git push --tags
 
 Create a GitHub Release from the tag — the workflow fires automatically, builds
 the wheel and sdist, attaches them to the release, and publishes to PyPI.
+
+## Known limitation: `catchup`'s SessionStart `systemMessage` may not reach the terminal
+
+If `cccs_hooks.catchup` (the scheduled-job catch-up digest, registered on `SessionStart` and
+`UserPromptSubmit`) emits a correctly-formed top-level `systemMessage` but the user reports never
+seeing it, don't assume `catchup.py` is broken — check `remoteControlAtStartup` in
+`~/.claude/settings.json` first. Two Claude Code GitHub issues (`anthropics/claude-code#47828`,
+`#52775`) describe exactly this: `SessionStart` `systemMessage` is swallowed or not rendered
+inline when Remote Control is active at startup, reproduced on both macOS and Windows. Both were
+closed by a stale-bot for inactivity, not fixed — there is no `CHANGELOG.md` entry on Claude
+Code's `main` indicating this is resolved.
+
+This is Claude Code platform behaviour, not something `catchup.py` can work around by changing its
+own output format — it already follows the documented hooks contract. Don't treat a job's
+`surface: true` `systemMessage` as guaranteed-delivered to the user for this reason; for a finding
+where a missed notification actually matters, route through the `notify-user` skill's Telegram
+channel instead.
