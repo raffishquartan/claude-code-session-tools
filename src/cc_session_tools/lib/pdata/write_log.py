@@ -19,7 +19,17 @@ LOG_FILENAME = "ccst-pdata-init-write.log"
 class _Tee:
     """File-like object writing to two streams, flushing the log stream after every write so
     the file is never left holding a buffered-but-unflushed tail if the process dies (crash,
-    OOM-kill, Ctrl-C) mid-run."""
+    OOM-kill, Ctrl-C) mid-run.
+
+    The log side of every write is best-effort: an OSError writing to the log file is
+    swallowed, never propagated to the real stream's caller. The whole point of this module is
+    to survive and diagnose exactly the class of transient I/O error (a flaky network/DrvFS-
+    backed project root) that also happens to be where the log file itself lives — if writing a
+    progress line to the log could itself raise, a log-file blip during --write's import loop
+    would be caught by that loop's own `except OSError` and misreported as a failure of
+    whichever source file was being imported at the time, or (for the calls outside that loop)
+    escape write() as a raw, uncaught exception. The real stream (stdout/stderr) still gets
+    every write; only the log's copy is allowed to silently fail."""
 
     def __init__(self, real_stream: TextIO, log_file: TextIO) -> None:
         self._real = real_stream
@@ -27,13 +37,19 @@ class _Tee:
 
     def write(self, data: str) -> int:
         self._real.write(data)
-        self._log.write(data)
-        self._log.flush()
+        try:
+            self._log.write(data)
+            self._log.flush()
+        except OSError:
+            pass
         return len(data)
 
     def flush(self) -> None:
         self._real.flush()
-        self._log.flush()
+        try:
+            self._log.flush()
+        except OSError:
+            pass
 
     def isatty(self) -> bool:
         return False
@@ -74,7 +90,13 @@ class WriteLog:
         assert self._real_stderr is not None, "WriteLog.__exit__ called without a completed __enter__"
 
         if exc is not None:
-            traceback.print_exception(exc_type, exc, tb, file=self._file)
-            self._file.flush()
+            try:
+                traceback.print_exception(exc_type, exc, tb, file=self._file)
+                self._file.flush()
+            except OSError:
+                pass  # same best-effort contract as _Tee — never let the log itself crash
         sys.stdout, sys.stderr = self._real_stdout, self._real_stderr
-        self._file.close()
+        try:
+            self._file.close()
+        except OSError:
+            pass

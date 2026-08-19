@@ -60,6 +60,62 @@ def test_write_log_writes_non_ascii_content(tmp_path):
     assert "café — naïve façade 日本語" in log_path.read_text(encoding="utf-8")
 
 
+def test_write_log_write_survives_a_broken_log_stream(tmp_path):
+    """The whole point of this module is to survive the exact class of transient I/O error
+    (a flaky network/DrvFS-backed project root) that the log file itself also lives under. If
+    a write to the log stream could raise, a log-file blip during --write's import loop would
+    be caught by that loop's own `except OSError` and misreported as a source-file import
+    failure, or escape write() as a raw exception for calls outside that loop. The real
+    stream must still receive every write even when the log side is broken."""
+    project_root = tmp_path / "demo"
+    project_root.mkdir()
+
+    class _BrokenLog:
+        def write(self, data):
+            raise OSError(5, "Input/output error")
+
+        def flush(self):
+            raise OSError(5, "Input/output error")
+
+    real_stdout = sys.stdout
+    tee = write_log._Tee(real_stdout, _BrokenLog())
+
+    written = tee.write("hello despite a broken log")  # must not raise
+    tee.flush()  # must not raise
+
+    assert written == len("hello despite a broken log")
+
+
+def test_write_log_exit_survives_a_broken_log_stream_while_reporting_an_exception(tmp_path):
+    """Same contract as above, for __exit__'s traceback-capture path and its file close."""
+    project_root = tmp_path / "demo"
+    project_root.mkdir()
+    real_stdout, real_stderr = sys.stdout, sys.stderr
+
+    class _BrokenLog:
+        def write(self, data):
+            raise OSError(5, "Input/output error")
+
+        def flush(self):
+            raise OSError(5, "Input/output error")
+
+        def close(self):
+            raise OSError(5, "Input/output error")
+
+    log = write_log.WriteLog(project_root)
+    log.__enter__()
+    log._file = _BrokenLog()  # simulate the log file becoming unwritable mid-run
+
+    try:
+        raise ValueError("boom")
+    except ValueError:
+        exc_type, exc, tb = sys.exc_info()
+        log.__exit__(exc_type, exc, tb)  # must not raise despite the broken file
+
+    assert sys.stdout is real_stdout  # streams were still restored
+    assert sys.stderr is real_stderr
+
+
 def test_write_log_captures_traceback_of_an_exception_that_escapes(tmp_path):
     project_root = tmp_path / "demo"
     project_root.mkdir()
