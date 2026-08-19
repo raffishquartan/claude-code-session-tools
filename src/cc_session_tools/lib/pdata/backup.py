@@ -20,7 +20,7 @@ _RETRY_BACKOFF_SECONDS = (1, 2)
 
 
 class BackupError(Exception):
-    """create_backup() exhausted its retries against a persistent OSError."""
+    """create_backup() exhausted its retries against a persistent OSError or sqlite3.Error."""
 
 
 def backup_dir() -> Path:

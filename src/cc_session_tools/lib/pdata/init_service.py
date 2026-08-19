@@ -113,6 +113,24 @@ def _validate_no_conflicting_field_types(m: Manifest) -> None:
             seen[key] = spec.sql_type
 
 
+def _rollback(*, project: str, created_ids: list[int]) -> list[str]:
+    """Soft-delete every id in created_ids (spec §4.5) — no hard delete, full auditability.
+    Every id here was inserted earlier in this single-threaded run, so its version is always
+    1. Each delete_record call is wrapped individually: service.RecordNotFoundError/
+    VersionConflictError are plain Exception subclasses (not ValueError/OSError), so an
+    unwrapped raise here would abort the loop mid-way and leave some just-inserted rows
+    soft-deleted and others still live. Any rollback failure is returned alongside the
+    caller's own failure reasons rather than raised, since the caller still needs a
+    WriteResult back, not a crash."""
+    rollback_failures: list[str] = []
+    for record_id in created_ids:
+        try:
+            service.delete_record(project=project, record_id=record_id, expected_version=1)
+        except (service.RecordNotFoundError, service.VersionConflictError) as exc:
+            rollback_failures.append(f"record {record_id}: rollback failed: {exc}")
+    return rollback_failures
+
+
 def write(*, project: str, rehearse: Path | None = None) -> WriteResult:
     project_root = init_paths.resolve_project_root(project, rehearse=rehearse)
     proposal_path = project_root / init_paths.PROPOSAL_FILENAME
@@ -174,32 +192,24 @@ def write(*, project: str, rehearse: Path | None = None) -> WriteResult:
         )
 
         if reasons:
-            # Soft-delete every row inserted this run (spec §4.5) — no hard delete,
-            # full auditability, and nothing proceeds to backup/cutover. Every id
-            # here was just inserted in this single-threaded run, so its version is
-            # always 1 — but each delete_record call is still wrapped individually:
-            # service.RecordNotFoundError/VersionConflictError are plain Exception
-            # subclasses (not ValueError/OSError), so an unwrapped raise here would
-            # abort the loop mid-way and leave some just-inserted rows soft-deleted
-            # and others still live. Any rollback failure is reported alongside the
-            # original failure reasons rather than raised, since the caller still
-            # needs a WriteResult back, not a crash, to know backup/cutover did not
-            # run.
-            rollback_failures: list[str] = []
-            for record_id in created_ids:
-                try:
-                    service.delete_record(
-                        project=project, record_id=record_id, expected_version=1,
-                    )
-                except (service.RecordNotFoundError, service.VersionConflictError) as exc:
-                    rollback_failures.append(f"record {record_id}: rollback failed: {exc}")
-            return WriteResult(created_record_ids=[], entries_written=[],
-                               backup_path=None,
-                               failure=WriteFailure(reasons=reasons + rollback_failures))
+            return WriteResult(
+                created_record_ids=[], entries_written=[], backup_path=None,
+                failure=WriteFailure(
+                    reasons=reasons + _rollback(project=project, created_ids=created_ids)
+                ),
+            )
 
         # Still inside both overrides: a rehearsed run's backup must land in the
         # rehearsal sandbox (backup_dir_override), never in the real backup dir.
-        backup_path = backup.create_backup(project=project, project_root=project_root)
+        try:
+            backup_path = backup.create_backup(project=project, project_root=project_root)
+        except backup.BackupError as exc:
+            return WriteResult(
+                created_record_ids=[], entries_written=[], backup_path=None,
+                failure=WriteFailure(
+                    reasons=[str(exc)] + _rollback(project=project, created_ids=created_ids)
+                ),
+            )
 
     cutover.archive_entries(project_root=project_root, entries=written_entries)
     return WriteResult(

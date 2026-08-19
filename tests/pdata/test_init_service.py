@@ -267,6 +267,33 @@ def test_write_reports_rollback_failure_without_crashing(monkeypatch, tmp_path):
     assert any("rollback failed" in reason for reason in result.failure.reasons)
 
 
+def test_write_rolls_back_and_reports_failure_when_backup_raises(monkeypatch, tmp_path):
+    from cc_session_tools.lib.pdata import backup, service
+
+    monkeypatch.setenv(init_paths.PROJECTS_ROOT_ENV, str(tmp_path / "projects"))
+    monkeypatch.setenv("CCST_PROJECT_DB_DIR", str(tmp_path / "dbs"))
+    monkeypatch.setenv("CCST_PDATA_BACKUP_DIR", str(tmp_path / "backups"))
+    project_dir = tmp_path / "projects" / "demo"
+    project_dir.mkdir(parents=True)
+    (project_dir / "ideas.csv").write_text("idea\nfirst\nsecond\n")
+
+    init_service.dry_run(project="demo")
+
+    def _always_fails(**kwargs):
+        raise backup.BackupError("simulated backup failure")
+
+    monkeypatch.setattr(backup, "create_backup", _always_fails)
+
+    result = init_service.write(project="demo")
+
+    assert result.failure is not None
+    assert any("simulated backup failure" in reason for reason in result.failure.reasons)
+    assert service.list_records(project="demo", record_group="ideas") == []
+    # Nothing was cut over — source file untouched, no .pdata-migrated dir.
+    assert (project_dir / "ideas.csv").exists()
+    assert not (project_dir / init_paths.MIGRATED_ARCHIVE_DIRNAME).exists()
+
+
 def test_write_rejects_conflicting_field_sql_types_across_entries(monkeypatch, tmp_path):
     """Two manifest entries feeding the same record_group with the same field name
     but a different sql_type must be rejected before any DDL/import runs — Plan
