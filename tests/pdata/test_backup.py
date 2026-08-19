@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import sqlite3
 import tarfile
 
 import pytest
@@ -98,3 +99,45 @@ def test_create_backup_retries_transient_os_error_then_succeeds(monkeypatch, tmp
 
     assert calls["n"] == 2
     assert tar_path.exists()
+
+
+def test_create_backup_includes_project_db_snapshot(monkeypatch, tmp_path):
+    from cc_session_tools.lib.pdata import store
+
+    monkeypatch.setenv(backup.BACKUP_DIR_ENV, str(tmp_path / "backups"))
+    monkeypatch.setenv(store.PROJECT_DB_DIR_ENV, str(tmp_path / "dbs"))
+    project_root = tmp_path / "demo"
+    project_root.mkdir()
+
+    db_path = store.db_path("demo")
+    db_path.parent.mkdir(parents=True)
+    conn = sqlite3.connect(db_path)
+    conn.execute("CREATE TABLE t (x INTEGER)")
+    conn.execute("INSERT INTO t VALUES (1)")
+    conn.commit()
+    conn.close()
+
+    tar_path = backup.create_backup(project="demo", project_root=project_root)
+
+    with tarfile.open(tar_path, "r:gz") as tar:
+        assert "demo/demo.db" in tar.getnames()
+        extracted = tmp_path / "extracted.db"
+        with tar.extractfile("demo/demo.db") as fh:
+            extracted.write_bytes(fh.read())
+
+    verify_conn = sqlite3.connect(extracted)
+    assert verify_conn.execute("SELECT x FROM t").fetchall() == [(1,)]
+
+
+def test_create_backup_skips_db_entry_when_no_db_exists(monkeypatch, tmp_path):
+    from cc_session_tools.lib.pdata import store
+
+    monkeypatch.setenv(backup.BACKUP_DIR_ENV, str(tmp_path / "backups"))
+    monkeypatch.setenv(store.PROJECT_DB_DIR_ENV, str(tmp_path / "dbs"))
+    project_root = tmp_path / "demo"
+    project_root.mkdir()
+
+    tar_path = backup.create_backup(project="demo", project_root=project_root)
+
+    with tarfile.open(tar_path, "r:gz") as tar:
+        assert "demo/demo.db" not in tar.getnames()

@@ -2,11 +2,13 @@
 from __future__ import annotations
 
 import os
+import sqlite3
 import tarfile
 import time
 from pathlib import Path
 
-from cc_session_tools.lib import paths
+from cc_session_tools.lib import db, paths
+from cc_session_tools.lib.pdata import store
 
 BACKUP_DIR_ENV = "CCST_PDATA_BACKUP_DIR"
 
@@ -24,6 +26,37 @@ class BackupError(Exception):
 def backup_dir() -> Path:
     override = os.environ.get(BACKUP_DIR_ENV)
     return Path(override).expanduser() if override else paths.data_home() / "pdata-backups"
+
+
+def _snapshot_db_into_tar(tar: tarfile.TarFile, *, project: str, tmp_dir: Path) -> None:
+    """Add a point-in-time consistent copy of the project's .db to the archive, via the
+    sqlite3 backup API rather than a raw file copy — a raw copy of a WAL-mode database can
+    miss rows still sitting in the -wal file that haven't been checkpointed into the main
+    file yet. No-op if the project has no .db yet (a brand-new project's first --write).
+
+    The source connection goes through the shared lib/db.py helper, readonly, matching this
+    repo's data-store convention (WAL + busy-timeout applied consistently). The destination
+    is a throwaway temp file immediately tar'd and deleted, not a persistent store, so it
+    connects directly via sqlite3.connect() — routing it through the WAL-enabling helper
+    would just leave -wal/-shm sidecars to clean up around a file that exists for a few
+    lines and is never reopened."""
+    db_source = store.db_path(project)
+    if not db_source.exists():
+        return
+    snapshot_path = tmp_dir / f"{project}.db"
+    try:
+        src_conn = db.connect(db_source, readonly=True)
+        try:
+            dst_conn = sqlite3.connect(snapshot_path)
+            try:
+                src_conn.backup(dst_conn)
+            finally:
+                dst_conn.close()
+        finally:
+            src_conn.close()
+        tar.add(snapshot_path, arcname=f"{project}/{project}.db")
+    finally:
+        snapshot_path.unlink(missing_ok=True)
 
 
 def create_backup(*, project: str, project_root: Path) -> Path:
@@ -48,6 +81,7 @@ def create_backup(*, project: str, project_root: Path) -> Path:
     for attempt in range(1, _MAX_ATTEMPTS + 1):
         try:
             with tarfile.open(tmp_path, "w:gz") as tar:
+                _snapshot_db_into_tar(tar, project=project, tmp_dir=target_dir)
                 tar.add(project_root, arcname=project)
             os.replace(tmp_path, final_path)
             return final_path
