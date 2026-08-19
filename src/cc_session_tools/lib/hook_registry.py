@@ -32,6 +32,7 @@ HOOK_VERBS: dict[str, str] = {
     "catchup": "cccs_hooks.catchup",
     "pending-migration": "cccs_hooks.pending_migration",
     "context-window-warning": "cccs_hooks.context_window_warning",
+    "pending-rename": "cccs_hooks.pending_rename",
 }
 
 
@@ -48,6 +49,7 @@ HOOK_DESCRIPTIONS: dict[str, str] = {
     "catchup": "Reconciles+launches missed scheduled jobs (ccsched) detached and surfaces a catch-up digest (SessionStart + UserPromptSubmit)",
     "pending-migration": "Detects legacy pre-1.0.0 flat-file data left unmigrated (ccmsg/ccsched/sessions/telemetry) and surfaces a FAIL digest pointing at `ccst migrate all`; honours `ccst doctor --mute` (SessionStart)",
     "context-window-warning": "Nudges toward /compact when the context window passes 150k/200k tokens; silenced for the session by /context-override (Stop)",
+    "pending-rename": "Surfaces `.pending-rename` markers left by the move-session skill, skipping those whose /rename already landed and collapsing the list above 3; self-times-out at 5s with a visible notice (SessionStart)",
 }
 
 # Every settings.json hook entry CCST owns is spelled `ccst hooks run <name>`.
