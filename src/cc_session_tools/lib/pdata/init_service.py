@@ -5,6 +5,7 @@ A's service.py — this module owns no SQL of its own.
 from __future__ import annotations
 
 import csv
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -113,6 +114,11 @@ def _validate_no_conflicting_field_types(m: Manifest) -> None:
             seen[key] = spec.sql_type
 
 
+def _emit(on_progress: Callable[[str], None] | None, message: str) -> None:
+    if on_progress is not None:
+        on_progress(message)
+
+
 def _rollback(*, project: str, created_ids: list[int]) -> list[str]:
     """Soft-delete every id in created_ids (spec §4.5) — no hard delete, full auditability.
     Every id here was inserted earlier in this single-threaded run, so its version is always
@@ -131,7 +137,10 @@ def _rollback(*, project: str, created_ids: list[int]) -> list[str]:
     return rollback_failures
 
 
-def write(*, project: str, rehearse: Path | None = None) -> WriteResult:
+def write(
+    *, project: str, rehearse: Path | None = None,
+    on_progress: Callable[[str], None] | None = None,
+) -> WriteResult:
     project_root = init_paths.resolve_project_root(project, rehearse=rehearse)
     proposal_path = project_root / init_paths.PROPOSAL_FILENAME
     if not proposal_path.exists():
@@ -162,10 +171,13 @@ def write(*, project: str, rehearse: Path | None = None) -> WriteResult:
         init_paths.project_db_dir_override(rehearse),
         init_paths.backup_dir_override(rehearse),
     ):
+        db_owned = [e for e in m.entries if e.classification == "db-owned"]
+        _emit(on_progress, f"Importing {len(db_owned)} file(s)...")
         for entry in m.entries:
             if entry.classification != "db-owned":
                 continue
             try:
+                _emit(on_progress, f"  importing {entry.path} -> group={entry.db_group()}...")
                 for spec in entry.fields:
                     service.schema_add_field(
                         project=project, record_group=entry.db_group(),
@@ -182,10 +194,12 @@ def write(*, project: str, rehearse: Path | None = None) -> WriteResult:
                     created_ids.append(record.id)
                     rows_for_entry.append((record.id, row))
                 entry_rows[entry.path] = rows_for_entry
+                _emit(on_progress, f"    {len(rows_for_entry)} row(s) imported")
                 written_entries.append(entry)
             except (ValueError, OSError, csv.Error) as exc:
                 reasons.append(f"{entry.path}: {exc}")
 
+        _emit(on_progress, "Verifying imported rows...")
         reasons.extend(
             _verify(project=project, project_root=project_root,
                     written_entries=written_entries, entry_rows=entry_rows)
@@ -201,8 +215,10 @@ def write(*, project: str, rehearse: Path | None = None) -> WriteResult:
 
         # Still inside both overrides: a rehearsed run's backup must land in the
         # rehearsal sandbox (backup_dir_override), never in the real backup dir.
+        _emit(on_progress, "Backing up project and database before cutover...")
         try:
             backup_path = backup.create_backup(project=project, project_root=project_root)
+            _emit(on_progress, f"Backup written: {backup_path}")
         except backup.BackupError as exc:
             return WriteResult(
                 created_record_ids=[], entries_written=[], backup_path=None,
@@ -211,6 +227,7 @@ def write(*, project: str, rehearse: Path | None = None) -> WriteResult:
                 ),
             )
 
+    _emit(on_progress, f"Cutting over {len(written_entries)} file(s)...")
     cutover.archive_entries(project_root=project_root, entries=written_entries)
     return WriteResult(
         created_record_ids=created_ids,
