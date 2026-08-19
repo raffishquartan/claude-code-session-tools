@@ -22,6 +22,7 @@ from typing import Any
 from cc_session_tools.lib.pdata import naming
 from cc_session_tools.lib.pdata.init_paths import EXCLUDED_DIR_NAMES, PROPOSAL_FILENAME
 from cc_session_tools.lib.pdata.manifest import FieldSpec, ManifestEntry
+from cc_session_tools.lib.pdata.write_log import LOG_FILENAME as WRITE_LOG_FILENAME
 
 _BINARY_EXTENSIONS = frozenset({
     ".pdf", ".png", ".jpg", ".jpeg", ".gif", ".docx", ".xlsx", ".pptx",
@@ -191,8 +192,8 @@ def walk_and_classify(
     project_root: Path, *, existing_record_groups: frozenset[str] = frozenset(),
 ) -> list[ManifestEntry]:
     """Walk project_root, classifying every file not inside an excluded directory
-    and not the proposal file itself. Returns entries sorted by relative path for
-    deterministic report output. `existing_record_groups` — see
+    and not the proposal file or --write's own log file. Returns entries sorted by
+    relative path for deterministic report output. `existing_record_groups` — see
     _disambiguate_record_groups — lets a caller (manifest.load_or_create) pass in
     the project's already-live record_groups so a fresh classification pass never
     silently proposes merging into one of them."""
@@ -203,7 +204,7 @@ def walk_and_classify(
         rel = abs_path.relative_to(project_root)
         if any(part in EXCLUDED_DIR_NAMES for part in rel.parts[:-1]):
             continue
-        if abs_path.name == PROPOSAL_FILENAME:
+        if abs_path.name in (PROPOSAL_FILENAME, WRITE_LOG_FILENAME):
             continue
         entries.append(classify_path(str(rel), abs_path))
     _disambiguate_record_groups(entries, existing_record_groups=existing_record_groups)
