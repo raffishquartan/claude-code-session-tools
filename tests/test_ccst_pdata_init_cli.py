@@ -151,6 +151,9 @@ def test_pdata_init_write_log_captures_verification_failure(base_env, tmp_path):
     r_write = _run(base_env, "pdata", "init", "--project", "demo", "--write")
 
     assert r_write.returncode == 1
+    # Assert both channels independently (not just the tee'd log file), so a regression that
+    # broke only the stderr side wouldn't slip past this test.
+    assert "verification failed" in r_write.stderr.lower()
     log_content = (project_dir / "ccst-pdata-init-write.log").read_text()
     assert "verification failed" in log_content.lower()
 
