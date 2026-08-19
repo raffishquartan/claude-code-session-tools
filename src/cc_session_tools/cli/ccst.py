@@ -1044,7 +1044,7 @@ def _cmd_pdata_restore(args: argparse.Namespace) -> int:
 
 
 def _cmd_pdata_init(args: argparse.Namespace) -> int:
-    from cc_session_tools.lib.pdata import init_service
+    from cc_session_tools.lib.pdata import init_paths, init_service, write_log
 
     rehearse = Path(args.rehearse) if args.rehearse else None
 
@@ -1059,27 +1059,36 @@ def _cmd_pdata_init(args: argparse.Namespace) -> int:
         return 0
 
     try:
-        write_result = init_service.write(project=args.project, rehearse=rehearse)
-    except (FileNotFoundError, ValueError) as exc:
+        project_root = init_paths.resolve_project_root(args.project, rehearse=rehearse)
+    except ValueError as exc:
         print(f"ccst pdata: {exc}", file=sys.stderr)
         return 2
 
-    if write_result.failure is not None:
-        print("ccst pdata init: verification failed, nothing was cut over:", file=sys.stderr)
-        for reason in write_result.failure.reasons:
-            print(f"  - {reason}", file=sys.stderr)
-        return 1
+    with write_log.WriteLog(project_root):
+        try:
+            write_result = init_service.write(
+                project=args.project, rehearse=rehearse, on_progress=print,
+            )
+        except (FileNotFoundError, ValueError) as exc:
+            print(f"ccst pdata: {exc}", file=sys.stderr)
+            return 2
 
-    print(
-        f"Wrote {len(write_result.created_record_ids)} record(s) across "
-        f"{len(write_result.entries_written)} file(s)."
-    )
-    print(f"Backup: {write_result.backup_path}")
-    for path in write_result.entries_written:
-        print(f"  cut over: {path}")
-    print()
-    print(write_result.report)  # spec §7.1 step 4's diff report, for review
-    return 0
+        if write_result.failure is not None:
+            print("ccst pdata init: verification failed, nothing was cut over:", file=sys.stderr)
+            for reason in write_result.failure.reasons:
+                print(f"  - {reason}", file=sys.stderr)
+            return 1
+
+        print(
+            f"Wrote {len(write_result.created_record_ids)} record(s) across "
+            f"{len(write_result.entries_written)} file(s)."
+        )
+        print(f"Backup: {write_result.backup_path}")
+        for path in write_result.entries_written:
+            print(f"  cut over: {path}")
+        print()
+        print(write_result.report)  # spec §7.1 step 4's diff report, for review
+        return 0
 
 
 def _cmd_pdata_reconcile_session_output(args: argparse.Namespace) -> int:

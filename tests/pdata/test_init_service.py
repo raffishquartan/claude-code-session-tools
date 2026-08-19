@@ -267,6 +267,33 @@ def test_write_reports_rollback_failure_without_crashing(monkeypatch, tmp_path):
     assert any("rollback failed" in reason for reason in result.failure.reasons)
 
 
+def test_write_rolls_back_and_reports_failure_when_backup_raises(monkeypatch, tmp_path):
+    from cc_session_tools.lib.pdata import backup, service
+
+    monkeypatch.setenv(init_paths.PROJECTS_ROOT_ENV, str(tmp_path / "projects"))
+    monkeypatch.setenv("CCST_PROJECT_DB_DIR", str(tmp_path / "dbs"))
+    monkeypatch.setenv("CCST_PDATA_BACKUP_DIR", str(tmp_path / "backups"))
+    project_dir = tmp_path / "projects" / "demo"
+    project_dir.mkdir(parents=True)
+    (project_dir / "ideas.csv").write_text("idea\nfirst\nsecond\n")
+
+    init_service.dry_run(project="demo")
+
+    def _always_fails(**kwargs):
+        raise backup.BackupError("simulated backup failure")
+
+    monkeypatch.setattr(backup, "create_backup", _always_fails)
+
+    result = init_service.write(project="demo")
+
+    assert result.failure is not None
+    assert any("simulated backup failure" in reason for reason in result.failure.reasons)
+    assert service.list_records(project="demo", record_group="ideas") == []
+    # Nothing was cut over — source file untouched, no .pdata-migrated dir.
+    assert (project_dir / "ideas.csv").exists()
+    assert not (project_dir / init_paths.MIGRATED_ARCHIVE_DIRNAME).exists()
+
+
 def test_write_rejects_conflicting_field_sql_types_across_entries(monkeypatch, tmp_path):
     """Two manifest entries feeding the same record_group with the same field name
     but a different sql_type must be rejected before any DDL/import runs — Plan
@@ -321,3 +348,90 @@ def test_write_aborts_and_soft_deletes_on_manifest_strategy_shape_mismatch(monke
     assert result.failure is not None
     assert any("json-array-rows" in reason for reason in result.failure.reasons)
     assert service.list_records(project="demo", record_group="chars") == []
+
+
+def test_write_reports_progress_on_verify_failure(monkeypatch, tmp_path):
+    """A code-review finding on the initial on_progress implementation: the last message an
+    observer saw on a verify failure was "Verifying imported rows..." with no signal that the
+    run then aborted and rolled back — the stream just stopped. Assert an explicit
+    failure/rollback message is emitted before write() returns."""
+    from cc_session_tools.lib.pdata import manifest
+
+    monkeypatch.setenv(init_paths.PROJECTS_ROOT_ENV, str(tmp_path / "projects"))
+    monkeypatch.setenv("CCST_PROJECT_DB_DIR", str(tmp_path / "dbs"))
+    monkeypatch.setenv("CCST_PDATA_BACKUP_DIR", str(tmp_path / "backups"))
+    project_dir = tmp_path / "projects" / "demo"
+    project_dir.mkdir(parents=True)
+    (project_dir / "docs.csv").write_text("doc_path,note\nmissing/does-not-exist.pdf,bad\n")
+
+    dry = init_service.dry_run(project="demo")
+    edited = manifest.load(dry.proposal_path)
+    edited.entries[0].file_path_column = "doc_path"
+    manifest.save(edited, dry.proposal_path)
+
+    messages: list[str] = []
+    result = init_service.write(project="demo", on_progress=messages.append)
+
+    assert result.failure is not None
+    assert any("roll" in m.lower() for m in messages)
+
+
+def test_write_reports_progress_on_backup_failure(monkeypatch, tmp_path):
+    """Same gap as above, on the backup-failure path — the stream must not go silent
+    between "Backing up..." and write() returning a WriteFailure."""
+    from cc_session_tools.lib.pdata import backup
+
+    monkeypatch.setenv(init_paths.PROJECTS_ROOT_ENV, str(tmp_path / "projects"))
+    monkeypatch.setenv("CCST_PROJECT_DB_DIR", str(tmp_path / "dbs"))
+    monkeypatch.setenv("CCST_PDATA_BACKUP_DIR", str(tmp_path / "backups"))
+    project_dir = tmp_path / "projects" / "demo"
+    project_dir.mkdir(parents=True)
+    (project_dir / "ideas.csv").write_text("idea\nfirst\n")
+
+    init_service.dry_run(project="demo")
+
+    def _always_fails(**kwargs):
+        raise backup.BackupError("simulated backup failure")
+
+    monkeypatch.setattr(backup, "create_backup", _always_fails)
+
+    messages: list[str] = []
+    result = init_service.write(project="demo", on_progress=messages.append)
+
+    assert result.failure is not None
+    assert any("roll" in m.lower() for m in messages)
+
+
+def test_write_reports_progress_through_on_progress_callback(monkeypatch, tmp_path):
+    monkeypatch.setenv(init_paths.PROJECTS_ROOT_ENV, str(tmp_path / "projects"))
+    monkeypatch.setenv("CCST_PROJECT_DB_DIR", str(tmp_path / "dbs"))
+    monkeypatch.setenv("CCST_PDATA_BACKUP_DIR", str(tmp_path / "backups"))
+    project_dir = tmp_path / "projects" / "demo"
+    project_dir.mkdir(parents=True)
+    (project_dir / "ideas.csv").write_text("idea\nfirst\n")
+
+    init_service.dry_run(project="demo")
+    messages: list[str] = []
+    result = init_service.write(project="demo", on_progress=messages.append)
+
+    assert result.failure is None
+    joined = "\n".join(messages)
+    assert "ideas.csv" in joined
+    assert any("verif" in m.lower() for m in messages)
+    assert any("backup" in m.lower() for m in messages)
+    assert any("cut" in m.lower() or "cutover" in m.lower() for m in messages)
+
+
+def test_write_on_progress_defaults_to_silent(monkeypatch, tmp_path):
+    """Existing callers (and every test above this one) call write() with no on_progress —
+    must keep working exactly as before, silently."""
+    monkeypatch.setenv(init_paths.PROJECTS_ROOT_ENV, str(tmp_path / "projects"))
+    monkeypatch.setenv("CCST_PROJECT_DB_DIR", str(tmp_path / "dbs"))
+    monkeypatch.setenv("CCST_PDATA_BACKUP_DIR", str(tmp_path / "backups"))
+    project_dir = tmp_path / "projects" / "demo"
+    project_dir.mkdir(parents=True)
+    (project_dir / "ideas.csv").write_text("idea\nfirst\n")
+
+    init_service.dry_run(project="demo")
+    result = init_service.write(project="demo")  # no on_progress kwarg
+    assert result.failure is None

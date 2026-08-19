@@ -5,6 +5,7 @@ A's service.py — this module owns no SQL of its own.
 from __future__ import annotations
 
 import csv
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -113,7 +114,33 @@ def _validate_no_conflicting_field_types(m: Manifest) -> None:
             seen[key] = spec.sql_type
 
 
-def write(*, project: str, rehearse: Path | None = None) -> WriteResult:
+def _emit(on_progress: Callable[[str], None] | None, message: str) -> None:
+    if on_progress is not None:
+        on_progress(message)
+
+
+def _rollback(*, project: str, created_ids: list[int]) -> list[str]:
+    """Soft-delete every id in created_ids (spec §4.5) — no hard delete, full auditability.
+    Every id here was inserted earlier in this single-threaded run, so its version is always
+    1. Each delete_record call is wrapped individually: service.RecordNotFoundError/
+    VersionConflictError are plain Exception subclasses (not ValueError/OSError), so an
+    unwrapped raise here would abort the loop mid-way and leave some just-inserted rows
+    soft-deleted and others still live. Any rollback failure is returned alongside the
+    caller's own failure reasons rather than raised, since the caller still needs a
+    WriteResult back, not a crash."""
+    rollback_failures: list[str] = []
+    for record_id in created_ids:
+        try:
+            service.delete_record(project=project, record_id=record_id, expected_version=1)
+        except (service.RecordNotFoundError, service.VersionConflictError) as exc:
+            rollback_failures.append(f"record {record_id}: rollback failed: {exc}")
+    return rollback_failures
+
+
+def write(
+    *, project: str, rehearse: Path | None = None,
+    on_progress: Callable[[str], None] | None = None,
+) -> WriteResult:
     project_root = init_paths.resolve_project_root(project, rehearse=rehearse)
     proposal_path = project_root / init_paths.PROPOSAL_FILENAME
     if not proposal_path.exists():
@@ -144,10 +171,13 @@ def write(*, project: str, rehearse: Path | None = None) -> WriteResult:
         init_paths.project_db_dir_override(rehearse),
         init_paths.backup_dir_override(rehearse),
     ):
+        db_owned = [e for e in m.entries if e.classification == "db-owned"]
+        _emit(on_progress, f"Importing {len(db_owned)} file(s)...")
         for entry in m.entries:
             if entry.classification != "db-owned":
                 continue
             try:
+                _emit(on_progress, f"  importing {entry.path} -> group={entry.db_group()}...")
                 for spec in entry.fields:
                     service.schema_add_field(
                         project=project, record_group=entry.db_group(),
@@ -164,43 +194,42 @@ def write(*, project: str, rehearse: Path | None = None) -> WriteResult:
                     created_ids.append(record.id)
                     rows_for_entry.append((record.id, row))
                 entry_rows[entry.path] = rows_for_entry
+                _emit(on_progress, f"    {len(rows_for_entry)} row(s) imported")
                 written_entries.append(entry)
             except (ValueError, OSError, csv.Error) as exc:
                 reasons.append(f"{entry.path}: {exc}")
 
+        _emit(on_progress, "Verifying imported rows...")
         reasons.extend(
             _verify(project=project, project_root=project_root,
                     written_entries=written_entries, entry_rows=entry_rows)
         )
 
         if reasons:
-            # Soft-delete every row inserted this run (spec §4.5) — no hard delete,
-            # full auditability, and nothing proceeds to backup/cutover. Every id
-            # here was just inserted in this single-threaded run, so its version is
-            # always 1 — but each delete_record call is still wrapped individually:
-            # service.RecordNotFoundError/VersionConflictError are plain Exception
-            # subclasses (not ValueError/OSError), so an unwrapped raise here would
-            # abort the loop mid-way and leave some just-inserted rows soft-deleted
-            # and others still live. Any rollback failure is reported alongside the
-            # original failure reasons rather than raised, since the caller still
-            # needs a WriteResult back, not a crash, to know backup/cutover did not
-            # run.
-            rollback_failures: list[str] = []
-            for record_id in created_ids:
-                try:
-                    service.delete_record(
-                        project=project, record_id=record_id, expected_version=1,
-                    )
-                except (service.RecordNotFoundError, service.VersionConflictError) as exc:
-                    rollback_failures.append(f"record {record_id}: rollback failed: {exc}")
-            return WriteResult(created_record_ids=[], entries_written=[],
-                               backup_path=None,
-                               failure=WriteFailure(reasons=reasons + rollback_failures))
+            _emit(on_progress, "Verification failed — rolling back inserted rows...")
+            return WriteResult(
+                created_record_ids=[], entries_written=[], backup_path=None,
+                failure=WriteFailure(
+                    reasons=reasons + _rollback(project=project, created_ids=created_ids)
+                ),
+            )
 
         # Still inside both overrides: a rehearsed run's backup must land in the
         # rehearsal sandbox (backup_dir_override), never in the real backup dir.
-        backup_path = backup.create_backup(project=project, project_root=project_root)
+        _emit(on_progress, "Backing up project and database before cutover...")
+        try:
+            backup_path = backup.create_backup(project=project, project_root=project_root)
+            _emit(on_progress, f"Backup written: {backup_path}")
+        except backup.BackupError as exc:
+            _emit(on_progress, "Backup failed — rolling back inserted rows...")
+            return WriteResult(
+                created_record_ids=[], entries_written=[], backup_path=None,
+                failure=WriteFailure(
+                    reasons=[str(exc)] + _rollback(project=project, created_ids=created_ids)
+                ),
+            )
 
+    _emit(on_progress, f"Cutting over {len(written_entries)} file(s)...")
     cutover.archive_entries(project_root=project_root, entries=written_entries)
     return WriteResult(
         created_record_ids=created_ids,

@@ -115,6 +115,49 @@ def test_pdata_init_write_aborts_on_bad_file_path_without_cutover(base_env, tmp_
     assert not (project_dir / ".pdata-migrated").exists()
 
 
+def test_pdata_init_write_streams_progress_and_writes_log_file(base_env, tmp_path):
+    project_dir = tmp_path / "projects" / "demo"
+    project_dir.mkdir(parents=True)
+    (project_dir / "ideas.csv").write_text("idea\nfirst\nsecond\n")
+    base_env["CCST_PDATA_BACKUP_DIR"] = str(tmp_path / "backups")
+
+    _run(base_env, "pdata", "init", "--project", "demo")
+    r_write = _run(base_env, "pdata", "init", "--project", "demo", "--write")
+
+    assert r_write.returncode == 0, r_write.stderr
+    assert "Importing 1 file(s)" in r_write.stdout
+    assert "Backing up" in r_write.stdout
+    assert "Cutting over" in r_write.stdout
+
+    log_path = project_dir / "ccst-pdata-init-write.log"
+    assert log_path.exists()
+    log_content = log_path.read_text()
+    assert "Importing 1 file(s)" in log_content
+    assert "Wrote 2 record(s)" in log_content
+
+
+def test_pdata_init_write_log_captures_verification_failure(base_env, tmp_path):
+    project_dir = tmp_path / "projects" / "demo"
+    project_dir.mkdir(parents=True)
+    (project_dir / "docs.csv").write_text("doc_path,note\n/etc/passwd,bad\n")
+    base_env["CCST_PDATA_BACKUP_DIR"] = str(tmp_path / "backups")
+
+    _run(base_env, "pdata", "init", "--project", "demo")
+    proposal_path = project_dir / ".ccst-pdata-proposal.json"
+    data = json.loads(proposal_path.read_text())
+    data["entries"][0]["file_path_column"] = "doc_path"
+    proposal_path.write_text(json.dumps(data))
+
+    r_write = _run(base_env, "pdata", "init", "--project", "demo", "--write")
+
+    assert r_write.returncode == 1
+    # Assert both channels independently (not just the tee'd log file), so a regression that
+    # broke only the stderr side wouldn't slip past this test.
+    assert "verification failed" in r_write.stderr.lower()
+    log_content = (project_dir / "ccst-pdata-init-write.log").read_text()
+    assert "verification failed" in log_content.lower()
+
+
 def test_pdata_init_rehearse_does_not_touch_real_project(base_env, tmp_path):
     project_dir = tmp_path / "projects" / "demo"
     project_dir.mkdir(parents=True)

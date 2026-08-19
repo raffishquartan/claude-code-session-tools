@@ -13,6 +13,17 @@ def test_binary_extension_classified_folder_owned(tmp_path):
     ]
 
 
+def test_write_log_file_excluded_from_classification(tmp_path):
+    """ccst-pdata-init-write.log is tool bookkeeping written by --write itself, not project
+    content — a re-run of `ccst pdata init` after a --write must never propose it as a
+    manifest entry, the same way the proposal file itself is already excluded."""
+    from cc_session_tools.lib.pdata.write_log import LOG_FILENAME
+
+    (tmp_path / LOG_FILENAME).write_text("Importing 1 file(s)...\nWrote 2 record(s).\n")
+    entries = classify.walk_and_classify(tmp_path)
+    assert entries == []
+
+
 def test_markdown_defaults_folder_owned_not_guessed(tmp_path):
     """The classifier must NOT try to decide whether a .md file is a log or a
     versioned doc — that judgement call is out of this plan's scope (see plan

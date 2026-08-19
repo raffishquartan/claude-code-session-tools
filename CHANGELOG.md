@@ -7,6 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.7.0] - 2026-08-20
+
+### Fixed
+
+- **`ccst pdata init --write`** no longer crashes with a raw traceback if its pre-cutover
+  backup step hits an I/O error (e.g. a transient failure reading a network- or
+  DrvFS-backed project root) or a locked/errored `.db` file. The failure is now retried a
+  bounded number of times, and if it still fails, every row inserted during that run is
+  rolled back and reported as a structured failure - matching the existing
+  verification-failure behaviour - instead of leaving a half-completed migration (DB rows
+  committed, cutover never run) with no non-crash signal.
+- The backup tar.gz is now written to a temp path and atomically renamed to its final name
+  only on full success, so an interrupted backup can never leave a corrupt file sitting at
+  the filename a valid backup would use.
+
+### Added
+
+- **`ccst pdata init --write`** now backs up the project's `.db` (via the sqlite3 backup API,
+  for a point-in-time consistent snapshot even under WAL mode) alongside the existing
+  `project_root` tar, inside the same archive, before cutover touches anything.
+- **`ccst pdata init --write`** streams phase-by-phase progress to stdout (import / verify /
+  backup / cutover, including on failure/rollback) instead of producing no output until it
+  finishes or crashes, and writes everything printed - plus the traceback of anything that
+  still escapes unhandled - to a new `ccst-pdata-init-write.log` file inside the project,
+  flushed after every line.
+
 ## [2.6.0] - 2026-08-18
 
 ### Added
