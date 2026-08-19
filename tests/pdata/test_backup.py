@@ -120,9 +120,13 @@ def test_create_backup_includes_project_db_snapshot(monkeypatch, tmp_path):
     tar_path = backup.create_backup(project="demo", project_root=project_root)
 
     with tarfile.open(tar_path, "r:gz") as tar:
-        assert "demo/demo.db" in tar.getnames()
+        # Under a distinct _pdata-db/ prefix, not demo/ — the .db snapshot is CCST's own
+        # tool state, not project content, so it must never land in the same in-archive
+        # location a human restoring demo/... into project_root would extract to.
+        assert "_pdata-db/demo.db" in tar.getnames()
+        assert "demo/demo.db" not in tar.getnames()
         extracted = tmp_path / "extracted.db"
-        with tar.extractfile("demo/demo.db") as fh:
+        with tar.extractfile("_pdata-db/demo.db") as fh:
             extracted.write_bytes(fh.read())
 
     verify_conn = sqlite3.connect(extracted)
@@ -188,4 +192,4 @@ def test_create_backup_skips_db_entry_when_no_db_exists(monkeypatch, tmp_path):
     tar_path = backup.create_backup(project="demo", project_root=project_root)
 
     with tarfile.open(tar_path, "r:gz") as tar:
-        assert "demo/demo.db" not in tar.getnames()
+        assert "_pdata-db/demo.db" not in tar.getnames()

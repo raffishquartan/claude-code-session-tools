@@ -34,6 +34,12 @@ def _snapshot_db_into_tar(tar: tarfile.TarFile, *, project: str, tmp_dir: Path) 
     miss rows still sitting in the -wal file that haven't been checkpointed into the main
     file yet. No-op if the project has no .db yet (a brand-new project's first --write).
 
+    Added under a `_pdata-db/` prefix distinct from the `<project>/` prefix that
+    `create_backup()` uses for project_root's own contents — this snapshot is CCST's own
+    tool state (the project's SQLite store lives under store.db_path(), not project_root),
+    not project content, so a human restoring `<project>/...` from this archive into
+    project_root must never end up with a stray `.db` file mixed into their project files.
+
     The source connection goes through the shared lib/db.py helper, readonly, matching this
     repo's data-store convention (WAL + busy-timeout applied consistently). The destination
     is a throwaway temp file immediately tar'd and deleted, not a persistent store, so it
@@ -54,7 +60,7 @@ def _snapshot_db_into_tar(tar: tarfile.TarFile, *, project: str, tmp_dir: Path) 
                 dst_conn.close()
         finally:
             src_conn.close()
-        tar.add(snapshot_path, arcname=f"{project}/{project}.db")
+        tar.add(snapshot_path, arcname=f"_pdata-db/{project}.db")
     finally:
         snapshot_path.unlink(missing_ok=True)
 
