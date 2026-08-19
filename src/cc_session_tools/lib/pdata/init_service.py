@@ -206,6 +206,7 @@ def write(
         )
 
         if reasons:
+            _emit(on_progress, "Verification failed — rolling back inserted rows...")
             return WriteResult(
                 created_record_ids=[], entries_written=[], backup_path=None,
                 failure=WriteFailure(
@@ -220,6 +221,7 @@ def write(
             backup_path = backup.create_backup(project=project, project_root=project_root)
             _emit(on_progress, f"Backup written: {backup_path}")
         except backup.BackupError as exc:
+            _emit(on_progress, "Backup failed — rolling back inserted rows...")
             return WriteResult(
                 created_record_ids=[], entries_written=[], backup_path=None,
                 failure=WriteFailure(

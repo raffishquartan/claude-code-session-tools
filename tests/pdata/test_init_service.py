@@ -350,6 +350,58 @@ def test_write_aborts_and_soft_deletes_on_manifest_strategy_shape_mismatch(monke
     assert service.list_records(project="demo", record_group="chars") == []
 
 
+def test_write_reports_progress_on_verify_failure(monkeypatch, tmp_path):
+    """A code-review finding on the initial on_progress implementation: the last message an
+    observer saw on a verify failure was "Verifying imported rows..." with no signal that the
+    run then aborted and rolled back — the stream just stopped. Assert an explicit
+    failure/rollback message is emitted before write() returns."""
+    from cc_session_tools.lib.pdata import manifest
+
+    monkeypatch.setenv(init_paths.PROJECTS_ROOT_ENV, str(tmp_path / "projects"))
+    monkeypatch.setenv("CCST_PROJECT_DB_DIR", str(tmp_path / "dbs"))
+    monkeypatch.setenv("CCST_PDATA_BACKUP_DIR", str(tmp_path / "backups"))
+    project_dir = tmp_path / "projects" / "demo"
+    project_dir.mkdir(parents=True)
+    (project_dir / "docs.csv").write_text("doc_path,note\nmissing/does-not-exist.pdf,bad\n")
+
+    dry = init_service.dry_run(project="demo")
+    edited = manifest.load(dry.proposal_path)
+    edited.entries[0].file_path_column = "doc_path"
+    manifest.save(edited, dry.proposal_path)
+
+    messages: list[str] = []
+    result = init_service.write(project="demo", on_progress=messages.append)
+
+    assert result.failure is not None
+    assert any("roll" in m.lower() for m in messages)
+
+
+def test_write_reports_progress_on_backup_failure(monkeypatch, tmp_path):
+    """Same gap as above, on the backup-failure path — the stream must not go silent
+    between "Backing up..." and write() returning a WriteFailure."""
+    from cc_session_tools.lib.pdata import backup
+
+    monkeypatch.setenv(init_paths.PROJECTS_ROOT_ENV, str(tmp_path / "projects"))
+    monkeypatch.setenv("CCST_PROJECT_DB_DIR", str(tmp_path / "dbs"))
+    monkeypatch.setenv("CCST_PDATA_BACKUP_DIR", str(tmp_path / "backups"))
+    project_dir = tmp_path / "projects" / "demo"
+    project_dir.mkdir(parents=True)
+    (project_dir / "ideas.csv").write_text("idea\nfirst\n")
+
+    init_service.dry_run(project="demo")
+
+    def _always_fails(**kwargs):
+        raise backup.BackupError("simulated backup failure")
+
+    monkeypatch.setattr(backup, "create_backup", _always_fails)
+
+    messages: list[str] = []
+    result = init_service.write(project="demo", on_progress=messages.append)
+
+    assert result.failure is not None
+    assert any("roll" in m.lower() for m in messages)
+
+
 def test_write_reports_progress_through_on_progress_callback(monkeypatch, tmp_path):
     monkeypatch.setenv(init_paths.PROJECTS_ROOT_ENV, str(tmp_path / "projects"))
     monkeypatch.setenv("CCST_PROJECT_DB_DIR", str(tmp_path / "dbs"))
