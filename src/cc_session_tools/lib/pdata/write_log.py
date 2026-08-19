@@ -55,7 +55,7 @@ class WriteLog:
         self._real_stderr: TextIO | None = None
 
     def __enter__(self) -> WriteLog:
-        self._file = open(self._path, "w", buffering=1)
+        self._file = open(self._path, "w", buffering=1, encoding="utf-8")
         self._real_stdout, self._real_stderr = sys.stdout, sys.stderr
         sys.stdout = _Tee(self._real_stdout, self._file)
         sys.stderr = _Tee(self._real_stderr, self._file)
@@ -69,9 +69,9 @@ class WriteLog:
     ) -> None:
         # __exit__ only ever runs after a completed __enter__, so these are never still None —
         # the assert makes that contract visible to mypy instead of silently re-checking it.
-        assert self._file is not None
-        assert self._real_stdout is not None
-        assert self._real_stderr is not None
+        assert self._file is not None, "WriteLog.__exit__ called without a completed __enter__"
+        assert self._real_stdout is not None, "WriteLog.__exit__ called without a completed __enter__"
+        assert self._real_stderr is not None, "WriteLog.__exit__ called without a completed __enter__"
 
         if exc is not None:
             traceback.print_exception(exc_type, exc, tb, file=self._file)
