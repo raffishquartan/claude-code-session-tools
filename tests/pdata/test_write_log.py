@@ -132,6 +132,24 @@ def test_write_log_captures_traceback_of_an_exception_that_escapes(tmp_path):
     assert "boom" in content
 
 
+def test_write_log_writes_error_sentinel_for_an_escaping_exception(tmp_path):
+    """The log's last line must say ERROR unambiguously — this is the one exit path that
+    never reaches the CLI's own print("SUCCESS")/print(f"ERROR: ...") calls, since the
+    exception escapes the `with` block entirely rather than returning normally."""
+    project_root = tmp_path / "demo"
+    project_root.mkdir()
+    log_path = project_root / write_log.LOG_FILENAME
+
+    try:
+        with write_log.WriteLog(project_root):
+            raise RuntimeError("boom")
+    except RuntimeError:
+        pass
+
+    last_line = log_path.read_text().rstrip().splitlines()[-1]
+    assert last_line == "ERROR: RuntimeError: boom"
+
+
 def test_write_log_restores_real_stdout_and_stderr_on_exit(tmp_path):
     project_root = tmp_path / "demo"
     project_root.mkdir()

@@ -90,8 +90,19 @@ class WriteLog:
         assert self._real_stderr is not None, "WriteLog.__exit__ called without a completed __enter__"
 
         if exc is not None:
+            # The exc_type/exc pairing is a stdlib __exit__ contract guarantee (exc_type is
+            # only ever None when exc is too), not something this method re-derives — same
+            # rationale as the asserts above.
+            assert exc_type is not None, "WriteLog.__exit__ called with exc but no exc_type"
             try:
                 traceback.print_exception(exc_type, exc, tb, file=self._file)
+                # An explicit sentinel line after the traceback, matching the ERROR/SUCCESS
+                # contract the CLI's own known exit paths write via print() — this is the one
+                # path that never reaches back to those print() calls, since the exception
+                # escapes the `with` block entirely. Without it, an absent sentinel would mean
+                # two different things (an escaped exception vs. the process being killed
+                # before __exit__ ran) instead of just the latter.
+                self._file.write(f"ERROR: {exc_type.__name__}: {exc}\n")
                 self._file.flush()
             except OSError:
                 pass  # same best-effort contract as _Tee — never let the log itself crash
