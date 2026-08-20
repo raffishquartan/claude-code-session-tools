@@ -64,8 +64,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   enforces its own 5s soft deadline (`CCST_PENDING_RENAME_SOFT_TIMEOUT`) inside a 10s registered
   timeout. Overrunning now prints a short notice plus the manual command; previously the harness
   killed the hook with zero output, losing the entire remediation block. The registered timeout is
-  10s rather than the 7s a 5s deadline would suggest because WSL2 returns from a bare `sleep 5`
-  after ~8s in roughly one run in five (measured), and every timing primitive inherits that slack.
+  10s rather than the 7s a 5s deadline would suggest because a wait of any kind can return ~2.9s
+  late when the hypervisor parks an idle vCPU - measured at 3/20 runs for `sleep 5`, `read -t 5`
+  and a pure busy-loop alike. The deadline waits in re-armed 1s slices, which cut that to 1/46
+  runs; the registered timeout covers the residue (deadline + one whole slack event + emit time).
 - **Stale pending-rename markers no longer nag.** A marker whose `/rename` has already been applied
   (the session transcript's `custom-title` equals the marker's `tag`) is left out of the report;
   the marker file itself is untouched, since deleting files stays a user action. Above three
