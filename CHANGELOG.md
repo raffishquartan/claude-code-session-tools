@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.8.0] - 2026-08-20
+
+### Added
+
+- `ccst pdata init` now ships two reusable prompts alongside it, bundled the same way `skills/`
+  is - `pdata-migration-claude-md-update.md` and `pdata-migration-skills-update.md` - for
+  finding and updating a project's own docs and Claude Code skills that still reference the
+  pre-migration flat-file layout after a `--write`. Dry-run prints the doc-update prompt's path;
+  a successful `--write` prints both. **The two prompts currently ship as placeholders** - their
+  real step-by-step content is gated on a design conversation about `~/cc/<project>` scaffolding
+  conventions (see `docs/superpowers/specs/2026-08-20-pdata-migration-prompts-design.md`).
+
 ## [2.7.2] - 2026-08-20
 
 ### Fixed
