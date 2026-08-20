@@ -137,6 +137,25 @@ def _discover_prompts_dir() -> Path:
     )
 
 
+def _print_migration_prompt_reminders(*labeled_filenames: tuple[str, str]) -> None:
+    """Print one "<label>: <path>" reminder line per (label, filename) pair, for the bundled
+    prompts/ directory.
+
+    Best-effort, deliberately swallowing a missing prompts/ directory: these reminders are a
+    nicety layered on top of an otherwise-already-completed classification or migration, not
+    the operation itself — a broken/partial install must never turn a successful --write (rows
+    already written, files already cut over) or dry-run (proposal already written) into a
+    reported failure just because this follow-up reminder couldn't be printed.
+    """
+    try:
+        prompts_dir = _discover_prompts_dir()
+    except FileNotFoundError as exc:
+        print(f"({exc})", file=sys.stderr)
+        return
+    for label, filename in labeled_filenames:
+        print(f"{label}: {prompts_dir / filename}")
+
+
 # ---------- skills install ----------
 
 
@@ -1071,9 +1090,8 @@ def _cmd_pdata_init(args: argparse.Namespace) -> int:
             return 2
         print(result.report)
         print(f"\nProposal: {result.proposal_path}")
-        print(
-            "After a successful --write, see: "
-            f"{_discover_prompts_dir() / 'pdata-migration-claude-md-update.md'}"
+        _print_migration_prompt_reminders(
+            ("After a successful --write, update project docs", "pdata-migration-claude-md-update.md"),
         )
         return 0
 
@@ -1110,9 +1128,10 @@ def _cmd_pdata_init(args: argparse.Namespace) -> int:
         print()
         print(write_result.report)  # spec §7.1 step 4's diff report, for review
         print(f"\nVerify: ccst pdata verify --project {args.project} --full")
-        prompts_dir = _discover_prompts_dir()
-        print(f"Update project docs: {prompts_dir / 'pdata-migration-claude-md-update.md'}")
-        print(f"Update consuming skills: {prompts_dir / 'pdata-migration-skills-update.md'}")
+        _print_migration_prompt_reminders(
+            ("Update project docs", "pdata-migration-claude-md-update.md"),
+            ("Update consuming skills", "pdata-migration-skills-update.md"),
+        )
         print("SUCCESS")
         return 0
 
