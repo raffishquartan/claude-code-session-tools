@@ -101,6 +101,44 @@ def test_create_backup_retries_transient_os_error_then_succeeds(monkeypatch, tmp
     assert tar_path.exists()
 
 
+def test_create_backup_reports_each_failed_attempt_via_on_progress(monkeypatch, tmp_path):
+    """Without this, --write's progress log shows "Backing up..." then a silent multi-second
+    gap (one per retry's backoff) before either success or a single final BackupError — no
+    record of how many attempts ran or what each one hit. on_progress must fire once per
+    failed attempt, before that attempt's backoff sleep."""
+    monkeypatch.setenv(backup.BACKUP_DIR_ENV, str(tmp_path / "backups"))
+    monkeypatch.setattr(backup.time, "sleep", lambda _seconds: None)
+    project_root = tmp_path / "demo"
+    project_root.mkdir()
+    (project_root / "ideas.csv").write_text("idea\nfirst\n")
+
+    def always_fails(self, name, **kwargs):
+        raise OSError(5, "Input/output error")
+
+    monkeypatch.setattr(tarfile.TarFile, "add", always_fails)
+
+    messages: list[str] = []
+    with pytest.raises(backup.BackupError):
+        backup.create_backup(
+            project="demo", project_root=project_root, on_progress=messages.append,
+        )
+
+    assert len(messages) == backup._MAX_ATTEMPTS
+    assert all(f"attempt {n}/{backup._MAX_ATTEMPTS}" in messages[n - 1] for n in range(1, backup._MAX_ATTEMPTS + 1))
+
+
+def test_create_backup_on_progress_defaults_to_silent(monkeypatch, tmp_path):
+    """Every existing caller (init_service.write() before this change, and every test above
+    this one) calls create_backup() with no on_progress — must keep working silently."""
+    monkeypatch.setenv(backup.BACKUP_DIR_ENV, str(tmp_path / "backups"))
+    project_root = tmp_path / "demo"
+    project_root.mkdir()
+    (project_root / "ideas.csv").write_text("idea\nfirst\n")
+
+    tar_path = backup.create_backup(project="demo", project_root=project_root)  # no kwarg
+    assert tar_path.exists()
+
+
 def test_create_backup_includes_project_db_snapshot(monkeypatch, tmp_path):
     from cc_session_tools.lib.pdata import store
 

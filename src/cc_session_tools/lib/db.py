@@ -128,9 +128,19 @@ def backup_to(source_path: Path, dest_path: Path) -> None:
     cp needed (sqlite3.Connection.backup() handles this internally). Used by
     `ccst backup run` (Phase 7) and by migration scripts' pre-cutover safety
     copies.
+
+    The source opens through this module's own connect(readonly=True) — the same
+    WAL/busy-timeout-aware helper every other store connection in the codebase uses — so a
+    backup never takes any lock on the live source file (a plain sqlite3.connect() call would
+    still be a real, if short-lived, connection to a file this function's whole job is to
+    leave completely undisturbed). The destination is a throwaway file this function creates
+    and populates in one call, never reopened afterward, so it connects directly via plain
+    sqlite3.connect() rather than through connect() — routing it through the WAL-enabling
+    helper would just leave -wal/-shm sidecars on a file with no second reader to benefit from
+    WAL mode.
     """
     dest_path.parent.mkdir(parents=True, exist_ok=True)
-    src = sqlite3.connect(str(source_path))
+    src = connect(source_path, readonly=True)
     dst = sqlite3.connect(str(dest_path))
     try:
         src.backup(dst)
