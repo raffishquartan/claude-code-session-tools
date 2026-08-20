@@ -9,11 +9,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [2.7.2] - 2026-08-20
 
-### Added
-
-- **`ccst pdata init --write`** now prints `ccst pdata verify --project <name> --full` after a
-  successful run, so the self-verify command doesn't need to be already known or remembered.
-
 ### Fixed
 
 - **`ccst pdata init --write`**'s log file now ends in an unambiguous `SUCCESS` or
@@ -23,6 +18,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **`ccst pdata init --write`** now prints `ccst pdata verify --project <name> --full` after a
+  successful run, so the self-verify command doesn't need to be already known or remembered -
+  existing output, no new flag.
 - Pre-cutover backup archives are now named `<project>-<YYYYMMDD-HHMMSS>.tar.gz` instead of
   `<project>-<epoch>.tar.gz` - human-readable at a glance, with the same second-granularity
   collision-resistance the epoch format had.
