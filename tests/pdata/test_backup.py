@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 import sqlite3
 import tarfile
 
@@ -11,6 +12,17 @@ from cc_session_tools.lib.pdata import backup
 def test_backup_dir_env_override(monkeypatch, tmp_path):
     monkeypatch.setenv(backup.BACKUP_DIR_ENV, str(tmp_path / "custom"))
     assert backup.backup_dir() == tmp_path / "custom"
+
+
+def test_create_backup_uses_a_human_readable_timestamp_filename(monkeypatch, tmp_path):
+    monkeypatch.setenv(backup.BACKUP_DIR_ENV, str(tmp_path / "backups"))
+    project_root = tmp_path / "demo"
+    project_root.mkdir()
+    (project_root / "ideas.csv").write_text("idea\nfirst\n")
+
+    tar_path = backup.create_backup(project="demo", project_root=project_root)
+
+    assert re.fullmatch(r"demo-\d{8}-\d{6}\.tar\.gz", tar_path.name), tar_path.name
 
 
 def test_create_backup_writes_tar_containing_project_files(monkeypatch, tmp_path):

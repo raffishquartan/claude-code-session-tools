@@ -75,9 +75,12 @@ def create_backup(
     philosophy (spec goals).
 
     Written to a temp path first and atomically renamed to the final
-    `<project>-<epoch>.tar.gz` name only once the archive is fully and successfully written —
-    a failed or interrupted run never leaves a corrupt file at the name a valid backup would
-    use. Transient OSErrors (e.g. a flaky network/DrvFS-backed project_root) are retried a
+    `<project>-<YYYYMMDD-HHMMSS>.tar.gz` name only once the archive is fully and successfully
+    written — a failed or interrupted run never leaves a corrupt file at the name a valid
+    backup would use. The timestamp is second-granularity specifically so it keeps the same
+    collision-resistance across reruns within the same minute that the epoch it replaced had
+    — a coarser (e.g. minute-only) format would need a separate numeric tie-breaker to match.
+    Transient OSErrors (e.g. a flaky network/DrvFS-backed project_root) are retried a
     bounded number of times before raising BackupError. Each failed attempt is reported
     through on_progress (if given) before the retry sleep — otherwise a multi-attempt backup
     that eventually succeeds leaves no trace in --write's progress log of the retries it took,
@@ -92,7 +95,7 @@ def create_backup(
     """
     target_dir = backup_dir()
     target_dir.mkdir(parents=True, exist_ok=True)
-    final_path = target_dir / f"{project}-{int(time.time())}.tar.gz"
+    final_path = target_dir / f"{project}-{time.strftime('%Y%m%d-%H%M%S')}.tar.gz"
     tmp_path = final_path.parent / (final_path.name + ".tmp")
 
     last_exc: OSError | sqlite3.Error | None = None
