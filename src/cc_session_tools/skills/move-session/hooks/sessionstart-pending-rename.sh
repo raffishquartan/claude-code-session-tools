@@ -117,19 +117,33 @@ exec 3<> "$scan_fifo"
 ( exec > /dev/null 2>&1 < /dev/null; scan > "$scan_out" || true; printf 'done\n' >&3 ) &
 scan_pid=$!
 
-# `read -t` is the deadline: a shell builtin, so it cannot be delayed by the
-# thing that makes this hook overrun in the first place. Both alternatives can
-# be, and were measured being: a `sleep`-per-tick poll loop and a `sleep`-based
-# watchdog child each drifted ~3s past the budget on a loaded WSL box, because
-# spawning /bin/sleep itself stalled. macOS ships no GNU `timeout`, and `wait`
-# has no timeout of its own. Whole seconds only - bash 3.2's `read -t` rejects
-# fractions.
-budget=$((soft_timeout - SECONDS))
-if [[ $budget -lt 1 ]]; then
-  budget=1
-fi
+# The deadline is a loop of one-second `read -t` waits against an absolute
+# deadline, not one long wait for the whole budget. Two separate effects force
+# this shape:
+#
+#   - `read -t` is a builtin, so no /bin/sleep spawn can stall it. A poll loop
+#     spawning sleep per tick, and a sleep-based watchdog child, were both
+#     measured drifting 2-3s past budget on a loaded box.
+#   - A *single* long wait is not enough either. Any wait can come back ~2.9s
+#     late on a hypervisor that parks an idle vCPU - `sleep`, `read -t`, and
+#     even a pure CPU busy-loop all show it, at 3/20 runs for both `sleep 5`
+#     and `read -t 5`. Re-arming 1s waits cut that to 1/46 runs here, so it
+#     reduces the exposure rather than removing it: a 1s wait can still slip.
+#     The registered timeout (hooks-bundle.json) carries the residue - it is
+#     sized for this deadline plus a whole slack event plus emit time, not for
+#     the deadline plus a token couple of seconds.
+#
+# macOS ships no GNU `timeout`, and `wait` has no timeout of its own. Whole
+# seconds only - bash 3.2's `read -t` rejects fractions.
+scan_completed=0
+while [[ $SECONDS -lt $soft_timeout ]]; do
+  if read -t 1 -r _ <&3; then
+    scan_completed=1
+    break
+  fi
+done
 
-if ! read -t "$budget" -r _ <&3; then
+if [[ $scan_completed -eq 0 ]]; then
   # Only the immediate child is signalled; a `find` it spawned may outlive it
   # briefly, writing into a file we are about to delete. Harmless, and cheaper
   # than turning on job control just to signal a process group.
