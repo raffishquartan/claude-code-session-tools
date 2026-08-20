@@ -1071,12 +1071,14 @@ def _cmd_pdata_init(args: argparse.Namespace) -> int:
             )
         except (FileNotFoundError, ValueError) as exc:
             print(f"ccst pdata: {exc}", file=sys.stderr)
+            print(f"ERROR: {exc}")
             return 2
 
         if write_result.failure is not None:
             print("ccst pdata init: verification failed, nothing was cut over:", file=sys.stderr)
             for reason in write_result.failure.reasons:
                 print(f"  - {reason}", file=sys.stderr)
+            print(f"ERROR: verification failed ({len(write_result.failure.reasons)} reason(s))")
             return 1
 
         print(
@@ -1088,6 +1090,8 @@ def _cmd_pdata_init(args: argparse.Namespace) -> int:
             print(f"  cut over: {path}")
         print()
         print(write_result.report)  # spec §7.1 step 4's diff report, for review
+        print(f"\nVerify: ccst pdata verify --project {args.project} --full")
+        print("SUCCESS")
         return 0
 
 
