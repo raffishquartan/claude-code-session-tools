@@ -26,6 +26,12 @@
             "command": "ccst hooks run pending-migration",
             "timeout": 5,
             "statusMessage": "Checking for unmigrated legacy data stores..."
+          },
+          {
+            "type": "command",
+            "command": "ccst hooks run pending-rename",
+            "timeout": 10,
+            "statusMessage": "Checking for pending session-renames..."
           }
         ]
       }
