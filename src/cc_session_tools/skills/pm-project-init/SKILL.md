@@ -103,6 +103,12 @@ explicit approval. **Never invoke `--write` without it.**
 ccst pdata init --project <project> [--rehearse <path>] --write
 ```
 
+`--write` streams progress to stdout as it runs and also writes everything printed - plus the
+traceback of anything that escapes unhandled - to `<project-root>/ccst-pdata-init-write.log`,
+flushed after every line. If a run hangs, crashes, or you're not sure what happened, read this
+log rather than re-running blind. It is excluded from classification (like the proposal file
+itself), so it never shows up as a manifest entry on a later dry-run.
+
 - **Exit 0:** everything imported, verified, backed up, and cut over. Report the backup tar path
   and the list of cut-over files to Chris.
 - **Exit 1:** verification failed. Nothing was cut over and no live rows were left behind (they
@@ -128,7 +134,12 @@ instruction.
 There is no `--rollback` flag. Recover by hand:
 
 1. Restore the backup tar (printed on a successful `--write`) over the project folder:
-   `tar -xzf <backup>.tar.gz -C <parent-of-project-root>`.
+   `tar -xzf <backup>.tar.gz -C <parent-of-project-root>`. This also drops a
+   `_pdata-db/<project>.db` sibling directory alongside `<project-root>` - a snapshot of the
+   project's SQLite store at backup time, CCST's own tool state, not project content. Never
+   move or copy it into `<project-root>` itself; if you need to restore the `.db`, copy it to
+   the real store path (`ccst pdata schema list --project <name>` will error with the current
+   path if you're unsure) and leave the extracted project folder alone.
 2. Undo the DB side with `ccst pdata delete --project <name> --id <id> --version <n>` for the
    specific rows that shouldn't have landed, or - for a wholesale bad run - delete the project's
    `.db` file directly and re-run `ccst pdata init` from scratch.

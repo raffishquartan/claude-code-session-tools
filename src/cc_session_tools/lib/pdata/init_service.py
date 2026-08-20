@@ -218,7 +218,9 @@ def write(
         # rehearsal sandbox (backup_dir_override), never in the real backup dir.
         _emit(on_progress, "Backing up project and database before cutover...")
         try:
-            backup_path = backup.create_backup(project=project, project_root=project_root)
+            backup_path = backup.create_backup(
+                project=project, project_root=project_root, on_progress=on_progress,
+            )
             _emit(on_progress, f"Backup written: {backup_path}")
         except backup.BackupError as exc:
             _emit(on_progress, "Backup failed — rolling back inserted rows...")

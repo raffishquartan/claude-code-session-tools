@@ -145,6 +145,31 @@ def test_backup_to_copies_committed_data(tmp_path):
     assert rows == [("backed-up",)]
 
 
+def test_backup_to_captures_wal_only_data_not_yet_checkpointed(tmp_path):
+    """backup_to() must use the sqlite3 backup API against a real connection to source_path
+    (not a raw file copy) — committed rows can sit only in the -wal file, not yet
+    checkpointed into the main .db file, for as long as any connection to the database stays
+    open. A raw `shutil.copy(source, dest)` taken while the writer connection below is still
+    open would miss this row entirely; db.backup_to() must not."""
+    source = tmp_path / "source.db"
+    dest = tmp_path / "backups" / "source-copy.db"
+
+    writer = db.connect(source, ddl=_DDL)
+    writer.execute("INSERT INTO widgets (name) VALUES ('wal-only')")
+    writer.commit()
+    # Deliberately NOT closing writer and NOT calling db.checkpoint() — the row must still
+    # sit in the -wal file, not the main .db file, at the moment backup_to() runs.
+    try:
+        db.backup_to(source, dest)
+    finally:
+        writer.close()
+
+    check = sqlite3.connect(str(dest))
+    rows = check.execute("SELECT name FROM widgets").fetchall()
+    check.close()
+    assert rows == [("wal-only",)]
+
+
 def test_checkpoint_does_not_error_on_fresh_connection(tmp_path):
     conn = db.connect(tmp_path / "store.db", ddl=_DDL)
     db.checkpoint(conn)  # must not raise

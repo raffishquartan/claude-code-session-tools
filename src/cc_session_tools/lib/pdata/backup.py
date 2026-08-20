@@ -5,6 +5,7 @@ import os
 import sqlite3
 import tarfile
 import time
+from collections.abc import Callable
 from pathlib import Path
 
 from cc_session_tools.lib import db, paths
@@ -16,7 +17,14 @@ BACKUP_DIR_ENV = "CCST_PDATA_BACKUP_DIR"
 # mounted into WSL2) are often momentary — retry a few times before giving up rather than
 # crashing the whole --write run on the first blip.
 _MAX_ATTEMPTS = 3
-_RETRY_BACKOFF_SECONDS = (1, 2)
+_RETRY_BACKOFF_BASE_SECONDS = 1
+
+
+def _backoff_seconds(attempt: int) -> float:
+    """Exponential backoff (1s, 2s, 4s, ...) keyed only off the attempt number — unlike a
+    fixed-length lookup tuple, this can't drift out of sync with _MAX_ATTEMPTS if that
+    constant is ever changed without a matching edit elsewhere."""
+    return _RETRY_BACKOFF_BASE_SECONDS * (2 ** (attempt - 1))
 
 
 class BackupError(Exception):
@@ -29,10 +37,11 @@ def backup_dir() -> Path:
 
 
 def _snapshot_db_into_tar(tar: tarfile.TarFile, *, project: str, tmp_dir: Path) -> None:
-    """Add a point-in-time consistent copy of the project's .db to the archive, via the
-    sqlite3 backup API rather than a raw file copy — a raw copy of a WAL-mode database can
-    miss rows still sitting in the -wal file that haven't been checkpointed into the main
-    file yet. No-op if the project has no .db yet (a brand-new project's first --write).
+    """Add a point-in-time consistent copy of the project's .db to the archive, via
+    db.backup_to() (the sqlite3 backup API, WAL-safe — a raw file copy of a WAL-mode database
+    can miss rows still sitting in the -wal file that haven't been checkpointed into the main
+    file yet) rather than a raw copy. No-op if the project has no .db yet (a brand-new
+    project's first --write).
 
     Added under a `_pdata-db/` prefix distinct from the `<project>/` prefix that
     `create_backup()` uses for project_root's own contents — this snapshot is CCST's own
@@ -40,32 +49,25 @@ def _snapshot_db_into_tar(tar: tarfile.TarFile, *, project: str, tmp_dir: Path) 
     not project content, so a human restoring `<project>/...` from this archive into
     project_root must never end up with a stray `.db` file mixed into their project files.
 
-    The source connection goes through the shared lib/db.py helper, readonly, matching this
-    repo's data-store convention (WAL + busy-timeout applied consistently). The destination
-    is a throwaway temp file immediately tar'd and deleted, not a persistent store, so it
-    connects directly via sqlite3.connect() — routing it through the WAL-enabling helper
-    would just leave -wal/-shm sidecars to clean up around a file that exists for a few
-    lines and is never reopened."""
+    The destination is a throwaway temp file immediately tar'd and deleted, not a persistent
+    store — db.backup_to() opens it via a plain (non-WAL) connection for exactly that reason,
+    since routing a file that exists for a few lines and is never reopened through the
+    WAL-enabling helper would just leave -wal/-shm sidecars to clean up."""
     db_source = store.db_path(project)
     if not db_source.exists():
         return
     snapshot_path = tmp_dir / f"{project}.db"
     try:
-        src_conn = db.connect(db_source, readonly=True)
-        try:
-            dst_conn = sqlite3.connect(snapshot_path)
-            try:
-                src_conn.backup(dst_conn)
-            finally:
-                dst_conn.close()
-        finally:
-            src_conn.close()
+        db.backup_to(db_source, snapshot_path)
         tar.add(snapshot_path, arcname=f"_pdata-db/{project}.db")
     finally:
         snapshot_path.unlink(missing_ok=True)
 
 
-def create_backup(*, project: str, project_root: Path) -> Path:
+def create_backup(
+    *, project: str, project_root: Path,
+    on_progress: Callable[[str], None] | None = None,
+) -> Path:
     """tar.gz snapshot of project_root as it stands right now, written outside
     project_root (spec §7.1 step 5 — "stored outside the project folder, before
     touching any original file"). One backup per --write invocation; never
@@ -76,7 +78,11 @@ def create_backup(*, project: str, project_root: Path) -> Path:
     `<project>-<epoch>.tar.gz` name only once the archive is fully and successfully written —
     a failed or interrupted run never leaves a corrupt file at the name a valid backup would
     use. Transient OSErrors (e.g. a flaky network/DrvFS-backed project_root) are retried a
-    bounded number of times before raising BackupError.
+    bounded number of times before raising BackupError. Each failed attempt is reported
+    through on_progress (if given) before the retry sleep — otherwise a multi-attempt backup
+    that eventually succeeds leaves no trace in --write's progress log of the retries it took,
+    and a backup that eventually fails only ever shows the final BackupError, not what each
+    individual attempt actually hit.
 
     sqlite3.Error is caught alongside OSError because it is NOT an OSError subclass, yet
     _snapshot_db_into_tar's sqlite3 backup-API call can raise one (e.g. sqlite3.OperationalError
@@ -100,8 +106,10 @@ def create_backup(*, project: str, project_root: Path) -> Path:
         except (OSError, sqlite3.Error) as exc:
             last_exc = exc
             tmp_path.unlink(missing_ok=True)
+            if on_progress is not None:
+                on_progress(f"  backup attempt {attempt}/{_MAX_ATTEMPTS} failed: {exc}")
             if attempt < _MAX_ATTEMPTS:
-                time.sleep(_RETRY_BACKOFF_SECONDS[attempt - 1])
+                time.sleep(_backoff_seconds(attempt))
     raise BackupError(
         f"backup of {project!r} failed after {_MAX_ATTEMPTS} attempts: {last_exc}"
     ) from last_exc

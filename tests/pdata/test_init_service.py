@@ -422,6 +422,47 @@ def test_write_reports_progress_through_on_progress_callback(monkeypatch, tmp_pa
     assert any("cut" in m.lower() or "cutover" in m.lower() for m in messages)
 
 
+def test_write_forwards_on_progress_into_backup_retry_attempts(monkeypatch, tmp_path):
+    """write()'s on_progress must reach backup.create_backup()'s own per-attempt reporting,
+    not just init_service's own phase-boundary messages — otherwise a --write that retries
+    the backup step a few times before succeeding shows nothing about those retries in the
+    log, only the two on-either-side "Backing up..."/"Backup written:" messages."""
+    import tarfile
+
+    from cc_session_tools.lib.pdata import backup
+
+    monkeypatch.setenv(init_paths.PROJECTS_ROOT_ENV, str(tmp_path / "projects"))
+    monkeypatch.setenv("CCST_PROJECT_DB_DIR", str(tmp_path / "dbs"))
+    monkeypatch.setenv("CCST_PDATA_BACKUP_DIR", str(tmp_path / "backups"))
+    monkeypatch.setattr(backup.time, "sleep", lambda _seconds: None)
+    project_dir = tmp_path / "projects" / "demo"
+    project_dir.mkdir(parents=True)
+    (project_dir / "ideas.csv").write_text("idea\nfirst\n")
+
+    init_service.dry_run(project="demo")
+
+    real_add = tarfile.TarFile.add
+    calls = {"n": 0}
+
+    def flaky_add(self, name, *args, **kwargs):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise OSError(5, "Input/output error")
+        monkeypatch.setattr(tarfile.TarFile, "add", real_add)
+        try:
+            return real_add(self, name, *args, **kwargs)
+        finally:
+            monkeypatch.setattr(tarfile.TarFile, "add", flaky_add)
+
+    monkeypatch.setattr(tarfile.TarFile, "add", flaky_add)
+
+    messages: list[str] = []
+    result = init_service.write(project="demo", on_progress=messages.append)
+
+    assert result.failure is None
+    assert any("attempt 1/" in m for m in messages)
+
+
 def test_write_on_progress_defaults_to_silent(monkeypatch, tmp_path):
     """Existing callers (and every test above this one) call write() with no on_progress —
     must keep working exactly as before, silently."""

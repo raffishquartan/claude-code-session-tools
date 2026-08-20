@@ -2094,7 +2094,11 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     pdata_init_parser.add_argument(
         "--write", action="store_true",
-        help="Perform the write/verify/backup/cutover phase (default: dry-run only)",
+        help=(
+            "Perform the write/verify/backup/cutover phase (default: dry-run only). "
+            "Streams progress to stdout and also writes it to "
+            "<project>/ccst-pdata-init-write.log"
+        ),
     )
 
     pdata_reconcile_parser = pdata_sub.add_parser(

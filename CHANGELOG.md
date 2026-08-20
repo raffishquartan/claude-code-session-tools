@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.7.1] - 2026-08-20
+
+### Fixed
+
+- **`ccst pdata init --write`**'s backup-retry backoff is no longer a fixed-length lookup
+  tuple indexed by attempt number, which would have silently broken with an `IndexError` if
+  the retry-count constant were ever changed without a matching edit elsewhere. Backoff is
+  now a formula keyed only off the attempt number.
+- Each failed backup attempt is now reported through `--write`'s progress stream and log file
+  before its retry, instead of only the final outcome (success or a single failure message)
+  being visible.
+
+### Changed
+
+- The `.db` snapshot inside `--write`'s pre-cutover backup archive now shares its
+  WAL-safe-copy implementation with the existing `lib/db.py` `backup_to()` helper (previously
+  duplicated) - a correctness improvement that also applies to `ccst repair-sessions`'s own
+  backup step, which no longer takes any connection on the live store it's backing up.
+
 ## [2.7.0] - 2026-08-20
 
 ### Fixed
