@@ -7,6 +7,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.8.0] - 2026-08-20
+
+### Added
+
+- `ccst pdata init` now ships two reusable prompts alongside it, bundled the same way `skills/`
+  is - `pdata-migration-claude-md-update.md` and `pdata-migration-skills-update.md` - for
+  finding and updating a project's own docs and Claude Code skills that still reference the
+  pre-migration flat-file layout after a `--write`. Dry-run prints the doc-update prompt's path;
+  a successful `--write` prints both. **The two prompts currently ship as placeholders** - their
+  real step-by-step content is gated on a design conversation about `~/cc/<project>` scaffolding
+  conventions (see `docs/superpowers/specs/2026-08-20-pdata-migration-prompts-design.md`).
+
+## [2.7.2] - 2026-08-20
+
+### Fixed
+
+- **`ccst pdata init --write`**'s log file now ends in an unambiguous `SUCCESS` or
+  `ERROR: ...` line on every exit path, including an exception that escapes unhandled - a log's
+  *absence* of a success line is now itself the signal something went wrong, not something that
+  has to be inferred from what's missing at the end of the file.
+
+### Changed
+
+- **`ccst pdata init --write`** now prints `ccst pdata verify --project <name> --full` after a
+  successful run, so the self-verify command doesn't need to be already known or remembered -
+  existing output, no new flag.
+- Pre-cutover backup archives are now named `<project>-<YYYYMMDD-HHMMSS>.tar.gz` instead of
+  `<project>-<epoch>.tar.gz` - human-readable at a glance, with the same second-granularity
+  collision-resistance the epoch format had.
+
 ## [2.7.1] - 2026-08-20
 
 ### Fixed

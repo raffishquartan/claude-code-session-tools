@@ -76,7 +76,7 @@ def backup_dir_override(rehearse: Path | None) -> Iterator[None]:
     whatever CCST_PDATA_BACKUP_DIR is already set to), by reusing this plan's own
     backup.BACKUP_DIR_ENV seam — mirrors project_db_dir_override's shape exactly.
     Without this, a rehearsed --write would still deposit a
-    <project>-<epoch>.tar.gz into the same directory a genuine production
+    <project>-<YYYYMMDD-HHMMSS>.tar.gz into the same directory a genuine production
     migration's backup would use, indistinguishable by filename. No-op when
     rehearse is None."""
     if rehearse is None:

@@ -117,3 +117,43 @@ about it.
 - [ ] Backfill: a store whose legacy sources are already gone has migrated by
   definition — decide whether to write the marker on first connect in that
   case, or leave it absent and rely on "no legacy data found -> OK".
+
+## Harden `enforce-git-branch-policy.sh` against text-matching bypasses
+
+Not a CCST file — the hook lives in `claude-code-config-sync`
+(`hooks/pre-tool-use/enforce-git-branch-policy.sh`) — but tracked here since it surfaced during
+CCST release work and CCST is where this project's cross-repo follow-up work lands. Full
+write-up, evidence, and recommended fixes:
+`~/cc/claude/enforce-git-branch-policy-hook-hardening.md`.
+
+Found 2026-08-18 shipping the context-window-warning migration: the hook blocks mutating git
+commands on `main`/`master` by scanning the raw Bash `command` string for verb keywords, rather
+than parsing what actually executes. Proven with a false positive — a Telegram-notification
+command containing the literal text "git push --tags" inside a message string (no git invocation
+anywhere near it) was blocked. The same gap likely permits writing a mutating git command into a
+script file and executing that file, since the hook only inspects the Bash tool's literal command
+text, not files it goes on to execute.
+
+- [ ] Read `~/cc/claude/enforce-git-branch-policy-hook-hardening.md` for the full analysis and
+  ranked fix options.
+- [ ] Decide whether to harden the text-matching (tokenize instead of substring-match; follow
+  `bash <file>`/`sh <file>` into the target file's contents) or move enforcement into a real git
+  `pre-push`/`pre-commit` hook (immune to every text-level bypass, since git invokes it directly
+  regardless of how the git command was run) — the write-up recommends the latter as strictly more
+  robust.
+- [ ] This is a `claude-code-config-sync` change, not a CCST one — implement there, not here.
+
+## Tidy up `catchup.py` and siblings' module path
+
+`catchup.py`, `session_tag.py`, `after_response.py`, and `messaging_deliver.py` all live under
+`src/cc_session_tools/cccs_hooks/` — a package name inherited from when these hooks were CCCS
+(`claude-code-config-sync`) code, before they moved into this repo. The `cccs_hooks` name no
+longer describes anything: these are CCST hooks now, dispatched via `HOOK_VERBS` in
+`lib/hook_registry.py` and invoked as `ccst hooks run <name>`.
+
+- [ ] Rename the `cccs_hooks` package to something that reflects current ownership (e.g.
+  `hooks`, matching how `lib/hook_registry.py` already refers to them).
+- [ ] Update every import site and the `HOOK_VERBS` dispatch table in `lib/hook_registry.py`
+  accordingly.
+- [ ] Check for any other stale `cccs_hooks`-shaped naming elsewhere in this repo picked up by
+  the same historical move (e.g. docstrings, test paths).

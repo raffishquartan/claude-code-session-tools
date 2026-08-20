@@ -47,6 +47,16 @@ def test_pdata_init_dry_run_classifies_and_writes_proposal(base_env, tmp_path):
     assert (project_dir / ".ccst-pdata-proposal.json").exists()
 
 
+def test_pdata_init_dry_run_prints_doc_update_prompt_path(base_env, tmp_path):
+    project_dir = tmp_path / "projects" / "demo"
+    project_dir.mkdir(parents=True)
+    (project_dir / "ideas.csv").write_text("idea\nfirst\n")
+
+    r = _run(base_env, "pdata", "init", "--project", "demo")
+    assert r.returncode == 0, r.stderr
+    assert "pdata-migration-claude-md-update.md" in r.stdout
+
+
 def test_pdata_init_rejects_bad_project_name(base_env):
     r = _run(base_env, "pdata", "init", "--project", "../escape")
     assert r.returncode == 2
@@ -90,10 +100,16 @@ def test_pdata_init_write_end_to_end_imports_and_cuts_over(base_env, tmp_path):
 
 
 def test_pdata_init_write_without_prior_dry_run_errors(base_env, tmp_path):
-    (tmp_path / "projects" / "demo").mkdir(parents=True)
+    project_dir = tmp_path / "projects" / "demo"
+    project_dir.mkdir(parents=True)
     r = _run(base_env, "pdata", "init", "--project", "demo", "--write")
     assert r.returncode == 2
     assert "proposal" in r.stderr
+
+    # This is the FileNotFoundError/ValueError branch inside WriteLog's `with` block (project
+    # root resolution already succeeded), so it must still end in the ERROR sentinel.
+    log_content = (project_dir / "ccst-pdata-init-write.log").read_text()
+    assert log_content.rstrip().splitlines()[-1].startswith("ERROR: ")
 
 
 def test_pdata_init_write_aborts_on_bad_file_path_without_cutover(base_env, tmp_path):
@@ -156,6 +172,45 @@ def test_pdata_init_write_log_captures_verification_failure(base_env, tmp_path):
     assert "verification failed" in r_write.stderr.lower()
     log_content = (project_dir / "ccst-pdata-init-write.log").read_text()
     assert "verification failed" in log_content.lower()
+
+
+def test_pdata_init_write_success_ends_with_success_sentinel_and_verify_command(base_env, tmp_path):
+    project_dir = tmp_path / "projects" / "demo"
+    project_dir.mkdir(parents=True)
+    (project_dir / "ideas.csv").write_text("idea\nfirst\nsecond\n")
+    base_env["CCST_PDATA_BACKUP_DIR"] = str(tmp_path / "backups")
+
+    _run(base_env, "pdata", "init", "--project", "demo")
+    r_write = _run(base_env, "pdata", "init", "--project", "demo", "--write")
+
+    assert r_write.returncode == 0, r_write.stderr
+    assert "ccst pdata verify --project demo --full" in r_write.stdout
+    assert "pdata-migration-claude-md-update.md" in r_write.stdout
+    assert "pdata-migration-skills-update.md" in r_write.stdout
+    assert r_write.stdout.rstrip().splitlines()[-1] == "SUCCESS"
+
+    log_content = (project_dir / "ccst-pdata-init-write.log").read_text()
+    assert log_content.rstrip().splitlines()[-1] == "SUCCESS"
+
+
+def test_pdata_init_write_verification_failure_ends_with_error_sentinel(base_env, tmp_path):
+    project_dir = tmp_path / "projects" / "demo"
+    project_dir.mkdir(parents=True)
+    (project_dir / "docs.csv").write_text("doc_path,note\n/etc/passwd,bad\n")
+    base_env["CCST_PDATA_BACKUP_DIR"] = str(tmp_path / "backups")
+
+    _run(base_env, "pdata", "init", "--project", "demo")
+    proposal_path = project_dir / ".ccst-pdata-proposal.json"
+    data = json.loads(proposal_path.read_text())
+    data["entries"][0]["file_path_column"] = "doc_path"
+    proposal_path.write_text(json.dumps(data))
+
+    r_write = _run(base_env, "pdata", "init", "--project", "demo", "--write")
+
+    assert r_write.returncode == 1
+    assert r_write.stdout.rstrip().splitlines()[-1].startswith("ERROR: ")
+    log_content = (project_dir / "ccst-pdata-init-write.log").read_text()
+    assert log_content.rstrip().splitlines()[-1].startswith("ERROR: ")
 
 
 def test_pdata_init_rehearse_does_not_touch_real_project(base_env, tmp_path):

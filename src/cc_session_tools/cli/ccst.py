@@ -122,6 +122,40 @@ def _discover_bundle() -> Path:
     )
 
 
+def _discover_prompts_dir() -> Path:
+    """Return the bundled prompts/ directory (pdata-migration follow-up prompts).
+
+    prompts/ is packaged inside cc_session_tools the same way skills/ and config/ are (see
+    _discover_source_dir) - src/cc_session_tools/cli/ccst.py -> ../prompts. No install-location
+    fallback, same reasoning as the other two: a fallback here would just mask a broken install.
+    """
+    candidate = Path(__file__).resolve().parent.parent / "prompts"
+    if candidate.is_dir():
+        return candidate
+    raise FileNotFoundError(
+        "Cannot locate bundled prompts/ directory. Run from the source tree or reinstall ccst."
+    )
+
+
+def _print_migration_prompt_reminders(*labeled_filenames: tuple[str, str]) -> None:
+    """Print one "<label>: <path>" reminder line per (label, filename) pair, for the bundled
+    prompts/ directory.
+
+    Best-effort, deliberately swallowing a missing prompts/ directory: these reminders are a
+    nicety layered on top of an otherwise-already-completed classification or migration, not
+    the operation itself — a broken/partial install must never turn a successful --write (rows
+    already written, files already cut over) or dry-run (proposal already written) into a
+    reported failure just because this follow-up reminder couldn't be printed.
+    """
+    try:
+        prompts_dir = _discover_prompts_dir()
+    except FileNotFoundError as exc:
+        print(f"({exc})", file=sys.stderr)
+        return
+    for label, filename in labeled_filenames:
+        print(f"{label}: {prompts_dir / filename}")
+
+
 # ---------- skills install ----------
 
 
@@ -1056,6 +1090,9 @@ def _cmd_pdata_init(args: argparse.Namespace) -> int:
             return 2
         print(result.report)
         print(f"\nProposal: {result.proposal_path}")
+        _print_migration_prompt_reminders(
+            ("After a successful --write, update project docs", "pdata-migration-claude-md-update.md"),
+        )
         return 0
 
     try:
@@ -1071,12 +1108,14 @@ def _cmd_pdata_init(args: argparse.Namespace) -> int:
             )
         except (FileNotFoundError, ValueError) as exc:
             print(f"ccst pdata: {exc}", file=sys.stderr)
+            print(f"ERROR: {exc}")
             return 2
 
         if write_result.failure is not None:
             print("ccst pdata init: verification failed, nothing was cut over:", file=sys.stderr)
             for reason in write_result.failure.reasons:
                 print(f"  - {reason}", file=sys.stderr)
+            print(f"ERROR: verification failed ({len(write_result.failure.reasons)} reason(s))")
             return 1
 
         print(
@@ -1088,6 +1127,12 @@ def _cmd_pdata_init(args: argparse.Namespace) -> int:
             print(f"  cut over: {path}")
         print()
         print(write_result.report)  # spec §7.1 step 4's diff report, for review
+        print(f"\nVerify: ccst pdata verify --project {args.project} --full")
+        _print_migration_prompt_reminders(
+            ("Update project docs", "pdata-migration-claude-md-update.md"),
+            ("Update consuming skills", "pdata-migration-skills-update.md"),
+        )
+        print("SUCCESS")
         return 0
 
 

@@ -164,7 +164,7 @@ def write(
     # A's CCST_PROJECT_DB_DIR seam), backup_dir_override redirects where
     # backup.create_backup() below writes its tar.gz (this module's own
     # CCST_PDATA_BACKUP_DIR seam). Without the second seam, a rehearsed --write
-    # would still deposit a real <project>-<epoch>.tar.gz into the production
+    # would still deposit a real <project>-<YYYYMMDD-HHMMSS>.tar.gz into the production
     # backup directory — indistinguishable by filename from a genuine migration's
     # backup. Both are no-ops when rehearse is None.
     with (

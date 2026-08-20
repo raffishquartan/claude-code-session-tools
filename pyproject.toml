@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "cc-session-tools"
-version = "2.7.1"
+version = "2.8.0"
 description = "Claude Code session management CLI tools (ccd, ccr, ccs, claude-code-usage, ccst) and hook library (cccs_hooks)"
 readme = "README.md"
 license = { file = "LICENSE" }
@@ -62,11 +62,11 @@ where = ["src"]
 # only filters within the file's *own* discovered package, and a wrongly
 # auto-discovered "cc_session_tools.skills.<name>.tests" package was never
 # covered by an exclude-package-data entry keyed just "cc_session_tools").
-exclude = ["cc_session_tools.skills", "cc_session_tools.skills.*", "cc_session_tools.config", "cc_session_tools.config.*"]
+exclude = ["cc_session_tools.skills", "cc_session_tools.skills.*", "cc_session_tools.config", "cc_session_tools.config.*", "cc_session_tools.prompts", "cc_session_tools.prompts.*"]
 
 [tool.setuptools.package-data]
 claude_code_usage = ["data/*.json"]
-cc_session_tools = ["skills/**/*", "config/*"]
+cc_session_tools = ["skills/**/*", "config/*", "prompts/**/*"]
 
 [tool.setuptools.exclude-package-data]
 cc_session_tools = ["**/tests/*", "**/__pycache__/*"]
