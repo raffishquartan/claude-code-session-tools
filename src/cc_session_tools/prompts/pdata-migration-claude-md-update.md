@@ -62,7 +62,9 @@ untouched by the migration, sitting right next to its `data/`). Cross-check each
 what actually got migrated — run
 `ccst pdata list --project <name> --group <record_group>` for the record groups you'd expect, or
 check the project's `ccst-pdata-init-write.log`, if one exists, for the record groups the
-migration created — before deciding a reference is stale.
+migration created — before deciding a reference is stale. If neither source is available,
+`<project-root>/.pdata-migrated/` holds every migrated file's original, unchanged content under
+its original relative path, and is worth checking too.
 
 ---
 

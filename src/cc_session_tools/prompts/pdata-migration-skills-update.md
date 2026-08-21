@@ -17,19 +17,18 @@ cd ~/cc/<project> && \
 ## Step 1 — Verify project context
 
 Before doing anything else, check that the current working directory is a `~/cc/<project>`
-project directory.
+project directory with a `CLAUDE.md` present.
 
 Run:
 ```sh
-pwd && basename "$(pwd)"
+pwd && basename "$(pwd)" && ls CLAUDE.md 2>/dev/null && echo "project CLAUDE.md confirmed"
 ```
 
-Confirm with the user (or from the project's own `CLAUDE.md`, if present) that this is the
-project name to search for. If the directory clearly isn't a `~/cc/<project>` project, print the
-following message and exit immediately:
+If `CLAUDE.md` is present, the directory name (from `basename`) is the project name to search
+for in Step 2. If not, print the following message and exit immediately:
 
-> ERROR: This prompt must be run from a `~/cc/<project>` directory. Aborting without touching any
-> skills.
+> ERROR: This prompt must be run from a `~/cc/<project>` directory containing a `CLAUDE.md`.
+> Aborting without touching any skills.
 
 ---
 
@@ -45,8 +44,10 @@ grep -rl "cc/<project>/<old-path>" ~/.claude/skills/*/ 2>/dev/null   # relative-
 
 Substitute the project's actual name and the actual pre-migration path(s) identified from the
 project's `ccst-pdata-init-write.log` (or from the classification report `ccst pdata init`
-produced) — e.g. for a project called `home` that migrated its Tesco order history, you'd search
-for mentions of `~/cc/home/data/tesco/*.csv` or `home/data/tesco` across every skill's `SKILL.md`
+produced; if neither is available, check `<project-root>/.pdata-migrated/` — the migration
+archives the original pre-cutover files there, unchanged, under their original relative paths)
+— e.g. for a project called `home` that migrated its Tesco order history, you'd search for
+mentions of `~/cc/home/data/tesco/*.csv` or `home/data/tesco` across every skill's `SKILL.md`
 and scripts.
 
 Match by literal path only. Do not widen the search to skills whose name merely sounds related to
@@ -93,8 +94,8 @@ equivalent `ccst pdata` command instead of touching the flat file:
 Keep the rewrite mechanical and narrow: change the I/O call to go through `ccst pdata`, but don't
 otherwise restructure the skill's logic or prose beyond what's needed to reflect the new access
 path. If the skill's script parsed CSV columns or JSON keys directly, map those to the equivalent
-pdata record fields using the project's schema (`ccst pdata schema --help` for the discovery
-subcommand) rather than guessing field names.
+pdata record fields using `ccst pdata schema show --project <name> --group <record_group>` (lists
+the group's registered extension fields) rather than guessing field names.
 
 **Do not touch skills unrelated to this project.** A skill whose path match turns out, on closer
 reading, to reference a different project's similarly-named folder is not this prompt's concern —
