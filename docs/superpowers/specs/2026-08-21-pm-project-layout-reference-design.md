@@ -26,10 +26,11 @@ first and redoing the work when the broader question eventually got answered any
 
 - **Both together**: one coherent set of conventions, both prompts derive from it - not two
   separate design efforts.
-- **Advisory only, no tooling enforcement**: no new `ccst doctor` check, no hard-coded numeric
-  thresholds enforced in code. This is a documented convention + assessment criteria a prompt or
-  skill reasons from, matching "a project may have none/some/all of these" being a per-project
-  judgement call, not a rule a linter can own.
+- **Advisory only, no tooling enforcement**: no new `ccst doctor` check, no thresholds enforced
+  in *code*. This does not rule out writing down concrete numbers as *documented* guidance (the
+  `correspondence/` nesting criteria below has one) - it rules out a linter/doctor check acting
+  on them automatically. The distinction is who applies the number: a human or an agent reasoning
+  from prose, not a script.
 - **Delivery**: a new bundled skill, `pm-project-layout-reference`, is the single canonical
   reference (mirrors `pod-reference-people`'s "read this before acting on anything X" shape,
   applied to ccst's own `pm-` skill family - `pm-project-init`, `pm-pdata-schema-design`,
@@ -44,7 +45,28 @@ first and redoing the work when the broader question eventually got answered any
 New skill under `src/cc_session_tools/skills/pm-project-layout-reference/`, shipped as ccst
 package-data exactly like the other `pm-*` skills (synced to `~/.claude/skills/` via
 `ccst install-everything`). Reference-only - it documents conventions and assessment criteria,
-it does not perform any action itself (no scripts, no `ccst` subcommand). Content:
+it does not perform any action itself (no scripts, no `ccst` subcommand).
+
+Draft `SKILL.md` frontmatter (matching `pm-project-init`'s trigger-phrase style - the
+implementation plan may refine the exact wording, but the shape and triggers below should carry
+through):
+
+```yaml
+name: pm-project-layout-reference
+description: Canonical reference for ~/cc/<project>'s optional folder conventions
+  (correspondence/, meetings-and-calls/, analysis/, workstreams/, workstreams-archived/)
+  and the assessment criteria for using them - which folders a given project needs, when
+  correspondence/ should nest by year, and how a workstream moves from active to archived.
+  Read this before setting up a new project's folders, before reorganising an existing
+  project's layout, or before deciding whether a project's correspondence/ needs splitting.
+  Reference-only - does not perform any reorganisation itself. Triggers - "how should this
+  project be organised", "should correspondence/ be split", "archive this workstream",
+  "/pm-project-layout-reference". Do NOT use for the pdata data-store migration itself
+  (pm-project-init) or per-record-group schema design (pm-pdata-schema-design) - those are
+  separate skills; this one is about folder-owned content and structure, not the data store.
+```
+
+Content:
 
 **Folder set** (all optional - a project has whichever subset fits its nature):
 
@@ -56,9 +78,20 @@ it does not perform any action itself (no scripts, no `ccst` subcommand). Conten
 | `workstreams/` | Active concurrent lines of work, each its own `ws-XX-<slug>` folder |
 | `workstreams-archived/` | Completed workstreams, moved here intact |
 
-Evidence this is genuinely opt-in (survey of `~/cc/*`, 2026-08-20/21): `deauppet`/`maxella`/`pbt`
-(legal/dispute-tracking) have most or all five; `home`/`pod` (household/logistics) have only
-`correspondence/`; `biz`/`claude`/`fire`/`future`/`oneshot` have none - different shapes entirely.
+Evidence this is genuinely opt-in (survey of `~/cc/*`, 2026-08-20/21, re-verified during spec
+review): `deauppet` and `pbt` each have four of the five (`correspondence/`,
+`meetings-and-calls/`, `analysis/`, `workstreams/`); `maxella` has three
+(`correspondence/`, `meetings-and-calls/`, `analysis/` - no `workstreams/`). `home` has only
+`correspondence/`; `pod` has neither `correspondence/` nor any of the other four - it's pure
+`data/` (pdata store) plus docs. `biz`/`claude`/`fire`/`future`/`oneshot` have none - different
+shapes entirely.
+
+**Correction to an earlier claim in this conversation**: no project currently has
+`workstreams-archived/` - not `deauppet`, not `pbt`, neither of which has ever archived a
+workstream out of `workstreams/`. The `ws-XX-<slug>` naming and the `workstreams/` folder itself
+*are* observed, existing practice; archiving into a separate `workstreams-archived/` folder is a
+**new convention being proposed here, not yet practised anywhere** - flagged explicitly so an
+implementer doesn't cite false precedent for it.
 
 **`correspondence/` nesting - assessment criteria:**
 
@@ -79,17 +112,41 @@ Evidence this is genuinely opt-in (survey of `~/cc/*`, 2026-08-20/21): `deauppet
   pure date-nesting rather than preserve it as a third level, unless something surfaces during
   an actual reorg that shows it still matters.
 
+**Why only `correspondence/` gets a numeric threshold**: it's the one folder that accumulates
+one-entry-per-external-event, often at high frequency (every incoming/outgoing message), which is
+exactly the shape that silently reaches thousands of flat files. `analysis/` and
+`meetings-and-calls/` accumulate far more slowly - authored in larger, human-paced chunks - and
+`workstreams/` is self-limiting (bounded by how many concurrent lines of work a project
+realistically runs, and each entry is already its own dated-by-number folder, not a
+one-file-per-event pile). Lighter, qualitative guidance for those three: split `analysis/` into
+topic subdirectories once it holds more than a handful of clearly distinct topics (no file-count
+trigger needed - it won't reach `correspondence/`-scale volume); `meetings-and-calls/` and
+`workstreams/` don't need subdivision guidance at all under normal use.
+
 **Workstream lifecycle:**
 
 - `workstreams/ws-XX-<slug>/` per active line of work, numbered sequentially
   (`ws-01`, `ws-02`, ...) - matches the existing `deauppet`/`pbt` convention.
 - On completion, move the whole folder - unchanged name and number - to
-  `workstreams-archived/`.
+  `workstreams-archived/` (new convention - see the correction above; not yet observed anywhere,
+  proposed here for the first time).
 - Numbering is monotonic over the project's life: a new workstream gets the next unused number
   regardless of how many have been archived, and an archived workstream keeps its original
   number forever. "ws-03" always means the same thing, active or archived.
 - A non-conforming existing folder (e.g. `pbt`'s `ella-situation`) gets renamed to fit
   `ws-XX-<slug>` when convenient - advisory, not urgent.
+
+**Relationship to `ccst pdata init`'s folder-owned/db-owned split**: these five folders hold
+folder-owned content by definition - genuinely file-shaped material (attachments, PDFs, `.eml`
+originals) that isn't a good fit for becoming pdata rows, per `pm-project-init`'s own default
+("every markdown/text file defaults to folder-owned... db-owned when genuinely
+machine-inferable"). Re-checked against real projects during spec review: `home` is
+pdata-migrated *and* still has a live `correspondence/` (9 files - `.md`+`.pdf` pairs, untouched
+by the migration) sitting right next to `data/` (which now holds only a non-migrated helper
+script, `build-csv.py` - the CSVs it used to hold became pdata rows). `pod`, by contrast, never
+had a `correspondence/` folder at all - it's pure `data/` plus docs. The two axes are orthogonal: a
+project being pdata-migrated says nothing about whether it also has any of these five folders,
+and vice versa. Nothing here changes when a project migrates to pdata.
 
 **Bringing an existing project into line** (answers `ce30`'s original question directly): a
 one-off manual/session-driven pass, guided by reading this skill first - plain `git mv`
@@ -117,6 +174,15 @@ independent of folder shape.
 This keeps each prompt's own job narrow (what pdata migration specifically disrupted) while
 still surfacing the general reference for awareness - the "both together" scope answer, without
 turning the doc-update prompt into a full reorg tool.
+
+**Scope of this spec vs. the implementation plan**: the two paragraphs above describe *what*
+each prompt should do - they are not the prompts' final text. Writing the full, step-by-step
+prompt content (matching `docs/global-claude-md-bootstrap-prompt.md`'s precedent: numbered
+steps, a context-check step first, explicit idempotency notes) is implementation work, done
+from this spec, not part of the spec itself. This spec resolves the *design* gate
+[[2026-08-20-pdata-migration-prompts-design]]'s Task 3 was waiting on (what conventions the
+prompts should assume); it does not itself take the prompts from PLACEHOLDER to finished - the
+implementation plan does that.
 
 ## Out of scope
 
