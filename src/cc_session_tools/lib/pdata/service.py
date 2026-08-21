@@ -9,7 +9,7 @@ import re as _re
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 
-from cc_session_tools.lib.pdata import naming, repository
+from cc_session_tools.lib.pdata import naming, repository, store
 
 # op is deliberately \S+ here (not the literal alternation of valid ops) — matching only a
 # literal alternation would make an invalid op (e.g. "~=") fail to match the whole regex at all,
@@ -211,6 +211,38 @@ def query_records(
         return records
     finally:
         conn.close()
+
+
+def find_records_by_file_path_prefix(*, project: str, prefix: str) -> list[Record]:
+    """Every active record across every record_group in this project whose file_path starts
+    with prefix - used by lib/pdata/reorganize.py to find which rows need their file_path
+    updated when a folder is split into a nested structure. Returns [] both when the project
+    has no .db yet and when it has one but nothing matches - callers that need to distinguish
+    "no store" from "store, no match" should check store.db_path(project).exists() themselves.
+
+    Known limitation: prefix is interpolated into a SQL LIKE pattern unescaped, so a literal
+    '%' or '_' in it would be interpreted as a wildcard rather than a literal character. This
+    repo's query_records()/_parse_where_clause() plumbing (shared with `ccst pdata query`)
+    has no ESCAPE-clause support to fix this properly without changing that shared code, which
+    is out of scope here. Not a practical issue for this callsite specifically - prefix is
+    always a project-relative folder path (this codebase's own naming convention uses hyphens,
+    not underscores, e.g. ws-01-slug), but worth knowing if this function is ever reused
+    somewhere prefix isn't a controlled folder name."""
+    if not store.db_path(project).exists():
+        return []
+    matches: list[Record] = []
+    for group in schema_list(project=project):
+        matches.extend(
+            query_records(
+                project=project, record_group=group["record_group"],
+                # No surrounding quotes: service._parse_where_clause's `value` capture group
+                # is bound directly as the SQL parameter, not SQL-literal syntax to be
+                # unquoted. Quoting it here would make the comparison look for a file_path
+                # that literally starts and ends with an apostrophe - never matching anything.
+                where=[f"file_path LIKE {prefix}%"],
+            )
+        )
+    return matches
 
 
 class RecordNotFoundError(Exception):
