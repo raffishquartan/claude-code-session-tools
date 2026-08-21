@@ -157,3 +157,16 @@ longer describes anything: these are CCST hooks now, dispatched via `HOOK_VERBS`
   accordingly.
 - [ ] Check for any other stale `cccs_hooks`-shaped naming elsewhere in this repo picked up by
   the same historical move (e.g. docstrings, test paths).
+
+## `ccst pdata reorganize` - reuse one connection across matched-record updates
+
+`reorganize.write()`'s update loop calls `service.update_record()` once per matched record,
+and each call opens its own fresh SQLite connection (WAL pragma setup, DDL re-execution,
+`BEGIN IMMEDIATE`/`COMMIT`) rather than reusing one connection/transaction across the whole
+batch. Correct, but wasteful for the tool's own stated target scenario - reorganizing a folder
+with hundreds of matched records performs hundreds of separate connection setups for what is
+logically one atomic "apply these path updates" step. Would need either a new
+`service`-level batch-update entry point taking an already-open connection, or exposing
+`repository.update_base_record()` directly to `reorganize.py` the way `find_records_by_file_path_prefix()`
+already does for reads. Not blocking - it's a performance concern, not a correctness one, and
+the operation is still safe (each row uses its own transaction).

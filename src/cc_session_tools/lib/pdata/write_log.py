@@ -1,4 +1,5 @@
-"""Tee stdout/stderr to a per-run log file during `ccst pdata init --write`.
+"""Tee stdout/stderr to a per-run log file during a long-running pdata write operation
+(`ccst pdata init --write`, `ccst pdata reorganize --write`).
 
 --write can run for a long time with zero visible progress otherwise, and a failure can
 crash before any of it is reported anywhere durable. WriteLog gives every --write invocation
@@ -56,16 +57,20 @@ class _Tee:
 
 
 class WriteLog:
-    """Truncates project_root/ccst-pdata-init-write.log at the start of every --write run —
-    one log per invocation, matching the tool's big-bang/one-shot semantics; stitching
-    together unrelated attempts into one file would be confusing, not helpful — and tees
-    every sys.stdout/sys.stderr write into it for the duration of the `with` block. Any
-    exception that escapes the block has its full traceback written to the log before the
-    real streams are restored, so it's captured even though Python's own default unhandled-
-    exception printer runs after __exit__."""
+    """Truncates project_root/<log_filename> at the start of every --write run — one log per
+    invocation, matching the tool's big-bang/one-shot semantics; stitching together unrelated
+    attempts into one file would be confusing, not helpful — and tees every sys.stdout/
+    sys.stderr write into it for the duration of the `with` block. Any exception that escapes
+    the block has its full traceback written to the log before the real streams are restored,
+    so it's captured even though Python's own default unhandled-exception printer runs after
+    __exit__.
 
-    def __init__(self, project_root: Path) -> None:
-        self._path = project_root / LOG_FILENAME
+    log_filename defaults to LOG_FILENAME (`ccst pdata init --write`'s own log) for backward
+    compatibility with that caller; `ccst pdata reorganize --write` passes its own distinct
+    filename so the two operations never truncate each other's log."""
+
+    def __init__(self, project_root: Path, *, log_filename: str = LOG_FILENAME) -> None:
+        self._path = project_root / log_filename
         self._file: TextIO | None = None
         self._real_stdout: TextIO | None = None
         self._real_stderr: TextIO | None = None

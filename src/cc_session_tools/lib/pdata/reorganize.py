@@ -24,13 +24,22 @@ _LEADING_DATE_RE = re.compile(r"^(?P<year>\d{4})\.(?P<month>\d{2})\.(?P<day>\d{2
 
 _STRATEGIES = frozenset({"by-year", "by-year-month"})
 
-# Filenames excluded from the external-reference scan by name, not just by directory - both
-# persist at the project root indefinitely (classify.py excludes them from classification for
-# the same reason) and literally contain the file_path of every classified entry, including
-# files under whatever folder is being reorganized. Without this, any project that has ever
-# run `ccst pdata init` would get a spurious "external reference" hit inside its own
-# bookkeeping every time dry_run() runs.
-_EXCLUDED_FILENAMES = frozenset({PROPOSAL_FILENAME, WRITE_LOG_FILENAME})
+# This operation's own durable per-run log (mirrors ccst-pdata-init-write.log, but under its
+# own name so a reorganize run never truncates - or gets excluded/included alongside - an
+# unrelated pdata init run's log). Named here, not in write_log.py, since it's this module's
+# own concern; the CLI layer imports it to pass to write_log.WriteLog(log_filename=...).
+REORGANIZE_WRITE_LOG_FILENAME = "ccst-pdata-reorganize-write.log"
+
+# Filenames excluded from the external-reference scan by name, not just by directory - all
+# three persist at the project root indefinitely (classify.py excludes the first two from
+# classification for the same reason) and can literally contain the file_path of every
+# classified/moved entry, including files under whatever folder is being reorganized. Without
+# this, a project that has ever run `ccst pdata init` or a previous `ccst pdata reorganize`
+# would get a spurious "external reference" hit inside its own bookkeeping every time
+# dry_run() runs.
+_EXCLUDED_FILENAMES = frozenset({
+    PROPOSAL_FILENAME, WRITE_LOG_FILENAME, REORGANIZE_WRITE_LOG_FILENAME,
+})
 
 
 @dataclass(frozen=True, slots=True)
@@ -138,13 +147,30 @@ def _scan_external_references(
 
 
 def _validate_relative_folder(folder: str) -> None:
-    """Same boundary guard as service._validate_relative_file_path, applied to --folder:
-    without it, an absolute path silently discards project_root entirely when joined with `/`
-    (pathlib's own behaviour, not a bug in this code - `Path("/a") / "/etc"` is `Path("/etc")`),
-    and a '..' segment can escape project_root the same way a crafted --file could."""
+    """A separate check from (not a call to) service._validate_relative_file_path - similar in
+    spirit, but folder has two failure modes file_path doesn't need to guard against, since
+    file_path is never joined with mkdir() to build a new directory tree the way folder is here:
+
+    - An absolute path silently discards project_root entirely when joined with `/` (pathlib's
+      own behaviour, not a bug in this code - `Path("/a") / "/etc"` is `Path("/etc")`), and a
+      '..' segment can escape project_root the same way a crafted --file could.
+    - An EMPTY folder ("") makes old_relative/new_relative leading-slash strings
+      (f"{folder}/{name}" -> "/name"), which then trigger the exact same absolute-path escape
+      above once project_root / new_relative is evaluated - so empty must be rejected as its
+      own case, before the absolute-path check ever sees it (an empty string doesn't start with
+      "/", so that check alone wouldn't catch it). A trailing or doubled slash
+      ("correspondence/", "a//b") produces a doubled-slash old_relative/new_relative that no
+      longer matches the single-slash file_path values pdata records and project docs actually
+      use - write() would then silently update zero matching records and report success while
+      every affected record's file_path goes stale, instead of erroring loudly."""
     if folder.startswith("/"):
         raise ValueError(f"--folder must be relative to the project root, got absolute path: {folder!r}")
-    if any(segment == ".." for segment in folder.split("/")):
+    segments = folder.split("/")
+    if not folder or any(not segment for segment in segments):
+        raise ValueError(
+            f"--folder must not be empty or contain empty/trailing path segments: {folder!r}"
+        )
+    if any(segment == ".." for segment in segments):
         raise ValueError(f"--folder must not contain '..' path-traversal segments: {folder!r}")
 
 
@@ -301,14 +327,29 @@ def write(*, project: str, project_root: Path, folder: str, strategy: str) -> Re
     except (OSError, subprocess.CalledProcessError, service.VersionConflictError,
             service.RecordNotFoundError) as exc:
         reasons = [str(exc)]
-        # Reverse successfully-applied DB updates before moving files back - matched.record
-        # is filtered upstream (dry_run) to always have a non-None file_path, so this always
-        # restores a real prior value, never a no-op None. Each reversal is wrapped
-        # individually, matching init_service._rollback()'s own contract: an unwrapped raise
-        # here would abort the rest of the rollback (and this whole function) instead of
-        # returning a ReorganizeResult at all.
-        unreverted_new_paths: set[str] = set()
-        for matched, updated_record in reversed(updated):
+        # Roll back each moved file and its matching DB update (if any) as one paired unit,
+        # in reverse order - move the file back FIRST, then revert its record, so the two
+        # can never end up disagreeing about where the file actually is:
+        #   - if the move-back fails, the record is left un-reverted too (still pointing at
+        #     the new path) - consistent, since the file is still physically there.
+        #   - if the move-back succeeds but the reversal update_record() call then fails,
+        #     that's flagged explicitly rather than silently diverging - matched.record is
+        #     filtered upstream (dry_run) to always have a non-None file_path, so the
+        #     reversal always restores a real prior value, never a no-op None.
+        # Each step is wrapped individually, matching init_service._rollback()'s own contract:
+        # an unwrapped raise here would abort the rest of the rollback (and this whole
+        # function) instead of returning a ReorganizeResult at all.
+        updated_by_new_path = {m.new_file_path: (m, r) for m, r in updated}
+        for move in reversed(moved):
+            pair = updated_by_new_path.get(move.new_relative)
+            try:
+                _move_file_back(project_root=project_root, move=move, folder=folder, use_git=use_git)
+            except (OSError, subprocess.CalledProcessError) as rollback_exc:
+                reasons.append(f"{move.new_relative}: rollback failed: {rollback_exc}")
+                continue  # file never moved back - its record (if any) must keep the new path
+            if pair is None:
+                continue
+            matched, updated_record = pair
             try:
                 service.update_record(
                     project=project, record_id=matched.record.id,
@@ -316,20 +357,7 @@ def write(*, project: str, project_root: Path, folder: str, strategy: str) -> Re
                     content=None, file_path=matched.record.file_path, fields={},
                 )
             except (service.VersionConflictError, service.RecordNotFoundError) as rollback_exc:
-                # This record's file_path couldn't be reverted - leave its file at the new
-                # location too, rather than moving the file back while the DB still points at
-                # the new path (which would recreate the exact dangling-reference state this
-                # rollback exists to avoid).
-                unreverted_new_paths.add(matched.new_file_path)
                 reasons.append(f"record {matched.record.id}: rollback failed: {rollback_exc}")
-
-        for move in reversed(moved):
-            if move.new_relative in unreverted_new_paths:
-                continue
-            try:
-                _move_file_back(project_root=project_root, move=move, folder=folder, use_git=use_git)
-            except (OSError, subprocess.CalledProcessError) as rollback_exc:
-                reasons.append(f"{move.new_relative}: rollback failed: {rollback_exc}")
 
         return ReorganizeResult(
             plan=plan, backup_path=backup_path,

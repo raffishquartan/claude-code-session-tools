@@ -1137,7 +1137,7 @@ def _cmd_pdata_init(args: argparse.Namespace) -> int:
 
 
 def _cmd_pdata_reorganize(args: argparse.Namespace) -> int:
-    from cc_session_tools.lib.pdata import init_paths, reorganize
+    from cc_session_tools.lib.pdata import init_paths, reorganize, write_log
 
     try:
         project_root = init_paths.resolve_project_root(args.project, rehearse=None)
@@ -1148,41 +1148,53 @@ def _cmd_pdata_reorganize(args: argparse.Namespace) -> int:
         print(f"ccst pdata: {exc}", file=sys.stderr)
         return 2
 
-    try:
-        if not args.write:
+    if not args.write:
+        try:
             plan = reorganize.dry_run(
                 project=args.project, project_root=project_root,
                 folder=args.folder, strategy=args.strategy,
             )
-            for move in plan.moves:
-                print(f"{move.old_relative} -> {move.new_relative}")
-            for matched in plan.matched_records:
-                print(f"  pdata record {matched.record.id} (group={matched.record.record_group}): "
-                      f"file_path -> {matched.new_file_path}")
-            for ref in plan.external_references:
-                print(f"  external reference: {ref.file}:{ref.line_number}: {ref.line_text}")
-            if not plan.moves:
-                print(f"no files found directly under {args.folder}/")
-            return 0
+        except (FileNotFoundError, ValueError) as exc:
+            print(f"ccst pdata: {exc}", file=sys.stderr)
+            return 2
+        for move in plan.moves:
+            print(f"{move.old_relative} -> {move.new_relative}")
+        for matched in plan.matched_records:
+            print(f"  pdata record {matched.record.id} (group={matched.record.record_group}): "
+                  f"file_path -> {matched.new_file_path}")
+        for ref in plan.external_references:
+            print(f"  external reference: {ref.file}:{ref.line_number}: {ref.line_text}")
+        if not plan.moves:
+            print(f"no files found directly under {args.folder}/")
+        return 0
 
-        result = reorganize.write(
-            project=args.project, project_root=project_root,
-            folder=args.folder, strategy=args.strategy,
-        )
+    # --write can move many files over a long-running, potentially flaky I/O path - durably
+    # logged the same way `ccst pdata init --write` is, under this operation's own filename so
+    # the two never truncate each other's log (see reorganize.REORGANIZE_WRITE_LOG_FILENAME).
+    with write_log.WriteLog(project_root, log_filename=reorganize.REORGANIZE_WRITE_LOG_FILENAME):
+        try:
+            result = reorganize.write(
+                project=args.project, project_root=project_root,
+                folder=args.folder, strategy=args.strategy,
+            )
+        except (FileNotFoundError, ValueError) as exc:
+            print(f"ccst pdata: {exc}", file=sys.stderr)
+            print(f"ERROR: {exc}")
+            return 2
+
         if result.failure is not None:
             print("ccst pdata reorganize: failed, rolled back:", file=sys.stderr)
             for reason in result.failure.reasons:
                 print(f"  - {reason}", file=sys.stderr)
+            print(f"ERROR: failed, rolled back ({len(result.failure.reasons)} reason(s))")
             return 1
 
         print(f"Moved {len(result.plan.moves)} file(s) under {args.folder}/")
         print(f"Backup: {result.backup_path}")
         for ref in result.plan.external_references:
             print(f"  still needs manual review: {ref.file}:{ref.line_number}: {ref.line_text}")
+        print("SUCCESS")
         return 0
-    except (FileNotFoundError, ValueError) as exc:
-        print(f"ccst pdata: {exc}", file=sys.stderr)
-        return 2
 
 
 def _cmd_pdata_reconcile_session_output(args: argparse.Namespace) -> int:

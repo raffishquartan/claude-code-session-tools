@@ -63,6 +63,19 @@ def test_reorganize_rejects_unknown_strategy(base_env, tmp_path):
     assert "invalid choice" in r.stderr  # argparse choices=[...] rejects it before reorganize.py sees it
 
 
+def test_reorganize_rejects_empty_folder(base_env, tmp_path):
+    """Regression test: argparse's required=True does not reject an empty string, only a
+    missing flag - the empty-string rejection has to happen in reorganize.py itself, and the
+    CLI must surface it as the standard exit-2 error, not a raw traceback."""
+    (tmp_path / "projects" / "demo").mkdir(parents=True)
+
+    r = _run(base_env, "pdata", "reorganize", "--project", "demo",
+              "--folder", "", "--strategy", "by-year")
+
+    assert r.returncode == 2
+    assert "empty" in r.stderr
+
+
 def test_reorganize_rejects_bad_project_name(base_env, tmp_path):
     r = _run(base_env, "pdata", "reorganize", "--project", "../escape",
               "--folder", "correspondence", "--strategy", "by-year")
@@ -138,3 +151,25 @@ def test_reorganize_write_reports_failure_and_rolls_back(base_env, tmp_path):
     assert "failed, rolled back" in r_write.stderr
     # Nothing actually moved - the original file survives at its flat location.
     assert (corr / "2025.03.14-note.md").exists()
+
+
+def test_reorganize_write_streams_progress_and_writes_its_own_log_file(base_env, tmp_path):
+    """Mirrors test_pdata_init_write_streams_progress_and_writes_log_file (same contract, own
+    log filename - ccst-pdata-reorganize-write.log, not ccst-pdata-init-write.log, so the two
+    operations never truncate each other's log)."""
+    project_root = tmp_path / "projects" / "demo"
+    corr = project_root / "correspondence"
+    corr.mkdir(parents=True)
+    (corr / "2025.03.14-note.md").write_text("x")
+
+    r_write = _run(base_env, "pdata", "reorganize", "--project", "demo",
+                    "--folder", "correspondence", "--strategy", "by-year", "--write")
+
+    assert r_write.returncode == 0, r_write.stderr
+    assert r_write.stdout.rstrip().splitlines()[-1] == "SUCCESS"
+
+    log_path = project_root / "ccst-pdata-reorganize-write.log"
+    assert log_path.exists()
+    log_content = log_path.read_text()
+    assert "Moved 1 file(s)" in log_content
+    assert log_content.rstrip().splitlines()[-1] == "SUCCESS"

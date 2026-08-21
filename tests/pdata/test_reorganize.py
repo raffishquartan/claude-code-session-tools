@@ -142,6 +142,9 @@ def test_dry_run_excludes_ccst_bookkeeping_files_from_external_references(monkey
     (project_root / "ccst-pdata-init-write.log").write_text(
         "importing correspondence/2025.03.14-note.md -> group=correspondence...\n"
     )
+    (project_root / reorganize.REORGANIZE_WRITE_LOG_FILENAME).write_text(
+        "correspondence/2025.03.14-note.md -> correspondence/2025/2025.03.14-note.md\n"
+    )
 
     plan = reorganize.dry_run(
         project="demo", project_root=project_root, folder="correspondence",
@@ -195,6 +198,50 @@ def test_dry_run_rejects_folder_with_parent_traversal(monkeypatch, tmp_path):
     with pytest.raises(ValueError, match="path-traversal"):
         reorganize.dry_run(
             project="demo", project_root=project_root, folder="../../etc",
+            strategy="by-year",
+        )
+
+
+def test_dry_run_rejects_empty_folder(monkeypatch, tmp_path):
+    """Regression test: an empty --folder makes old_relative/new_relative leading-slash
+    strings (f"{folder}/{name}" -> "/name"), which pathlib's `/` operator then resolves as an
+    ABSOLUTE path once joined with project_root - discarding project_root entirely and writing
+    outside the project. Must be rejected up front, before any move is even planned."""
+    monkeypatch.setenv("CCST_PROJECT_DB_DIR", str(tmp_path / "dbs"))
+    project_root = tmp_path / "projects" / "demo"
+    project_root.mkdir(parents=True)
+
+    with pytest.raises(ValueError, match="empty"):
+        reorganize.dry_run(
+            project="demo", project_root=project_root, folder="",
+            strategy="by-year",
+        )
+
+
+def test_dry_run_rejects_folder_with_trailing_slash(monkeypatch, tmp_path):
+    """Regression test: a trailing slash doubles the slash in old_relative/new_relative
+    ("correspondence//file.md"), which no longer matches the single-slash file_path values
+    pdata records actually use - write() would silently update zero matching records and
+    report success while every affected record's file_path goes stale."""
+    monkeypatch.setenv("CCST_PROJECT_DB_DIR", str(tmp_path / "dbs"))
+    project_root = tmp_path / "projects" / "demo"
+    (project_root / "correspondence").mkdir(parents=True)
+
+    with pytest.raises(ValueError, match="empty"):
+        reorganize.dry_run(
+            project="demo", project_root=project_root, folder="correspondence/",
+            strategy="by-year",
+        )
+
+
+def test_dry_run_rejects_folder_with_doubled_slash(monkeypatch, tmp_path):
+    monkeypatch.setenv("CCST_PROJECT_DB_DIR", str(tmp_path / "dbs"))
+    project_root = tmp_path / "projects" / "demo"
+    project_root.mkdir(parents=True)
+
+    with pytest.raises(ValueError, match="empty"):
+        reorganize.dry_run(
+            project="demo", project_root=project_root, folder="workstreams//ws-01",
             strategy="by-year",
         )
 
@@ -367,9 +414,14 @@ def test_write_survives_a_failed_rollback_reversal_without_crashing(monkeypatch,
     """If update_record()'s own reversal call (used only during rollback) itself raises,
     write() must still return a ReorganizeResult, not propagate the exception uncaught -
     matching init_service._rollback()'s contract that a rollback failure is reported
-    alongside the caller's own failure reasons, never raised. The record whose reversal
-    failed must stay consistent with its (unreverted) new file_path rather than getting its
-    file moved back while the DB still points at the new path."""
+    alongside the caller's own failure reasons, never raised.
+
+    write() moves a file back BEFORE reverting its record (not the other way around), so a
+    file whose move-back succeeds but whose record-reversal then fails ends up back at its
+    flat location physically, with its DB row now the one lagging behind (still pointing at
+    the no-longer-existent new path) - this residual mismatch is unavoidable without a real
+    cross-system transaction spanning the filesystem and the DB, but it must always be
+    reported via `reasons`, never silent."""
     monkeypatch.setenv("CCST_PROJECT_DB_DIR", str(tmp_path / "dbs"))
     monkeypatch.setenv(backup.BACKUP_DIR_ENV, str(tmp_path / "backups"))
     project_root = tmp_path / "projects" / "demo"
@@ -401,10 +453,13 @@ def test_write_survives_a_failed_rollback_reversal_without_crashing(monkeypatch,
 
     assert result.failure is not None
     assert any("rollback failed" in reason for reason in result.failure.reasons)
+    # The file physically moved back (move-back is attempted first and succeeded); the DB
+    # revert that was supposed to follow it failed, so the record is left pointing at the new
+    # path even though the file is no longer there - flagged in `reasons`, not silent.
     records = {r.content: r for r in service.list_records(project="demo", record_group="letters")}
     assert records["a"].file_path == "correspondence/2025/2025.03.14-a.md"
-    assert (corr / "2025" / "2025.03.14-a.md").exists()
-    assert not (corr / "2025.03.14-a.md").exists()
+    assert (corr / "2025.03.14-a.md").exists()
+    assert not (corr / "2025").exists()
 
 
 def test_write_rolls_back_earlier_moves_when_a_later_move_fails(monkeypatch, tmp_path):
