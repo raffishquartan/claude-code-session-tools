@@ -85,7 +85,7 @@ def test_reorganize_reports_external_references(base_env, tmp_path):
     assert "correspondence/2025.03.14-note.md" in r.stdout
 
 
-def test_reorganize_prints_matched_record_and_reports_backup_on_write(base_env, tmp_path):
+def test_reorganize_write_reports_file_count_and_backup_path(base_env, tmp_path):
     corr = tmp_path / "projects" / "demo" / "correspondence"
     corr.mkdir(parents=True)
     (corr / "2025.03.14-note.md").write_text("x")
@@ -96,3 +96,22 @@ def test_reorganize_prints_matched_record_and_reports_backup_on_write(base_env, 
     assert r_write.returncode == 0, r_write.stderr
     assert "Moved 1 file(s)" in r_write.stdout
     assert "Backup:" in r_write.stdout
+
+
+def test_reorganize_dry_run_prints_matched_pdata_record(base_env, tmp_path):
+    """The dry-run branch is the only place a matched pdata record is ever printed - --write's
+    success output only reports the move count and backup path, not a per-record breakdown."""
+    corr = tmp_path / "projects" / "demo" / "correspondence"
+    corr.mkdir(parents=True)
+    (corr / "2025.03.14-note.md").write_text("x")
+    r_add = _run(base_env, "pdata", "add", "--project", "demo", "--group", "letters",
+                  "--content", "x", "--file", "correspondence/2025.03.14-note.md")
+    assert r_add.returncode == 0, r_add.stderr
+
+    r = _run(base_env, "pdata", "reorganize", "--project", "demo",
+              "--folder", "correspondence", "--strategy", "by-year")
+
+    assert r.returncode == 0, r.stderr
+    assert "pdata record" in r.stdout
+    assert "group=letters" in r.stdout
+    assert "correspondence/2025/2025.03.14-note.md" in r.stdout
