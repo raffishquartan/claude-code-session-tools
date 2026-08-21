@@ -57,8 +57,9 @@ like:
 Any of these is a candidate for update if the thing it describes was migrated into pdata. Not
 every folder reference is stale — a project can legitimately still have a `data/` folder for
 content that was deliberately left folder-owned (see `pm-project-layout-reference`'s §4,
-"Relationship to pdata", for the `home`/`pod` examples of pdata-migrated projects that still have
-live non-pdata folders). Cross-check each candidate against what actually got migrated — run
+"Relationship to pdata": `home` is pdata-migrated and still has a live `correspondence/` folder
+untouched by the migration, sitting right next to its `data/`). Cross-check each candidate against
+what actually got migrated — run
 `ccst pdata list --project <name> --group <record_group>` for the record groups you'd expect, or
 check the project's `ccst-pdata-init-write.log`, if one exists, for the record groups the
 migration created — before deciding a reference is stale.
