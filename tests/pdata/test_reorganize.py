@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 import subprocess
+from pathlib import Path
 
 import pytest
 
@@ -276,6 +277,145 @@ def test_write_rolls_back_moved_files_on_record_update_failure(monkeypatch, tmp_
     # Rolled back: the file is back at its original flat location, not left half-moved.
     assert (corr / "2025.03.14-note.md").exists()
     assert not (corr / "2025").exists()
+
+
+def test_write_reverts_earlier_successful_record_update_when_a_later_one_fails(monkeypatch, tmp_path):
+    """Regression test: a naive rollback that only undoes file moves (not already-applied
+    update_record() calls) leaves an earlier-succeeded record's file_path pointing at the new
+    location while its file gets moved back to the old one - a dangling reference. Both the
+    file and the DB row must end up consistent with each other."""
+    monkeypatch.setenv("CCST_PROJECT_DB_DIR", str(tmp_path / "dbs"))
+    monkeypatch.setenv(backup.BACKUP_DIR_ENV, str(tmp_path / "backups"))
+    project_root = tmp_path / "projects" / "demo"
+    corr = project_root / "correspondence"
+    corr.mkdir(parents=True)
+    (corr / "2025.03.14-a.md").write_text("a")
+    (corr / "2025.03.15-b.md").write_text("b")
+    service.add_record(
+        project="demo", record_group="letters", content="a",
+        file_path="correspondence/2025.03.14-a.md", fields={}, created_at=1,
+    )
+    service.add_record(
+        project="demo", record_group="letters", content="b",
+        file_path="correspondence/2025.03.15-b.md", fields={}, created_at=1,
+    )
+
+    real_update = service.update_record
+    def _fail_for_b(**kwargs):
+        if (kwargs.get("file_path") or "").endswith("b.md"):
+            raise service.VersionConflictError(current={}, attempted={})
+        return real_update(**kwargs)
+    monkeypatch.setattr(reorganize.service, "update_record", _fail_for_b)
+
+    result = reorganize.write(project="demo", project_root=project_root, folder="correspondence",
+                              strategy="by-year")
+
+    assert result.failure is not None
+    # Both files back at their original flat location, and record "a"'s file_path reverted
+    # too - regardless of which order the two records were processed in.
+    assert (corr / "2025.03.14-a.md").exists()
+    assert (corr / "2025.03.15-b.md").exists()
+    assert not (corr / "2025").exists()
+    records = {r.content: r for r in service.list_records(project="demo", record_group="letters")}
+    assert records["a"].file_path == "correspondence/2025.03.14-a.md"
+    assert records["b"].file_path == "correspondence/2025.03.15-b.md"
+
+
+def test_write_survives_a_failed_rollback_reversal_without_crashing(monkeypatch, tmp_path):
+    """If update_record()'s own reversal call (used only during rollback) itself raises,
+    write() must still return a ReorganizeResult, not propagate the exception uncaught -
+    matching init_service._rollback()'s contract that a rollback failure is reported
+    alongside the caller's own failure reasons, never raised. The record whose reversal
+    failed must stay consistent with its (unreverted) new file_path rather than getting its
+    file moved back while the DB still points at the new path."""
+    monkeypatch.setenv("CCST_PROJECT_DB_DIR", str(tmp_path / "dbs"))
+    monkeypatch.setenv(backup.BACKUP_DIR_ENV, str(tmp_path / "backups"))
+    project_root = tmp_path / "projects" / "demo"
+    corr = project_root / "correspondence"
+    corr.mkdir(parents=True)
+    (corr / "2025.03.14-a.md").write_text("a")
+    (corr / "2025.03.15-b.md").write_text("b")
+    service.add_record(
+        project="demo", record_group="letters", content="a",
+        file_path="correspondence/2025.03.14-a.md", fields={}, created_at=1,
+    )
+    service.add_record(
+        project="demo", record_group="letters", content="b",
+        file_path="correspondence/2025.03.15-b.md", fields={}, created_at=1,
+    )
+
+    real_update = service.update_record
+    def _selective_failure(**kwargs):
+        file_path = kwargs.get("file_path") or ""
+        if file_path.endswith("b.md"):
+            raise service.VersionConflictError(current={}, attempted={})  # b's forward update
+        if file_path == "correspondence/2025.03.14-a.md":
+            raise service.VersionConflictError(current={}, attempted={})  # a's reversal
+        return real_update(**kwargs)  # a's forward update
+    monkeypatch.setattr(reorganize.service, "update_record", _selective_failure)
+
+    result = reorganize.write(project="demo", project_root=project_root, folder="correspondence",
+                              strategy="by-year")
+
+    assert result.failure is not None
+    assert any("rollback failed" in reason for reason in result.failure.reasons)
+    records = {r.content: r for r in service.list_records(project="demo", record_group="letters")}
+    assert records["a"].file_path == "correspondence/2025/2025.03.14-a.md"
+    assert (corr / "2025" / "2025.03.14-a.md").exists()
+    assert not (corr / "2025.03.14-a.md").exists()
+
+
+def test_write_rolls_back_earlier_moves_when_a_later_move_fails(monkeypatch, tmp_path):
+    monkeypatch.setenv("CCST_PROJECT_DB_DIR", str(tmp_path / "dbs"))
+    monkeypatch.setenv(backup.BACKUP_DIR_ENV, str(tmp_path / "backups"))
+    project_root = tmp_path / "projects" / "demo"
+    corr = project_root / "correspondence"
+    corr.mkdir(parents=True)
+    (corr / "2025.03.14-a.md").write_text("a")
+    (corr / "2026.01.02-b.md").write_text("b")
+
+    real_move_file = reorganize._move_file
+    def _fail_for_b(**kwargs):
+        if kwargs["move"].old_relative.endswith("b.md"):
+            raise OSError("simulated move failure")
+        return real_move_file(**kwargs)
+    monkeypatch.setattr(reorganize, "_move_file", _fail_for_b)
+
+    result = reorganize.write(project="demo", project_root=project_root, folder="correspondence",
+                              strategy="by-year")
+
+    assert result.failure is not None
+    # a's move (which succeeded) is rolled back; b's move never happened at all - both files
+    # end up back at their original flat locations, and neither year subdirectory survives.
+    assert (corr / "2025.03.14-a.md").exists()
+    assert (corr / "2026.01.02-b.md").exists()
+    assert not (corr / "2025").exists()
+    assert not (corr / "2026").exists()
+
+
+def test_move_file_cleans_up_newly_created_directory_when_the_move_itself_fails(monkeypatch, tmp_path):
+    project_root = tmp_path / "projects" / "demo"
+    corr = project_root / "correspondence"
+    corr.mkdir(parents=True)
+    (corr / "2025.03.14-note.md").write_text("x")
+    move = reorganize.Move(
+        old_relative="correspondence/2025.03.14-note.md",
+        new_relative="correspondence/2025/2025.03.14-note.md",
+    )
+
+    def _fail_rename(self, target):
+        raise OSError("simulated rename failure")
+    monkeypatch.setattr(Path, "rename", _fail_rename)
+
+    with pytest.raises(OSError):
+        reorganize._move_file(project_root=project_root, move=move, folder="correspondence",
+                              use_git=False)
+
+    # dest.parent (correspondence/2025/) was created by _move_file's own mkdir call, then the
+    # move itself failed - it must not be left behind as debris (write()'s own rollback only
+    # knows about *completed* moves, so nothing else would ever clean this up).
+    assert not (corr / "2025").exists()
+    assert (corr / "2025.03.14-note.md").exists()
 
 
 def test_write_reports_structured_failure_when_backup_fails(monkeypatch, tmp_path):

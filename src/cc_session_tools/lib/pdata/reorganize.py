@@ -200,26 +200,42 @@ def _is_git_repo(project_root: Path) -> bool:
     return (project_root / ".git").exists()
 
 
-def _move_file(*, project_root: Path, move: Move, use_git: bool) -> None:
+def _remove_empty_dirs_up_to(*, start: Path, boundary: Path) -> None:
+    """Remove start and each successive empty parent directory, stopping at (never removing)
+    boundary itself. Shared by _move_file's own failure cleanup and _move_file_back's rollback
+    cleanup - both need to walk back up through however many nesting levels by-year-month left
+    (two - correspondence/2025/06/) without ever deleting the folder being reorganized."""
+    current = start
+    while current != boundary and current.is_dir() and not any(current.iterdir()):
+        current.rmdir()
+        current = current.parent
+
+
+def _move_file(*, project_root: Path, move: Move, folder: str, use_git: bool) -> None:
     src = project_root / move.old_relative
     dest = project_root / move.new_relative
     dest.parent.mkdir(parents=True, exist_ok=True)
-    if use_git:
-        subprocess.run(
-            ["git", "mv", move.old_relative, move.new_relative],
-            cwd=project_root, check=True, capture_output=True, text=True,
-        )
-    else:
-        src.rename(dest)
+    try:
+        if use_git:
+            subprocess.run(
+                ["git", "mv", move.old_relative, move.new_relative],
+                cwd=project_root, check=True, capture_output=True, text=True,
+            )
+        else:
+            src.rename(dest)
+    except (OSError, subprocess.CalledProcessError):
+        # The mkdir above may have just created dest.parent (and its own new parents, for
+        # by-year-month) - if the move itself then failed, that directory was never populated
+        # and would otherwise be left behind as debris: write()'s own rollback only knows
+        # about *completed* moves (this one was never added to `moved`), so nothing else
+        # would ever clean it up.
+        _remove_empty_dirs_up_to(start=dest.parent, boundary=project_root / folder)
+        raise
 
 
 def _move_file_back(*, project_root: Path, move: Move, folder: str, use_git: bool) -> None:
-    """Undo _move_file - used by write()'s rollback path only. Also removes every nested
-    subdirectory _move_file created that's now empty, walking up from the immediate parent -
-    by-year-month leaves two levels (correspondence/2025/06/), not just one, so a single
-    rmdir() of the immediate parent alone would leave the year directory behind."""
+    """Undo _move_file - used by write()'s rollback path only."""
     dest_parent = (project_root / move.new_relative).parent
-    folder_path = project_root / folder
     if use_git:
         subprocess.run(
             ["git", "mv", move.new_relative, move.old_relative],
@@ -227,10 +243,7 @@ def _move_file_back(*, project_root: Path, move: Move, folder: str, use_git: boo
         )
     else:
         (project_root / move.new_relative).rename(project_root / move.old_relative)
-    current = dest_parent
-    while current != folder_path and current.is_dir() and not any(current.iterdir()):
-        current.rmdir()
-        current = current.parent
+    _remove_empty_dirs_up_to(start=dest_parent, boundary=project_root / folder)
 
 
 def write(*, project: str, project_root: Path, folder: str, strategy: str) -> ReorganizeResult:
@@ -247,27 +260,58 @@ def write(*, project: str, project_root: Path, folder: str, strategy: str) -> Re
         return ReorganizeResult(plan=plan, backup_path=None, failure=ReorganizeFailure(reasons=[str(exc)]))
 
     moved: list[Move] = []
+    # (matched, post-update Record incl. its bumped version) for every update_record() call
+    # that succeeded so far - needed to reverse them in the right order on failure, each with
+    # the expected_version its OWN update actually left the row at, not its pre-update version.
+    updated: list[tuple[MatchedRecord, Record]] = []
     try:
         for move in plan.moves:
-            _move_file(project_root=project_root, move=move, use_git=use_git)
+            _move_file(project_root=project_root, move=move, folder=folder, use_git=use_git)
             moved.append(move)
 
         for matched in plan.matched_records:
-            service.update_record(
+            updated_record = service.update_record(
                 project=project, record_id=matched.record.id,
                 expected_version=matched.record.version,
                 content=None, file_path=matched.new_file_path, fields={},
             )
+            updated.append((matched, updated_record))
     except (OSError, subprocess.CalledProcessError, service.VersionConflictError,
             service.RecordNotFoundError) as exc:
-        # Known gap: if plan.matched_records has more than one entry and a LATER one's
-        # update_record() call fails here, EARLIER ones in this same loop already succeeded
-        # and are not reversed - only the file moves are rolled back. See TODO.md.
+        reasons = [str(exc)]
+        # Reverse successfully-applied DB updates before moving files back - matched.record
+        # is filtered upstream (dry_run) to always have a non-None file_path, so this always
+        # restores a real prior value, never a no-op None. Each reversal is wrapped
+        # individually, matching init_service._rollback()'s own contract: an unwrapped raise
+        # here would abort the rest of the rollback (and this whole function) instead of
+        # returning a ReorganizeResult at all.
+        unreverted_new_paths: set[str] = set()
+        for matched, updated_record in reversed(updated):
+            try:
+                service.update_record(
+                    project=project, record_id=matched.record.id,
+                    expected_version=updated_record.version,
+                    content=None, file_path=matched.record.file_path, fields={},
+                )
+            except (service.VersionConflictError, service.RecordNotFoundError) as rollback_exc:
+                # This record's file_path couldn't be reverted - leave its file at the new
+                # location too, rather than moving the file back while the DB still points at
+                # the new path (which would recreate the exact dangling-reference state this
+                # rollback exists to avoid).
+                unreverted_new_paths.add(matched.new_file_path)
+                reasons.append(f"record {matched.record.id}: rollback failed: {rollback_exc}")
+
         for move in reversed(moved):
-            _move_file_back(project_root=project_root, move=move, folder=folder, use_git=use_git)
+            if move.new_relative in unreverted_new_paths:
+                continue
+            try:
+                _move_file_back(project_root=project_root, move=move, folder=folder, use_git=use_git)
+            except (OSError, subprocess.CalledProcessError) as rollback_exc:
+                reasons.append(f"{move.new_relative}: rollback failed: {rollback_exc}")
+
         return ReorganizeResult(
             plan=plan, backup_path=backup_path,
-            failure=ReorganizeFailure(reasons=[str(exc)]),
+            failure=ReorganizeFailure(reasons=reasons),
         )
 
     return ReorganizeResult(plan=plan, backup_path=backup_path, failure=None)
