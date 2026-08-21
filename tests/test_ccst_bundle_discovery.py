@@ -89,3 +89,10 @@ def test_print_migration_prompt_reminders_degrades_gracefully_when_prompts_dir_m
     captured = capsys.readouterr()
     assert captured.out == ""  # nothing bogus printed to stdout (would land in --write's log)
     assert "Cannot locate bundled prompts" in captured.err
+
+
+def test_bundled_prompts_are_no_longer_placeholders():
+    prompts_dir = ccst._discover_prompts_dir()
+    for filename in ("pdata-migration-claude-md-update.md", "pdata-migration-skills-update.md"):
+        text = (prompts_dir / filename).read_text()
+        assert "PLACEHOLDER" not in text
