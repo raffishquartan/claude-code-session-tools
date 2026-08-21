@@ -311,8 +311,50 @@ def test_write_reverts_earlier_successful_record_update_when_a_later_one_fails(m
                               strategy="by-year")
 
     assert result.failure is not None
-    # Both files back at their original flat location, and record "a"'s file_path reverted
-    # too - regardless of which order the two records were processed in.
+    # Both files back at their original flat location, and record "a"'s file_path reverted too.
+    assert (corr / "2025.03.14-a.md").exists()
+    assert (corr / "2025.03.15-b.md").exists()
+    assert not (corr / "2025").exists()
+    records = {r.content: r for r in service.list_records(project="demo", record_group="letters")}
+    assert records["a"].file_path == "correspondence/2025.03.14-a.md"
+    assert records["b"].file_path == "correspondence/2025.03.15-b.md"
+
+
+def test_write_reverts_earlier_successful_record_update_when_a_later_one_fails_reverse_order(
+    monkeypatch, tmp_path,
+):
+    """Same scenario as the test above with "b" inserted (and so processed) before "a" -
+    plan.matched_records order follows DB insertion order, so this is a genuinely different
+    processing order, not just a relabelling. write()'s rollback logic itself doesn't depend
+    on which matched record comes first, but that needs its own test to actually be exercised,
+    not just asserted in a comment on a test that always inserts in the same order."""
+    monkeypatch.setenv("CCST_PROJECT_DB_DIR", str(tmp_path / "dbs"))
+    monkeypatch.setenv(backup.BACKUP_DIR_ENV, str(tmp_path / "backups"))
+    project_root = tmp_path / "projects" / "demo"
+    corr = project_root / "correspondence"
+    corr.mkdir(parents=True)
+    (corr / "2025.03.14-a.md").write_text("a")
+    (corr / "2025.03.15-b.md").write_text("b")
+    service.add_record(
+        project="demo", record_group="letters", content="b",
+        file_path="correspondence/2025.03.15-b.md", fields={}, created_at=1,
+    )
+    service.add_record(
+        project="demo", record_group="letters", content="a",
+        file_path="correspondence/2025.03.14-a.md", fields={}, created_at=1,
+    )
+
+    real_update = service.update_record
+    def _fail_for_a(**kwargs):
+        if (kwargs.get("file_path") or "").endswith("a.md"):
+            raise service.VersionConflictError(current={}, attempted={})
+        return real_update(**kwargs)
+    monkeypatch.setattr(reorganize.service, "update_record", _fail_for_a)
+
+    result = reorganize.write(project="demo", project_root=project_root, folder="correspondence",
+                              strategy="by-year")
+
+    assert result.failure is not None
     assert (corr / "2025.03.14-a.md").exists()
     assert (corr / "2025.03.15-b.md").exists()
     assert not (corr / "2025").exists()
@@ -415,6 +457,33 @@ def test_move_file_cleans_up_newly_created_directory_when_the_move_itself_fails(
     # move itself failed - it must not be left behind as debris (write()'s own rollback only
     # knows about *completed* moves, so nothing else would ever clean this up).
     assert not (corr / "2025").exists()
+    assert (corr / "2025.03.14-note.md").exists()
+
+
+def test_move_file_never_removes_a_directory_that_predates_the_call(monkeypatch, tmp_path):
+    """Regression test: cleanup-on-failure must only remove directories this specific
+    _move_file call created. An empty correspondence/2025/ that already existed before the
+    call (e.g. left over from an earlier partial/crashed run, or present for any other reason)
+    must survive a failed move exactly as it would have if _move_file had never run."""
+    project_root = tmp_path / "projects" / "demo"
+    corr = project_root / "correspondence"
+    corr.mkdir(parents=True)
+    (corr / "2025.03.14-note.md").write_text("x")
+    (corr / "2025").mkdir()  # pre-exists, empty, before _move_file is ever called
+    move = reorganize.Move(
+        old_relative="correspondence/2025.03.14-note.md",
+        new_relative="correspondence/2025/2025.03.14-note.md",
+    )
+
+    def _fail_rename(self, target):
+        raise OSError("simulated rename failure")
+    monkeypatch.setattr(Path, "rename", _fail_rename)
+
+    with pytest.raises(OSError):
+        reorganize._move_file(project_root=project_root, move=move, folder="correspondence",
+                              use_git=False)
+
+    assert (corr / "2025").exists()  # pre-existing directory survives - it wasn't ours to remove
     assert (corr / "2025.03.14-note.md").exists()
 
 

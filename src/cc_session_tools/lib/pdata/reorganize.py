@@ -211,9 +211,29 @@ def _remove_empty_dirs_up_to(*, start: Path, boundary: Path) -> None:
         current = current.parent
 
 
+def _first_missing_ancestor(*, start: Path, boundary: Path) -> Path | None:
+    """Walking from start up towards (not including) boundary, the shallowest directory that
+    does not yet exist - exactly the topmost directory `start.mkdir(parents=True)` would
+    actually create. None if start already exists (mkdir would be a complete no-op).
+
+    Used so _move_file's failure-cleanup only ever removes directories its own mkdir call
+    genuinely created, never one that already existed before it - e.g. left over from an
+    earlier partial/crashed run, or present for an unrelated reason. Without this, cleanup
+    would delete any empty directory sitting at the destination path regardless of whether
+    this call was the one that created it."""
+    if start.exists():
+        return None
+    missing = start
+    while missing.parent != boundary and not missing.parent.exists():
+        missing = missing.parent
+    return missing
+
+
 def _move_file(*, project_root: Path, move: Move, folder: str, use_git: bool) -> None:
     src = project_root / move.old_relative
     dest = project_root / move.new_relative
+    folder_path = project_root / folder
+    newly_created_root = _first_missing_ancestor(start=dest.parent, boundary=folder_path)
     dest.parent.mkdir(parents=True, exist_ok=True)
     try:
         if use_git:
@@ -228,8 +248,10 @@ def _move_file(*, project_root: Path, move: Move, folder: str, use_git: bool) ->
         # by-year-month) - if the move itself then failed, that directory was never populated
         # and would otherwise be left behind as debris: write()'s own rollback only knows
         # about *completed* moves (this one was never added to `moved`), so nothing else
-        # would ever clean it up.
-        _remove_empty_dirs_up_to(start=dest.parent, boundary=project_root / folder)
+        # would ever clean it up. newly_created_root is None when dest.parent already existed
+        # before this call (nothing to clean up - it wasn't ours to remove).
+        if newly_created_root is not None:
+            _remove_empty_dirs_up_to(start=dest.parent, boundary=newly_created_root.parent)
         raise
 
 
