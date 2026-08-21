@@ -1,17 +1,6 @@
 ---
 name: pm-project-layout-reference
-description: Canonical reference for ~/cc/<project>'s optional folder conventions
-  (correspondence/, meetings-and-calls/, analysis/, workstreams/, workstreams-archived/)
-  and the assessment criteria for using them - which folders a given project needs, when
-  correspondence/ should nest by year, and how a workstream moves from active to archived.
-  Read this before setting up a new project's folders, before reorganising an existing
-  project's layout, or before deciding whether a project's correspondence/ needs splitting.
-  Reference-only - does not perform any reorganisation itself; for an actual flat-to-nested
-  split once you've decided one is needed, see `ccst pdata reorganize`. Triggers - "how should
-  this project be organised", "should correspondence/ be split", "archive this workstream",
-  "/pm-project-layout-reference". Do NOT use for the pdata data-store migration itself
-  (pm-project-init) or per-record-group schema design (pm-pdata-schema-design) - those are
-  separate skills; this one is about folder-owned content and structure, not the data store.
+description: Canonical reference for ~/cc/<project>'s optional folder conventions (correspondence/, meetings-and-calls/, analysis/, workstreams/, workstreams-archived/) and the assessment criteria for using them - which folders a given project needs, when correspondence/ should nest by year, and how a workstream moves from active to archived. Read this before setting up a new project's folders, before reorganising an existing project's layout, or before deciding whether a project's correspondence/ needs splitting. Reference-only - does not perform any reorganisation itself; for an actual flat-to-nested split once you've decided one is needed, see `ccst pdata reorganize`. Triggers - "how should this project be organised", "should correspondence/ be split", "archive this workstream", "/pm-project-layout-reference". Do NOT use for the pdata data-store migration itself (pm-project-init) or per-record-group schema design (pm-pdata-schema-design) - those are separate skills; this one is about folder-owned content and structure, not the data store.
 ---
 
 # pm-project-layout-reference
@@ -83,7 +72,12 @@ folder. `pod`, by contrast, never had a `correspondence/` at all - it's pure `da
 
 ## 5. Performing an actual reorganisation
 
-To actually perform a flat-to-nested split, use `ccst pdata reorganize --project <name> --folder
-<folder> --strategy by-year` (dry-run first, `--write` to apply) - see its `--help` for details.
-Anything simpler (renaming one folder, adding a new folder type) is a plain `git mv`/`mv`, no
-tool needed.
+To actually perform a flat-to-nested split by date, use `ccst pdata reorganize --project <name>
+--folder <folder> --strategy by-year` (or `--strategy by-year-month` for higher-volume folders) -
+dry-run first, `--write` to apply. See its `--help` for details.
+
+The tool only automates date-based splitting - it's the mechanical case, since a date is
+derivable per file. Topic-based splitting (`analysis/`, or any project-specific folder without a
+natural date) has no tool support and stays a manual `git mv`/`mv` pass, since grouping by topic
+needs human judgement the tool can't safely substitute for. Anything simpler than a split
+(renaming one folder, adding a new folder type) is also a plain `git mv`/`mv`.
