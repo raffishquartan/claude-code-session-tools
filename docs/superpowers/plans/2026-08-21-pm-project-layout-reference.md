@@ -392,13 +392,21 @@ def _scan_external_references(
 ) -> list[ExternalReference]:
     """Grep every text file in project_root (excluding folder itself and the usual
     ccst/git bookkeeping dirs) for a literal occurrence of any old_relatives entry - reported
-    only, never edited (design spec §3: rewriting prose isn't safe to automate)."""
-    excluded_dir_names = {".git", ".claude", "cc-sessions", ".pdata-migrated", folder}
+    only, never edited (design spec §3: rewriting prose isn't safe to automate).
+
+    folder is excluded by path-prefix comparison, not single-component name matching - folder
+    can itself be multi-segment (e.g. "workstreams/ws-01"), which a plain
+    `part in excluded_names` check would never match against any single path component."""
+    excluded_dir_names = {".git", ".claude", "cc-sessions", ".pdata-migrated"}
+    folder_parts = Path(folder).parts
     refs: list[ExternalReference] = []
     for candidate in sorted(project_root.rglob("*")):
         if not candidate.is_file():
             continue
-        if any(part in excluded_dir_names for part in candidate.relative_to(project_root).parts[:-1]):
+        rel_parts = candidate.relative_to(project_root).parts
+        if rel_parts[:len(folder_parts)] == folder_parts:
+            continue  # inside the folder being reorganized itself
+        if any(part in excluded_dir_names for part in rel_parts[:-1]):
             continue
         try:
             text = candidate.read_text(encoding="utf-8")
@@ -531,10 +539,13 @@ def test_write_uses_git_mv_when_project_root_is_a_git_repo(tmp_path, monkeypatch
     reorganize.write(project="demo", project_root=project_root, folder="correspondence",
                       strategy="by-year")
 
-    log = subprocess.run(["git", "log", "--follow", "--oneline",
-                          "correspondence/2025/2025.03.14-note.md"],
-                         cwd=project_root, capture_output=True, text=True, check=True)
-    assert "init" in log.stdout  # --follow found the pre-move history through the rename
+    # write() only stages the rename via `git mv` - it never commits - so this checks the
+    # staged rename directly rather than `git log --follow`, which walks committed history
+    # only and would see nothing yet.
+    status = subprocess.run(["git", "status", "--short"],
+                            cwd=project_root, capture_output=True, text=True, check=True)
+    assert "correspondence/2025.03.14-note.md" in status.stdout
+    assert "correspondence/2025/2025.03.14-note.md" in status.stdout
 
 
 def test_write_rolls_back_moved_files_on_record_update_failure(tmp_path, monkeypatch):
@@ -608,11 +619,13 @@ def _move_file(*, project_root: Path, move: Move, use_git: bool) -> None:
         src.rename(dest)
 
 
-def _move_file_back(*, project_root: Path, move: Move, use_git: bool) -> None:
-    """Undo _move_file - used by write()'s rollback path only. Also removes the nested
-    subdirectory _move_file created if this was the last file in it, so a rolled-back run
-    doesn't leave an empty correspondence/2025/ behind alongside the restored flat file."""
+def _move_file_back(*, project_root: Path, move: Move, folder: str, use_git: bool) -> None:
+    """Undo _move_file - used by write()'s rollback path only. Also removes every nested
+    subdirectory _move_file created that's now empty, walking up from the immediate parent -
+    by-year-month leaves two levels (correspondence/2025/06/), not just one, so a single
+    rmdir() of the immediate parent alone would leave the year directory behind."""
     dest_parent = (project_root / move.new_relative).parent
+    folder_path = project_root / folder
     if use_git:
         subprocess.run(
             ["git", "mv", move.new_relative, move.old_relative],
@@ -620,8 +633,10 @@ def _move_file_back(*, project_root: Path, move: Move, use_git: bool) -> None:
         )
     else:
         (project_root / move.new_relative).rename(project_root / move.old_relative)
-    if dest_parent.is_dir() and not any(dest_parent.iterdir()):
-        dest_parent.rmdir()
+    current = dest_parent
+    while current != folder_path and current.is_dir() and not any(current.iterdir()):
+        current.rmdir()
+        current = current.parent
 
 
 def write(*, project: str, project_root: Path, folder: str, strategy: str) -> ReorganizeResult:
@@ -644,7 +659,7 @@ def write(*, project: str, project_root: Path, folder: str, strategy: str) -> Re
     except (OSError, subprocess.CalledProcessError, service.VersionConflictError,
             service.RecordNotFoundError) as exc:
         for move in reversed(moved):
-            _move_file_back(project_root=project_root, move=move, use_git=use_git)
+            _move_file_back(project_root=project_root, move=move, folder=folder, use_git=use_git)
         return ReorganizeResult(
             plan=plan, backup_path=backup_path,
             failure=ReorganizeFailure(reasons=[str(exc)]),
