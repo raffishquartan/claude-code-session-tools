@@ -220,29 +220,56 @@ def find_records_by_file_path_prefix(*, project: str, prefix: str) -> list[Recor
     has no .db yet and when it has one but nothing matches - callers that need to distinguish
     "no store" from "store, no match" should check store.db_path(project).exists() themselves.
 
-    Known limitation: prefix is interpolated into a SQL LIKE pattern unescaped, so a literal
-    '%' or '_' in it would be interpreted as a wildcard rather than a literal character. This
-    repo's query_records()/_parse_where_clause() plumbing (shared with `ccst pdata query`)
-    has no ESCAPE-clause support to fix this properly without changing that shared code, which
-    is out of scope here. Not a practical issue for this callsite specifically - prefix is
-    always a project-relative folder path (this codebase's own naming convention uses hyphens,
-    not underscores, e.g. ws-01-slug), but worth knowing if this function is ever reused
-    somewhere prefix isn't a controlled folder name."""
+    Goes straight to repository.query_records() with an already-parsed (field, op, value)
+    condition, one connection reused across every record_group, rather than routing through
+    this module's own query_records()/_parse_where_clause() string DSL: that DSL's
+    `\\s+`-based regex would silently strip any leading whitespace off prefix on the round
+    trip through it (a real, if narrow, correctness bug for a prefix that legitimately starts
+    with a space), and re-resolving a fresh connection per record_group here would be needless
+    overhead for what's logically one read. list_extension_columns/get_extension_row's
+    row-materialisation is duplicated inline here rather than shared with list_records/
+    query_records above - matching how those two already duplicate the same block between
+    each other rather than a factored-out helper.
+
+    Known limitation: prefix is still used as a raw SQL LIKE pattern, so a literal '%' or '_'
+    in it is interpreted as a wildcard rather than a literal character - SQLite's LIKE has no
+    ESCAPE-clause support wired up anywhere in this codebase. Not a practical issue for this
+    callsite specifically - prefix is always a project-relative folder path (this codebase's
+    own naming convention uses hyphens, not underscores, e.g. ws-01-slug), but worth knowing if
+    this function is ever reused somewhere prefix isn't a controlled folder name."""
+    if not prefix:
+        raise ValueError("find_records_by_file_path_prefix requires a non-empty prefix")
     if not store.db_path(project).exists():
         return []
-    matches: list[Record] = []
-    for group in schema_list(project=project):
-        matches.extend(
-            query_records(
-                project=project, record_group=group["record_group"],
-                # No surrounding quotes: service._parse_where_clause's `value` capture group
-                # is bound directly as the SQL parameter, not SQL-literal syntax to be
-                # unquoted. Quoting it here would make the comparison look for a file_path
-                # that literally starts and ends with an apostrophe - never matching anything.
-                where=[f"file_path LIKE {prefix}%"],
+    conn = repository.connect(project)
+    try:
+        matches: list[Record] = []
+        for group in repository.list_record_groups(conn):
+            record_group = group["record_group"]
+            # list_record_groups() types its return as dict[str, object] since row_count and
+            # max_updated_at are int-shaped columns in the same row - record_group itself is
+            # always the TEXT column's value, never anything else, so this narrows it for
+            # mypy the same way an impossible-state assert would (coding-standards: make the
+            # impossible state visible rather than silently re-checking it).
+            assert isinstance(record_group, str)
+            rows = repository.query_records(
+                conn, record_group=record_group,
+                conditions=[("file_path", "LIKE", f"{prefix}%")],
+                limit=None, include_deleted=False,
             )
-        )
-    return matches
+            has_ext = repository.extension_table_exists(conn, record_group)
+            for row in rows:
+                record = _row_to_record(row)
+                if has_ext:
+                    ext_row = repository.get_extension_row(conn, record_group, row["id"])
+                    if ext_row is not None:
+                        record.fields = {
+                            k: ext_row[k] for k in ext_row.keys() if k != "record_id"
+                        }
+                matches.append(record)
+        return matches
+    finally:
+        conn.close()
 
 
 class RecordNotFoundError(Exception):
