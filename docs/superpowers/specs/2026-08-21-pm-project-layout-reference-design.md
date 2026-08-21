@@ -1,6 +1,7 @@
 # `pm-project-layout-reference` — design spec
 
-Status: DRAFT, awaiting spec review + Chris's review of this file. Source: a design conversation
+Status: Spec review APPROVED (2 rounds). Awaiting Chris's review of this file before it's
+finalised. Source: a design conversation
 (2026-08-21) that grew out of the deferred `ce30` inter-session message ("How should ccst help
 set up `~/cc/<project>` consistently?", held on 2026-08-20 pending exactly this conversation)
 and Chris's own follow-up questions about the two placeholder pdata-migration prompts
@@ -143,8 +144,9 @@ originals) that isn't a good fit for becoming pdata rows, per `pm-project-init`'
 machine-inferable"). Re-checked against real projects during spec review: `home` is
 pdata-migrated *and* still has a live `correspondence/` (9 files - `.md`+`.pdf` pairs, untouched
 by the migration) sitting right next to `data/` (which now holds only a non-migrated helper
-script, `build-csv.py` - the CSVs it used to hold became pdata rows). `pod`, by contrast, never
-had a `correspondence/` folder at all - it's pure `data/` plus docs. The two axes are orthogonal: a
+script, `data/tesco/build-csv.py` - the CSVs it used to hold became pdata rows). `pod`, by
+contrast, never had a `correspondence/` folder at all - it's pure `data/` plus a `CLAUDE.md`.
+The two axes are orthogonal: a
 project being pdata-migrated says nothing about whether it also has any of these five folders,
 and vice versa. Nothing here changes when a project migrates to pdata.
 
