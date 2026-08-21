@@ -76,9 +76,10 @@ These criteria apply to any of the folders above, not just `correspondence/`:
 These five folders hold folder-owned content by definition - genuinely file-shaped material
 (attachments, PDFs, `.eml` originals) that isn't a good fit for becoming pdata rows. A project
 being pdata-migrated (see `pm-project-init`) says nothing about whether it also has any of these
-five folders, and vice versa - they're orthogonal. Example: a project can be pdata-migrated (its
-structured data now lives in SQLite) and still have a live `correspondence/` folder full of
-`.md`+`.pdf` pairs, untouched by the migration, sitting right next to its `data/` folder.
+five folders, and vice versa - they're orthogonal. `home` is the concrete example: it's
+pdata-migrated (its structured data now lives in SQLite) and still has a live `correspondence/`
+folder full of `.md`+`.pdf` pairs, untouched by the migration, sitting right next to its `data/`
+folder. `pod`, by contrast, never had a `correspondence/` at all - it's pure `data/` plus docs.
 
 ## 5. Performing an actual reorganisation
 
