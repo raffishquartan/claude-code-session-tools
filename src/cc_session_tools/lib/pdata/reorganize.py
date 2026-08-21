@@ -15,49 +15,78 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from cc_session_tools.lib.pdata import init_paths, service
+from cc_session_tools.lib.pdata.init_paths import PROPOSAL_FILENAME
 from cc_session_tools.lib.pdata.service import Record
+from cc_session_tools.lib.pdata.write_log import LOG_FILENAME as WRITE_LOG_FILENAME
 
 _LEADING_DATE_RE = re.compile(r"^(?P<year>\d{4})\.(?P<month>\d{2})\.(?P<day>\d{2})-")
 
 _STRATEGIES = frozenset({"by-year", "by-year-month"})
 
+# Filenames excluded from the external-reference scan by name, not just by directory - both
+# persist at the project root indefinitely (classify.py excludes them from classification for
+# the same reason) and literally contain the file_path of every classified entry, including
+# files under whatever folder is being reorganized. Without this, any project that has ever
+# run `ccst pdata init` would get a spurious "external reference" hit inside its own
+# bookkeeping every time dry_run() runs.
+_EXCLUDED_FILENAMES = frozenset({PROPOSAL_FILENAME, WRITE_LOG_FILENAME})
 
-@dataclass(frozen=True)
+
+@dataclass(frozen=True, slots=True)
 class Move:
     old_relative: str
     new_relative: str
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class ExternalReference:
     file: Path
     line_number: int
     line_text: str
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
+class MatchedRecord:
+    record: Record
+    new_file_path: str
+
+
+@dataclass(frozen=True, slots=True)
 class ReorganizePlan:
     project: str
     project_root: Path
     folder: str
     strategy: str
     moves: list[Move]
-    matched_records: list[tuple[Record, str]]  # (record, new_file_path)
+    matched_records: list[MatchedRecord]
     external_references: list[ExternalReference]
 
 
-def _year_for(path: Path) -> str:
+def _year_and_month_for(path: Path) -> tuple[str, str]:
+    """(year, month) for path - from a leading YYYY.MM.DD- date in the filename if present
+    (this codebase's own naming convention, e.g. archive-correspondence's output), else the
+    file's mtime. Shared by _year_for/_year_month_for so the date-vs-mtime decision and the
+    regex match happen exactly once, not twice with the same logic duplicated between them.
+
+    No validation that a regex-matched month is actually 01-12 (or day 01-31) - a malformed
+    but shape-matching date in a filename (e.g. "2025.13.99-foo.md") is accepted at face value.
+    Low-risk for a dry-run/planning tool whose output is reviewed before any --write, but worth
+    knowing if this is ever reused somewhere the plan isn't reviewed first."""
     match = _LEADING_DATE_RE.match(path.name)
     if match:
-        return match.group("year")
-    return time.strftime("%Y", time.localtime(path.stat().st_mtime))
+        return match.group("year"), match.group("month")
+    localtime = time.localtime(path.stat().st_mtime)
+    return time.strftime("%Y", localtime), time.strftime("%m", localtime)
+
+
+def _year_for(path: Path) -> str:
+    year, _month = _year_and_month_for(path)
+    return year
 
 
 def _year_month_for(path: Path) -> str:
-    match = _LEADING_DATE_RE.match(path.name)
-    if match:
-        return f"{match.group('year')}/{match.group('month')}"
-    return time.strftime("%Y/%m", time.localtime(path.stat().st_mtime))
+    year, month = _year_and_month_for(path)
+    return f"{year}/{month}"
 
 
 def _new_relative(folder: str, entry: Path, strategy: str) -> str:
@@ -92,6 +121,8 @@ def _scan_external_references(
             continue  # inside the folder being reorganized itself
         if any(part in excluded_dir_names for part in rel_parts[:-1]):
             continue
+        if candidate.name in _EXCLUDED_FILENAMES:
+            continue  # ccst's own bookkeeping - see _EXCLUDED_FILENAMES's comment
         try:
             text = candidate.read_text(encoding="utf-8")
         except (UnicodeDecodeError, OSError):
@@ -136,7 +167,7 @@ def dry_run(*, project: str, project_root: Path, folder: str, strategy: str) -> 
     matched = service.find_records_by_file_path_prefix(project=project, prefix=f"{folder}/")
     move_by_old = {m.old_relative: m.new_relative for m in moves}
     matched_records = [
-        (record, move_by_old[record.file_path])
+        MatchedRecord(record=record, new_file_path=move_by_old[record.file_path])
         for record in matched
         if record.file_path is not None and record.file_path in move_by_old
     ]
