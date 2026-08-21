@@ -157,3 +157,11 @@ longer describes anything: these are CCST hooks now, dispatched via `HOOK_VERBS`
   accordingly.
 - [ ] Check for any other stale `cccs_hooks`-shaped naming elsewhere in this repo picked up by
   the same historical move (e.g. docstrings, test paths).
+
+## `ccst pdata reorganize` - full DB-update rollback
+
+`reorganize.write()` rolls back file moves on failure but not already-applied
+`update_record()` calls from earlier in the same run, if a later matched record's update
+fails partway through a multi-record reorganisation. Needs each record's prior file_path kept
+around to reverse. Low priority - the same `--write` run's own backup still lets a human
+restore from the tarball if this narrow case bites.

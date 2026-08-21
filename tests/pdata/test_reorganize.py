@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 import re
+import subprocess
 
 import pytest
 
-from cc_session_tools.lib.pdata import reorganize, service
+from cc_session_tools.lib.pdata import backup, reorganize, service
 
 
 def test_dry_run_computes_by_year_moves_from_filename_dates(monkeypatch, tmp_path):
@@ -195,3 +196,106 @@ def test_dry_run_rejects_folder_with_parent_traversal(monkeypatch, tmp_path):
             project="demo", project_root=project_root, folder="../../etc",
             strategy="by-year",
         )
+
+
+def test_write_moves_files_and_updates_matching_records(monkeypatch, tmp_path):
+    monkeypatch.setenv("CCST_PROJECT_DB_DIR", str(tmp_path / "dbs"))
+    monkeypatch.setenv(backup.BACKUP_DIR_ENV, str(tmp_path / "backups"))
+    project_root = tmp_path / "projects" / "demo"
+    corr = project_root / "correspondence"
+    corr.mkdir(parents=True)
+    (corr / "2025.03.14-note.md").write_text("x")
+    record = service.add_record(
+        project="demo", record_group="letters", content="x",
+        file_path="correspondence/2025.03.14-note.md", fields={}, created_at=1,
+    )
+
+    result = reorganize.write(
+        project="demo", project_root=project_root, folder="correspondence",
+        strategy="by-year",
+    )
+
+    assert result.failure is None
+    assert not (corr / "2025.03.14-note.md").exists()
+    assert (corr / "2025" / "2025.03.14-note.md").exists()
+    updated = service.list_records(project="demo", record_group="letters")[0]
+    assert updated.file_path == "correspondence/2025/2025.03.14-note.md"
+    assert updated.version == record.version + 1
+    assert result.backup_path.exists()
+
+
+def test_write_uses_git_mv_when_project_root_is_a_git_repo(monkeypatch, tmp_path):
+    monkeypatch.setenv("CCST_PROJECT_DB_DIR", str(tmp_path / "dbs"))
+    monkeypatch.setenv(backup.BACKUP_DIR_ENV, str(tmp_path / "backups"))
+    project_root = tmp_path / "projects" / "demo"
+    corr = project_root / "correspondence"
+    corr.mkdir(parents=True)
+    (corr / "2025.03.14-note.md").write_text("x")
+    subprocess.run(["git", "init", "-q"], cwd=project_root, check=True)
+    subprocess.run(["git", "add", "-A"], cwd=project_root, check=True)
+    subprocess.run(["git", "-c", "user.email=t@t.com", "-c", "user.name=t",
+                    "commit", "-q", "-m", "init"], cwd=project_root, check=True)
+
+    reorganize.write(project="demo", project_root=project_root, folder="correspondence",
+                      strategy="by-year")
+
+    # write() only stages the rename via `git mv` - it never commits - so this checks the
+    # staged rename directly rather than `git log --follow`, which walks committed history
+    # only and would see nothing yet.
+    status = subprocess.run(["git", "status", "--short"],
+                            cwd=project_root, capture_output=True, text=True, check=True)
+    assert "correspondence/2025.03.14-note.md" in status.stdout
+    assert "correspondence/2025/2025.03.14-note.md" in status.stdout
+
+
+def test_write_rolls_back_moved_files_on_record_update_failure(monkeypatch, tmp_path):
+    monkeypatch.setenv("CCST_PROJECT_DB_DIR", str(tmp_path / "dbs"))
+    monkeypatch.setenv(backup.BACKUP_DIR_ENV, str(tmp_path / "backups"))
+    project_root = tmp_path / "projects" / "demo"
+    corr = project_root / "correspondence"
+    corr.mkdir(parents=True)
+    (corr / "2025.03.14-note.md").write_text("x")
+    service.add_record(
+        project="demo", record_group="letters", content="x",
+        file_path="correspondence/2025.03.14-note.md", fields={}, created_at=1,
+    )
+
+    # Force a version conflict: simplest way to simulate this without threads is to monkeypatch
+    # service.update_record to raise once.
+    calls = {"n": 0}
+    def _flaky_update(**kwargs):
+        calls["n"] += 1
+        raise service.VersionConflictError(current={}, attempted={})
+    monkeypatch.setattr(reorganize.service, "update_record", _flaky_update)
+
+    result = reorganize.write(project="demo", project_root=project_root, folder="correspondence",
+                              strategy="by-year")
+
+    assert result.failure is not None
+    assert calls["n"] == 1
+    # Rolled back: the file is back at its original flat location, not left half-moved.
+    assert (corr / "2025.03.14-note.md").exists()
+    assert not (corr / "2025").exists()
+
+
+def test_write_reports_structured_failure_when_backup_fails(monkeypatch, tmp_path):
+    """Matches init_service.write()'s own contract for this exact call: a backup failure
+    must become a ReorganizeResult(failure=...), not an uncaught BackupError - nothing has
+    been moved yet at this point, so there's nothing to roll back."""
+    monkeypatch.setenv("CCST_PROJECT_DB_DIR", str(tmp_path / "dbs"))
+    monkeypatch.setenv(backup.BACKUP_DIR_ENV, str(tmp_path / "backups"))
+    project_root = tmp_path / "projects" / "demo"
+    corr = project_root / "correspondence"
+    corr.mkdir(parents=True)
+    (corr / "2025.03.14-note.md").write_text("x")
+
+    def _raise(*args, **kwargs):
+        raise backup.BackupError("simulated backup failure")
+    monkeypatch.setattr(reorganize.backup, "create_backup", _raise)
+
+    result = reorganize.write(project="demo", project_root=project_root, folder="correspondence",
+                              strategy="by-year")
+
+    assert result.failure is not None
+    assert result.backup_path is None
+    assert (corr / "2025.03.14-note.md").exists()  # untouched - failure was before any move

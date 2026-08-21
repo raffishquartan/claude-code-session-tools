@@ -10,11 +10,12 @@ exactly the way `ccst pdata init --write` does.
 from __future__ import annotations
 
 import re
+import subprocess
 import time
 from dataclasses import dataclass
 from pathlib import Path
 
-from cc_session_tools.lib.pdata import init_paths, service
+from cc_session_tools.lib.pdata import backup, init_paths, service
 from cc_session_tools.lib.pdata.init_paths import PROPOSAL_FILENAME
 from cc_session_tools.lib.pdata.service import Record
 from cc_session_tools.lib.pdata.write_log import LOG_FILENAME as WRITE_LOG_FILENAME
@@ -181,3 +182,92 @@ def dry_run(*, project: str, project_root: Path, folder: str, strategy: str) -> 
         project=project, project_root=project_root, folder=folder, strategy=strategy,
         moves=moves, matched_records=matched_records, external_references=external_references,
     )
+
+
+@dataclass(frozen=True, slots=True)
+class ReorganizeFailure:
+    reasons: list[str]
+
+
+@dataclass(frozen=True, slots=True)
+class ReorganizeResult:
+    plan: ReorganizePlan
+    backup_path: Path | None
+    failure: ReorganizeFailure | None
+
+
+def _is_git_repo(project_root: Path) -> bool:
+    return (project_root / ".git").exists()
+
+
+def _move_file(*, project_root: Path, move: Move, use_git: bool) -> None:
+    src = project_root / move.old_relative
+    dest = project_root / move.new_relative
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    if use_git:
+        subprocess.run(
+            ["git", "mv", move.old_relative, move.new_relative],
+            cwd=project_root, check=True, capture_output=True, text=True,
+        )
+    else:
+        src.rename(dest)
+
+
+def _move_file_back(*, project_root: Path, move: Move, folder: str, use_git: bool) -> None:
+    """Undo _move_file - used by write()'s rollback path only. Also removes every nested
+    subdirectory _move_file created that's now empty, walking up from the immediate parent -
+    by-year-month leaves two levels (correspondence/2025/06/), not just one, so a single
+    rmdir() of the immediate parent alone would leave the year directory behind."""
+    dest_parent = (project_root / move.new_relative).parent
+    folder_path = project_root / folder
+    if use_git:
+        subprocess.run(
+            ["git", "mv", move.new_relative, move.old_relative],
+            cwd=project_root, check=True, capture_output=True, text=True,
+        )
+    else:
+        (project_root / move.new_relative).rename(project_root / move.old_relative)
+    current = dest_parent
+    while current != folder_path and current.is_dir() and not any(current.iterdir()):
+        current.rmdir()
+        current = current.parent
+
+
+def write(*, project: str, project_root: Path, folder: str, strategy: str) -> ReorganizeResult:
+    plan = dry_run(project=project, project_root=project_root, folder=folder, strategy=strategy)
+    use_git = _is_git_repo(project_root)
+
+    # Matches init_service.write()'s own handling of this exact call (init_service.py
+    # ~lines 220-232): create_backup() can exhaust its retries and raise BackupError, which
+    # must become a structured failure here too, not an uncaught crash before anything has
+    # been moved.
+    try:
+        backup_path = backup.create_backup(project=project, project_root=project_root)
+    except backup.BackupError as exc:
+        return ReorganizeResult(plan=plan, backup_path=None, failure=ReorganizeFailure(reasons=[str(exc)]))
+
+    moved: list[Move] = []
+    try:
+        for move in plan.moves:
+            _move_file(project_root=project_root, move=move, use_git=use_git)
+            moved.append(move)
+
+        for matched in plan.matched_records:
+            service.update_record(
+                project=project, record_id=matched.record.id,
+                expected_version=matched.record.version,
+                content=None, file_path=matched.new_file_path, fields={},
+            )
+    except (OSError, subprocess.CalledProcessError, service.VersionConflictError,
+            service.RecordNotFoundError) as exc:
+        # Known gap: if plan.matched_records has more than one entry and a LATER one's
+        # update_record() call fails here, EARLIER ones in this same loop already succeeded
+        # and are not reversed - only the file moves are rolled back. See TODO.md.
+        for move in reversed(moved):
+            _move_file_back(project_root=project_root, move=move, folder=folder, use_git=use_git)
+        return ReorganizeResult(
+            plan=plan, backup_path=backup_path,
+            failure=ReorganizeFailure(reasons=[str(exc)]),
+        )
+
+    return ReorganizeResult(plan=plan, backup_path=backup_path, failure=None)
