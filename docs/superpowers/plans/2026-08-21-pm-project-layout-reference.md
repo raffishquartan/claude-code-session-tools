@@ -127,7 +127,16 @@ def find_records_by_file_path_prefix(*, project: str, prefix: str) -> list[Recor
     with prefix - used by lib/pdata/reorganize.py to find which rows need their file_path
     updated when a folder is split into a nested structure. Returns [] both when the project
     has no .db yet and when it has one but nothing matches - callers that need to distinguish
-    "no store" from "store, no match" should check store.db_path(project).exists() themselves."""
+    "no store" from "store, no match" should check store.db_path(project).exists() themselves.
+
+    Known limitation: prefix is interpolated into a SQL LIKE pattern unescaped, so a literal
+    '%' or '_' in it would be interpreted as a wildcard rather than a literal character. This
+    repo's query_records()/_parse_where_clause() plumbing (shared with `ccst pdata query`)
+    has no ESCAPE-clause support to fix this properly without changing that shared code, which
+    is out of scope here. Not a practical issue for this callsite specifically - prefix is
+    always a project-relative folder path (this codebase's own naming convention uses hyphens,
+    not underscores, e.g. ws-01-slug), but worth knowing if this function is ever reused
+    somewhere prefix isn't a controlled folder name."""
     if not store.db_path(project).exists():
         return []
     matches: list[Record] = []
@@ -336,7 +345,7 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
-from cc_session_tools.lib.pdata import service
+from cc_session_tools.lib.pdata import init_paths, service
 from cc_session_tools.lib.pdata.service import Record
 
 _LEADING_DATE_RE = re.compile(r"^(?P<year>\d{4})\.(?P<month>\d{2})\.(?P<day>\d{2})-")
@@ -396,8 +405,14 @@ def _scan_external_references(
 
     folder is excluded by path-prefix comparison, not single-component name matching - folder
     can itself be multi-segment (e.g. "workstreams/ws-01"), which a plain
-    `part in excluded_names` check would never match against any single path component."""
-    excluded_dir_names = {".git", ".claude", "cc-sessions", ".pdata-migrated"}
+    `part in excluded_names` check would never match against any single path component.
+
+    Reuses init_paths.EXCLUDED_DIR_NAMES - the same set classify.py's own directory walk
+    already excludes - rather than hardcoding a second, incomplete copy: a hardcoded
+    ".pdata-migrated" literal here would also miss REHEARSAL_DB_DIRNAME/
+    REHEARSAL_BACKUP_DIRNAME, walking into a rehearsal sandbox's own contents on any project
+    that has ever used --rehearse and reporting spurious matches from inside it."""
+    excluded_dir_names = init_paths.EXCLUDED_DIR_NAMES
     folder_parts = Path(folder).parts
     refs: list[ExternalReference] = []
     for candidate in sorted(project_root.rglob("*")):
@@ -578,6 +593,29 @@ def test_write_rolls_back_moved_files_on_record_update_failure(tmp_path, monkeyp
     # Rolled back: the file is back at its original flat location, not left half-moved.
     assert (corr / "2025.03.14-note.md").exists()
     assert not (corr / "2025").exists()
+
+
+def test_write_reports_structured_failure_when_backup_fails(tmp_path, monkeypatch):
+    """Matches init_service.write()'s own contract for this exact call: a backup failure
+    must become a ReorganizeResult(failure=...), not an uncaught BackupError - nothing has
+    been moved yet at this point, so there's nothing to roll back."""
+    monkeypatch.setenv(store.PROJECT_DB_DIR_ENV, str(tmp_path / "project-db"))
+    monkeypatch.setenv(backup.BACKUP_DIR_ENV, str(tmp_path / "backups"))
+    project_root = tmp_path / "projects" / "demo"
+    corr = project_root / "correspondence"
+    corr.mkdir(parents=True)
+    (corr / "2025.03.14-note.md").write_text("x")
+
+    def _raise(*args, **kwargs):
+        raise backup.BackupError("simulated backup failure")
+    monkeypatch.setattr(reorganize.backup, "create_backup", _raise)
+
+    result = reorganize.write(project="demo", project_root=project_root, folder="correspondence",
+                              strategy="by-year")
+
+    assert result.failure is not None
+    assert result.backup_path is None
+    assert (corr / "2025.03.14-note.md").exists()  # untouched - failure was before any move
 ```
 
 - [ ] **Step 2: Run to verify red**
@@ -643,7 +681,14 @@ def write(*, project: str, project_root: Path, folder: str, strategy: str) -> Re
     plan = dry_run(project=project, project_root=project_root, folder=folder, strategy=strategy)
     use_git = _is_git_repo(project_root)
 
-    backup_path = backup.create_backup(project=project, project_root=project_root)
+    # Matches init_service.write()'s own handling of this exact call (init_service.py
+    # ~lines 220-232): create_backup() can exhaust its retries and raise BackupError, which
+    # must become a structured failure here too, not an uncaught crash before anything has
+    # been moved.
+    try:
+        backup_path = backup.create_backup(project=project, project_root=project_root)
+    except backup.BackupError as exc:
+        return ReorganizeResult(plan=plan, backup_path=None, failure=ReorganizeFailure(reasons=[str(exc)]))
 
     moved: list[Move] = []
     try:
