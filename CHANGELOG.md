@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.8.1] - 2026-08-21
+
+### Added
+
+- New `ccst pdata reorganize --project <name> --folder <folder> --strategy
+  by-year|by-year-month [--write]` command - splits a flat folder into a nested (by-year or
+  by-year/month) structure, keeping any matching pdata records' `file_path` correct and backing
+  up the project first (dry-run by default, same shape as `ccst pdata init`). Scoped to exactly
+  that one operation - deciding *when* a folder needs splitting stays a documented, advisory
+  judgement call, not something ccst detects or enforces automatically.
+- New `pm-project-layout-reference` skill - the canonical reference for `~/cc/<project>`'s
+  optional folder conventions (`correspondence/`, `meetings-and-calls/`, `analysis/`,
+  `workstreams/`, `workstreams-archived/`), the assessment criteria for using them (the 500-file
+  threshold that triggers `ccst pdata reorganize`), and how a workstream moves from active to
+  archived.
+- The two `ccst pdata init` migration prompts (`pdata-migration-claude-md-update.md`,
+  `pdata-migration-skills-update.md`) now have real, step-by-step content instead of
+  placeholders.
+
 ## [2.8.0] - 2026-08-20
 
 ### Added

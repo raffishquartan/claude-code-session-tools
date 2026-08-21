@@ -9,7 +9,7 @@ import re as _re
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 
-from cc_session_tools.lib.pdata import naming, repository
+from cc_session_tools.lib.pdata import naming, repository, store
 
 # op is deliberately \S+ here (not the literal alternation of valid ops) — matching only a
 # literal alternation would make an invalid op (e.g. "~=") fail to match the whole regex at all,
@@ -209,6 +209,65 @@ def query_records(
                     }
             records.append(record)
         return records
+    finally:
+        conn.close()
+
+
+def find_records_by_file_path_prefix(*, project: str, prefix: str) -> list[Record]:
+    """Every active record across every record_group in this project whose file_path starts
+    with prefix - used by lib/pdata/reorganize.py to find which rows need their file_path
+    updated when a folder is split into a nested structure. Returns [] both when the project
+    has no .db yet and when it has one but nothing matches - callers that need to distinguish
+    "no store" from "store, no match" should check store.db_path(project).exists() themselves.
+
+    Goes straight to repository.query_records() with an already-parsed (field, op, value)
+    condition, one connection reused across every record_group, rather than routing through
+    this module's own query_records()/_parse_where_clause() string DSL: that DSL's
+    `\\s+`-based regex would silently strip any leading whitespace off prefix on the round
+    trip through it (a real, if narrow, correctness bug for a prefix that legitimately starts
+    with a space), and re-resolving a fresh connection per record_group here would be needless
+    overhead for what's logically one read. list_extension_columns/get_extension_row's
+    row-materialisation is duplicated inline here rather than shared with list_records/
+    query_records above - matching how those two already duplicate the same block between
+    each other rather than a factored-out helper.
+
+    Known limitation: prefix is still used as a raw SQL LIKE pattern, so a literal '%' or '_'
+    in it is interpreted as a wildcard rather than a literal character - SQLite's LIKE has no
+    ESCAPE-clause support wired up anywhere in this codebase. Not a practical issue for this
+    callsite specifically - prefix is always a project-relative folder path (this codebase's
+    own naming convention uses hyphens, not underscores, e.g. ws-01-slug), but worth knowing if
+    this function is ever reused somewhere prefix isn't a controlled folder name."""
+    if not prefix:
+        raise ValueError("find_records_by_file_path_prefix requires a non-empty prefix")
+    if not store.db_path(project).exists():
+        return []
+    conn = repository.connect(project)
+    try:
+        matches: list[Record] = []
+        for group in repository.list_record_groups(conn):
+            record_group = group["record_group"]
+            # list_record_groups() types its return as dict[str, object] since row_count and
+            # max_updated_at are int-shaped columns in the same row - record_group itself is
+            # always the TEXT column's value, never anything else, so this narrows it for
+            # mypy the same way an impossible-state assert would (coding-standards: make the
+            # impossible state visible rather than silently re-checking it).
+            assert isinstance(record_group, str)
+            rows = repository.query_records(
+                conn, record_group=record_group,
+                conditions=[("file_path", "LIKE", f"{prefix}%")],
+                limit=None, include_deleted=False,
+            )
+            has_ext = repository.extension_table_exists(conn, record_group)
+            for row in rows:
+                record = _row_to_record(row)
+                if has_ext:
+                    ext_row = repository.get_extension_row(conn, record_group, row["id"])
+                    if ext_row is not None:
+                        record.fields = {
+                            k: ext_row[k] for k in ext_row.keys() if k != "record_id"
+                        }
+                matches.append(record)
+        return matches
     finally:
         conn.close()
 

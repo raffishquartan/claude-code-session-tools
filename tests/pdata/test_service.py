@@ -420,3 +420,54 @@ def test_restore_record_makes_it_visible_again(monkeypatch, tmp_path):
     service.delete_record(project="testproj", record_id=created.id, expected_version=1)
     service.restore_record(project="testproj", record_id=created.id)
     assert service.get_record(project="testproj", record_id=created.id) is not None
+
+
+def test_find_records_by_file_path_prefix_matches_across_groups(monkeypatch, tmp_path):
+    monkeypatch.setenv("CCST_PROJECT_DB_DIR", str(tmp_path))
+    service.add_record(
+        project="demo", record_group="letters", content="a",
+        file_path="correspondence/a.md", fields={}, created_at=1,
+    )
+    service.add_record(
+        project="demo", record_group="notes", content="b",
+        file_path="correspondence/b.md", fields={}, created_at=1,
+    )
+    service.add_record(
+        project="demo", record_group="letters", content="c",
+        file_path="analysis/c.md", fields={}, created_at=1,
+    )
+
+    matches = service.find_records_by_file_path_prefix(project="demo", prefix="correspondence/")
+
+    assert sorted(r.file_path for r in matches) == ["correspondence/a.md", "correspondence/b.md"]
+
+
+def test_find_records_by_file_path_prefix_empty_project_returns_empty(monkeypatch, tmp_path):
+    monkeypatch.setenv("CCST_PROJECT_DB_DIR", str(tmp_path))
+    # no records ever added for "demo" - no .db file exists at all yet
+    assert service.find_records_by_file_path_prefix(project="demo", prefix="correspondence/") == []
+
+
+def test_find_records_by_file_path_prefix_rejects_empty_prefix(monkeypatch, tmp_path):
+    monkeypatch.setenv("CCST_PROJECT_DB_DIR", str(tmp_path))
+    with pytest.raises(ValueError, match="non-empty prefix"):
+        service.find_records_by_file_path_prefix(project="demo", prefix="")
+
+
+def test_find_records_by_file_path_prefix_preserves_leading_whitespace(monkeypatch, tmp_path):
+    """Regression test: querying via repository.query_records() with an already-parsed
+    condition tuple (not this module's own string-DSL query_records()) means a prefix
+    starting with whitespace isn't silently stripped by _parse_where_clause's \\s+ regex."""
+    monkeypatch.setenv("CCST_PROJECT_DB_DIR", str(tmp_path))
+    service.add_record(
+        project="demo", record_group="letters", content="a",
+        file_path=" leading-space/a.md", fields={}, created_at=1,
+    )
+    service.add_record(
+        project="demo", record_group="letters", content="b",
+        file_path="leading-space/b.md", fields={}, created_at=1,
+    )
+
+    matches = service.find_records_by_file_path_prefix(project="demo", prefix=" leading-space/")
+
+    assert [r.file_path for r in matches] == [" leading-space/a.md"]
