@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.8.3] - 2026-08-21
+
+### Fixed
+
+- `ccst pdata init`'s two migration-prompt reminders (dry-run's doc-update prompt, `--write`'s
+  doc-update and skills-update prompts) now say to run the prompt in a fresh Claude Code session
+  started in the project directory, not just print its path. Each prompt's own Step 1 aborts if
+  cwd isn't the project root, so a bare path with no such instruction invited running it inline
+  in whatever session called `ccst pdata init` instead.
+
 ## [2.8.1] - 2026-08-21
 
 ### Added
