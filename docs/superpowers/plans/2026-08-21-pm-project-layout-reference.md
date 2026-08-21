@@ -135,7 +135,11 @@ def find_records_by_file_path_prefix(*, project: str, prefix: str) -> list[Recor
         matches.extend(
             query_records(
                 project=project, record_group=group["record_group"],
-                where=[f"file_path LIKE '{prefix}%'"],
+                # No surrounding quotes: service._parse_where_clause's `value` capture group
+                # is bound directly as the SQL parameter, not SQL-literal syntax to be
+                # unquoted. Quoting it here would make the comparison look for a file_path
+                # that literally starts and ends with an apostrophe - never matching anything.
+                where=[f"file_path LIKE {prefix}%"],
             )
         )
     return matches
@@ -283,6 +287,30 @@ def test_dry_run_rejects_missing_folder(tmp_path, monkeypatch):
             project="demo", project_root=project_root, folder="correspondence",
             strategy="by-year",
         )
+
+
+def test_dry_run_rejects_absolute_folder_path(tmp_path, monkeypatch):
+    monkeypatch.setenv(store.PROJECT_DB_DIR_ENV, str(tmp_path / "project-db"))
+    project_root = tmp_path / "projects" / "demo"
+    project_root.mkdir(parents=True)
+
+    with pytest.raises(ValueError, match="absolute path"):
+        reorganize.dry_run(
+            project="demo", project_root=project_root, folder="/etc",
+            strategy="by-year",
+        )
+
+
+def test_dry_run_rejects_folder_with_parent_traversal(tmp_path, monkeypatch):
+    monkeypatch.setenv(store.PROJECT_DB_DIR_ENV, str(tmp_path / "project-db"))
+    project_root = tmp_path / "projects" / "demo"
+    project_root.mkdir(parents=True)
+
+    with pytest.raises(ValueError, match="path-traversal"):
+        reorganize.dry_run(
+            project="demo", project_root=project_root, folder="../../etc",
+            strategy="by-year",
+        )
 ```
 
 - [ ] **Step 2: Run to verify red**
@@ -385,9 +413,21 @@ def _scan_external_references(
     return refs
 
 
+def _validate_relative_folder(folder: str) -> None:
+    """Same boundary guard as service._validate_relative_file_path, applied to --folder:
+    without it, an absolute path silently discards project_root entirely when joined with `/`
+    (pathlib's own behaviour, not a bug in this code - `Path("/a") / "/etc"` is `Path("/etc")`),
+    and a '..' segment can escape project_root the same way a crafted --file could."""
+    if folder.startswith("/"):
+        raise ValueError(f"--folder must be relative to the project root, got absolute path: {folder!r}")
+    if any(segment == ".." for segment in folder.split("/")):
+        raise ValueError(f"--folder must not contain '..' path-traversal segments: {folder!r}")
+
+
 def dry_run(*, project: str, project_root: Path, folder: str, strategy: str) -> ReorganizePlan:
     if strategy not in _STRATEGIES:
         raise ValueError(f"unknown strategy {strategy!r} - must be one of {sorted(_STRATEGIES)}")
+    _validate_relative_folder(folder)
     folder_path = project_root / folder
     if not folder_path.is_dir():
         raise FileNotFoundError(f"no such folder to reorganize: {folder_path}")
@@ -440,6 +480,11 @@ git commit -m "feat(pdata): add reorganize.dry_run() - flat-to-nested move plann
 - Test: `tests/pdata/test_reorganize.py`
 
 - [ ] **Step 1: Write the failing tests**
+
+Add `import subprocess` and `from cc_session_tools.lib.pdata import backup` to
+`tests/pdata/test_reorganize.py`'s existing imports (the tests below use `backup.BACKUP_DIR_ENV`
+and `result.backup_path`, neither reachable from Task 3's `reorganize, service, store` imports
+alone).
 
 ```python
 import subprocess
@@ -530,8 +575,8 @@ Run: `uv run pytest tests/pdata/test_reorganize.py -k write -v`
 
 - [ ] **Step 3: Implement `write()`**
 
-Add to `reorganize.py` (imports to add: `shutil`, `subprocess`, `from cc_session_tools.lib.pdata
-import backup`):
+Add to `reorganize.py` (imports to add: `subprocess`, `from cc_session_tools.lib.pdata import
+backup`):
 
 ```python
 @dataclass(frozen=True)
@@ -564,7 +609,10 @@ def _move_file(*, project_root: Path, move: Move, use_git: bool) -> None:
 
 
 def _move_file_back(*, project_root: Path, move: Move, use_git: bool) -> None:
-    """Undo _move_file - used by write()'s rollback path only."""
+    """Undo _move_file - used by write()'s rollback path only. Also removes the nested
+    subdirectory _move_file created if this was the last file in it, so a rolled-back run
+    doesn't leave an empty correspondence/2025/ behind alongside the restored flat file."""
+    dest_parent = (project_root / move.new_relative).parent
     if use_git:
         subprocess.run(
             ["git", "mv", move.new_relative, move.old_relative],
@@ -572,6 +620,8 @@ def _move_file_back(*, project_root: Path, move: Move, use_git: bool) -> None:
         )
     else:
         (project_root / move.new_relative).rename(project_root / move.old_relative)
+    if dest_parent.is_dir() and not any(dest_parent.iterdir()):
+        dest_parent.rmdir()
 
 
 def write(*, project: str, project_root: Path, folder: str, strategy: str) -> ReorganizeResult:
@@ -749,7 +799,14 @@ Run: `uv run pytest tests/test_ccst_pdata_reorganize_cli.py -v`
 def _cmd_pdata_reorganize(args: argparse.Namespace) -> int:
     from cc_session_tools.lib.pdata import init_paths, reorganize
 
-    project_root = init_paths.resolve_project_root(args.project, rehearse=None)
+    try:
+        project_root = init_paths.resolve_project_root(args.project, rehearse=None)
+    except ValueError as exc:
+        # Matches _cmd_pdata_init's own handling of the identical resolve_project_root() call -
+        # a bad --project name (e.g. containing '/') must give the same clean exit-2 message
+        # every other pdata command gives, not an uncaught traceback.
+        print(f"ccst pdata: {exc}", file=sys.stderr)
+        return 2
 
     try:
         if not args.write:
