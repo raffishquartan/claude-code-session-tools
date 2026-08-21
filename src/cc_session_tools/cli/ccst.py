@@ -1136,6 +1136,55 @@ def _cmd_pdata_init(args: argparse.Namespace) -> int:
         return 0
 
 
+def _cmd_pdata_reorganize(args: argparse.Namespace) -> int:
+    from cc_session_tools.lib.pdata import init_paths, reorganize
+
+    try:
+        project_root = init_paths.resolve_project_root(args.project, rehearse=None)
+    except ValueError as exc:
+        # Matches _cmd_pdata_init's own handling of the identical resolve_project_root() call -
+        # a bad --project name (e.g. containing '/') must give the same clean exit-2 message
+        # every other pdata command gives, not an uncaught traceback.
+        print(f"ccst pdata: {exc}", file=sys.stderr)
+        return 2
+
+    try:
+        if not args.write:
+            plan = reorganize.dry_run(
+                project=args.project, project_root=project_root,
+                folder=args.folder, strategy=args.strategy,
+            )
+            for move in plan.moves:
+                print(f"{move.old_relative} -> {move.new_relative}")
+            for matched in plan.matched_records:
+                print(f"  pdata record {matched.record.id} (group={matched.record.record_group}): "
+                      f"file_path -> {matched.new_file_path}")
+            for ref in plan.external_references:
+                print(f"  external reference: {ref.file}:{ref.line_number}: {ref.line_text}")
+            if not plan.moves:
+                print(f"no files found directly under {args.folder}/")
+            return 0
+
+        result = reorganize.write(
+            project=args.project, project_root=project_root,
+            folder=args.folder, strategy=args.strategy,
+        )
+        if result.failure is not None:
+            print("ccst pdata reorganize: failed, rolled back:", file=sys.stderr)
+            for reason in result.failure.reasons:
+                print(f"  - {reason}", file=sys.stderr)
+            return 1
+
+        print(f"Moved {len(result.plan.moves)} file(s) under {args.folder}/")
+        print(f"Backup: {result.backup_path}")
+        for ref in result.plan.external_references:
+            print(f"  still needs manual review: {ref.file}:{ref.line_number}: {ref.line_text}")
+        return 0
+    except (FileNotFoundError, ValueError) as exc:
+        print(f"ccst pdata reorganize: {exc}", file=sys.stderr)
+        return 2
+
+
 def _cmd_pdata_reconcile_session_output(args: argparse.Namespace) -> int:
     from cc_session_tools.lib import roots
     from cc_session_tools.lib.pdata import session_output
@@ -2146,6 +2195,19 @@ def _build_parser() -> argparse.ArgumentParser:
         ),
     )
 
+    pdata_reorganize_parser = pdata_sub.add_parser(
+        "reorganize", help="Split a flat folder into a nested (by-year) structure"
+    )
+    pdata_reorganize_parser.add_argument("--project", required=True, metavar="NAME")
+    pdata_reorganize_parser.add_argument("--folder", required=True, metavar="RELATIVE_PATH")
+    pdata_reorganize_parser.add_argument(
+        "--strategy", required=True, choices=["by-year", "by-year-month"],
+    )
+    pdata_reorganize_parser.add_argument(
+        "--write", action="store_true",
+        help="Perform the move and update matching pdata records (default: dry-run only)",
+    )
+
     pdata_reconcile_parser = pdata_sub.add_parser(
         "reconcile-session-output",
         help="Backfill the session-output index from cc-sessions/*/out/ on disk (idempotent)",
@@ -2450,6 +2512,8 @@ def main() -> None:
             sys.exit(_cmd_pdata_restore(args))
         if args.verb == "init":
             sys.exit(_cmd_pdata_init(args))
+        if args.verb == "reorganize":
+            sys.exit(_cmd_pdata_reorganize(args))
         if args.verb == "reconcile-session-output":
             sys.exit(_cmd_pdata_reconcile_session_output(args))
         if args.verb == "verify":
