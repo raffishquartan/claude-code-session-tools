@@ -1181,7 +1181,7 @@ def _cmd_pdata_reorganize(args: argparse.Namespace) -> int:
             print(f"  still needs manual review: {ref.file}:{ref.line_number}: {ref.line_text}")
         return 0
     except (FileNotFoundError, ValueError) as exc:
-        print(f"ccst pdata reorganize: {exc}", file=sys.stderr)
+        print(f"ccst pdata: {exc}", file=sys.stderr)
         return 2
 
 
@@ -2196,12 +2196,12 @@ def _build_parser() -> argparse.ArgumentParser:
     )
 
     pdata_reorganize_parser = pdata_sub.add_parser(
-        "reorganize", help="Split a flat folder into a nested (by-year) structure"
+        "reorganize", help="Split a flat folder into a nested (by-year or by-year-month) structure"
     )
     pdata_reorganize_parser.add_argument("--project", required=True, metavar="NAME")
     pdata_reorganize_parser.add_argument("--folder", required=True, metavar="RELATIVE_PATH")
     pdata_reorganize_parser.add_argument(
-        "--strategy", required=True, choices=["by-year", "by-year-month"],
+        "--strategy", required=True, choices=("by-year", "by-year-month"),
     )
     pdata_reorganize_parser.add_argument(
         "--write", action="store_true",

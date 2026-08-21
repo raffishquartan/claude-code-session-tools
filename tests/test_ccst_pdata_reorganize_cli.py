@@ -81,6 +81,7 @@ def test_reorganize_reports_external_references(base_env, tmp_path):
     r = _run(base_env, "pdata", "reorganize", "--project", "demo",
               "--folder", "correspondence", "--strategy", "by-year")
 
+    assert r.returncode == 0, r.stderr
     assert "CLAUDE.md" in r.stdout
     assert "correspondence/2025.03.14-note.md" in r.stdout
 
@@ -115,3 +116,25 @@ def test_reorganize_dry_run_prints_matched_pdata_record(base_env, tmp_path):
     assert "pdata record" in r.stdout
     assert "group=letters" in r.stdout
     assert "correspondence/2025/2025.03.14-note.md" in r.stdout
+
+
+def test_reorganize_write_reports_failure_and_rolls_back(base_env, tmp_path):
+    """A real, portable failure trigger, avoiding any monkeypatching since this is a
+    subprocess-based CLI test: pre-create the exact destination path as a directory instead
+    of the file it needs to be. Path.rename() (or `git mv`) raises IsADirectoryError (an
+    OSError subclass) trying to rename a file onto an existing directory - note this can't be
+    a file directly under correspondence/ itself (that would just get picked up as one of the
+    entries to move and moved out of the way first), it has to already exist at the nested
+    destination."""
+    corr = tmp_path / "projects" / "demo" / "correspondence"
+    corr.mkdir(parents=True)
+    (corr / "2025.03.14-note.md").write_text("x")
+    (corr / "2025" / "2025.03.14-note.md").mkdir(parents=True)
+
+    r_write = _run(base_env, "pdata", "reorganize", "--project", "demo",
+                    "--folder", "correspondence", "--strategy", "by-year", "--write")
+
+    assert r_write.returncode == 1
+    assert "failed, rolled back" in r_write.stderr
+    # Nothing actually moved - the original file survives at its flat location.
+    assert (corr / "2025.03.14-note.md").exists()
