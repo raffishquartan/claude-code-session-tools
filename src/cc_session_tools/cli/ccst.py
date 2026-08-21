@@ -137,9 +137,18 @@ def _discover_prompts_dir() -> Path:
     )
 
 
-def _print_migration_prompt_reminders(*labeled_filenames: tuple[str, str]) -> None:
+def _print_migration_prompt_reminders(
+    project_root: Path, *labeled_filenames: tuple[str, str]
+) -> None:
     """Print one "<label>: <path>" reminder line per (label, filename) pair, for the bundled
-    prompts/ directory.
+    prompts/ directory, followed by a line telling the user to run it in a fresh Claude Code
+    session started in project_root.
+
+    Each prompt's own "Run it via" section already spells out the `cd <project> && claude -p
+    ...` invocation (see e.g. pdata-migration-skills-update.md) - that only works if the
+    session's cwd is the project root, since every prompt's Step 1 checks for it and aborts
+    otherwise. Printing the reminder without saying so reads as "open this file", which invites
+    running it inline in whatever session called `ccst pdata init` - the wrong cwd entirely.
 
     Best-effort, deliberately swallowing a missing prompts/ directory: these reminders are a
     nicety layered on top of an otherwise-already-completed classification or migration, not
@@ -154,6 +163,10 @@ def _print_migration_prompt_reminders(*labeled_filenames: tuple[str, str]) -> No
         return
     for label, filename in labeled_filenames:
         print(f"{label}: {prompts_dir / filename}")
+        print(
+            f"  Run in a new Claude Code session started in {project_root} (its own "
+            f"\"Run it via\" section has the exact command) - not in this session."
+        )
 
 
 # ---------- skills install ----------
@@ -1091,6 +1104,7 @@ def _cmd_pdata_init(args: argparse.Namespace) -> int:
         print(result.report)
         print(f"\nProposal: {result.proposal_path}")
         _print_migration_prompt_reminders(
+            result.proposal_path.parent,
             ("After a successful --write, update project docs", "pdata-migration-claude-md-update.md"),
         )
         return 0
@@ -1129,6 +1143,7 @@ def _cmd_pdata_init(args: argparse.Namespace) -> int:
         print(write_result.report)  # spec §7.1 step 4's diff report, for review
         print(f"\nVerify: ccst pdata verify --project {args.project} --full")
         _print_migration_prompt_reminders(
+            project_root,
             ("Update project docs", "pdata-migration-claude-md-update.md"),
             ("Update consuming skills", "pdata-migration-skills-update.md"),
         )

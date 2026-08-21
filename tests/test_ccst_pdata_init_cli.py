@@ -55,6 +55,11 @@ def test_pdata_init_dry_run_prints_doc_update_prompt_path(base_env, tmp_path):
     r = _run(base_env, "pdata", "init", "--project", "demo")
     assert r.returncode == 0, r.stderr
     assert "pdata-migration-claude-md-update.md" in r.stdout
+    # Must tell the user to run it in a fresh session started in the project dir - the
+    # prompt's own Step 1 aborts otherwise, so a bare path alone invites running it inline
+    # in whatever session called `ccst pdata init`.
+    assert "new Claude Code session" in r.stdout
+    assert str(project_dir) in r.stdout
 
 
 def test_pdata_init_rejects_bad_project_name(base_env):
@@ -187,6 +192,8 @@ def test_pdata_init_write_success_ends_with_success_sentinel_and_verify_command(
     assert "ccst pdata verify --project demo --full" in r_write.stdout
     assert "pdata-migration-claude-md-update.md" in r_write.stdout
     assert "pdata-migration-skills-update.md" in r_write.stdout
+    assert r_write.stdout.count("new Claude Code session") == 2  # one per prompt reminder
+    assert str(project_dir) in r_write.stdout
     assert r_write.stdout.rstrip().splitlines()[-1] == "SUCCESS"
 
     log_content = (project_dir / "ccst-pdata-init-write.log").read_text()
