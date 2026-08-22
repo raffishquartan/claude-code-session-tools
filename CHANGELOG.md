@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- New `ccst pdata rename-group --project NAME --from OLD --to NEW [--write]` command - renames
+  a record_group's `records` rows, its `record_group_fields` rows, and its `ext_<group>` table
+  in one transaction, backing up the project first (dry-run by default, same shape as
+  `ccst pdata reorganize`). Also updates every matching entry in `.ccst-pdata-proposal.json`
+  when the project has one - skipping that step is what previously made a hand-renamed group
+  fail `ccst pdata verify`'s row-count-parity check forever with a false "possible data loss"
+  (the check cross-references live row counts against the manifest's archived-file entries by
+  record_group name). Refuses to rename onto a `--to` name that already has rows or an
+  extension table, rather than silently merging into it.
+
 ## [2.8.2] - 2026-08-22
 
 ### Fixed
