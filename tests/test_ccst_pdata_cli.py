@@ -206,6 +206,28 @@ def test_pdata_update_without_file_preserves_existing_file_path(base_env):
     assert "filings/keep.md" in r_get.stdout
 
 
+def test_pdata_update_field_null_literal_sets_true_null(base_env):
+    """Regression test: --field name=null (the literal token null, unquoted) must set the
+    column to real SQL NULL, not the four-character string "null" - check-tesco-shop-due's
+    SKILL.md already documents --field next_upcoming_delivery=null as the way to clear that
+    field, so the CLI must actually honour it."""
+    _run(base_env, "pdata", "schema", "add-field", "--project", "testproj",
+         "--group", "key-events", "--field", "sender:TEXT")
+    r_add = _run(base_env, "pdata", "add", "--project", "testproj", "--group", "key-events",
+                  "--content", "an event", "--field", "sender=alice")
+    record_id = r_add.stdout.strip()
+
+    r_update = _run(base_env, "pdata", "update", "--project", "testproj", "--id", record_id,
+                      "--version", "1", "--field", "sender=null")
+    assert r_update.returncode == 0, r_update.stderr
+
+    r_list = _run(base_env, "pdata", "list", "--project", "testproj", "--group", "key-events",
+                    "--format", "json")
+    import json
+    parsed = json.loads(r_list.stdout)
+    assert parsed[0]["sender"] is None
+
+
 def test_pdata_update_rejects_empty_update(base_env):
     r_add = _run(base_env, "pdata", "add", "--project", "testproj", "--group", "notes",
                   "--content", "x")

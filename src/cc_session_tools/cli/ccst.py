@@ -888,14 +888,19 @@ def _cmd_gc_report(args: argparse.Namespace) -> int:
 # ---------- pdata ----------
 
 
-def _parse_field_assignment(raw: str) -> tuple[str, str]:
-    """Parse "k=v" into (k, v). Raises ValueError on malformed input."""
+def _parse_field_assignment(raw: str) -> tuple[str, str | None]:
+    """Parse "k=v" into (k, v). The literal token `null` (unquoted, lowercase) is interpreted
+    as SQL NULL rather than the four-character string "null" - this is the documented way to
+    clear/unset a field via --field (see check-tesco-shop-due's SKILL.md for a real caller that
+    relies on it). A field genuinely needing to store the text "null" cannot be written via
+    --field; there's no escape hatch for that case since --field has no quoting syntax at all.
+    Raises ValueError on malformed input."""
     if "=" not in raw:
         raise ValueError(f"malformed --field assignment (want name=value): {raw!r}")
     name, value = raw.split("=", 1)
     if not name:
         raise ValueError(f"malformed --field assignment (want name=value): {raw!r}")
-    return name, value
+    return name, (None if value == "null" else value)
 
 
 def _cmd_pdata_add(args: argparse.Namespace) -> int:
@@ -2114,7 +2119,8 @@ def _build_parser() -> argparse.ArgumentParser:
     pdata_add_parser.add_argument(
         "--field", action="append", default=[], metavar="NAME=VALUE",
         help="Extension field assignment; may repeat. Field must already be registered via "
-             "'ccst pdata schema add-field'.",
+             "'ccst pdata schema add-field'. VALUE of the literal token 'null' sets SQL NULL "
+             "rather than the string \"null\".",
     )
 
     pdata_schema_parser = pdata_sub.add_parser("schema", help="Schema discovery and evolution")
@@ -2183,13 +2189,19 @@ def _build_parser() -> argparse.ArgumentParser:
     pdata_update_parser.add_argument(
         "--content", default=None,
         help="New content. Omit to leave content unchanged (at least one of --content, "
-             "--file, --field is required)",
+             "--file, --field is required). Never re-derived from --field - if a record's "
+             "content is meant to mirror its fields, pass a matching --content on every "
+             "--field update yourself.",
     )
     pdata_update_parser.add_argument(
         "--file", default=None, metavar="PATH",
         help="New relative file path. Omit to leave the existing file_path unchanged.",
     )
-    pdata_update_parser.add_argument("--field", action="append", default=[], metavar="NAME=VALUE")
+    pdata_update_parser.add_argument(
+        "--field", action="append", default=[], metavar="NAME=VALUE",
+        help="Extension field assignment; may repeat. Never updates content (see --content). "
+             "VALUE of the literal token 'null' sets SQL NULL rather than the string \"null\".",
+    )
     pdata_update_parser.add_argument(
         "--format", choices=("table", "json"), default="table",
         help="Format used only for the conflict diff on a version mismatch",

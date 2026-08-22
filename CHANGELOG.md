@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- `ccst pdata add`/`ccst pdata update --field name=null` now sets the column to real SQL `NULL`
+  instead of silently storing the four-character string `"null"`. `check-tesco-shop-due`'s
+  SKILL.md already documented `--field next_upcoming_delivery=null` as the way to clear that
+  field, so the CLI now actually honours it.
+
+### Documentation
+
+- `pm-pdata-schema-design` SKILL.md now documents that `ccst pdata update`'s `--content` and
+  `--field` writes are independent and never auto-synced - a record group whose `content` is
+  designed to mirror its fields must have every caller pass a matching `--content` on each
+  `--field` update itself. (Investigated as a suspected divergence bug; the divergence is the
+  tool's actual, deliberate contract, not a defect - see `update_record`'s docstring in
+  `lib/pdata/service.py`.)
+
 ## [2.8.2] - 2026-08-22
 
 ### Fixed
