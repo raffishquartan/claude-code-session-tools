@@ -1217,6 +1217,64 @@ def _cmd_pdata_reorganize(args: argparse.Namespace) -> int:
         return 0
 
 
+def _cmd_pdata_rename_group(args: argparse.Namespace) -> int:
+    from cc_session_tools.lib.pdata import init_paths, naming, rename_group
+
+    try:
+        project_root = init_paths.resolve_project_root(args.project, rehearse=None)
+    except ValueError as exc:
+        print(f"ccst pdata: {exc}", file=sys.stderr)
+        return 2
+
+    if not args.write:
+        try:
+            plan = rename_group.dry_run(
+                project=args.project, project_root=project_root, old=args.from_, new=args.to,
+            )
+        except ValueError as exc:
+            print(f"ccst pdata: {exc}", file=sys.stderr)
+            return 2
+        print(f"record_group: {plan.old} -> {plan.new}")
+        print(f"  {plan.row_count} row(s) in records to update")
+        if plan.has_extension_table:
+            print(f"  ext table: {naming.extension_table_name(plan.old)} -> "
+                  f"{naming.extension_table_name(plan.new)}")
+        else:
+            print("  no extension table")
+        if plan.manifest_entry_paths:
+            n = len(plan.manifest_entry_paths)
+            print(f"  {n} manifest entr{'y' if n == 1 else 'ies'} to update:")
+            for path in plan.manifest_entry_paths:
+                print(f"    {path}")
+        else:
+            print("  no matching manifest entries")
+        return 0
+
+    try:
+        result = rename_group.write(
+            project=args.project, project_root=project_root, old=args.from_, new=args.to,
+        )
+    except ValueError as exc:
+        print(f"ccst pdata: {exc}", file=sys.stderr)
+        return 2
+
+    if result.failure is not None:
+        print("ccst pdata rename-group: failed:", file=sys.stderr)
+        for reason in result.failure.reasons:
+            print(f"  - {reason}", file=sys.stderr)
+        return 1
+
+    plan = result.plan
+    print(f"Renamed record_group {plan.old!r} -> {plan.new!r}: {plan.row_count} row(s)")
+    print(f"Backup: {result.backup_path}")
+    n = len(plan.manifest_entry_paths)
+    if n:
+        print(f"{n} manifest entr{'y' if n == 1 else 'ies'} updated - remember to update any "
+              f"skills/docs that still reference the old group name.")
+    print("SUCCESS")
+    return 0
+
+
 def _cmd_pdata_reconcile_session_output(args: argparse.Namespace) -> int:
     from cc_session_tools.lib import roots
     from cc_session_tools.lib.pdata import session_output
@@ -2247,6 +2305,18 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Perform the move and update matching pdata records (default: dry-run only)",
     )
 
+    pdata_rename_group_parser = pdata_sub.add_parser(
+        "rename-group", help="Rename a record_group in place (records, record_group_fields, "
+                              "its ext table, and any matching manifest entries)"
+    )
+    pdata_rename_group_parser.add_argument("--project", required=True, metavar="NAME")
+    pdata_rename_group_parser.add_argument("--from", dest="from_", required=True, metavar="OLD")
+    pdata_rename_group_parser.add_argument("--to", required=True, metavar="NEW")
+    pdata_rename_group_parser.add_argument(
+        "--write", action="store_true",
+        help="Perform the rename and update .ccst-pdata-proposal.json (default: dry-run only)",
+    )
+
     pdata_reconcile_parser = pdata_sub.add_parser(
         "reconcile-session-output",
         help="Backfill the session-output index from cc-sessions/*/out/ on disk (idempotent)",
@@ -2553,6 +2623,8 @@ def main() -> None:
             sys.exit(_cmd_pdata_init(args))
         if args.verb == "reorganize":
             sys.exit(_cmd_pdata_reorganize(args))
+        if args.verb == "rename-group":
+            sys.exit(_cmd_pdata_rename_group(args))
         if args.verb == "reconcile-session-output":
             sys.exit(_cmd_pdata_reconcile_session_output(args))
         if args.verb == "verify":
