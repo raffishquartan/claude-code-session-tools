@@ -84,11 +84,27 @@ def test_print_migration_prompt_reminders_degrades_gracefully_when_prompts_dir_m
 
     monkeypatch.setattr(ccst, "_discover_prompts_dir", _raise)
 
-    ccst._print_migration_prompt_reminders(("Update project docs", "some-prompt.md"))
+    ccst._print_migration_prompt_reminders(
+        Path("/some/project"), ("Update project docs", "some-prompt.md")
+    )
 
     captured = capsys.readouterr()
     assert captured.out == ""  # nothing bogus printed to stdout (would land in --write's log)
     assert "Cannot locate bundled prompts" in captured.err
+
+
+def test_print_migration_prompt_reminders_tells_user_to_run_in_project_dir(capsys):
+    """Each reminder must say to run the prompt in a fresh CC session started in the project
+    directory — the prompt's own Step 1 aborts if cwd isn't the project root, so a bare path
+    with no such instruction invites running it inline in the current (wrong-cwd) session."""
+    ccst._print_migration_prompt_reminders(
+        Path("/home/chris/cc/demo"), ("Update project docs", "pdata-migration-claude-md-update.md")
+    )
+
+    captured = capsys.readouterr()
+    assert "pdata-migration-claude-md-update.md" in captured.out
+    assert "new Claude Code session" in captured.out
+    assert "/home/chris/cc/demo" in captured.out
 
 
 def test_bundled_prompts_are_no_longer_placeholders():

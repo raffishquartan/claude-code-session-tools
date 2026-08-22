@@ -26,6 +26,34 @@ uv run python -m cc_session_tools.cli.ccd --help     # test ccd manually
 from a worktree overwrites the global install's source pointer and will break
 the CLIs when the worktree is deleted.
 
+### `uv run ccst` and the auto-sync side effect
+
+This applies to **any local checkout** — the base repo at `~/repos/claude-code-session-tools`
+just as much as a `.worktrees/` feature branch — whenever its `pyproject.toml`
+version differs from the globally `uv tool install`-installed version.
+
+**`uv run ccst` still writes to the real `~/.claude`, and can fight the globally
+installed `ccst`.** `ensure_synced()` (`src/cc_session_tools/lib/install_sync.py`)
+runs before almost every `ccst` subcommand and compares the *invoking process's*
+package version against a single shared, machine-wide "last synced version"
+stamp in `~/.local/share/claude/sessions.db`. If the checkout you're running
+`uv run` from has a different `pyproject.toml` version than the currently
+installed tool (e.g. mid-release-bump on `main`, or any feature branch), that
+version won't match the stamp, so an un-exempt command triggers a real
+`install-everything --apply` — sourced from *that checkout's* bundled
+skills/hooks/CLAUDE.md, applied to the live `~/.claude` directory, not
+sandboxed to the checkout in any way. The next ordinary invocation of the
+globally installed `ccst` then sees its own version mismatch against that
+stamp and re-syncs back the other way, ping-ponging `~/.claude` between the
+two versions. Exempt commands (`install-everything`, `doctor`, `repair`,
+`migrate`, any `install`/`uninstall` verb, `hooks run`) are unaffected; any
+other ad hoc `uv run` command during dev/testing — in the base repo or a
+worktree — should be prefixed with `CCST_NO_AUTO_SYNC=1`:
+
+```sh
+CCST_NO_AUTO_SYNC=1 uv run python -m cc_session_tools.cli.ccst pdata schema list --project home
+```
+
 ### After merging a PR
 
 Reinstall the global tool from the canonical source:

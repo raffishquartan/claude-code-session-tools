@@ -72,6 +72,26 @@ for that information (spec §4.4: `record_group_fields` stores no type informati
 a field with a blank description is genuinely undocumented for the next session that runs `schema
 show`).
 
+## `content` and extension fields are never auto-synced
+
+`ccst pdata update` treats `--content` and `--field` as independent, both-optional writes -
+updating one never re-derives the other, for any record group. If a group's design has `content`
+hold the same values as one or more extension fields (e.g. a JSON snapshot that duplicates fields
+also exposed for querying), every caller that updates those fields via `--field` alone leaves
+`content` silently stale from that point on. There is no code-level fix for this - it is the
+tool's actual contract, not a bug in it (`ccst pdata update`'s optional `--content`/`--file`/
+`--field` shape exists precisely so a `--field`-only update doesn't have to resend `content`).
+
+Two ways to avoid the trap, not one - pick per record group:
+- Don't duplicate the data in the first place: either the fields are the record (no matching keys
+  in `content`), or `content` is the record and nothing needs the duplicated fields to be queryable.
+- If both really are needed, the caller updating fields is responsible for also passing a
+  matching `--content` on every write that changes a mirrored field - `ccst pdata update` will not
+  do this for you.
+
+A `--field` value of the literal token `null` (unquoted) sets that column to real SQL `NULL` - it
+is not possible to write the four-character string `"null"` into a field via `--field`.
+
 ## Quick reference
 
 | Question | Where the answer comes from |

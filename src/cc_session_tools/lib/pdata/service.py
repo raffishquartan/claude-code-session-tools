@@ -87,7 +87,7 @@ def add_record(
     record_group: str,
     content: str,
     file_path: str | None,
-    fields: Mapping[str, str],
+    fields: Mapping[str, str | None],
     created_at: int | None = None,
 ) -> Record:
     naming.validate_record_group(record_group)
@@ -294,14 +294,20 @@ def update_record(
     expected_version: int,
     content: str | None,
     file_path: str | None,
-    fields: Mapping[str, str],
+    fields: Mapping[str, str | None],
     updated_at: int | None = None,
 ) -> Record:
     """content and file_path are each optional (spec §5's `[--content "..."]  [--file <path>]`)
     — omitting one (passing None) leaves that column unchanged; it does not clear it. At least
     one of content, file_path, or fields must be given, or this is a no-op update request that
     only bumps version/updated_at for nothing (this repo's coding standard: reject inputs that
-    ask the system to do nothing)."""
+    ask the system to do nothing).
+
+    content and fields are independent — updating fields never re-serializes content, and vice
+    versa. This is deliberate (it's what lets a --field-only update skip resending content), not
+    a gap: a record group whose content is designed to mirror its fields is the caller's own
+    duplication to keep in sync, on every write, by passing both. See pm-pdata-schema-design
+    SKILL.md's "content and extension fields are never auto-synced" section."""
     if content is None and file_path is None and not fields:
         raise ValueError(
             "ccst pdata update requires at least one of --content, --file, or --field"
