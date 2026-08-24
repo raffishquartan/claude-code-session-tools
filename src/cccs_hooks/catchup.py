@@ -6,7 +6,13 @@ LAUNCH detached workers, then surface ledger-since-cursor entries. Job commands
 run off the critical path in `ccsched _run-job` workers. Never blocks a session:
 any failure degrades to an empty additionalContext and is logged to telemetry
 (§15). Throttles reconcile on UserPromptSubmit so sub-daily cadences fire during
-a long session without re-reconciling on every keypress."""
+a long session without re-reconciling on every keypress.
+
+SessionStart's surface call widens below the session's own seeded cursor to a
+24h rolling lookback (§9.3 widen fix), so activity that completed between
+sessions - with no live session open to surface it via a later
+UserPromptSubmit - is not lost forever. UserPromptSubmit never widens; it keeps
+the exact cursor-only behaviour it has always had."""
 from __future__ import annotations
 
 import json
@@ -22,6 +28,12 @@ from cccs_hooks.telemetry import TelemetryEntry, log_event
 logger = logging.getLogger(__name__)
 
 _RECONCILE_THROTTLE = timedelta(seconds=60)
+# SessionStart widens its digest read to this far below its own cursor, so
+# activity that completed between sessions (with no live session open to
+# surface it via UserPromptSubmit) still shows up at the next SessionStart
+# (§9.3 widen fix). UserPromptSubmit never widens - it keeps the exact
+# cursor-only behaviour it has always had.
+_SESSION_START_LOOKBACK = timedelta(hours=24)
 
 
 def _now() -> datetime:
@@ -99,7 +111,10 @@ def main(argv: list[str] | None = None) -> int:
             # parse-error digest immediately so the user sees the warning.
             _emit(format_digest([], parse_error=parse_error), event)
             return 0
-        surfaced = surface.surface(session_uuid=uuid, now=now)
+        surfaced = surface.surface(
+            session_uuid=uuid, now=now,
+            lookback=_SESSION_START_LOOKBACK if event == "SessionStart" else None,
+        )
         digest = format_digest(surfaced.reports, parse_error=None)
     except (OSError, ValueError, sqlite3.Error) as exc:
         _log_failure(type(exc).__name__)

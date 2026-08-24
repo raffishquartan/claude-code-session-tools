@@ -31,9 +31,15 @@ class JobReport:
     # SUMMARY only: number of routine entries folded into this one line.
     count: int = 0
     # RAN only: a successful-but-nonzero-exit run's captured stdout (e.g. a
-    # drift monitor's report). Always surfaced, never folded into SUMMARY -
-    # see surface.py.
+    # drift monitor's "found something" report). Always surfaced with a
+    # warning wording, never folded into SUMMARY - see surface.py.
     findings: str | None = None
+    # RAN only: a successful, zero-exit run's captured stdout (e.g. a verify
+    # command's "all OK" confirmation). Always surfaced with neutral wording,
+    # distinct from `findings`' warning wording - see surface.py. Mutually
+    # exclusive with `findings`: a given run is either a clean 0-exit or a
+    # findings-bearing nonzero exit, never both.
+    output: str | None = None
 
 
 def _ordinal(n: int) -> str:
@@ -64,24 +70,36 @@ def _line(report: JobReport) -> str | None:
             f"({_ordinal(report.consecutive_failures)} consecutive{age_suffix}) — see "
             f"`ccsched status {report.job_id}`"
         )
-    if report.outcome is Outcome.RAN and report.findings:
-        # Bypasses the surface gate deliberately, same as FAILED/SUSPENDED
-        # above: findings are signal, not routine noise a job can silence.
+    if report.outcome is Outcome.RAN:
+        # A completed run is always shown, regardless of `surface` - unlike
+        # LAUNCHED below, "it ran" is never something a job can silence.
         overdue = f" ({report.overdue} overdue)" if report.overdue else ""
-        header = f"⚠ {report.job_id} ran with findings{overdue}:"
-        body = "\n".join(f"  {line}" for line in report.findings.splitlines())
-        return f"{header}\n{body}"
+        if report.findings:
+            # Bypasses the surface gate deliberately, same as FAILED/SUSPENDED
+            # above: findings are signal, not routine noise a job can silence.
+            header = f"⚠ {report.job_id} ran with findings{overdue}:"
+            body = "\n".join(f"  {line}" for line in report.findings.splitlines())
+            return f"{header}\n{body}"
+        if report.output:
+            # A clean (0-exit) run's captured stdout - neutral wording, kept
+            # distinct from the findings/warning case above so a passing check
+            # is never mistaken for one that found something. One line-group:
+            # never falls through to the bare "✓ ran" case below.
+            header = f"✓ ran {report.job_id}{overdue}:"
+            body = "\n".join(f"  {line}" for line in report.output.splitlines())
+            return f"{header}\n{body}"
+        base = f"✓ ran {report.job_id}{overdue}"
+        if report.deferred:
+            base += f"\n⏳ {report.job_id}: {report.deferred} backfills deferred"
+        if report.expired:
+            base += f"\n   ({report.expired} missed run(s) dropped as expired)"
+        return base
+    # Only Outcome.LAUNCHED can reach here - SUMMARY/SUSPENDED/FAILED/RAN are
+    # all fully handled above and always return. A "started" notice is not
+    # "it ran", so it is the one outcome that still respects `surface`.
     if not report.surface:
         return None
-    if report.outcome is Outcome.LAUNCHED:
-        return f"▶ launched {report.job_id} (running in background)"
-    overdue = f" ({report.overdue} overdue)" if report.overdue else ""
-    base = f"✓ ran {report.job_id}{overdue}"
-    if report.deferred:
-        base += f"\n⏳ {report.job_id}: {report.deferred} backfills deferred"
-    if report.expired:
-        base += f"\n   ({report.expired} missed run(s) dropped as expired)"
-    return base
+    return f"▶ launched {report.job_id} (running in background)"
 
 
 def format_digest(reports: list[JobReport], *, parse_error: str | None = None) -> str:

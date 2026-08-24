@@ -187,3 +187,52 @@ def test_current_offset_is_max_id(tmp_path: Path, monkeypatch: pytest.MonkeyPatc
     ))
     rows, _ = ledger.read_since(0)
     assert ledger.current_offset() == rows[0]["id"]
+
+
+# ---------- offset_before_ts ----------
+
+
+def _insert_row_with_ts(tmp_path: Path, *, ts: str, job_id: str) -> None:
+    conn = telemetry_store.connect(tmp_path)
+    conn.execute(
+        "INSERT INTO catchup_events (ts, job_id, event, owed, ran, exit_code, "
+        "duration_ms, error, consecutive_failures) VALUES (?, ?, 'run', 1, 1, 0, 1, NULL, 0)",
+        (ts, job_id),
+    )
+    conn.commit()
+    conn.close()
+
+
+def test_offset_before_ts_is_zero_on_empty_ledger(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("CCCS_HOOKS_DIR", str(tmp_path))
+    assert ledger.offset_before_ts("2026-06-20T00:00:00Z") == 0
+
+
+def test_offset_before_ts_is_zero_when_nothing_predates_cutoff(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("CCCS_HOOKS_DIR", str(tmp_path))
+    _insert_row_with_ts(tmp_path, ts="2026-06-20T00:00:00Z", job_id="a")
+    assert ledger.offset_before_ts("2000-01-01T00:00:00Z") == 0
+
+
+def test_offset_before_ts_finds_the_last_row_strictly_before_cutoff(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("CCCS_HOOKS_DIR", str(tmp_path))
+    _insert_row_with_ts(tmp_path, ts="2026-06-18T00:00:00Z", job_id="job0")
+    _insert_row_with_ts(tmp_path, ts="2026-06-19T00:00:00Z", job_id="job1")
+    _insert_row_with_ts(tmp_path, ts="2026-06-20T00:00:00Z", job_id="job2")
+    rows, _ = ledger.read_since(0)
+    ids = {r["job_id"]: r["id"] for r in rows}
+    assert ledger.offset_before_ts("2026-06-19T12:00:00Z") == ids["job1"]
+
+
+def test_offset_before_ts_excludes_a_row_exactly_at_the_cutoff(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("CCCS_HOOKS_DIR", str(tmp_path))
+    _insert_row_with_ts(tmp_path, ts="2026-06-20T00:00:00Z", job_id="at-cutoff")
+    assert ledger.offset_before_ts("2026-06-20T00:00:00Z") == 0

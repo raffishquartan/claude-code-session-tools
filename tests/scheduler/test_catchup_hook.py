@@ -4,11 +4,12 @@ from __future__ import annotations
 import io
 import json
 import sqlite3
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
 
+from cc_session_tools.lib import telemetry_store
 from cccs_hooks import catchup
 from cc_session_tools.lib.scheduler import ledger, reconcile, registry, state
 from cc_session_tools.lib.scheduler.jobspec import validate_job_fields
@@ -176,6 +177,77 @@ def test_emit_user_prompt_submit_has_no_system_message_when_digest_empty(
     catchup._emit("", "UserPromptSubmit")
     payload = json.loads(capsys.readouterr().out)
     assert "systemMessage" not in payload
+
+
+def _insert_run_row(tmp_path: Path, *, ts: str, job_id: str) -> None:
+    conn = telemetry_store.connect(tmp_path / "hooks")
+    conn.execute(
+        "INSERT INTO catchup_events (ts, job_id, event, owed, ran, exit_code, "
+        "duration_ms, error, consecutive_failures) VALUES (?, ?, 'run', 1, 1, 0, 1, NULL, 0)",
+        (ts, job_id),
+    )
+    conn.commit()
+    conn.close()
+
+
+def test_session_start_surfaces_last_24h_even_if_it_predates_seeded_cursor(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """§ widen fix: a RUN completed in an earlier/now-closed session (so no
+    live session ever surfaced it) must still show up in the very next
+    SessionStart digest if it happened within the last 24h - even though this
+    brand-new session's cursor gets seeded past it before surface() runs."""
+    registry.add_job(validate_job_fields(
+        job_id="tesco", cadence="daily@09:00", coalesce="one", command=["true"],
+        surface=True, enabled=True, catchup_window="30d", timeout="5s",
+    ))
+    fixed_now = datetime(2026, 6, 20, 10, 0, tzinfo=timezone.utc)
+    recent_ts = (fixed_now - timedelta(hours=2)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    _insert_run_row(tmp_path, ts=recent_ts, job_id="tesco")
+    monkeypatch.setattr(catchup, "_now", lambda: fixed_now)
+    monkeypatch.setattr(reconcile, "spawn_detached", _Spawn())
+    _stdin(monkeypatch, {"hook_event_name": "SessionStart", "session_id": "brand-new", "cwd": "/tmp"})
+    out = _capture(monkeypatch)
+    assert catchup.main() == 0
+    assert any("tesco" in e for e in out)
+
+
+def test_session_start_lookback_excludes_entries_older_than_24h(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    registry.add_job(validate_job_fields(
+        job_id="tesco", cadence="daily@09:00", coalesce="one", command=["true"],
+        surface=True, enabled=True, catchup_window="30d", timeout="5s",
+    ))
+    fixed_now = datetime(2026, 6, 20, 10, 0, tzinfo=timezone.utc)
+    old_ts = (fixed_now - timedelta(hours=30)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    _insert_run_row(tmp_path, ts=old_ts, job_id="tesco")
+    monkeypatch.setattr(catchup, "_now", lambda: fixed_now)
+    monkeypatch.setattr(reconcile, "spawn_detached", _Spawn())
+    _stdin(monkeypatch, {"hook_event_name": "SessionStart", "session_id": "brand-new", "cwd": "/tmp"})
+    out = _capture(monkeypatch)
+    assert catchup.main() == 0
+    assert all("tesco" not in e for e in out)
+
+
+def test_user_prompt_submit_never_widens_lookback(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The 24h widen only applies to SessionStart - UserPromptSubmit keeps
+    its exact current cursor-only behaviour, even for a brand-new session."""
+    registry.add_job(validate_job_fields(
+        job_id="tesco", cadence="daily@09:00", coalesce="one", command=["true"],
+        surface=True, enabled=True, catchup_window="30d", timeout="5s",
+    ))
+    fixed_now = datetime(2026, 6, 20, 10, 0, tzinfo=timezone.utc)
+    recent_ts = (fixed_now - timedelta(hours=2)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    _insert_run_row(tmp_path, ts=recent_ts, job_id="tesco")
+    monkeypatch.setattr(catchup, "_now", lambda: fixed_now)
+    monkeypatch.setattr(reconcile, "spawn_detached", _Spawn())
+    _stdin(monkeypatch, {"hook_event_name": "UserPromptSubmit", "session_id": "brand-new", "cwd": "/tmp"})
+    out = _capture(monkeypatch)
+    assert catchup.main() == 0
+    assert all("tesco" not in e for e in out)
 
 
 @pytest.mark.parametrize("event", ["SessionStart", "UserPromptSubmit"])
