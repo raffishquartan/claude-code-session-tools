@@ -1,6 +1,6 @@
 ---
 name: analyse-cc-usage
-description: Analyse the user's Claude Code usage across projects, sessions, MCP servers, plugins, tools, time and models, in tokens AND dollars. Use whenever the user asks about their Claude Code usage in any way - "how much have I spent", "tokens used last week", "which project costs the most", "how much did Opus cost in April", "MCP usage by project", "compare Sonnet and Opus", "show my sessions in oneshot last month", "how often am I using the github plugin", "give me a usage report for the quarter", "what tools do I lean on", "any spike in usage recently". Backed by the cc-session-tools repo at ~/repos/claude-code-session-tools (also on GitHub at raffishquartan/claude-code-session-tools). Reconciles token totals against ccusage so we know the numbers are right.
+description: Analyse the user's Claude Code usage across projects, sessions, MCP servers, plugins, tools, time and models, in tokens AND dollars. Use whenever the user asks about their Claude Code usage in any way - "how much have I spent", "tokens used last week", "which project costs the most", "how much did Opus cost in April", "MCP usage by project", "compare Sonnet and Opus", "show my sessions in oneshot last month", "how often am I using the github plugin", "give me a usage report for the quarter", "what tools do I lean on", "any spike in usage recently", "which skill costs the most". Backed by the cc-session-tools repo at ~/repos/claude-code-session-tools (also on GitHub at raffishquartan/claude-code-session-tools). Reconciles token totals against ccusage so we know the numbers are right.
 ---
 
 # analyse-cc-usage
@@ -25,6 +25,7 @@ Trigger phrases (non-exhaustive):
 - "any spike in usage recently"
 - "do I have any expensive sessions"
 - "what tools am I leaning on"
+- "which skill costs the most" / "cost per invocation of a skill"
 
 If the user's question maps to one of those, invoke the CLI rather than
 guessing or trying to read the JSONLs yourself.
@@ -153,6 +154,21 @@ when the user runs `/rename` in a session), so sessions whose PID file was
 pruned before `warm-cache` ran will now be resolved correctly. UUID-only
 fallback (`sess-<uuid8>`) covers sessions launched without `-n` that were
 never renamed.
+
+## Skill-level cost data (claude.ai/settings/usage, if available)
+
+Some accounts show a per-skill invocation-count/cost breakdown at
+`https://claude.ai/settings/usage` - detail the local JSONL parse can't
+reconstruct (`claude-code-usage` tracks the generic `Skill` tool call,
+not which skill was invoked). Not available on every account.
+
+Check it on every invocation: open the page via the `open-browser-tab`
+skill (needs an existing authenticated browser session) and read it. If
+a skills table is present, use it directly for skill-level questions. If
+absent, fall back to `claude-code-usage query --tool Skill --group-by
+...` and flag it as aggregate-only, not per-skill. Never merge either
+source into `cost_usd` - present side by side, as `reconcile` does for
+ccusage.
 
 ## Setup on a new machine
 
