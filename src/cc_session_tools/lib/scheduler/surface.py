@@ -8,7 +8,19 @@ entire backlog into the digest as if it just happened, so a large or stale
 backlog of routine events is folded into a single summary line instead
 (§ staleness fix). FAILED/SUSPENDED events are never summarised — they always
 replay in full, each carrying an explicit relative-age suffix so a long-past
-failure is never mistaken for something currently happening."""
+failure is never mistaken for something currently happening.
+
+A completed run (RUN/BACKFILL) is always turned into a visible JobReport,
+regardless of the job's `surface` flag — only a LAUNCH ("started", not "ran")
+still respects it (§ visibility fix). RAN/BACKFILL reports carry `surface=True`
+unconditionally rather than the per-job flag, since digest.py never consults
+`surface` for Outcome.RAN — the per-job flag is only meaningful for LAUNCH,
+where it is still looked up via `_surface_flag`.
+
+`surface(..., lookback=...)` optionally widens the read below the session's
+own cursor to also pick up ledger activity within `lookback` of `now`, for the
+SessionStart 24h rolling lookback (§ widen fix) — see catchup.py, the only
+caller that ever passes it."""
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -20,7 +32,7 @@ from cc_session_tools.lib.scheduler.digest import JobReport, Outcome
 
 # Ledger events that produce a digest line.
 _BACKFILL_EVENTS = {ledger.LedgerEvent.BACKFILL.value}
-_ROUTINE_EVENTS = {ledger.LedgerEvent.LAUNCH.value, ledger.LedgerEvent.RUN.value}
+_RUN_EVENTS = {ledger.LedgerEvent.RUN.value}
 _LAUNCH_EVENTS = {ledger.LedgerEvent.LAUNCH.value}
 _FAIL_EVENTS = {ledger.LedgerEvent.FAIL.value}
 _SUSPEND_EVENTS = {ledger.LedgerEvent.SUSPEND.value}
@@ -112,9 +124,21 @@ def _routine_reports(entries: list[dict[str, object]], *, now: datetime) -> list
     return [_individual_routine_report(e, surface=True) for e in entries]
 
 
-def surface(*, session_uuid: str, now: datetime) -> SurfaceResult:
-    offset = cursor.read_cursor(session_uuid)
-    entries, new_offset = ledger.read_since(offset)
+def surface(
+    *, session_uuid: str, now: datetime, lookback: timedelta | None = None,
+) -> SurfaceResult:
+    cursor_offset = cursor.read_cursor(session_uuid)
+    if lookback is not None:
+        # Widen the read below the session's own cursor to also pick up
+        # activity within `lookback` of `now`, even if it predates this
+        # session's seeded cursor. A single merged read (rather than two
+        # separate queries) means an entry reachable via both paths cannot
+        # be surfaced twice within this call.
+        floor_offset = ledger.offset_before_ts((now - lookback).strftime(_TS_FMT))
+        start_offset = min(cursor_offset, floor_offset)
+    else:
+        start_offset = cursor_offset
+    entries, new_offset = ledger.read_since(start_offset)
     surface_by_id = {s.job_id: s.surface for s in registry.load_registry()}
 
     reports: list[JobReport] = []
@@ -131,32 +155,42 @@ def surface(*, session_uuid: str, now: datetime) -> SurfaceResult:
                 ran=0, deferred=0, expired=0, consecutive_failures=consecutive,
                 age=_format_age(_parse_ts(e.get("ts")), now),
             ))
-        elif event in _ROUTINE_EVENTS:
+        elif event in _LAUNCH_EVENTS:
+            # LAUNCHED "started" notices are the one outcome that still
+            # respects `surface` - unaffected by the RUN/BACKFILL
+            # always-visible handling below.
+            if _surface_flag(job_id, surface_by_id):
+                routine.append(e)
+            else:
+                reports.append(_individual_routine_report(e, surface=False))
+        elif event in _RUN_EVENTS:
+            # A completed run is always visible now - `surface` no longer
+            # gates it (§ visibility fix).
             raw_exit = e.get("exit_code")
-            has_findings = (
-                event == ledger.LedgerEvent.RUN.value
-                and bool(e.get("error"))
-                and raw_exit not in (0, None)
-            )
-            if has_findings:
-                # Findings are signal, not routine noise - never folded into
-                # the SUMMARY line and never silenced, same as FAIL/SUSPEND.
+            captured = e.get("error")
+            if captured:
+                is_warning = raw_exit not in (0, None)
+                # surface=True unconditionally: a completed run is always
+                # visible, so the per-job flag is not load-bearing here (see
+                # module docstring) - matches the pre-existing findings
+                # convention rather than the FAILED/SUSPENDED "write the real
+                # flag, bypass it in digest.py" one, since digest.py does not
+                # even look at `surface` for Outcome.RAN.
                 reports.append(JobReport(
                     job_id=job_id, outcome=Outcome.RAN, surface=True, overdue="",
                     ran=int(cast(int, e.get("ran", 0)) or 0), deferred=0, expired=0,
-                    consecutive_failures=0, findings=str(e.get("error")),
+                    consecutive_failures=0,
+                    findings=str(captured) if is_warning else None,
+                    output=str(captured) if not is_warning else None,
                 ))
-            elif _surface_flag(job_id, surface_by_id):
-                routine.append(e)
             else:
-                # Silent jobs never surface, individually or in the summary —
-                # keep the report (hidden by digest's surface check) so callers
-                # that inspect SurfaceResult.reports directly still see it.
-                reports.append(_individual_routine_report(e, surface=False))
+                # A bare clean run with no captured stdout - still eligible
+                # for the routine backlog fold (spam control, not the
+                # surface gate), never dropped as invisible.
+                routine.append(e)
         elif event in _BACKFILL_EVENTS:
             reports.append(JobReport(
-                job_id=job_id, outcome=Outcome.RAN,
-                surface=_surface_flag(job_id, surface_by_id), overdue="",
+                job_id=job_id, outcome=Outcome.RAN, surface=True, overdue="",
                 ran=int(cast(int, e.get("ran", 0)) or 0), deferred=0, expired=0,
                 consecutive_failures=0,
             ))

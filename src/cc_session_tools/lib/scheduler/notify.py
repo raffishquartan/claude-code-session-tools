@@ -9,7 +9,12 @@ if already exported, else are parsed directly from ``~/.creds`` (override via
 ``CCCS_CREDS_PATH``) since a detached subprocess's inherited environment is not
 guaranteed to have sourced a shell profile. Every failure mode degrades to a
 logged warning and a ``False`` return — a notification that can't be sent must
-never take down the worker it's reporting on."""
+never take down the worker it's reporting on.
+
+`suspended()` is the one-time push for the auto-suspend event; `push_outcome()`
+(§ visibility fix) is the general-purpose push for every ordinary FAILED/RAN
+worker completion, wired in from worker.py's `_run_body` at the same points it
+already records the ledger event."""
 from __future__ import annotations
 
 import json
@@ -18,6 +23,8 @@ import os
 import urllib.request
 from collections.abc import Callable
 from pathlib import Path
+
+from cc_session_tools.lib.scheduler.digest import Outcome
 
 logger = logging.getLogger(__name__)
 
@@ -95,3 +102,30 @@ def suspended(job_id: str, consecutive_failures: int, *, post: Poster = _default
         f"`ccsched enable {job_id}` after fixing"
     )
     return send_telegram(message, post=post)
+
+
+def _push_message(job_id: str, outcome: Outcome, detail: str | None) -> str:
+    """The single place that decides what a push message for outcome X looks
+    like. Deliberately simpler than digest.py's in-session line (no
+    overdue/deferred/expired context, no warning-vs-clean wording split) — a
+    detached worker has neither that context nor a need to match the digest
+    byte-for-byte, just to say what happened."""
+    if outcome is Outcome.FAILED:
+        suffix = f": {detail}" if detail else ""
+        return f"[cc-scheduler] {job_id} failed{suffix}"
+    suffix = f":\n{detail}" if detail else ""
+    return f"[cc-scheduler] {job_id} ran{suffix}"
+
+
+def push_outcome(
+    job_id: str, outcome: Outcome, detail: str | None = None, *, post: Poster = _default_post,
+) -> bool:
+    """Best-effort push for one worker-completion outcome (§ visibility fix).
+    Fires unconditionally for every FAILED and RAN outcome the worker
+    records — `JobSpec.surface` no longer gates run-completion visibility
+    here, matching digest.py's in-session line. Never called for
+    LAUNCHED/SUSPENDED/SUMMARY: LAUNCHED is not informative enough to push,
+    SUSPENDED already pushes via `suspended()` above, and SUMMARY is a
+    digest-only backlog-fold concept that never arises at the worker level.
+    """
+    return send_telegram(_push_message(job_id, outcome, detail), post=post)

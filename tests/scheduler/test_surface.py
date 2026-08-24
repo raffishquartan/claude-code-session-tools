@@ -10,7 +10,7 @@ from cc_session_tools.lib.scheduler import cursor
 from cc_session_tools.lib.scheduler import ledger as ld
 from cc_session_tools.lib.scheduler import registry as reg
 from cc_session_tools.lib.scheduler import surface as sf
-from cc_session_tools.lib.scheduler.digest import Outcome
+from cc_session_tools.lib.scheduler.digest import Outcome, format_digest
 from cc_session_tools.lib.scheduler.jobspec import validate_job_fields
 
 _NOW = datetime(2026, 6, 20, 10, 0, tzinfo=timezone.utc)
@@ -78,13 +78,58 @@ def test_two_sessions_each_surface_the_same_run_once(monkeypatch: pytest.MonkeyP
     assert any(r.job_id == "tesco" for r in b.reports)
 
 
-def test_silent_success_is_marked_non_surfacing(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_run_completion_ignores_surface_flag(monkeypatch: pytest.MonkeyPatch) -> None:
+    """§ correction: a bare successful RUN is always visible now, regardless
+    of the job's configured `surface` flag - only LAUNCHED remains gated."""
     _add("quiet", surface=False)
     _run_event("quiet")
     result = sf.surface(session_uuid="s1", now=_NOW)
-    # The report carries surface=False so digest omits it; failures would still show.
     rep = next(r for r in result.reports if r.job_id == "quiet")
-    assert rep.surface is False
+    assert rep.outcome is Outcome.RAN
+    assert "quiet" in format_digest(result.reports)
+
+
+def test_backfill_completion_ignores_surface_flag(monkeypatch: pytest.MonkeyPatch) -> None:
+    _add("quiet", surface=False)
+    ld.record(ld.LedgerEntry(job_id="quiet", event=ld.LedgerEvent.BACKFILL, owed=3,
+                             ran=3, exit_code=0, duration_ms=1, error=None))
+    result = sf.surface(session_uuid="s1", now=_NOW)
+    rep = next(r for r in result.reports if r.job_id == "quiet")
+    assert rep.outcome is Outcome.RAN
+    assert "quiet" in format_digest(result.reports)
+
+
+def test_launch_still_respects_surface_flag(monkeypatch: pytest.MonkeyPatch) -> None:
+    """LAUNCHED "started" notices are the one outcome the surface flag still
+    gates - unaffected by the RAN/BACKFILL always-visible change above."""
+    _add("quiet", surface=False)
+    ld.record(ld.LedgerEntry(job_id="quiet", event=ld.LedgerEvent.LAUNCH, owed=1,
+                             ran=0, exit_code=None, duration_ms=0, error=None))
+    result = sf.surface(session_uuid="s1", now=_NOW)
+    rep = next(r for r in result.reports if r.job_id == "quiet")
+    assert rep.outcome is Outcome.LAUNCHED
+    assert "quiet" not in format_digest(result.reports)
+
+
+def test_clean_run_with_stdout_surfaces_as_output_not_findings(monkeypatch: pytest.MonkeyPatch) -> None:
+    _add("verify", surface=True)
+    ld.record(ld.LedgerEntry(job_id="verify", event=ld.LedgerEvent.RUN, owed=1,
+                             ran=1, exit_code=0, duration_ms=1, error="proj-a: OK"))
+    result = sf.surface(session_uuid="s1", now=_NOW)
+    rep = next(r for r in result.reports if r.job_id == "verify")
+    assert rep.outcome is Outcome.RAN
+    assert rep.output == "proj-a: OK"
+    assert rep.findings is None
+
+
+def test_clean_run_with_stdout_ignores_surface_flag(monkeypatch: pytest.MonkeyPatch) -> None:
+    _add("verify", surface=False)
+    ld.record(ld.LedgerEntry(job_id="verify", event=ld.LedgerEvent.RUN, owed=1,
+                             ran=1, exit_code=0, duration_ms=1, error="proj-a: OK"))
+    result = sf.surface(session_uuid="s1", now=_NOW)
+    rep = next(r for r in result.reports if r.job_id == "verify")
+    assert rep.output == "proj-a: OK"
+    assert "verify" in format_digest(result.reports)
 
 
 def test_failure_event_maps_to_failed_outcome(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -255,3 +300,72 @@ def test_many_stale_routine_entries_and_one_recent_failure_coexist(
     assert len(fail_reports) == 1
     assert fail_reports[0].job_id == "cal"
     assert fail_reports[0].age == "1h ago"
+
+
+# --- SessionStart 24h rolling lookback ---------------------------------------
+
+
+def test_lookback_none_keeps_exact_cursor_only_behaviour(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Baseline: with no lookback (UserPromptSubmit's case), an entry that
+    predates the seeded cursor is invisible - exactly as before this change."""
+    _add("tesco")
+    recent_ts = (_NOW - timedelta(hours=2)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    _insert_catchup_row(tmp_path, ts=recent_ts, job_id="tesco", event="run", ran=1)
+    cursor.seed_new_session("s1")
+    result = sf.surface(session_uuid="s1", now=_NOW)
+    assert result.reports == []
+
+
+def test_lookback_surfaces_entry_that_predates_seeded_cursor(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """§ widen fix: with a 24h lookback (SessionStart's case), the same
+    pre-seed entry from test_lookback_none_keeps_exact_cursor_only_behaviour
+    above IS surfaced, since it falls within the window."""
+    _add("tesco")
+    recent_ts = (_NOW - timedelta(hours=2)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    _insert_catchup_row(tmp_path, ts=recent_ts, job_id="tesco", event="run", ran=1)
+    cursor.seed_new_session("s1")
+    result = sf.surface(session_uuid="s1", now=_NOW, lookback=timedelta(hours=24))
+    assert any(r.job_id == "tesco" for r in result.reports)
+
+
+def test_lookback_excludes_entries_older_than_the_window(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _add("tesco")
+    old_ts = (_NOW - timedelta(hours=30)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    _insert_catchup_row(tmp_path, ts=old_ts, job_id="tesco", event="run", ran=1)
+    cursor.seed_new_session("s1")
+    result = sf.surface(session_uuid="s1", now=_NOW, lookback=timedelta(hours=24))
+    assert result.reports == []
+
+
+def test_lookback_does_not_duplicate_entries_within_one_call(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An entry reachable via both the 24h floor and the normal cursor path
+    must appear exactly once in a single surface() call."""
+    _add("tesco")
+    recent_ts = (_NOW - timedelta(hours=2)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    _insert_catchup_row(tmp_path, ts=recent_ts, job_id="tesco", event="run", ran=1)
+    result = sf.surface(session_uuid="s1", now=_NOW, lookback=timedelta(hours=24))
+    matches = [r for r in result.reports if r.job_id == "tesco"]
+    assert len(matches) == 1
+
+
+def test_lookback_still_advances_cursor_to_the_true_tip(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """After a SessionStart lookback call, the session's cursor lands on the
+    ledger's current tip exactly as it does today - so the next
+    (non-lookback) UserPromptSubmit call in this session sees nothing new."""
+    _add("tesco")
+    recent_ts = (_NOW - timedelta(hours=2)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    _insert_catchup_row(tmp_path, ts=recent_ts, job_id="tesco", event="run", ran=1)
+    cursor.seed_new_session("s1")
+    sf.surface(session_uuid="s1", now=_NOW, lookback=timedelta(hours=24))
+    again = sf.surface(session_uuid="s1", now=_NOW)
+    assert again.reports == []

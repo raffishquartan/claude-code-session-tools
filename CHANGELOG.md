@@ -19,6 +19,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   record_group name). Refuses to rename onto a `--to` name that already has rows or an
   extension table, rather than silently merging into it.
 
+### Fixed
+
+- **`ccsched` now pushes a Telegram notification for every job outcome, not just
+  auto-suspend.** `lib/scheduler/notify.py` gained `push_outcome()`, wired into
+  `worker.py`'s `_run_body` at the same points it already records RUN/FAIL ledger
+  events. Fires for every FAILED and RAN (BACKFILL folds into RAN) outcome -
+  `JobSpec.surface` no longer gates push or the in-session digest for a completed run
+  at all; only the transient LAUNCHED "started" notice still respects it. A run's
+  captured stdout is also no longer discarded on a clean (0-exit) exit - previously
+  only a nonzero "found something" exit's stdout was captured; now both are, rendered
+  with distinct wording in the digest (`✓ ran X:` neutral vs `⚠ X ran with findings:`
+  warning, always exactly one line-group per run) so a passing verify-style job's
+  confirmation output is visible instead of silently thrown away.
+- **SessionStart's catch-up digest now looks back 24h**, not just since the session's
+  own seeded cursor. Previously a job that ran and completed between sessions - with
+  no live session open to catch it via a later UserPromptSubmit digest - was lost
+  forever, since every new session's cursor seeds at "now" (§9.3). `surface.surface()`
+  gained a `lookback` parameter (SessionStart only; UserPromptSubmit is unchanged) and
+  `ledger.py` gained `offset_before_ts()` to compute the widened starting offset via a
+  single indexed query rather than loading the whole ledger table.
+
 ## [2.8.2] - 2026-08-22
 
 ### Fixed

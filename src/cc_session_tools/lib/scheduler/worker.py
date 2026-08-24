@@ -3,7 +3,12 @@
 Acquires the per-job in-flight lock (sole overlap guarantee — unchanged from the
 flat-file era, R3), stamps in_flight, runs the command with a per-instant
 timeout, advances state on success via targeted single-row writes, records the
-outcome to the ledger, and ALWAYS clears in_flight + releases the lock."""
+outcome to the ledger, and ALWAYS clears in_flight + releases the lock.
+
+Also pushes every FAILED/RAN outcome via `notify.push_outcome` (§ visibility
+fix) at the same points it records the ledger event — a SUSPEND still pushes
+only via the existing `notify.suspended()` call, never doubled up with a
+FAILED push for the same crash."""
 from __future__ import annotations
 
 import logging
@@ -13,6 +18,7 @@ from datetime import datetime, timedelta
 
 from cc_session_tools.lib.scheduler import ledger, notify, registry, state
 from cc_session_tools.lib.scheduler.cadence import parse_cadence
+from cc_session_tools.lib.scheduler.digest import Outcome
 from cc_session_tools.lib.scheduler.duration import parse_duration
 from cc_session_tools.lib.scheduler.due import owed
 from cc_session_tools.lib.scheduler.jobspec import CoalesceKind, JobSpec
@@ -25,6 +31,7 @@ logger = logging.getLogger(__name__)
 
 Runner = Callable[[tuple[str, ...], timedelta], RunOutcome]
 NotifySuspended = Callable[[str, int], bool]
+NotifyPush = Callable[[str, Outcome, str | None], bool]
 
 
 class UnknownJob(ValueError):
@@ -51,7 +58,7 @@ def _record(spec: JobSpec, event: LedgerEvent, owed_n: int, ran: int,
 
 def _run_body(
     spec: JobSpec, instants: int, now: datetime, runner: Runner,
-    notify_suspended: NotifySuspended,
+    notify_suspended: NotifySuspended, notify_push: NotifyPush,
 ) -> None:
     timeout = parse_duration(spec.timeout)
     cadence = parse_cadence(spec.cadence)
@@ -86,14 +93,20 @@ def _run_body(
         new_consecutive, _new_suspended, newly_suspended = state.record_failure(
             spec.job_id, attempt_ts=attempt_ts, threshold=DEFAULT_SUSPEND_THRESHOLD,
         )
-        _record(spec, LedgerEvent.FAIL, owed_n, 0, last_outcome,
-                (last_outcome.stderr.strip()[:200] if last_outcome else None)
-                or ("timed out" if last_outcome and last_outcome.timed_out else None),
+        error_text = (
+            (last_outcome.stderr.strip()[:200] if last_outcome else None)
+            or ("timed out" if last_outcome and last_outcome.timed_out else None)
+        )
+        _record(spec, LedgerEvent.FAIL, owed_n, 0, last_outcome, error_text,
                 consecutive_failures=new_consecutive)
         if newly_suspended:
             notify_suspended(spec.job_id, new_consecutive)
             _record(spec, LedgerEvent.SUSPEND, owed_n, 0, None, None,
                     consecutive_failures=new_consecutive)
+        else:
+            # SUSPENDED already pushed above via notify_suspended - a FAILED
+            # push here too would double-notify for the same crash.
+            notify_push(spec.job_id, Outcome.FAILED, error_text)
         return
 
     if spec.coalesce is CoalesceKind.ONE:
@@ -102,18 +115,22 @@ def _run_body(
         new_success = state.format_ts(result.instants[succeeded - 1])
     state.record_success(spec.job_id, new_success=new_success, attempt_ts=attempt_ts)
     event = LedgerEvent.RUN if owed_n <= 1 and succeeded == 1 else LedgerEvent.BACKFILL
-    # A nonzero-but-successful exit (e.g. drift found) carries its stdout into
-    # the digest via the ledger's error column, so it surfaces as findings
-    # rather than a bare checkmark - see surface.py/digest.py.
-    findings = None
-    if last_outcome is not None and last_outcome.exit_code != 0:
-        findings = last_outcome.stdout.strip()[:1000] or None
-    _record(spec, event, owed_n, succeeded, last_outcome, findings)
+    # Every successful run's stdout is captured into the ledger's error column
+    # - not just a nonzero "found something" exit - so the digest/push always
+    # has something to show beyond a bare checkmark when the command produced
+    # output (see surface.py/digest.py, which render a clean vs a warning run
+    # differently based on the ledger row's exit_code).
+    captured_output = (
+        last_outcome.stdout.strip()[:1000] or None if last_outcome is not None else None
+    )
+    _record(spec, event, owed_n, succeeded, last_outcome, captured_output)
+    notify_push(spec.job_id, Outcome.RAN, captured_output)
 
 
 def run_job(
     job_id: str, *, instants: int, now: datetime, runner: Runner = run_command,
     notify_suspended: NotifySuspended = notify.suspended,
+    notify_push: NotifyPush = notify.push_outcome,
 ) -> None:
     spec = _load_spec(job_id)
     try:
@@ -125,7 +142,7 @@ def run_job(
                 state.set_in_flight(
                     job_id, pid=os.getpid(), started_at=state.format_ts(now), instants=instants
                 )
-                _run_body(spec, instants, now, runner, notify_suspended)
+                _run_body(spec, instants, now, runner, notify_suspended, notify_push)
             finally:
                 state.clear_in_flight(job_id)
     except InFlightLockHeld:

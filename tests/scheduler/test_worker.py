@@ -12,6 +12,7 @@ from cc_session_tools.lib.scheduler import registry as reg
 from cc_session_tools.lib.scheduler import state as st
 from cc_session_tools.lib.scheduler import store
 from cc_session_tools.lib.scheduler import worker as wk
+from cc_session_tools.lib.scheduler.digest import Outcome
 from cc_session_tools.lib.scheduler.jobspec import validate_job_fields
 from cc_session_tools.lib.scheduler.runner import RunOutcome
 
@@ -26,11 +27,11 @@ def _dirs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
 
 def _add(
     job_id: str, cadence: str = "daily@09:00", coalesce: str = "one",
-    success_exit_codes: tuple[int, ...] = (0,),
+    success_exit_codes: tuple[int, ...] = (0,), surface: bool = True,
 ) -> None:
     reg.add_job(validate_job_fields(
         job_id=job_id, cadence=cadence, coalesce=coalesce, command=["true"],
-        surface=True, enabled=True, catchup_window="30d", timeout="5s",
+        surface=surface, enabled=True, catchup_window="30d", timeout="5s",
         success_exit_codes=success_exit_codes,
     ))
 
@@ -241,6 +242,23 @@ def test_plain_zero_exit_records_no_findings(monkeypatch: pytest.MonkeyPatch) ->
     assert ld.read_recent(job_id="tesco")[-1]["error"] is None
 
 
+def test_clean_zero_exit_with_stdout_is_now_captured(monkeypatch: pytest.MonkeyPatch) -> None:
+    """§ correction: a 0-exit run's stdout used to be discarded entirely
+    (only a nonzero exit's stdout was captured as "findings"); now it is
+    captured exactly like the nonzero-exit case, so a verify-style job's
+    "all OK" confirmation is not silently thrown away."""
+    _add("verify")
+    _seed("verify")
+
+    def clean_runner(argv, timeout) -> RunOutcome:
+        return RunOutcome(exit_code=0, stdout="proj-a: OK (0 issue(s))", stderr="",
+                          duration_ms=1, timed_out=False)
+
+    now = datetime(2026, 6, 20, 10, 0, tzinfo=UTC)
+    wk.run_job("verify", instants=1, now=now, runner=clean_runner)
+    assert ld.read_recent(job_id="verify")[-1]["error"] == "proj-a: OK (0 issue(s))"
+
+
 def test_second_worker_exits_when_lock_held_by_live_pid(monkeypatch: pytest.MonkeyPatch) -> None:
     _add("busy")
     _seed("busy")
@@ -258,6 +276,89 @@ def test_second_worker_exits_when_lock_held_by_live_pid(monkeypatch: pytest.Monk
     wk.run_job("busy", instants=1, now=now, runner=runner)
     assert ran["n"] == 0  # lock held by a live holder → worker exited without running
     assert st.load_all_state()["busy"].last_success is None
+
+
+def test_successful_run_pushes_ran_outcome(monkeypatch: pytest.MonkeyPatch) -> None:
+    _add("tesco")
+    _seed("tesco")
+    pushed: list[tuple[str, Outcome, str | None]] = []
+
+    def fake_push(job_id: str, outcome: Outcome, detail: str | None = None) -> bool:
+        pushed.append((job_id, outcome, detail))
+        return True
+
+    now = datetime(2026, 6, 20, 10, 0, tzinfo=UTC)
+    wk.run_job("tesco", instants=1, now=now, runner=_ok_runner, notify_push=fake_push)
+    assert pushed == [("tesco", Outcome.RAN, None)]
+
+
+def test_successful_run_pushes_regardless_of_surface_flag(monkeypatch: pytest.MonkeyPatch) -> None:
+    """§ correction: `surface` no longer gates push (or digest) visibility
+    for a completed run - a --no-surface job still pushes on every clean
+    run."""
+    _add("quiet", surface=False)
+    _seed("quiet")
+    pushed: list[tuple[str, Outcome, str | None]] = []
+
+    def fake_push(job_id: str, outcome: Outcome, detail: str | None = None) -> bool:
+        pushed.append((job_id, outcome, detail))
+        return True
+
+    now = datetime(2026, 6, 20, 10, 0, tzinfo=UTC)
+    wk.run_job("quiet", instants=1, now=now, runner=_ok_runner, notify_push=fake_push)
+    assert pushed == [("quiet", Outcome.RAN, None)]
+
+
+def test_run_with_captured_output_pushes_with_detail(monkeypatch: pytest.MonkeyPatch) -> None:
+    _add("verify")
+    _seed("verify")
+
+    def clean_runner(argv, timeout) -> RunOutcome:
+        return RunOutcome(exit_code=0, stdout="all good", stderr="", duration_ms=1,
+                          timed_out=False)
+
+    pushed: list[tuple[str, Outcome, str | None]] = []
+
+    def fake_push(job_id: str, outcome: Outcome, detail: str | None = None) -> bool:
+        pushed.append((job_id, outcome, detail))
+        return True
+
+    now = datetime(2026, 6, 20, 10, 0, tzinfo=UTC)
+    wk.run_job("verify", instants=1, now=now, runner=clean_runner, notify_push=fake_push)
+    assert pushed == [("verify", Outcome.RAN, "all good")]
+
+
+def test_ordinary_failure_pushes_failed_outcome(monkeypatch: pytest.MonkeyPatch) -> None:
+    _add("cal")
+    _seed("cal")
+    pushed: list[tuple[str, Outcome, str | None]] = []
+
+    def fake_push(job_id: str, outcome: Outcome, detail: str | None = None) -> bool:
+        pushed.append((job_id, outcome, detail))
+        return True
+
+    now = datetime(2026, 6, 20, 10, 0, tzinfo=UTC)
+    wk.run_job("cal", instants=1, now=now, runner=_fail_runner, notify_push=fake_push)
+    assert pushed == [("cal", Outcome.FAILED, "boom")]
+
+
+def test_newly_suspended_does_not_also_push_failed(monkeypatch: pytest.MonkeyPatch) -> None:
+    """SUSPENDED already pushes via notify_suspended - a FAILED push for the
+    same crash would double-notify."""
+    _add("broken")
+    st.save_all_state({"broken": st.JobState(
+        registered_at="2026-06-17T09:00:00Z", last_success=None, last_attempt=None,
+        consecutive_failures=9, in_flight=None, suspended=False)})
+    pushed: list[tuple[str, Outcome, str | None]] = []
+
+    def fake_push(job_id: str, outcome: Outcome, detail: str | None = None) -> bool:
+        pushed.append((job_id, outcome, detail))
+        return True
+
+    now = datetime(2026, 6, 20, 10, 0, tzinfo=UTC)
+    wk.run_job("broken", instants=1, now=now, runner=_fail_runner,
+               notify_suspended=lambda j, n: True, notify_push=fake_push)
+    assert pushed == []
 
 
 def test_lock_wraps_sql_state_mutations_r3(monkeypatch: pytest.MonkeyPatch) -> None:

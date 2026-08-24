@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 
 from cc_session_tools.lib.scheduler import notify
+from cc_session_tools.lib.scheduler.digest import Outcome
 
 
 def _spy_post() -> tuple[list[tuple[str, bytes]], notify.Poster]:
@@ -72,3 +73,72 @@ def test_suspended_message_names_job_and_enable_command(monkeypatch: pytest.Monk
     assert b"ccmsg-dead-letter-sweep" in data
     assert b"10 consecutive" in data
     assert b"ccsched enable ccmsg-dead-letter-sweep" in data
+
+
+# ---------- push_outcome ----------
+
+
+def test_push_outcome_failed_includes_job_id_and_detail(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "tok")
+    monkeypatch.setenv("TELEGRAM_CHAT_ID", "chat")
+    calls, post = _spy_post()
+    assert notify.push_outcome("cal", Outcome.FAILED, "boom", post=post) is True
+    _, data = calls[0]
+    assert b"cal" in data
+    assert b"failed" in data
+    assert b"boom" in data
+
+
+def test_push_outcome_failed_without_detail_still_pushes(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "tok")
+    monkeypatch.setenv("TELEGRAM_CHAT_ID", "chat")
+    calls, post = _spy_post()
+    assert notify.push_outcome("cal", Outcome.FAILED, None, post=post) is True
+    _, data = calls[0]
+    assert b"cal" in data
+    assert b"failed" in data
+
+
+def test_push_outcome_ran_without_detail_pushes_bare_message(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """§ correction: RAN always pushes now, whether or not there is captured
+    output - `surface` no longer gates it."""
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "tok")
+    monkeypatch.setenv("TELEGRAM_CHAT_ID", "chat")
+    calls, post = _spy_post()
+    assert notify.push_outcome("tesco", Outcome.RAN, None, post=post) is True
+    _, data = calls[0]
+    assert b"tesco" in data
+    assert b"ran" in data
+
+
+def test_push_outcome_ran_with_detail_includes_it(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "tok")
+    monkeypatch.setenv("TELEGRAM_CHAT_ID", "chat")
+    calls, post = _spy_post()
+    assert notify.push_outcome("verify", Outcome.RAN, "proj-a: OK", post=post) is True
+    _, data = calls[0]
+    assert b"verify" in data
+    assert b"proj-a: OK" in data
+
+
+def test_push_outcome_returns_false_without_credentials(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("TELEGRAM_BOT_TOKEN", raising=False)
+    monkeypatch.delenv("TELEGRAM_CHAT_ID", raising=False)
+    monkeypatch.setenv("CCCS_CREDS_PATH", str(tmp_path / "nope"))
+    calls, post = _spy_post()
+    assert notify.push_outcome("tesco", Outcome.RAN, None, post=post) is False
+    assert calls == []
+
+
+def test_push_outcome_returns_false_on_post_failure(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "tok")
+    monkeypatch.setenv("TELEGRAM_CHAT_ID", "chat")
+
+    def failing_post(url: str, data: bytes) -> None:
+        raise OSError("network down")
+
+    assert notify.push_outcome("tesco", Outcome.RAN, None, post=failing_post) is False
