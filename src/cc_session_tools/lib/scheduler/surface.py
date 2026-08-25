@@ -81,25 +81,38 @@ def _format_age(sent: datetime | None, now: datetime) -> str:
     return f"{hours // 24}d ago"
 
 
-def _individual_routine_report(e: dict[str, object], *, surface: bool) -> JobReport:
+# Sort key for an entry whose ts is missing/unparseable - sorts first, same
+# convention as `_format_age`'s "unknown time ago" treating it as maximally old.
+_UNKNOWN_TS = datetime.min.replace(tzinfo=timezone.utc)
+
+
+def _individual_routine_report(e: dict[str, object], *, surface: bool, now: datetime) -> JobReport:
     event = str(e.get("event", ""))
     job_id = str(e.get("job_id", ""))
+    age = _format_age(_parse_ts(e.get("ts")), now)
     if event in _LAUNCH_EVENTS:
         return JobReport(
             job_id=job_id, outcome=Outcome.LAUNCHED, surface=surface, overdue="",
-            ran=0, deferred=0, expired=0, consecutive_failures=0,
+            ran=0, deferred=0, expired=0, consecutive_failures=0, age=age,
         )
     return JobReport(
         job_id=job_id, outcome=Outcome.RAN, surface=surface, overdue="",
         ran=int(cast(int, e.get("ran", 0)) or 0), deferred=0, expired=0,
-        consecutive_failures=0,
+        consecutive_failures=0, age=age,
     )
 
 
-def _routine_reports(entries: list[dict[str, object]], *, now: datetime) -> list[JobReport]:
-    """Surfaced (non-silent) LAUNCH/RUN entries only. Folds a large or stale
-    backlog into one summary JobReport; otherwise replays each individually,
-    exactly as before."""
+def _routine_reports(
+    entries: list[dict[str, object]], *, now: datetime,
+) -> list[tuple[datetime, JobReport]]:
+    """Surfaced (non-silent) LAUNCH/RUN entries only, paired with a sort
+    timestamp so the caller can interleave them chronologically with every
+    other report type. Folds a large or stale backlog into one summary
+    JobReport (unchanged). Otherwise, entries for the SAME job_id and the
+    same kind (LAUNCH vs RAN) coalesce into one line carrying a count (§
+    coalesce fix) - a job reconciled by several short-lived sessions within
+    one sweep must not replay as N near-identical lines. A group of exactly
+    one entry renders exactly as before (no '×1' suffix)."""
     if not entries:
         return []
     oldest: datetime | None = None
@@ -116,12 +129,36 @@ def _routine_reports(entries: list[dict[str, object]], *, now: datetime) -> list
     )
     if len(entries) > _ROUTINE_SUMMARY_COUNT_THRESHOLD or is_stale:
         age = "unknown time ago" if oldest is None else _format_age(oldest, now)
-        return [JobReport(
+        sort_ts = oldest if oldest is not None else _UNKNOWN_TS
+        return [(sort_ts, JobReport(
             job_id="", outcome=Outcome.SUMMARY, surface=True, overdue="",
             ran=0, deferred=0, expired=0, consecutive_failures=0,
             age=age, count=len(entries),
-        )]
-    return [_individual_routine_report(e, surface=True) for e in entries]
+        ))]
+
+    groups: dict[tuple[str, bool], list[dict[str, object]]] = {}
+    for e in entries:
+        job_id = str(e.get("job_id", ""))
+        is_launch = str(e.get("event", "")) in _LAUNCH_EVENTS
+        groups.setdefault((job_id, is_launch), []).append(e)
+
+    out: list[tuple[datetime, JobReport]] = []
+    for (job_id, is_launch), group in groups.items():
+        timestamps = [_parse_ts(g.get("ts")) for g in group]
+        latest = max((t for t in timestamps if t is not None), default=None)
+        sort_ts = latest if latest is not None else _UNKNOWN_TS
+        if len(group) == 1:
+            out.append((sort_ts, _individual_routine_report(group[0], surface=True, now=now)))
+            continue
+        age = _format_age(latest, now)
+        outcome = Outcome.LAUNCHED if is_launch else Outcome.RAN
+        ran = 0 if is_launch else sum(int(cast(int, g.get("ran", 0)) or 0) for g in group)
+        out.append((sort_ts, JobReport(
+            job_id=job_id, outcome=outcome, surface=True, overdue="",
+            ran=ran, deferred=0, expired=0, consecutive_failures=0,
+            age=age, count=len(group),
+        )))
+    return out
 
 
 def surface(
@@ -141,20 +178,27 @@ def surface(
     entries, new_offset = ledger.read_since(start_offset)
     surface_by_id = {s.job_id: s.surface for s in registry.load_registry()}
 
-    reports: list[JobReport] = []
+    # (sort timestamp, report) pairs, sorted once at the end so every report
+    # type - individually-appended and routine/coalesced/folded alike -
+    # interleaves in the order things actually happened (§ chronological
+    # order fix), not in the order surface()'s branches happen to process
+    # them.
+    pairs: list[tuple[datetime, JobReport]] = []
     routine: list[dict[str, object]] = []
     for e in entries:
         event = str(e.get("event", ""))
         job_id = str(e.get("job_id", ""))
+        sent = _parse_ts(e.get("ts"))
+        sort_ts = sent if sent is not None else _UNKNOWN_TS
         if event in _FAIL_EVENTS:
             raw_cf = e.get("consecutive_failures")
             consecutive = int(raw_cf) if isinstance(raw_cf, int) else 1
-            reports.append(JobReport(
+            pairs.append((sort_ts, JobReport(
                 job_id=job_id, outcome=Outcome.FAILED,
                 surface=_surface_flag(job_id, surface_by_id), overdue="",
                 ran=0, deferred=0, expired=0, consecutive_failures=consecutive,
-                age=_format_age(_parse_ts(e.get("ts")), now),
-            ))
+                age=_format_age(sent, now),
+            )))
         elif event in _LAUNCH_EVENTS:
             # LAUNCHED "started" notices are the one outcome that still
             # respects `surface` - unaffected by the RUN/BACKFILL
@@ -162,10 +206,14 @@ def surface(
             if _surface_flag(job_id, surface_by_id):
                 routine.append(e)
             else:
-                reports.append(_individual_routine_report(e, surface=False))
-        elif event in _RUN_EVENTS:
+                pairs.append((sort_ts, _individual_routine_report(e, surface=False, now=now)))
+        elif event in _RUN_EVENTS or event in _BACKFILL_EVENTS:
             # A completed run is always visible now - `surface` no longer
-            # gates it (§ visibility fix).
+            # gates it (§ visibility fix). RUN and BACKFILL (>1 missed
+            # interval caught up in one attempt) share this handling: worker.py
+            # always captures stdout into the ledger's `error` column for
+            # both alike, so BACKFILL must read it too, not drop it (§
+            # backfill-output fix).
             raw_exit = e.get("exit_code")
             captured = e.get("error")
             if captured:
@@ -176,36 +224,32 @@ def surface(
                 # convention rather than the FAILED/SUSPENDED "write the real
                 # flag, bypass it in digest.py" one, since digest.py does not
                 # even look at `surface` for Outcome.RAN.
-                reports.append(JobReport(
+                pairs.append((sort_ts, JobReport(
                     job_id=job_id, outcome=Outcome.RAN, surface=True, overdue="",
                     ran=int(cast(int, e.get("ran", 0)) or 0), deferred=0, expired=0,
                     consecutive_failures=0,
                     findings=str(captured) if is_warning else None,
                     output=str(captured) if not is_warning else None,
-                ))
+                    age=_format_age(sent, now),
+                )))
             else:
                 # A bare clean run with no captured stdout - still eligible
                 # for the routine backlog fold (spam control, not the
                 # surface gate), never dropped as invisible.
                 routine.append(e)
-        elif event in _BACKFILL_EVENTS:
-            reports.append(JobReport(
-                job_id=job_id, outcome=Outcome.RAN, surface=True, overdue="",
-                ran=int(cast(int, e.get("ran", 0)) or 0), deferred=0, expired=0,
-                consecutive_failures=0,
-            ))
         elif event in _SUSPEND_EVENTS:
             raw_cf = e.get("consecutive_failures")
             consecutive = int(raw_cf) if isinstance(raw_cf, int) else 0
-            reports.append(JobReport(
+            pairs.append((sort_ts, JobReport(
                 job_id=job_id, outcome=Outcome.SUSPENDED,
                 surface=_surface_flag(job_id, surface_by_id), overdue="",
                 ran=0, deferred=0, expired=0, consecutive_failures=consecutive,
-                age=_format_age(_parse_ts(e.get("ts")), now),
-            ))
+                age=_format_age(sent, now),
+            )))
         # skip_expired and defer events are not surfaced as standalone lines.
 
-    reports.extend(_routine_reports(routine, now=now))
+    pairs.extend(_routine_reports(routine, now=now))
+    pairs.sort(key=lambda p: p[0])
 
     cursor.write_cursor(session_uuid, new_offset)
-    return SurfaceResult(reports=reports)
+    return SurfaceResult(reports=[report for _, report in pairs])
