@@ -7,6 +7,66 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.9.0] - 2026-08-25
+
+### Added
+
+- New `ccst pdata rename-group --project NAME --from OLD --to NEW [--write]` command - renames
+  a record_group's `records` rows, its `record_group_fields` rows, and its `ext_<group>` table
+  in one transaction, backing up the project first (dry-run by default, same shape as
+  `ccst pdata reorganize`). Also updates every matching entry in `.ccst-pdata-proposal.json`
+  when the project has one - skipping that step is what previously made a hand-renamed group
+  fail `ccst pdata verify`'s row-count-parity check forever with a false "possible data loss"
+  (the check cross-references live row counts against the manifest's archived-file entries by
+  record_group name). Refuses to rename onto a `--to` name that already has rows or an
+  extension table, rather than silently merging into it.
+
+### Fixed
+
+- **`ccsched` now pushes a Telegram notification for every job outcome, not just
+  auto-suspend.** `lib/scheduler/notify.py` gained `push_outcome()`, wired into
+  `worker.py`'s `_run_body` at the same points it already records RUN/FAIL ledger
+  events. Fires for every FAILED and RAN (BACKFILL folds into RAN) outcome -
+  `JobSpec.surface` no longer gates push or the in-session digest for a completed run
+  at all; only the transient LAUNCHED "started" notice still respects it. A run's
+  captured stdout is also no longer discarded on a clean (0-exit) exit - previously
+  only a nonzero "found something" exit's stdout was captured; now both are, rendered
+  with distinct wording in the digest (`✓ ran X:` neutral vs `⚠ X ran with findings:`
+  warning, always exactly one line-group per run) so a passing verify-style job's
+  confirmation output is visible instead of silently thrown away.
+- **SessionStart's catch-up digest now looks back 24h**, not just since the session's
+  own seeded cursor. Previously a job that ran and completed between sessions - with
+  no live session open to catch it via a later UserPromptSubmit digest - was lost
+  forever, since every new session's cursor seeds at "now" (§9.3). `surface.surface()`
+  gained a `lookback` parameter (SessionStart only; UserPromptSubmit is unchanged) and
+  `ledger.py` gained `offset_before_ts()` to compute the widened starting offset via a
+  single indexed query rather than loading the whole ledger table.
+- **`ccsched run <id>` (the manual CLI trigger) now matches the real scheduled worker's
+  push and capture behaviour.** It was a separate, hand-maintained implementation from
+  `worker.py::run_job` that never got the two fixes above - it still only captured
+  stdout on a nonzero exit, and never pushed to Telegram at all. Extracted the shared
+  classification/capture/push logic into `worker.classify_outcome()`, called by both
+  `_cmd_run` and `_run_body`, so the two entry points can no longer drift apart the way
+  this gap happened in the first place.
+- **`ccst pdata init --write` now refuses immediately if another process already holds
+  the project's `.db` open**, via a non-blocking `BEGIN IMMEDIATE` pre-flight probe
+  before any mutation begins. Previously the only protection was a passive 5-second
+  busy-timeout, which only failed *after* `--write` had already started mutating
+  things. No-op for a project's first-ever `--write` (no pre-existing `.db` to guard).
+- **A failed job's captured diagnostic text now comes from the tail of stderr, not the
+  head**, with a larger budget (200 → 500 characters). For a Python traceback, the
+  exception type and message that actually explain the failure sit on the *last* line -
+  the previous head-truncated capture almost always kept only the "Traceback (most
+  recent call last): File ..., line ..." header and discarded the part a person would
+  need to diagnose the failure.
+- Test suite hardened against ever reaching the real Telegram API: an autouse fixture
+  in `tests/conftest.py` deletes `TELEGRAM_BOT_TOKEN`/`TELEGRAM_CHAT_ID` and points
+  `CCCS_CREDS_PATH` at a path that cannot exist, so `notify._credentials()` always
+  returns `None` regardless of whether any individual test remembers to stub the
+  poster itself. (Prompted by several pre-existing `test_worker.py` cases that called
+  `wk.run_job(...)` without stubbing `notify_push`, which - on a dev machine with real
+  credentials configured - sent real push messages on every `pytest` run.)
+
 ## [2.8.2] - 2026-08-22
 
 ### Fixed

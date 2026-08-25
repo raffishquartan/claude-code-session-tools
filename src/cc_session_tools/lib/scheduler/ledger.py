@@ -112,6 +112,24 @@ def read_since(offset: int) -> tuple[list[dict[str, object]], int]:
         conn.close()
 
 
+def offset_before_ts(cutoff_ts: str) -> int:
+    """The highest catchup_events id whose ts is strictly earlier than
+    cutoff_ts (0 if none) - the offset such that read_since(this) yields
+    every row with ts >= cutoff_ts. Used by the SessionStart digest's 24h
+    rolling lookback (§9.3 widen fix) to compute a starting offset without
+    loading the whole ledger table into memory; idx_catchup_events_ts makes
+    this a single index range scan rather than a full-table filter."""
+    conn = telemetry_store.connect()
+    try:
+        row = conn.execute(
+            "SELECT COALESCE(MAX(id), 0) AS m FROM catchup_events WHERE ts < ?",
+            (cutoff_ts,),
+        ).fetchone()
+        return int(row["m"])
+    finally:
+        conn.close()
+
+
 def current_offset() -> int:
     """The current max catchup_events id (0 if empty). Used to seed a
     brand-new session's cursor (§9.3) so its first digest reflects only

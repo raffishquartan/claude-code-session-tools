@@ -5,10 +5,12 @@ A's service.py — this module owns no SQL of its own.
 from __future__ import annotations
 
 import csv
+import sqlite3
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
+from cc_session_tools.lib import db
 from cc_session_tools.lib.pdata import (
     backup,
     cutover,
@@ -16,6 +18,7 @@ from cc_session_tools.lib.pdata import (
     manifest,
     repository,
     service,
+    store,
 )
 from cc_session_tools.lib.pdata.importers import ImportRow, count_source_rows, import_entry
 from cc_session_tools.lib.pdata.manifest import Manifest, ManifestEntry
@@ -137,6 +140,58 @@ def _rollback(*, project: str, created_ids: list[int]) -> list[str]:
     return rollback_failures
 
 
+def _check_db_not_locked(project: str) -> None:
+    """Pre-flight concurrency guard (inter-session message 20260819T114156Z-3ec7,
+    gap #2): refuse to start --write if another connection already holds a write
+    lock on the project's .db right now — e.g. a concurrent --write, or
+    pdata-verify-all's scheduled cadence firing against the same project — rather
+    than letting the first schema_add_field/add_record call inside the with-block
+    below block on db.py's passive 5s busy_timeout and eventually fail with
+    rows already mid-migration. Called as the very first thing inside write()'s
+    project_db_dir_override/backup_dir_override with-block so store.db_path()
+    resolves the rehearsal-sandboxed path when rehearsing, exactly like every
+    other db access in this function.
+
+    No-op if the project has no .db yet (a brand-new project's first --write) —
+    nothing to guard, and connecting would create one just to probe it.
+
+    The probe is a throwaway BEGIN IMMEDIATE / ROLLBACK on its own short-lived
+    connection, not a lock held across the rest of write() — this does not
+    protect against a second --write starting a few seconds *after* this check
+    passes (a TOCTOU race that is out of scope; the existing passive
+    busy_timeout is still the backstop for that narrower case). Its job is only
+    to catch the common case of something *already* actively using the .db,
+    immediately and with a clear message, instead of a raw sqlite3 error
+    surfacing minutes into the migration.
+
+    busy_timeout is overridden to 0 on this connection only — db.connect()'s
+    shared 5000ms default is exactly the passive wait this probe exists to
+    avoid; a probe that waits out the same timeout the mutation path already
+    relies on would defeat the point of checking up front. isolation_level is
+    set to None for the same reason repository.connect() sets it: so this
+    caller-issued BEGIN IMMEDIATE isn't wrapped in a second, implicit
+    transaction by sqlite3's own legacy transaction handling."""
+    db_path = store.db_path(project)
+    if not db_path.exists():
+        return
+    conn = db.connect(db_path)
+    conn.isolation_level = None
+    try:
+        conn.execute("PRAGMA busy_timeout=0")
+        try:
+            conn.execute("BEGIN IMMEDIATE")
+        except sqlite3.OperationalError as exc:
+            raise ValueError(
+                f"cannot start 'ccst pdata init --write' for project {project!r}: "
+                f"another process appears to be using {db_path} right now ({exc}) "
+                f"— wait for it to finish, or confirm it isn't stuck, then re-run --write"
+            ) from exc
+        else:
+            conn.execute("ROLLBACK")
+    finally:
+        conn.close()
+
+
 def write(
     *, project: str, rehearse: Path | None = None,
     on_progress: Callable[[str], None] | None = None,
@@ -171,6 +226,8 @@ def write(
         init_paths.project_db_dir_override(rehearse),
         init_paths.backup_dir_override(rehearse),
     ):
+        _check_db_not_locked(project)
+
         db_owned = [e for e in m.entries if e.classification == "db-owned"]
         _emit(on_progress, f"Importing {len(db_owned)} file(s)...")
         for entry in m.entries:

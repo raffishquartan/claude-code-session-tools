@@ -19,9 +19,11 @@ def test_ran_surfaced_job_appears() -> None:
     assert "1d overdue" in out
 
 
-def test_silent_success_is_omitted() -> None:
+def test_ran_completion_ignores_surface_flag() -> None:
+    """`surface` no longer gates a completed run's visibility - only
+    Outcome.LAUNCHED ("started") still respects it."""
     out = format_digest([_ran("quiet-job", surface=False)])
-    assert "quiet-job" not in out
+    assert "ran quiet-job" in out
 
 
 def test_failure_always_surfaces_even_when_silent() -> None:
@@ -84,6 +86,35 @@ def test_findings_surface_even_when_job_configured_silent() -> None:
 def test_ran_without_findings_unaffected() -> None:
     out = format_digest([_ran("tesco-shop-check")])
     assert "ran with findings" not in out
+
+
+def test_clean_run_output_renders_neutral_wording_not_findings() -> None:
+    r = JobReport(job_id="pdata-verify-all", outcome=Outcome.RAN, surface=True,
+                  overdue="", ran=1, deferred=0, expired=0, consecutive_failures=0,
+                  output="proj-a: OK (0 issue(s))\nproj-b: OK (0 issue(s))")
+    out = format_digest([r])
+    assert "✓ ran pdata-verify-all:" in out
+    assert "proj-a: OK (0 issue(s))" in out
+    assert "ran with findings" not in out
+
+
+def test_clean_run_output_is_a_single_line_group() -> None:
+    """No separate bare '✓ ran X' line followed by a second output block for
+    the same run - one run, one line-group."""
+    r = JobReport(job_id="pdata-verify-all", outcome=Outcome.RAN, surface=True,
+                  overdue="", ran=1, deferred=0, expired=0, consecutive_failures=0,
+                  output="proj-a: OK")
+    out = format_digest([r])
+    assert out.count("ran pdata-verify-all") == 1
+
+
+def test_clean_run_output_ignores_surface_flag() -> None:
+    r = JobReport(job_id="quiet-verify", outcome=Outcome.RAN, surface=False,
+                  overdue="", ran=1, deferred=0, expired=0, consecutive_failures=0,
+                  output="all good")
+    out = format_digest([r])
+    assert "quiet-verify" in out
+    assert "all good" in out
 
 
 def test_suspended_job_always_surfaces_even_when_silent() -> None:

@@ -36,3 +36,20 @@ def _clean_session_root_env(monkeypatch):
     monkeypatch.delenv("CLAUDE_SESSION_TOOLS_PROJ_ROOT", raising=False)
     monkeypatch.delenv("CCX_DEBUG", raising=False)
     monkeypatch.setenv("CCST_NO_AUTO_SYNC", "1")
+    # Never let a test reach the real Telegram API. `notify.send_telegram`'s
+    # `post` parameter defaults to a live HTTPS POST, and both it and every
+    # `notify_push`/`notify_suspended` caller default to the real
+    # `notify.push_outcome`/`notify.suspended` - so any test that exercises
+    # the scheduler worker without explicitly stubbing that callable would
+    # otherwise fall through to a genuine send on any machine with real
+    # credentials in the environment or ~/.creds (see incident: several
+    # pre-existing test_worker.py cases forgot to pass notify_push=, sending
+    # real pushes to a real phone on every `pytest` run on a dev machine with
+    # working creds). Deleting the env vars AND pointing CCCS_CREDS_PATH at a
+    # path that cannot exist makes `notify._credentials()` return None
+    # unconditionally, so `send_telegram` always short-circuits to `False`
+    # before ever calling `post` - a structural guarantee, not reliant on any
+    # individual test remembering to stub the poster.
+    monkeypatch.delenv("TELEGRAM_BOT_TOKEN", raising=False)
+    monkeypatch.delenv("TELEGRAM_CHAT_ID", raising=False)
+    monkeypatch.setenv("CCCS_CREDS_PATH", "/nonexistent/ccst-tests-must-not-read-real-creds")

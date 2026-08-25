@@ -11,6 +11,7 @@ from cc_session_tools import __version__
 from cc_session_tools.lib.scheduler import (
     cursor,
     ledger,
+    notify,
     reconcile,
     registry,
     state,
@@ -240,7 +241,9 @@ def _cmd_remove(job_id: str) -> int:
     return 0
 
 
-def _cmd_run(args: argparse.Namespace) -> int:
+def _cmd_run(
+    args: argparse.Namespace, *, notify_push: worker.NotifyPush = notify.push_outcome,
+) -> int:
     specs = {s.job_id: s for s in registry.load_registry()}
     spec: JobSpec | None = specs.get(args.id)
     if spec is None:
@@ -249,25 +252,22 @@ def _cmd_run(args: argparse.Namespace) -> int:
     now = datetime.now(timezone.utc)
     attempt_ts = state.format_ts(now)
     state.ensure_registered_db(spec.job_id, now)
-    crashed = outcome.timed_out or outcome.exit_code not in spec.success_exit_codes
-    if crashed:
+    # Manual runs always use record_manual_failure/record_success, not
+    # worker.py's suspend-threshold-aware record_failure - `ccsched run` never
+    # auto-suspends a job, unlike the scheduled `_run-job` path.
+    capture = worker.classify_outcome(spec, outcome, notify_push=notify_push)
+    if capture.crashed:
         new_consecutive = state.record_manual_failure(spec.job_id, attempt_ts=attempt_ts)
     else:
         state.record_success(spec.job_id, new_success=attempt_ts, attempt_ts=attempt_ts)
         new_consecutive = 0
-    findings = None
-    if not crashed and outcome.exit_code != 0:
-        findings = outcome.stdout.strip()[:1000] or None
     ledger.record(ledger.LedgerEntry(
-        job_id=spec.job_id,
-        event=ledger.LedgerEvent.FAIL if crashed else ledger.LedgerEvent.RUN,
-        owed=1, ran=0 if crashed else 1, exit_code=outcome.exit_code,
-        duration_ms=outcome.duration_ms,
-        error=(outcome.stderr.strip()[:200] or None) if crashed else findings,
-        consecutive_failures=new_consecutive if crashed else 0,
+        job_id=spec.job_id, event=capture.event, owed=1, ran=0 if capture.crashed else 1,
+        exit_code=outcome.exit_code, duration_ms=outcome.duration_ms, error=capture.detail,
+        consecutive_failures=new_consecutive if capture.crashed else 0,
     ))
-    print(f"{'failed' if crashed else 'ran'} {spec.job_id} (exit={outcome.exit_code})")
-    return 1 if crashed else 0
+    print(f"{'failed' if capture.crashed else 'ran'} {spec.job_id} (exit={outcome.exit_code})")
+    return 1 if capture.crashed else 0
 
 
 def _cmd_status(args: argparse.Namespace) -> int:

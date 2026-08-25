@@ -12,6 +12,7 @@ from cc_session_tools.lib.scheduler import registry as reg
 from cc_session_tools.lib.scheduler import state as st
 from cc_session_tools.lib.scheduler import store
 from cc_session_tools.lib.scheduler import worker as wk
+from cc_session_tools.lib.scheduler.digest import Outcome
 from cc_session_tools.lib.scheduler.jobspec import validate_job_fields
 from cc_session_tools.lib.scheduler.runner import RunOutcome
 
@@ -26,11 +27,11 @@ def _dirs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
 
 def _add(
     job_id: str, cadence: str = "daily@09:00", coalesce: str = "one",
-    success_exit_codes: tuple[int, ...] = (0,),
+    success_exit_codes: tuple[int, ...] = (0,), surface: bool = True,
 ) -> None:
     reg.add_job(validate_job_fields(
         job_id=job_id, cadence=cadence, coalesce=coalesce, command=["true"],
-        surface=True, enabled=True, catchup_window="30d", timeout="5s",
+        surface=surface, enabled=True, catchup_window="30d", timeout="5s",
         success_exit_codes=success_exit_codes,
     ))
 
@@ -172,9 +173,13 @@ def test_healthy_job_never_suspends(monkeypatch: pytest.MonkeyPatch) -> None:
     _add("tesco")
     _seed("tesco")
     notified: list[tuple[str, int]] = []
+
+    def fake_notify(job_id: str, n: int) -> bool:
+        notified.append((job_id, n))
+        return True
+
     now = datetime(2026, 6, 20, 10, 0, tzinfo=UTC)
-    wk.run_job("tesco", instants=1, now=now, runner=_ok_runner,
-               notify_suspended=lambda j, n: notified.append((j, n)) or True)
+    wk.run_job("tesco", instants=1, now=now, runner=_ok_runner, notify_suspended=fake_notify)
     after = st.load_all_state()["tesco"]
     assert after.suspended is False
     assert notified == []
@@ -241,6 +246,23 @@ def test_plain_zero_exit_records_no_findings(monkeypatch: pytest.MonkeyPatch) ->
     assert ld.read_recent(job_id="tesco")[-1]["error"] is None
 
 
+def test_clean_zero_exit_with_stdout_is_now_captured(monkeypatch: pytest.MonkeyPatch) -> None:
+    """§ correction: a 0-exit run's stdout used to be discarded entirely
+    (only a nonzero exit's stdout was captured as "findings"); now it is
+    captured exactly like the nonzero-exit case, so a verify-style job's
+    "all OK" confirmation is not silently thrown away."""
+    _add("verify")
+    _seed("verify")
+
+    def clean_runner(argv, timeout) -> RunOutcome:
+        return RunOutcome(exit_code=0, stdout="proj-a: OK (0 issue(s))", stderr="",
+                          duration_ms=1, timed_out=False)
+
+    now = datetime(2026, 6, 20, 10, 0, tzinfo=UTC)
+    wk.run_job("verify", instants=1, now=now, runner=clean_runner)
+    assert ld.read_recent(job_id="verify")[-1]["error"] == "proj-a: OK (0 issue(s))"
+
+
 def test_second_worker_exits_when_lock_held_by_live_pid(monkeypatch: pytest.MonkeyPatch) -> None:
     _add("busy")
     _seed("busy")
@@ -258,6 +280,249 @@ def test_second_worker_exits_when_lock_held_by_live_pid(monkeypatch: pytest.Monk
     wk.run_job("busy", instants=1, now=now, runner=runner)
     assert ran["n"] == 0  # lock held by a live holder → worker exited without running
     assert st.load_all_state()["busy"].last_success is None
+
+
+def test_successful_run_pushes_ran_outcome(monkeypatch: pytest.MonkeyPatch) -> None:
+    _add("tesco")
+    _seed("tesco")
+    pushed: list[tuple[str, Outcome, str | None]] = []
+
+    def fake_push(job_id: str, outcome: Outcome, detail: str | None = None) -> bool:
+        pushed.append((job_id, outcome, detail))
+        return True
+
+    now = datetime(2026, 6, 20, 10, 0, tzinfo=UTC)
+    wk.run_job("tesco", instants=1, now=now, runner=_ok_runner, notify_push=fake_push)
+    assert pushed == [("tesco", Outcome.RAN, None)]
+
+
+def test_successful_run_pushes_regardless_of_surface_flag(monkeypatch: pytest.MonkeyPatch) -> None:
+    """§ correction: `surface` no longer gates push (or digest) visibility
+    for a completed run - a --no-surface job still pushes on every clean
+    run."""
+    _add("quiet", surface=False)
+    _seed("quiet")
+    pushed: list[tuple[str, Outcome, str | None]] = []
+
+    def fake_push(job_id: str, outcome: Outcome, detail: str | None = None) -> bool:
+        pushed.append((job_id, outcome, detail))
+        return True
+
+    now = datetime(2026, 6, 20, 10, 0, tzinfo=UTC)
+    wk.run_job("quiet", instants=1, now=now, runner=_ok_runner, notify_push=fake_push)
+    assert pushed == [("quiet", Outcome.RAN, None)]
+
+
+def test_run_with_captured_output_pushes_with_detail(monkeypatch: pytest.MonkeyPatch) -> None:
+    _add("verify")
+    _seed("verify")
+
+    def clean_runner(argv, timeout) -> RunOutcome:
+        return RunOutcome(exit_code=0, stdout="all good", stderr="", duration_ms=1,
+                          timed_out=False)
+
+    pushed: list[tuple[str, Outcome, str | None]] = []
+
+    def fake_push(job_id: str, outcome: Outcome, detail: str | None = None) -> bool:
+        pushed.append((job_id, outcome, detail))
+        return True
+
+    now = datetime(2026, 6, 20, 10, 0, tzinfo=UTC)
+    wk.run_job("verify", instants=1, now=now, runner=clean_runner, notify_push=fake_push)
+    assert pushed == [("verify", Outcome.RAN, "all good")]
+
+
+def test_ordinary_failure_pushes_failed_outcome(monkeypatch: pytest.MonkeyPatch) -> None:
+    _add("cal")
+    _seed("cal")
+    pushed: list[tuple[str, Outcome, str | None]] = []
+
+    def fake_push(job_id: str, outcome: Outcome, detail: str | None = None) -> bool:
+        pushed.append((job_id, outcome, detail))
+        return True
+
+    now = datetime(2026, 6, 20, 10, 0, tzinfo=UTC)
+    wk.run_job("cal", instants=1, now=now, runner=_fail_runner, notify_push=fake_push)
+    assert pushed == [("cal", Outcome.FAILED, "boom")]
+
+
+def test_newly_suspended_does_not_also_push_failed(monkeypatch: pytest.MonkeyPatch) -> None:
+    """SUSPENDED already pushes via notify_suspended - a FAILED push for the
+    same crash would double-notify."""
+    _add("broken")
+    st.save_all_state({"broken": st.JobState(
+        registered_at="2026-06-17T09:00:00Z", last_success=None, last_attempt=None,
+        consecutive_failures=9, in_flight=None, suspended=False)})
+    pushed: list[tuple[str, Outcome, str | None]] = []
+
+    def fake_push(job_id: str, outcome: Outcome, detail: str | None = None) -> bool:
+        pushed.append((job_id, outcome, detail))
+        return True
+
+    now = datetime(2026, 6, 20, 10, 0, tzinfo=UTC)
+    wk.run_job("broken", instants=1, now=now, runner=_fail_runner,
+               notify_suspended=lambda j, n: True, notify_push=fake_push)
+    assert pushed == []
+
+
+def test_classify_outcome_success_captures_stdout_unconditionally_and_pushes() -> None:
+    spec = validate_job_fields(
+        job_id="verify", cadence="daily@09:00", coalesce="one", command=["true"],
+        surface=True, enabled=True, catchup_window="7d", timeout="5s",
+        success_exit_codes=(0,),
+    )
+    outcome = RunOutcome(exit_code=0, stdout="all good", stderr="", duration_ms=1, timed_out=False)
+    pushed: list[tuple[str, Outcome, str | None]] = []
+
+    def fake_push(job_id: str, outcome: Outcome, detail: str | None = None) -> bool:
+        pushed.append((job_id, outcome, detail))
+        return True
+
+    result = wk.classify_outcome(spec, outcome, notify_push=fake_push)
+    assert result.crashed is False
+    assert result.event == ld.LedgerEvent.RUN
+    assert result.detail == "all good"
+    assert pushed == [("verify", Outcome.RAN, "all good")]
+
+
+def test_classify_outcome_crash_captures_truncated_stderr_and_pushes() -> None:
+    """§ correction: the crash-path budget is now 500 chars (was 200) - a
+    300-char single-line stderr fits within it whole, unlike before."""
+    spec = validate_job_fields(
+        job_id="cal", cadence="daily@09:00", coalesce="one", command=["false"],
+        surface=True, enabled=True, catchup_window="7d", timeout="5s",
+        success_exit_codes=(0,),
+    )
+    outcome = RunOutcome(exit_code=1, stdout="", stderr="x" * 300, duration_ms=1, timed_out=False)
+    pushed: list[tuple[str, Outcome, str | None]] = []
+
+    def fake_push(job_id: str, outcome: Outcome, detail: str | None = None) -> bool:
+        pushed.append((job_id, outcome, detail))
+        return True
+
+    result = wk.classify_outcome(spec, outcome, notify_push=fake_push)
+    assert result.crashed is True
+    assert result.event == ld.LedgerEvent.FAIL
+    assert result.detail == "x" * 300
+    assert pushed == [("cal", Outcome.FAILED, "x" * 300)]
+
+
+def test_classify_outcome_crash_captures_the_tail_of_a_long_single_line_stderr() -> None:
+    """A single line (no newlines) longer than the budget has no line
+    boundary to cut on, so the tail slice is used as-is - still the last
+    `budget` characters, never the first."""
+    spec = validate_job_fields(
+        job_id="cal", cadence="daily@09:00", coalesce="one", command=["false"],
+        surface=True, enabled=True, catchup_window="7d", timeout="5s",
+        success_exit_codes=(0,),
+    )
+    outcome = RunOutcome(exit_code=1, stdout="", stderr="x" * 700, duration_ms=1, timed_out=False)
+    result = wk.classify_outcome(spec, outcome, notify_push=lambda *a, **k: True)
+    assert result.detail == "x" * 500
+
+
+def test_classify_outcome_crash_captures_tail_not_head_of_a_traceback() -> None:
+    """§ correction: the real bug behind the original env-var incident report
+    was never about those two vars specifically - it was that a Python
+    traceback's diagnostic line (the exception type + message) is its LAST
+    line, while the old `stderr[:200]` head-capture only ever reached the
+    "Traceback (most recent call last): File ..., line ..." boilerplate for
+    any traceback longer than ~200 characters. The captured detail must
+    include the final exception line and must not include the boilerplate
+    header - this must hold for ANY crash cause, not a specific exception
+    type."""
+    spec = validate_job_fields(
+        job_id="cal", cadence="daily@09:00", coalesce="one", command=["false"],
+        surface=True, enabled=True, catchup_window="7d", timeout="5s",
+        success_exit_codes=(0,),
+    )
+    frames = "\n".join(
+        f'  File "/some/long/path/to/a/module.py", line {n}, in some_function_{n}\n'
+        f"    result = do_the_thing_at_frame_{n}(argument_one, argument_two)"
+        for n in range(20)
+    )
+    traceback_text = (
+        "Traceback (most recent call last):\n"
+        f"{frames}\n"
+        "RootsConfigError: [CST-ROOTS-CONFIG-ERROR] CLAUDE_SESSION_TOOLS_REPO_ROOT is not set"
+    )
+    assert len(traceback_text) > 500  # must actually exercise the truncation path
+    outcome = RunOutcome(exit_code=1, stdout="", stderr=traceback_text, duration_ms=1, timed_out=False)
+    result = wk.classify_outcome(spec, outcome, notify_push=lambda *a, **k: True)
+    assert result.detail is not None
+    assert result.detail.endswith(
+        "RootsConfigError: [CST-ROOTS-CONFIG-ERROR] CLAUDE_SESSION_TOOLS_REPO_ROOT is not set"
+    )
+    assert "Traceback (most recent call last)" not in result.detail
+
+
+def test_classify_outcome_crash_captures_tail_of_plain_cli_error_line() -> None:
+    """Same tail-not-head fix, for a plain CLI tool (no traceback) whose last
+    line of output is its actual error - not Python-specific."""
+    spec = validate_job_fields(
+        job_id="cal", cadence="daily@09:00", coalesce="one", command=["false"],
+        surface=True, enabled=True, catchup_window="7d", timeout="5s",
+        success_exit_codes=(0,),
+    )
+    noise = "\n".join(f"processing item {n}..." for n in range(40))
+    stderr_text = f"{noise}\nERROR: could not connect to upstream after 3 attempts"
+    assert len(stderr_text) > 500
+    outcome = RunOutcome(exit_code=1, stdout="", stderr=stderr_text, duration_ms=1, timed_out=False)
+    result = wk.classify_outcome(spec, outcome, notify_push=lambda *a, **k: True)
+    assert result.detail is not None
+    assert result.detail.endswith("ERROR: could not connect to upstream after 3 attempts")
+
+
+def test_classify_outcome_timeout_with_no_stderr_falls_back_to_timed_out_text() -> None:
+    spec = validate_job_fields(
+        job_id="slow", cadence="daily@09:00", coalesce="one", command=["sleep", "10"],
+        surface=True, enabled=True, catchup_window="1s", timeout="1s",
+        success_exit_codes=(0,),
+    )
+    outcome = RunOutcome(exit_code=None, stdout="", stderr="", duration_ms=1000, timed_out=True)
+    result = wk.classify_outcome(spec, outcome, notify_push=lambda *a, **k: True)
+    assert result.crashed is True
+    assert result.detail == "timed out"
+
+
+def test_classify_outcome_push_false_suppresses_the_push() -> None:
+    spec = validate_job_fields(
+        job_id="broken", cadence="daily@09:00", coalesce="one", command=["false"],
+        surface=True, enabled=True, catchup_window="7d", timeout="5s",
+        success_exit_codes=(0,),
+    )
+    outcome = RunOutcome(exit_code=1, stdout="", stderr="boom", duration_ms=1, timed_out=False)
+    pushed: list[tuple[str, Outcome, str | None]] = []
+
+    def fake_push(job_id: str, outcome: Outcome, detail: str | None = None) -> bool:
+        pushed.append((job_id, outcome, detail))
+        return True
+
+    result = wk.classify_outcome(spec, outcome, notify_push=fake_push, push=False)
+    assert result.crashed is True
+    assert result.detail == "boom"
+    assert pushed == []
+
+
+def test_classify_outcome_zero_attempt_is_a_crash_with_no_detail() -> None:
+    """Mirrors `_run_body`'s zero-attempt edge case (a coalesce:each loop that
+    ran zero times) - `outcome=None` still classifies as crashed and still
+    pushes, with no detail to report."""
+    spec = validate_job_fields(
+        job_id="zero", cadence="daily@09:00", coalesce="each", command=["true"],
+        surface=True, enabled=True, catchup_window="7d", timeout="5s",
+        success_exit_codes=(0,),
+    )
+    pushed: list[tuple[str, Outcome, str | None]] = []
+
+    def fake_push(job_id: str, outcome: Outcome, detail: str | None = None) -> bool:
+        pushed.append((job_id, outcome, detail))
+        return True
+
+    result = wk.classify_outcome(spec, None, notify_push=fake_push)
+    assert result.crashed is True
+    assert result.detail is None
+    assert pushed == [("zero", Outcome.FAILED, None)]
 
 
 def test_lock_wraps_sql_state_mutations_r3(monkeypatch: pytest.MonkeyPatch) -> None:
