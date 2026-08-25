@@ -14,6 +14,7 @@ from __future__ import annotations
 import logging
 import os
 from collections.abc import Callable
+from dataclasses import dataclass
 from datetime import datetime, timedelta
 
 from cc_session_tools.lib.scheduler import ledger, notify, registry, state
@@ -56,6 +57,55 @@ def _record(spec: JobSpec, event: LedgerEvent, owed_n: int, ran: int,
     ))
 
 
+@dataclass(frozen=True, slots=True)
+class OutcomeCapture:
+    """Result of `classify_outcome` for one completed command run: whether it
+    crashed against `spec.success_exit_codes`, the ledger event a single,
+    uncoalesced attempt maps to (FAIL on crash, RUN on success — `_run_body`'s
+    coalesce/backfill loop may override a RUN to BACKFILL itself afterwards;
+    that decision needs owed/succeeded counts this function doesn't have, so
+    it's out of scope here), and the truncated text recorded to the ledger
+    and pushed — stderr on crash (200 chars, falling back to "timed out"
+    when empty), stdout on success (1000 chars, captured unconditionally so
+    a clean run's output still reaches the ledger/push, not just a nonzero
+    "found something" exit)."""
+    crashed: bool
+    event: LedgerEvent
+    detail: str | None
+
+
+def classify_outcome(
+    spec: JobSpec, outcome: RunOutcome | None, *,
+    notify_push: NotifyPush = notify.push_outcome, push: bool = True,
+) -> OutcomeCapture:
+    """Classify one completed run against `spec.success_exit_codes` and fire
+    `notify_push` with the matching Outcome/detail, unless `push=False`. The
+    single-attempt classification + capture + push shared by `_run_body`
+    (which passes `push=False` when a SUSPENDED push already covers the same
+    crash) and `ccsched.py`'s `_cmd_run` (which always pushes — a manual run
+    has no suspend/coalesce concept to guard against). `outcome` is
+    `RunOutcome | None` only to mirror `_run_body`'s zero-attempt edge case
+    (a coalesce:each loop that ran zero times); `_cmd_run` always has a
+    concrete outcome."""
+    crashed = (
+        outcome is None
+        or outcome.timed_out
+        or outcome.exit_code not in spec.success_exit_codes
+    )
+    if crashed:
+        detail = (outcome.stderr.strip()[:200] if outcome else None) or None
+        if detail is None and outcome is not None and outcome.timed_out:
+            detail = "timed out"
+        if push:
+            notify_push(spec.job_id, Outcome.FAILED, detail)
+        return OutcomeCapture(crashed=True, event=LedgerEvent.FAIL, detail=detail)
+    assert outcome is not None  # crashed is False only when an outcome exists
+    detail = outcome.stdout.strip()[:1000] or None
+    if push:
+        notify_push(spec.job_id, Outcome.RAN, detail)
+    return OutcomeCapture(crashed=False, event=LedgerEvent.RUN, detail=detail)
+
+
 def _run_body(
     spec: JobSpec, instants: int, now: datetime, runner: Runner,
     notify_suspended: NotifySuspended, notify_push: NotifyPush,
@@ -67,8 +117,8 @@ def _run_body(
     assert js is not None  # ensure_registered_db ran in run_job before the lock body
     baseline = state.parse_ts_or_none(js.last_success) or state.parse_ts_or_none(js.registered_at)
     assert baseline is not None
-    result = owed(cadence, baseline, now, catchup_window=window)
-    owed_n = len(result.instants)
+    owed_result = owed(cadence, baseline, now, catchup_window=window)
+    owed_n = len(owed_result.instants)
 
     runs = instants if spec.coalesce is CoalesceKind.EACH else 1
     last_outcome: RunOutcome | None = None
@@ -93,26 +143,23 @@ def _run_body(
         new_consecutive, _new_suspended, newly_suspended = state.record_failure(
             spec.job_id, attempt_ts=attempt_ts, threshold=DEFAULT_SUSPEND_THRESHOLD,
         )
-        error_text = (
-            (last_outcome.stderr.strip()[:200] if last_outcome else None)
-            or ("timed out" if last_outcome and last_outcome.timed_out else None)
+        # SUSPENDED already pushes via notify_suspended below - a FAILED push
+        # here too would double-notify for the same crash.
+        capture = classify_outcome(
+            spec, last_outcome, notify_push=notify_push, push=not newly_suspended,
         )
-        _record(spec, LedgerEvent.FAIL, owed_n, 0, last_outcome, error_text,
+        _record(spec, LedgerEvent.FAIL, owed_n, 0, last_outcome, capture.detail,
                 consecutive_failures=new_consecutive)
         if newly_suspended:
             notify_suspended(spec.job_id, new_consecutive)
             _record(spec, LedgerEvent.SUSPEND, owed_n, 0, None, None,
                     consecutive_failures=new_consecutive)
-        else:
-            # SUSPENDED already pushed above via notify_suspended - a FAILED
-            # push here too would double-notify for the same crash.
-            notify_push(spec.job_id, Outcome.FAILED, error_text)
         return
 
     if spec.coalesce is CoalesceKind.ONE:
         new_success = state.format_ts(now)
     else:
-        new_success = state.format_ts(result.instants[succeeded - 1])
+        new_success = state.format_ts(owed_result.instants[succeeded - 1])
     state.record_success(spec.job_id, new_success=new_success, attempt_ts=attempt_ts)
     event = LedgerEvent.RUN if owed_n <= 1 and succeeded == 1 else LedgerEvent.BACKFILL
     # Every successful run's stdout is captured into the ledger's error column
@@ -120,11 +167,8 @@ def _run_body(
     # has something to show beyond a bare checkmark when the command produced
     # output (see surface.py/digest.py, which render a clean vs a warning run
     # differently based on the ledger row's exit_code).
-    captured_output = (
-        last_outcome.stdout.strip()[:1000] or None if last_outcome is not None else None
-    )
-    _record(spec, event, owed_n, succeeded, last_outcome, captured_output)
-    notify_push(spec.job_id, Outcome.RAN, captured_output)
+    capture = classify_outcome(spec, last_outcome, notify_push=notify_push)
+    _record(spec, event, owed_n, succeeded, last_outcome, capture.detail)
 
 
 def run_job(
