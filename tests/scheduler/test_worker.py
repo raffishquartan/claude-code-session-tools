@@ -173,9 +173,13 @@ def test_healthy_job_never_suspends(monkeypatch: pytest.MonkeyPatch) -> None:
     _add("tesco")
     _seed("tesco")
     notified: list[tuple[str, int]] = []
+
+    def fake_notify(job_id: str, n: int) -> bool:
+        notified.append((job_id, n))
+        return True
+
     now = datetime(2026, 6, 20, 10, 0, tzinfo=UTC)
-    wk.run_job("tesco", instants=1, now=now, runner=_ok_runner,
-               notify_suspended=lambda j, n: notified.append((j, n)) or True)
+    wk.run_job("tesco", instants=1, now=now, runner=_ok_runner, notify_suspended=fake_notify)
     after = st.load_all_state()["tesco"]
     assert after.suspended is False
     assert notified == []
@@ -382,6 +386,8 @@ def test_classify_outcome_success_captures_stdout_unconditionally_and_pushes() -
 
 
 def test_classify_outcome_crash_captures_truncated_stderr_and_pushes() -> None:
+    """§ correction: the crash-path budget is now 500 chars (was 200) - a
+    300-char single-line stderr fits within it whole, unlike before."""
     spec = validate_job_fields(
         job_id="cal", cadence="daily@09:00", coalesce="one", command=["false"],
         surface=True, enabled=True, catchup_window="7d", timeout="5s",
@@ -397,8 +403,74 @@ def test_classify_outcome_crash_captures_truncated_stderr_and_pushes() -> None:
     result = wk.classify_outcome(spec, outcome, notify_push=fake_push)
     assert result.crashed is True
     assert result.event == ld.LedgerEvent.FAIL
-    assert result.detail == "x" * 200
-    assert pushed == [("cal", Outcome.FAILED, "x" * 200)]
+    assert result.detail == "x" * 300
+    assert pushed == [("cal", Outcome.FAILED, "x" * 300)]
+
+
+def test_classify_outcome_crash_captures_the_tail_of_a_long_single_line_stderr() -> None:
+    """A single line (no newlines) longer than the budget has no line
+    boundary to cut on, so the tail slice is used as-is - still the last
+    `budget` characters, never the first."""
+    spec = validate_job_fields(
+        job_id="cal", cadence="daily@09:00", coalesce="one", command=["false"],
+        surface=True, enabled=True, catchup_window="7d", timeout="5s",
+        success_exit_codes=(0,),
+    )
+    outcome = RunOutcome(exit_code=1, stdout="", stderr="x" * 700, duration_ms=1, timed_out=False)
+    result = wk.classify_outcome(spec, outcome, notify_push=lambda *a, **k: True)
+    assert result.detail == "x" * 500
+
+
+def test_classify_outcome_crash_captures_tail_not_head_of_a_traceback() -> None:
+    """§ correction: the real bug behind the original env-var incident report
+    was never about those two vars specifically - it was that a Python
+    traceback's diagnostic line (the exception type + message) is its LAST
+    line, while the old `stderr[:200]` head-capture only ever reached the
+    "Traceback (most recent call last): File ..., line ..." boilerplate for
+    any traceback longer than ~200 characters. The captured detail must
+    include the final exception line and must not include the boilerplate
+    header - this must hold for ANY crash cause, not a specific exception
+    type."""
+    spec = validate_job_fields(
+        job_id="cal", cadence="daily@09:00", coalesce="one", command=["false"],
+        surface=True, enabled=True, catchup_window="7d", timeout="5s",
+        success_exit_codes=(0,),
+    )
+    frames = "\n".join(
+        f'  File "/some/long/path/to/a/module.py", line {n}, in some_function_{n}\n'
+        f"    result = do_the_thing_at_frame_{n}(argument_one, argument_two)"
+        for n in range(20)
+    )
+    traceback_text = (
+        "Traceback (most recent call last):\n"
+        f"{frames}\n"
+        "RootsConfigError: [CST-ROOTS-CONFIG-ERROR] CLAUDE_SESSION_TOOLS_REPO_ROOT is not set"
+    )
+    assert len(traceback_text) > 500  # must actually exercise the truncation path
+    outcome = RunOutcome(exit_code=1, stdout="", stderr=traceback_text, duration_ms=1, timed_out=False)
+    result = wk.classify_outcome(spec, outcome, notify_push=lambda *a, **k: True)
+    assert result.detail is not None
+    assert result.detail.endswith(
+        "RootsConfigError: [CST-ROOTS-CONFIG-ERROR] CLAUDE_SESSION_TOOLS_REPO_ROOT is not set"
+    )
+    assert "Traceback (most recent call last)" not in result.detail
+
+
+def test_classify_outcome_crash_captures_tail_of_plain_cli_error_line() -> None:
+    """Same tail-not-head fix, for a plain CLI tool (no traceback) whose last
+    line of output is its actual error - not Python-specific."""
+    spec = validate_job_fields(
+        job_id="cal", cadence="daily@09:00", coalesce="one", command=["false"],
+        surface=True, enabled=True, catchup_window="7d", timeout="5s",
+        success_exit_codes=(0,),
+    )
+    noise = "\n".join(f"processing item {n}..." for n in range(40))
+    stderr_text = f"{noise}\nERROR: could not connect to upstream after 3 attempts"
+    assert len(stderr_text) > 500
+    outcome = RunOutcome(exit_code=1, stdout="", stderr=stderr_text, duration_ms=1, timed_out=False)
+    result = wk.classify_outcome(spec, outcome, notify_push=lambda *a, **k: True)
+    assert result.detail is not None
+    assert result.detail.endswith("ERROR: could not connect to upstream after 3 attempts")
 
 
 def test_classify_outcome_timeout_with_no_stderr_falls_back_to_timed_out_text() -> None:

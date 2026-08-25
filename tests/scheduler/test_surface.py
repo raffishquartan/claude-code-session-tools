@@ -343,6 +343,26 @@ def test_lookback_excludes_entries_older_than_the_window(
     assert result.reports == []
 
 
+def test_lookback_surfaces_a_fail_entry_that_predates_seeded_cursor(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """§ widen fix, FAIL variant: a job crash recorded before this brand-new
+    session's cursor was seeded must still surface via the same 24h lookback
+    mechanism that test_lookback_surfaces_entry_that_predates_seeded_cursor
+    proves for a RUN entry above - a FAIL must not be lost just because no
+    live session was open when the worker crashed."""
+    _add("cal")
+    recent_ts = (_NOW - timedelta(hours=2)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    _insert_catchup_row(
+        tmp_path, ts=recent_ts, job_id="cal", event="fail", ran=0, exit_code=1,
+        error="boom", consecutive_failures=1,
+    )
+    cursor.seed_new_session("s1")
+    result = sf.surface(session_uuid="s1", now=_NOW, lookback=timedelta(hours=24))
+    fail_reports = [r for r in result.reports if r.job_id == "cal" and r.outcome is Outcome.FAILED]
+    assert len(fail_reports) == 1
+
+
 def test_lookback_does_not_duplicate_entries_within_one_call(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
