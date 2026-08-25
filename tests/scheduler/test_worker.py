@@ -361,6 +361,98 @@ def test_newly_suspended_does_not_also_push_failed(monkeypatch: pytest.MonkeyPat
     assert pushed == []
 
 
+def test_classify_outcome_success_captures_stdout_unconditionally_and_pushes() -> None:
+    spec = validate_job_fields(
+        job_id="verify", cadence="daily@09:00", coalesce="one", command=["true"],
+        surface=True, enabled=True, catchup_window="7d", timeout="5s",
+        success_exit_codes=(0,),
+    )
+    outcome = RunOutcome(exit_code=0, stdout="all good", stderr="", duration_ms=1, timed_out=False)
+    pushed: list[tuple[str, Outcome, str | None]] = []
+
+    def fake_push(job_id: str, outcome: Outcome, detail: str | None = None) -> bool:
+        pushed.append((job_id, outcome, detail))
+        return True
+
+    result = wk.classify_outcome(spec, outcome, notify_push=fake_push)
+    assert result.crashed is False
+    assert result.event == ld.LedgerEvent.RUN
+    assert result.detail == "all good"
+    assert pushed == [("verify", Outcome.RAN, "all good")]
+
+
+def test_classify_outcome_crash_captures_truncated_stderr_and_pushes() -> None:
+    spec = validate_job_fields(
+        job_id="cal", cadence="daily@09:00", coalesce="one", command=["false"],
+        surface=True, enabled=True, catchup_window="7d", timeout="5s",
+        success_exit_codes=(0,),
+    )
+    outcome = RunOutcome(exit_code=1, stdout="", stderr="x" * 300, duration_ms=1, timed_out=False)
+    pushed: list[tuple[str, Outcome, str | None]] = []
+
+    def fake_push(job_id: str, outcome: Outcome, detail: str | None = None) -> bool:
+        pushed.append((job_id, outcome, detail))
+        return True
+
+    result = wk.classify_outcome(spec, outcome, notify_push=fake_push)
+    assert result.crashed is True
+    assert result.event == ld.LedgerEvent.FAIL
+    assert result.detail == "x" * 200
+    assert pushed == [("cal", Outcome.FAILED, "x" * 200)]
+
+
+def test_classify_outcome_timeout_with_no_stderr_falls_back_to_timed_out_text() -> None:
+    spec = validate_job_fields(
+        job_id="slow", cadence="daily@09:00", coalesce="one", command=["sleep", "10"],
+        surface=True, enabled=True, catchup_window="1s", timeout="1s",
+        success_exit_codes=(0,),
+    )
+    outcome = RunOutcome(exit_code=None, stdout="", stderr="", duration_ms=1000, timed_out=True)
+    result = wk.classify_outcome(spec, outcome, notify_push=lambda *a, **k: True)
+    assert result.crashed is True
+    assert result.detail == "timed out"
+
+
+def test_classify_outcome_push_false_suppresses_the_push() -> None:
+    spec = validate_job_fields(
+        job_id="broken", cadence="daily@09:00", coalesce="one", command=["false"],
+        surface=True, enabled=True, catchup_window="7d", timeout="5s",
+        success_exit_codes=(0,),
+    )
+    outcome = RunOutcome(exit_code=1, stdout="", stderr="boom", duration_ms=1, timed_out=False)
+    pushed: list[tuple[str, Outcome, str | None]] = []
+
+    def fake_push(job_id: str, outcome: Outcome, detail: str | None = None) -> bool:
+        pushed.append((job_id, outcome, detail))
+        return True
+
+    result = wk.classify_outcome(spec, outcome, notify_push=fake_push, push=False)
+    assert result.crashed is True
+    assert result.detail == "boom"
+    assert pushed == []
+
+
+def test_classify_outcome_zero_attempt_is_a_crash_with_no_detail() -> None:
+    """Mirrors `_run_body`'s zero-attempt edge case (a coalesce:each loop that
+    ran zero times) - `outcome=None` still classifies as crashed and still
+    pushes, with no detail to report."""
+    spec = validate_job_fields(
+        job_id="zero", cadence="daily@09:00", coalesce="each", command=["true"],
+        surface=True, enabled=True, catchup_window="7d", timeout="5s",
+        success_exit_codes=(0,),
+    )
+    pushed: list[tuple[str, Outcome, str | None]] = []
+
+    def fake_push(job_id: str, outcome: Outcome, detail: str | None = None) -> bool:
+        pushed.append((job_id, outcome, detail))
+        return True
+
+    result = wk.classify_outcome(spec, None, notify_push=fake_push)
+    assert result.crashed is True
+    assert result.detail is None
+    assert pushed == [("zero", Outcome.FAILED, None)]
+
+
 def test_lock_wraps_sql_state_mutations_r3(monkeypatch: pytest.MonkeyPatch) -> None:
     """R3: the file-based in-flight lock still wraps the (now SQL) state writes.
     A live lock holder means the worker exits without touching state at all."""

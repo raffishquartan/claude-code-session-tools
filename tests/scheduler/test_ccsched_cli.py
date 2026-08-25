@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import argparse
 import os
 import subprocess
 import sys
@@ -7,7 +8,11 @@ from pathlib import Path
 
 import pytest
 
+from cc_session_tools.cli import ccsched
+from cc_session_tools.lib.scheduler import registry as reg
 from cc_session_tools.lib.scheduler import state as st
+from cc_session_tools.lib.scheduler.digest import Outcome
+from cc_session_tools.lib.scheduler.jobspec import validate_job_fields
 
 
 def _run(args: list[str], sched_dir: Path, hooks_dir: Path) -> subprocess.CompletedProcess[str]:
@@ -185,6 +190,82 @@ def test_run_records_ledger(tmp_path: Path) -> None:
     res = _run(["run", "tesco"], sched, hooks)
     assert res.returncode == 0
     assert (hooks / "telemetry.db").is_file()
+
+
+def _add_direct(
+    job_id: str, command: list[str], success_exit_codes: tuple[int, ...] = (0,),
+) -> None:
+    """Register a job in-process (not via subprocess) so `_cmd_run` can be
+    called directly with an injected `notify_push`, matching test_worker.py's
+    convention for exercising push behaviour without a real Telegram send."""
+    reg.add_job(validate_job_fields(
+        job_id=job_id, cadence="daily@09:00", coalesce="one", command=command,
+        surface=True, enabled=True, catchup_window="7d", timeout="5s",
+        success_exit_codes=success_exit_codes,
+    ))
+
+
+def test_cmd_run_pushes_ran_outcome_with_stdout_captured_unconditionally(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """§ parity fix: a clean 0-exit `ccsched run` must push RAN with its
+    stdout captured unconditionally, same as the worker's `_run_body` -
+    previously `_cmd_run` only captured stdout when exit_code != 0 and never
+    pushed at all."""
+    sched, hooks = _dirs(tmp_path)
+    monkeypatch.setenv("CC_SCHEDULER_DIR", str(sched))
+    monkeypatch.setenv("CCCS_HOOKS_DIR", str(hooks))
+    _add_direct("verify", ["sh", "-c", "printf 'all good'"])
+    pushed: list[tuple[str, Outcome, str | None]] = []
+
+    def fake_push(job_id: str, outcome: Outcome, detail: str | None = None) -> bool:
+        pushed.append((job_id, outcome, detail))
+        return True
+
+    rc = ccsched._cmd_run(argparse.Namespace(id="verify"), notify_push=fake_push)
+    assert rc == 0
+    assert pushed == [("verify", Outcome.RAN, "all good")]
+    assert st.load_all_state()["verify"].last_success is not None
+
+
+def test_cmd_run_pushes_failed_outcome_with_captured_stderr(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sched, hooks = _dirs(tmp_path)
+    monkeypatch.setenv("CC_SCHEDULER_DIR", str(sched))
+    monkeypatch.setenv("CCCS_HOOKS_DIR", str(hooks))
+    _add_direct("cal", ["sh", "-c", "echo boom 1>&2; exit 1"])
+    pushed: list[tuple[str, Outcome, str | None]] = []
+
+    def fake_push(job_id: str, outcome: Outcome, detail: str | None = None) -> bool:
+        pushed.append((job_id, outcome, detail))
+        return True
+
+    rc = ccsched._cmd_run(argparse.Namespace(id="cal"), notify_push=fake_push)
+    assert rc == 1
+    assert pushed == [("cal", Outcome.FAILED, "boom")]
+
+
+def test_cmd_run_manual_failure_never_auto_suspends_despite_now_pushing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Manual runs stay on `state.record_manual_failure` - no suspend-
+    threshold accounting - even though `_cmd_run` now also pushes, matching
+    `_run_body`'s push behaviour but not its suspend semantics."""
+    sched, hooks = _dirs(tmp_path)
+    monkeypatch.setenv("CC_SCHEDULER_DIR", str(sched))
+    monkeypatch.setenv("CCCS_HOOKS_DIR", str(hooks))
+    _add_direct("flaky", ["false"])
+    st.save_all_state({"flaky": st.JobState(
+        registered_at="2026-01-01T00:00:00Z", last_success=None, last_attempt=None,
+        consecutive_failures=9, in_flight=None, suspended=False)})
+
+    rc = ccsched._cmd_run(argparse.Namespace(id="flaky"), notify_push=lambda *a, **k: True)
+
+    assert rc == 1
+    after = st.load_all_state()["flaky"]
+    assert after.consecutive_failures == 10
+    assert after.suspended is False  # manual run never auto-suspends
 
 
 def test_status_empty_ok(tmp_path: Path) -> None:
