@@ -1332,7 +1332,16 @@ def _cmd_pdata_verify(args: argparse.Namespace) -> int:
         print("ccst pdata verify: no project databases found", file=sys.stderr)
         return 2
 
+    # --all-projects without --verbose collapses the per-project listing to
+    # one summary line - with N projects, a line each (even when every one
+    # is clean) was the "very long" default output a daily unattended job
+    # printed into every catch-up digest. --project already prints just one
+    # project's worth, which isn't that problem, so the split only applies
+    # to --all-projects; a single --project run always gets full detail.
+    compact = args.all_projects and not args.verbose
+
     worst = 0
+    flagged: list[str] = []
     for project in projects:
         try:
             summary = verify.run_verify(project=project, full=args.full)
@@ -1340,11 +1349,24 @@ def _cmd_pdata_verify(args: argparse.Namespace) -> int:
             print(f"ccst pdata verify: {project}: {exc}", file=sys.stderr)
             worst = max(worst, 2)
             continue
+        if summary.status != "OK":
+            worst = max(worst, 1)
+            flagged.append(project)
+        if compact:
+            continue
         print(f"{project}: {summary.status} ({len(summary.issues)} issue(s))")
         for issue in summary.issues:
             print(f"  [{issue.severity}] {issue.check}: {issue.message}")
-        if summary.status != "OK":
-            worst = max(worst, 1)
+
+    if compact:
+        if flagged:
+            print(
+                f"ccst pdata verify --all-projects: ISSUES in {len(flagged)} of "
+                f"{len(projects)} project(s) - run 'ccst pdata verify --all-projects "
+                f"--verbose' for details"
+            )
+        else:
+            print(f"ccst pdata verify --all-projects: OK ({len(projects)} project(s), 0 issue(s))")
     return worst
 
 
@@ -2346,6 +2368,11 @@ def _build_parser() -> argparse.ArgumentParser:
     pdata_verify_parser.add_argument(
         "--full", action="store_true",
         help="Rescan every row instead of only rows changed since the last run",
+    )
+    pdata_verify_parser.add_argument(
+        "--verbose", action="store_true",
+        help="With --all-projects, print the full per-project listing instead of "
+             "the default one-line summary (--project always prints full detail)",
     )
 
     # ---- sessions ----

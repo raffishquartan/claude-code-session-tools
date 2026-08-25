@@ -105,6 +105,35 @@ def test_surface_emits_digest_from_ledger_since_cursor_and_advances(
     assert all("tesco" not in e for e in out2)
 
 
+def test_hook_mode_skips_reconcile_and_surface_entirely(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A `claude -p` sub-session spawned by bash_security_review.py sets
+    CLD_SESSION_MODE=hook (see bash_security_review.py:231). Nobody ever reads
+    that sub-session's own catch-up digest - its SessionStart hook must not
+    reconcile (launch jobs) or surface (read the ledger) at all, so it stops
+    generating throwaway cursor/reconcile-throttle rows for output no one
+    will see."""
+    registry.add_job(validate_job_fields(
+        job_id="tesco", cadence="daily@09:00", coalesce="one", command=["true"],
+        surface=True, enabled=True, catchup_window="30d", timeout="5s",
+    ))
+    # A registered_at 3 days in the past means this job is definitely owed a
+    # run right now - proving the guard, not an accidental "nothing owed yet".
+    state.save_all_state({"tesco": state.JobState(
+        registered_at="2026-06-17T09:00:00Z", last_success=None,
+        last_attempt=None, consecutive_failures=0, in_flight=None)})
+    monkeypatch.setenv("CLD_SESSION_MODE", "hook")
+    monkeypatch.setattr(catchup, "_now", lambda: datetime(2026, 6, 20, 10, 0, tzinfo=timezone.utc))
+    spawn = _Spawn()
+    monkeypatch.setattr(reconcile, "spawn_detached", spawn)
+    _stdin(monkeypatch, {"hook_event_name": "SessionStart", "session_id": "u", "cwd": "/tmp"})
+    out = _capture(monkeypatch)
+    assert catchup.main() == 0
+    assert out == [""]
+    assert spawn.calls == []
+
+
 def test_hook_emits_empty_on_bad_stdin(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("sys.stdin", io.StringIO("not json"))
     out = _capture(monkeypatch)

@@ -99,6 +99,34 @@ def test_backfill_completion_ignores_surface_flag(monkeypatch: pytest.MonkeyPatc
     assert "quiet" in format_digest(result.reports)
 
 
+def test_backfill_with_captured_output_surfaces_it(monkeypatch: pytest.MonkeyPatch) -> None:
+    """§ backfill-output fix: a BACKFILL run (>1 missed interval caught up in
+    one attempt - the exact 'machine was off' scenario ccsched exists for)
+    must surface its captured stdout the same way a plain RUN does, not drop
+    it - see worker.py's _run_body, which always captures stdout regardless
+    of RUN vs BACKFILL classification."""
+    _add("verify", surface=True)
+    ld.record(ld.LedgerEntry(job_id="verify", event=ld.LedgerEvent.BACKFILL, owed=3,
+                             ran=3, exit_code=0, duration_ms=1, error="proj-a: OK"))
+    result = sf.surface(session_uuid="s1", now=_NOW)
+    rep = next(r for r in result.reports if r.job_id == "verify")
+    assert rep.outcome is Outcome.RAN
+    assert rep.output == "proj-a: OK"
+    assert rep.findings is None
+    assert "proj-a: OK" in format_digest(result.reports)
+
+
+def test_backfill_with_findings_surfaces_as_findings(monkeypatch: pytest.MonkeyPatch) -> None:
+    _add("drift", surface=True)
+    ld.record(ld.LedgerEntry(job_id="drift", event=ld.LedgerEvent.BACKFILL, owed=3,
+                             ran=3, exit_code=1, duration_ms=1, error="WARN: drifted"))
+    result = sf.surface(session_uuid="s1", now=_NOW)
+    rep = next(r for r in result.reports if r.job_id == "drift")
+    assert rep.outcome is Outcome.RAN
+    assert rep.findings == "WARN: drifted"
+    assert rep.output is None
+
+
 def test_launch_still_respects_surface_flag(monkeypatch: pytest.MonkeyPatch) -> None:
     """LAUNCHED "started" notices are the one outcome the surface flag still
     gates - unaffected by the RAN/BACKFILL always-visible change above."""
@@ -300,6 +328,70 @@ def test_many_stale_routine_entries_and_one_recent_failure_coexist(
     assert len(fail_reports) == 1
     assert fail_reports[0].job_id == "cal"
     assert fail_reports[0].age == "1h ago"
+
+
+# --- Same-job coalescing + chronological order fix ---------------------------
+
+
+def test_repeated_launch_and_run_for_same_job_coalesce_to_one_line_each(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Regression for the reported symptom: a fast-cadence job that gets
+    reconciled by several short-lived sessions within one hour must not
+    replay as N near-identical '✓ ran'/'▶ launched' lines - each event type
+    coalesces to one line per job, carrying a count."""
+    _add("no-op", surface=True)
+    base = _NOW - timedelta(hours=1)
+    for n in range(3):
+        _insert_catchup_row(
+            tmp_path, ts=(base + timedelta(minutes=20 * n)).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            job_id="no-op", event="launch",
+        )
+        _insert_catchup_row(
+            tmp_path, ts=(base + timedelta(minutes=20 * n + 1)).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            job_id="no-op", event="run", ran=1, exit_code=0,
+        )
+    result = sf.surface(session_uuid="s1", now=_NOW)
+    launched = [r for r in result.reports if r.outcome is Outcome.LAUNCHED]
+    ran = [r for r in result.reports if r.outcome is Outcome.RAN]
+    assert len(launched) == 1
+    assert launched[0].count == 3
+    assert len(ran) == 1
+    assert ran[0].count == 3
+    assert len(result.reports) == 2
+    # Chronological: the last RUN (base+41m) happened after the last LAUNCH
+    # (base+40m), so the coalesced RAN line sorts after the coalesced
+    # LAUNCHED line, matching real chronological order rather than the
+    # (bare-vs-output-bearing) branch each event happened to take.
+    assert result.reports.index(launched[0]) < result.reports.index(ran[0])
+
+
+def test_events_from_different_branches_sort_chronologically(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A FAIL (always individual) and a bare LAUNCH (routine bucket) mixed in
+    one sweep must render in the order they actually happened, not in the
+    order surface()'s internal branches happen to process them."""
+    _add("flaky", surface=True)
+    _add("no-op", surface=True)
+    t1 = (_NOW - timedelta(minutes=30)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    t2 = (_NOW - timedelta(minutes=20)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    t3 = (_NOW - timedelta(minutes=10)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    _insert_catchup_row(tmp_path, ts=t1, job_id="no-op", event="launch")
+    _insert_catchup_row(
+        tmp_path, ts=t2, job_id="flaky", event="fail", ran=0, exit_code=1,
+        error="boom", consecutive_failures=1,
+    )
+    _insert_catchup_row(
+        tmp_path, ts=t3, job_id="no-op", event="run", ran=1, exit_code=0, error="did a thing",
+    )
+    result = sf.surface(session_uuid="s1", now=_NOW)
+    order = [(r.job_id, r.outcome) for r in result.reports]
+    assert order == [
+        ("no-op", Outcome.LAUNCHED),
+        ("flaky", Outcome.FAILED),
+        ("no-op", Outcome.RAN),
+    ]
 
 
 # --- SessionStart 24h rolling lookback ---------------------------------------

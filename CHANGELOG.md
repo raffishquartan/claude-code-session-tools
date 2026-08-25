@@ -7,6 +7,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.10.0] - 2026-08-25
+
+### Added
+
+- `ccst pdata verify --all-projects` gains `--verbose`. Without it, `--all-projects` now
+  prints one summary line - a clean confirmation, or an "ISSUES in N of M project(s)"
+  flag naming `--verbose` for detail - instead of a line per project even when every one
+  is clean. This was the "very long" default output the scheduled `pdata-verify-all` job
+  printed into every catch-up digest; `--project` (already just one project's worth) and
+  `--all-projects --verbose` are unaffected, still full per-project detail.
+
+### Fixed
+
+- **A `claude -p` sub-session spawned by `bash_security_review.py` to review one Bash
+  command no longer reconciles or surfaces scheduled jobs at all.** Every risky Bash
+  command fired its own SessionStart hook in a headless sub-session nobody ever reads the
+  catch-up digest of - the dominant source of throwaway reconcile-throttle/cursor rows.
+  `catchup.py` now short-circuits on the `CLD_SESSION_MODE=hook` env var those
+  sub-sessions already carry, before touching the ledger or registry.
+- **The catch-up digest now reads chronologically, coalesces repeated same-job lines, and
+  surfaces `BACKFILL` output.** `surface()` previously built its report list in two
+  disconnected passes - FAIL/RUN-with-output/BACKFILL/SUSPEND in ledger order, every bare
+  LAUNCH/RUN deferred to a block appended after - so a digest mixing event types never
+  actually read in the order things happened; every report now carries a sort timestamp
+  and the full list sorts once before return. A job reconciled by several short-lived
+  sessions within one sweep (e.g. the bash-security-review sub-sessions above, before
+  their own fix landed) replayed as N near-identical "ran"/"launched" lines; same-job/
+  same-kind entries below the existing summary-fold threshold now coalesce into one line
+  carrying a "×N (most recently ...)" count. `BACKFILL` (>1 missed interval caught up in
+  one attempt) never read the ledger's captured stdout, only plain `RUN` did, despite
+  `worker.py` capturing it identically for both - `BACKFILL` now shares `RUN`'s
+  output/findings handling. Every `RAN`/`LAUNCHED` line also carries a relative-age suffix
+  when known, so a result read back from an earlier run is never mistaken for something
+  that just happened next to a fresh launch of the same job.
+
 ## [2.9.0] - 2026-08-25
 
 ### Added

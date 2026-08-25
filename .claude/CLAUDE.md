@@ -114,6 +114,10 @@ conventional commit prefixes: `feat:`, `fix:`, `ci:`, `docs:`, `build:`,
 
 ## Releasing
 
+When bumping `pyproject.toml`'s `version`, run `uv lock` and commit the regenerated
+`uv.lock` in the same commit — its own `cc-session-tools` self-entry mirrors that version
+and is otherwise left stale until the next unrelated `uv run` silently regenerates it.
+
 See `.github/workflows/release.yml`. Before the first release, configure a PyPI
 Trusted Publisher at pypi.org → Account Settings → Publishing:
 

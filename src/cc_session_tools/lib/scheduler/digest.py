@@ -74,10 +74,15 @@ def _line(report: JobReport) -> str | None:
         # A completed run is always shown, regardless of `surface` - unlike
         # LAUNCHED below, "it ran" is never something a job can silence.
         overdue = f" ({report.overdue} overdue)" if report.overdue else ""
+        # Every RAN variant below carries this same age suffix (when set) so a
+        # result read back from an earlier run is never mistaken for something
+        # that just happened - e.g. sitting next to a fresh LAUNCHED line for
+        # the same job from this same sweep.
+        age_suffix = f", {report.age}" if report.age else ""
         if report.findings:
             # Bypasses the surface gate deliberately, same as FAILED/SUSPENDED
             # above: findings are signal, not routine noise a job can silence.
-            header = f"⚠ {report.job_id} ran with findings{overdue}:"
+            header = f"⚠ {report.job_id} ran with findings{overdue}{age_suffix}:"
             body = "\n".join(f"  {line}" for line in report.findings.splitlines())
             return f"{header}\n{body}"
         if report.output:
@@ -85,10 +90,18 @@ def _line(report: JobReport) -> str | None:
             # distinct from the findings/warning case above so a passing check
             # is never mistaken for one that found something. One line-group:
             # never falls through to the bare "✓ ran" case below.
-            header = f"✓ ran {report.job_id}{overdue}:"
+            header = f"✓ ran {report.job_id}{overdue}{age_suffix}:"
             body = "\n".join(f"  {line}" for line in report.output.splitlines())
             return f"{header}\n{body}"
-        base = f"✓ ran {report.job_id}{overdue}"
+        if report.count > 1:
+            # Several unremarkable runs of the same job coalesced within one
+            # sweep (§ coalesce fix) - one line with a count, not N
+            # near-identical bare ticks. Only bare (no output/findings) runs
+            # are ever coalesced - see surface.py - so this never competes
+            # with the findings/output branches above.
+            recency = f" (most recently {report.age})" if report.age else ""
+            return f"✓ ran {report.job_id} ×{report.count}{recency}"
+        base = f"✓ ran {report.job_id}{overdue}{age_suffix}"
         if report.deferred:
             base += f"\n⏳ {report.job_id}: {report.deferred} backfills deferred"
         if report.expired:
@@ -99,7 +112,13 @@ def _line(report: JobReport) -> str | None:
     # "it ran", so it is the one outcome that still respects `surface`.
     if not report.surface:
         return None
-    return f"▶ launched {report.job_id} (running in background)"
+    if report.count > 1:
+        # Several launches of the same job coalesced within one sweep (§
+        # coalesce fix) - see the matching RAN branch above.
+        recency = f" (most recently {report.age})" if report.age else ""
+        return f"▶ launched {report.job_id} ×{report.count}{recency}"
+    age_suffix = f", {report.age}" if report.age else ""
+    return f"▶ launched {report.job_id} (running in background){age_suffix}"
 
 
 def format_digest(reports: list[JobReport], *, parse_error: str | None = None) -> str:

@@ -117,6 +117,88 @@ def test_clean_run_output_ignores_surface_flag() -> None:
     assert "all good" in out
 
 
+def test_ran_line_carries_age_suffix_when_set() -> None:
+    """A completed run's age must be visible so a cached/stale result (read
+    back from an earlier run) is never mistaken for something that just
+    happened - e.g. right next to a fresh '▶ launched' line for the same job
+    from this same sweep."""
+    r = JobReport(job_id="pdata-verify-all", outcome=Outcome.RAN, surface=True,
+                  overdue="", ran=1, deferred=0, expired=0, consecutive_failures=0,
+                  age="3h ago")
+    out = format_digest([r])
+    assert "3h ago" in out
+
+
+def test_ran_line_without_age_is_unaffected() -> None:
+    """No age set (the pre-existing default) must render byte-identical to
+    before this field existed - no stray suffix text."""
+    out = format_digest([_ran("tesco-shop-check")])
+    assert "ago" not in out
+
+
+def test_ran_with_output_line_carries_age_suffix() -> None:
+    r = JobReport(job_id="pdata-verify-all", outcome=Outcome.RAN, surface=True,
+                  overdue="", ran=1, deferred=0, expired=0, consecutive_failures=0,
+                  output="proj-a: OK", age="3h ago")
+    out = format_digest([r])
+    assert "3h ago" in out
+    assert out.count("ran pdata-verify-all") == 1  # still one line-group, not two
+
+
+def test_findings_line_carries_age_suffix() -> None:
+    r = JobReport(job_id="drift", outcome=Outcome.RAN, surface=True, overdue="",
+                  ran=1, deferred=0, expired=0, consecutive_failures=0,
+                  findings="WARN drifted", age="45m ago")
+    out = format_digest([r])
+    assert "45m ago" in out
+
+
+def test_launched_line_carries_age_suffix_when_set() -> None:
+    r = JobReport(job_id="calendar-sync", outcome=Outcome.LAUNCHED, surface=True,
+                  overdue="", ran=0, deferred=0, expired=0, consecutive_failures=0,
+                  age="just now")
+    out = format_digest([r])
+    assert "just now" in out
+
+
+def test_launched_line_without_age_is_unaffected() -> None:
+    out = format_digest([JobReport(
+        job_id="calendar-sync", outcome=Outcome.LAUNCHED, surface=True,
+        overdue="", ran=0, deferred=0, expired=0, consecutive_failures=0,
+    )])
+    assert out == "[cc-scheduler] scheduled-task catch-up:\n▶ launched calendar-sync (running in background)"
+
+
+def test_coalesced_bare_run_shows_count_and_age_not_n_lines() -> None:
+    """Same job running several times unremarkably within one sweep (e.g. an
+    hourly no-op job across several short-lived sessions) must render as one
+    line with a count, not N near-identical bare ticks."""
+    r = JobReport(job_id="ccsched-no-op-demoing-job-visibility", outcome=Outcome.RAN,
+                  surface=True, overdue="", ran=1, deferred=0, expired=0,
+                  consecutive_failures=0, age="10m ago", count=3)
+    out = format_digest([r])
+    assert out.count("ccsched-no-op-demoing-job-visibility") == 1
+    assert "×3" in out
+    assert "10m ago" in out
+
+
+def test_coalesced_launch_shows_count_and_age_not_n_lines() -> None:
+    r = JobReport(job_id="ccsched-no-op-demoing-job-visibility", outcome=Outcome.LAUNCHED,
+                  surface=True, overdue="", ran=0, deferred=0, expired=0,
+                  consecutive_failures=0, age="10m ago", count=3)
+    out = format_digest([r])
+    assert out.count("ccsched-no-op-demoing-job-visibility") == 1
+    assert "×3" in out
+    assert "10m ago" in out
+
+
+def test_uncoalesced_run_has_no_count_suffix() -> None:
+    """count defaults to 0 (the pre-existing shape) - a single ordinary run
+    must not grow a '×1' suffix."""
+    out = format_digest([_ran("tesco-shop-check")])
+    assert "×" not in out
+
+
 def test_suspended_job_always_surfaces_even_when_silent() -> None:
     r = JobReport(job_id="broken-job", outcome=Outcome.SUSPENDED, surface=False,
                   overdue="", ran=0, deferred=0, expired=0, consecutive_failures=10)
