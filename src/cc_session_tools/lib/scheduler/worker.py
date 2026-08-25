@@ -8,7 +8,10 @@ outcome to the ledger, and ALWAYS clears in_flight + releases the lock.
 Also pushes every FAILED/RAN outcome via `notify.push_outcome` (§ visibility
 fix) at the same points it records the ledger event — a SUSPEND still pushes
 only via the existing `notify.suspended()` call, never doubled up with a
-FAILED push for the same crash."""
+FAILED push for the same crash.
+
+`classify_outcome`'s crash-path detail is captured from the TAIL of stderr,
+not the head — see its docstring/`_crash_detail` for why."""
 from __future__ import annotations
 
 import logging
@@ -65,13 +68,51 @@ class OutcomeCapture:
     coalesce/backfill loop may override a RUN to BACKFILL itself afterwards;
     that decision needs owed/succeeded counts this function doesn't have, so
     it's out of scope here), and the truncated text recorded to the ledger
-    and pushed — stderr on crash (200 chars, falling back to "timed out"
-    when empty), stdout on success (1000 chars, captured unconditionally so
-    a clean run's output still reaches the ledger/push, not just a nonzero
-    "found something" exit)."""
+    and pushed — stderr's tail on crash (see `_crash_detail`, falling back to
+    "timed out" when empty), stdout's head on success (1000 chars, captured
+    unconditionally so a clean run's output still reaches the ledger/push,
+    not just a nonzero "found something" exit)."""
     crashed: bool
     event: LedgerEvent
     detail: str | None
+
+
+_CRASH_DETAIL_BUDGET = 500
+
+
+def _crash_detail(stderr: str, *, budget: int = _CRASH_DETAIL_BUDGET) -> str | None:
+    """The diagnostic text to surface for a crashed run: the TAIL of stderr,
+    not the head. A Python traceback's actually-diagnostic line — the
+    exception type and message (e.g. "RootsConfigError: CLAUDE_SESSION_TOOLS
+    _REPO_ROOT is not set") — is its LAST line; the head is always the same
+    "Traceback (most recent call last): File ..., line ..." boilerplate. The
+    previous behaviour (`stderr[:200]`) captured only that boilerplate for
+    any traceback longer than ~200 characters, so a job failing on an
+    unhandled exception surfaced no diagnostic information at all in the
+    ledger/digest/push — just a header naming no cause. A plain CLI tool
+    whose last line of output is e.g. "ERROR: <reason>" gets the same
+    benefit for the same reason.
+
+    Applies uniformly to every job's crash path — no per-job or
+    per-error-type special-casing — and stays a pure string operation with
+    no dependency on how the failure happened.
+
+    Cuts on a line boundary where one exists in the kept tail, so a
+    multi-line message isn't sliced mid-word: takes the last `budget`
+    characters, then (unless that already covers the whole string) drops
+    everything up to and including the first newline in that slice, since
+    that first newline marks a line truncated mid-way through by the
+    windowing itself."""
+    stripped = stderr.strip()
+    if not stripped:
+        return None
+    if len(stripped) <= budget:
+        return stripped
+    tail = stripped[-budget:]
+    newline = tail.find("\n")
+    if 0 <= newline < len(tail) - 1:
+        tail = tail[newline + 1:]
+    return tail
 
 
 def classify_outcome(
@@ -93,7 +134,7 @@ def classify_outcome(
         or outcome.exit_code not in spec.success_exit_codes
     )
     if crashed:
-        detail = (outcome.stderr.strip()[:200] if outcome else None) or None
+        detail = _crash_detail(outcome.stderr) if outcome else None
         if detail is None and outcome is not None and outcome.timed_out:
             detail = "timed out"
         if push:

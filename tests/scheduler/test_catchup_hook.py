@@ -212,6 +212,40 @@ def test_session_start_surfaces_last_24h_even_if_it_predates_seeded_cursor(
     assert any("tesco" in e for e in out)
 
 
+def _insert_fail_row(tmp_path: Path, *, ts: str, job_id: str) -> None:
+    conn = telemetry_store.connect(tmp_path / "hooks")
+    conn.execute(
+        "INSERT INTO catchup_events (ts, job_id, event, owed, ran, exit_code, "
+        "duration_ms, error, consecutive_failures) VALUES (?, ?, 'fail', 1, 0, 1, 1, 'boom', 1)",
+        (ts, job_id),
+    )
+    conn.commit()
+    conn.close()
+
+
+def test_session_start_surfaces_a_failure_that_predates_seeded_cursor_via_lookback(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Verification for the "does a crashed job reliably reach the SessionStart
+    digest, not just a successful run" guarantee - end-to-end mirror of
+    test_session_start_surfaces_last_24h_even_if_it_predates_seeded_cursor
+    above, but for a FAIL event recorded in an earlier/now-closed session (so
+    no live session was open to surface it via UserPromptSubmit)."""
+    registry.add_job(validate_job_fields(
+        job_id="cal", cadence="daily@09:00", coalesce="one", command=["false"],
+        surface=True, enabled=True, catchup_window="30d", timeout="5s",
+    ))
+    fixed_now = datetime(2026, 6, 20, 10, 0, tzinfo=timezone.utc)
+    recent_ts = (fixed_now - timedelta(hours=2)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    _insert_fail_row(tmp_path, ts=recent_ts, job_id="cal")
+    monkeypatch.setattr(catchup, "_now", lambda: fixed_now)
+    monkeypatch.setattr(reconcile, "spawn_detached", _Spawn())
+    _stdin(monkeypatch, {"hook_event_name": "SessionStart", "session_id": "brand-new", "cwd": "/tmp"})
+    out = _capture(monkeypatch)
+    assert catchup.main() == 0
+    assert any("cal" in e and "failed" in e for e in out)
+
+
 def test_session_start_lookback_excludes_entries_older_than_24h(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
