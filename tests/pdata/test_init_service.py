@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 from cc_session_tools.lib.pdata import init_paths, init_service
 
 
@@ -85,6 +87,95 @@ def test_write_without_prior_dry_run_raises(monkeypatch, tmp_path):
 
     with pytest.raises(FileNotFoundError, match="proposal"):
         init_service.write(project="demo")
+
+
+def test_write_refuses_when_db_is_already_locked_by_another_connection(monkeypatch, tmp_path):
+    """Pre-flight guard (inter-session message 20260819T114156Z-3ec7, gap #2): if
+    another connection already holds a write lock on the project's .db (e.g. a
+    concurrent `--write`, or pdata-verify-all's scheduled cadence firing mid-migration),
+    write() must refuse immediately with a clear error before touching anything —
+    not proceed and let the first schema_add_field/add_record call block on
+    db.py's passive 5s busy_timeout and fail deep into the migration. Nothing must
+    be written: no records inserted, no backup created, no source file cut over."""
+    import pytest
+
+    from cc_session_tools.lib import db
+    from cc_session_tools.lib.pdata import service, store
+
+    monkeypatch.setenv(init_paths.PROJECTS_ROOT_ENV, str(tmp_path / "projects"))
+    monkeypatch.setenv("CCST_PROJECT_DB_DIR", str(tmp_path / "dbs"))
+    backup_dir = tmp_path / "backups"
+    monkeypatch.setenv("CCST_PDATA_BACKUP_DIR", str(backup_dir))
+    project_dir = tmp_path / "projects" / "demo"
+    project_dir.mkdir(parents=True)
+    (project_dir / "ideas.csv").write_text("idea\nfirst\n")
+
+    init_service.dry_run(project="demo")  # creates the .db (empty base schema)
+
+    locker = db.connect(store.db_path("demo"))
+    locker.isolation_level = None
+    locker.execute("BEGIN IMMEDIATE")
+    try:
+        with pytest.raises(ValueError, match="another process"):
+            init_service.write(project="demo")
+    finally:
+        locker.execute("ROLLBACK")
+        locker.close()
+
+    assert service.list_records(project="demo", record_group="ideas") == []
+    assert (project_dir / "ideas.csv").exists()
+    assert not (project_dir / init_paths.MIGRATED_ARCHIVE_DIRNAME).exists()
+    assert not backup_dir.exists() or not any(backup_dir.iterdir())
+
+
+def test_write_proceeds_when_db_exists_and_is_not_locked(monkeypatch, tmp_path):
+    """The common case: a project's .db already exists (from an earlier --write or
+    just from dry_run's schema bootstrap) but nothing else currently holds a lock
+    on it — the pre-flight guard must be a no-op and write() must succeed exactly
+    as it did before this guard existed."""
+    from cc_session_tools.lib.pdata import store
+
+    monkeypatch.setenv(init_paths.PROJECTS_ROOT_ENV, str(tmp_path / "projects"))
+    monkeypatch.setenv("CCST_PROJECT_DB_DIR", str(tmp_path / "dbs"))
+    monkeypatch.setenv("CCST_PDATA_BACKUP_DIR", str(tmp_path / "backups"))
+    project_dir = tmp_path / "projects" / "demo"
+    project_dir.mkdir(parents=True)
+    (project_dir / "ideas.csv").write_text("idea\nfirst\n")
+
+    init_service.dry_run(project="demo")
+    assert store.db_path("demo").exists()
+
+    result = init_service.write(project="demo")
+
+    assert result.failure is None
+    assert len(result.created_record_ids) == 1
+
+
+def test_write_proceeds_when_project_has_no_existing_db(monkeypatch, tmp_path):
+    """A brand-new project's first-ever --write has nothing to guard: the probe
+    must be skipped entirely (never create a .db just to lock-probe it) and
+    write() must proceed and create the .db itself, as before this guard
+    existed."""
+    from cc_session_tools.lib.pdata import store
+
+    monkeypatch.setenv(init_paths.PROJECTS_ROOT_ENV, str(tmp_path / "projects"))
+    monkeypatch.setenv("CCST_PROJECT_DB_DIR", str(tmp_path / "dbs"))
+    monkeypatch.setenv("CCST_PDATA_BACKUP_DIR", str(tmp_path / "backups"))
+    project_dir = tmp_path / "projects" / "demo"
+    project_dir.mkdir(parents=True)
+    (project_dir / "ideas.csv").write_text("idea\nfirst\n")
+
+    init_service.dry_run(project="demo")  # creates the proposal *and* the .db
+    db_path = store.db_path("demo")
+    for candidate in (db_path, Path(f"{db_path}-wal"), Path(f"{db_path}-shm")):
+        candidate.unlink(missing_ok=True)
+    assert not db_path.exists()
+
+    result = init_service.write(project="demo")
+
+    assert result.failure is None
+    assert len(result.created_record_ids) == 1
+    assert db_path.exists()  # write() created it, same as any first-ever write
 
 
 def test_write_imports_csv_rows_and_cuts_over(monkeypatch, tmp_path):
