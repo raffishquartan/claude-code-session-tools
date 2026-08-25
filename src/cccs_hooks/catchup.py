@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import sqlite3
 import sys
 from datetime import datetime, timedelta, timezone
@@ -95,6 +96,15 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     event = str(data.get("hook_event_name", "SessionStart"))
     uuid = str(data.get("session_id", "unknown"))
+    if os.environ.get("CLD_SESSION_MODE") == "hook":
+        # A headless `claude -p` sub-session spawned by bash_security_review.py
+        # to review one Bash command (CLD_SESSION_MODE=hook — see
+        # bash_security_review.py) - it exits before anyone could ever read its
+        # own catch-up digest. Skip reconcile (which would launch jobs) and
+        # surface (which would read/advance a cursor) entirely rather than do
+        # both for output that is guaranteed to go unseen.
+        _emit("", event)
+        return 0
     now = _now()
     parse_error: str | None = None
     try:
