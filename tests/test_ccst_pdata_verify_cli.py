@@ -47,15 +47,55 @@ def test_pdata_verify_all_with_no_projects_exits_two(base_env):
     assert "no project" in r.stderr.lower()
 
 
-def test_pdata_verify_all_iterates_every_project(base_env):
+def test_pdata_verify_all_default_is_one_line_summary_when_clean(base_env):
+    """§ compact-summary fix: the scheduled pdata-verify-all job's default
+    output was "very long" (one line per project) even when every project is
+    clean - --all-projects without --verbose must collapse that to a single
+    confirming line, not print each project."""
     _run(base_env, "pdata", "add", "--project", "alpha", "--group", "notes",
          "--content", "x")
     _run(base_env, "pdata", "add", "--project", "beta", "--group", "notes",
          "--content", "y")
     r = _run(base_env, "pdata", "verify", "--all-projects")
     assert r.returncode == 0, r.stderr
+    assert "alpha: OK" not in r.stdout
+    assert "beta: OK" not in r.stdout
+    assert r.stdout.strip().count("\n") == 0  # exactly one line
+    assert "OK" in r.stdout
+    assert "2" in r.stdout  # project count
+
+
+def test_pdata_verify_all_verbose_shows_full_per_project_listing(base_env):
+    _run(base_env, "pdata", "add", "--project", "alpha", "--group", "notes",
+         "--content", "x")
+    _run(base_env, "pdata", "add", "--project", "beta", "--group", "notes",
+         "--content", "y")
+    r = _run(base_env, "pdata", "verify", "--all-projects", "--verbose")
+    assert r.returncode == 0, r.stderr
     assert "alpha: OK" in r.stdout
     assert "beta: OK" in r.stdout
+
+
+def test_pdata_verify_all_default_flags_issues_and_suggests_verbose(base_env):
+    _run(base_env, "pdata", "add", "--project", "alpha", "--group", "notes",
+         "--content", "x")
+    _run(base_env, "pdata", "add", "--project", "broken", "--group", "filings",
+         "--content", "x", "--file", "missing.pdf")
+    r = _run(base_env, "pdata", "verify", "--all-projects")
+    assert r.returncode == 1
+    assert "broken: OK" not in r.stdout
+    assert "--verbose" in r.stdout
+    assert "1" in r.stdout  # 1 of 2 projects has issues
+
+
+def test_pdata_verify_single_project_is_unaffected_by_verbose_split(base_env):
+    """--project is already just one project's worth of output - the compact/
+    verbose split only applies to --all-projects."""
+    _run(base_env, "pdata", "add", "--project", "demo", "--group", "ccst-ideas",
+         "--content", "an idea")
+    r = _run(base_env, "pdata", "verify", "--project", "demo")
+    assert r.returncode == 0, r.stderr
+    assert "demo: OK" in r.stdout
 
 
 def test_pdata_verify_requires_project_or_all(base_env):
