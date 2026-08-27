@@ -30,6 +30,10 @@ Current subcommands:
   gc report                      Report orphaned per-session-uuid entries across the
                                  scheduler, messaging, and session-env stores (never
                                  deletes anything).
+  gc prune                       Delete the orphaned entries `gc report` finds, gated
+                                 by --execute (default: dry run) and a --min-age-hours
+                                 floor (default 24) so a brand-new session's own state
+                                 is never mid-race deleted.
   pdata add                      Insert a new record into a project's SQLite data store (see
                                  ccst pdata --help for the full records/schema subcommand set).
   pdata reconcile-session-output Backfill the session-output index from cc-sessions/*/out/ on
@@ -886,6 +890,23 @@ def _cmd_gc_report(args: argparse.Namespace) -> int:
     )
     print(format_report(report))
     return 0
+
+
+def _cmd_gc_prune(args: argparse.Namespace) -> int:
+    from cc_session_tools.lib.session_gc import format_prune_report, prune
+
+    result = prune(
+        min_age_hours=args.min_age_hours,
+        execute=args.execute,
+        only=frozenset(args.only) if args.only else None,
+        projects_dir=Path(args.projects_dir) if args.projects_dir else None,
+        scheduler_dir=Path(args.scheduler_dir) if args.scheduler_dir else None,
+        messages_root=Path(args.messages_root) if args.messages_root else None,
+        session_env_dir=Path(args.session_env_dir) if args.session_env_dir else None,
+        sessions_dir=Path(args.sessions_dir) if args.sessions_dir else None,
+    )
+    print(format_prune_report(result))
+    return 1 if result.any_failed else 0
 
 
 # ---------- pdata ----------
@@ -2224,6 +2245,75 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Directory holding sessions.db (default: from CCST_SESSIONS_DIR or data_home())",
     )
 
+    gc_prune_parser = gc_sub.add_parser(
+        "prune",
+        help=(
+            "Delete the orphaned entries `gc report` finds. Dry run by default "
+            "— pass --execute to actually delete."
+        ),
+    )
+    gc_prune_parser.add_argument(
+        "--execute",
+        action="store_true",
+        help="Actually delete (default: dry-run report only, same output shape plus what would happen)",
+    )
+    gc_prune_parser.add_argument(
+        "--min-age-hours",
+        type=float,
+        default=24.0,
+        metavar="N",
+        help="Exclude entries younger than this from deletion (default: 24)",
+    )
+    gc_prune_parser.add_argument(
+        "--only",
+        action="append",
+        default=[],
+        metavar="STORE",
+        # Kept as a literal list, not an import of session_gc.STORE_NAMES, to
+        # preserve this module's lazy-import-inside-handler convention for
+        # lib.session_gc (see _cmd_gc_report/_cmd_gc_prune) — parser
+        # construction runs on every `ccst` invocation, handlers only on a
+        # matching one. Update both if the 5 store names ever change.
+        choices=[
+            "scheduler-reconcile-markers",
+            "scheduler-cursors",
+            "messages-cursors",
+            "session-env",
+            "sessions-index",
+        ],
+        help="Restrict to one store (may repeat); default: all 5",
+    )
+    gc_prune_parser.add_argument(
+        "--projects-dir",
+        default=None,
+        metavar="PATH",
+        help="Transcript projects directory (default: ~/.claude/projects/)",
+    )
+    gc_prune_parser.add_argument(
+        "--scheduler-dir",
+        default=None,
+        metavar="PATH",
+        help="Scheduler directory holding ccsched.db (default: from CC_SCHEDULER_DIR or data_home())",
+    )
+    gc_prune_parser.add_argument(
+        "--messages-root",
+        default=None,
+        metavar="PATH",
+        help="Messaging store directory holding ccmsg.db (default: from CCST_MESSAGES_ROOT or data_home())",
+    )
+    gc_prune_parser.add_argument(
+        "--session-env-dir",
+        default=None,
+        metavar="PATH",
+        help="Session-env directory (default: ~/.claude/session-env/)",
+    )
+    gc_prune_parser.add_argument(
+        "--sessions-dir",
+        default=None,
+        metavar="PATH",
+        help="Directory holding sessions.db (default: from CCST_SESSIONS_DIR or data_home())",
+    )
+
     # ---- pdata ----
     pdata_parser = sub.add_parser("pdata", help="Per-project SQLite data store commands")
     pdata_sub = pdata_parser.add_subparsers(dest="verb", metavar="<verb>")
@@ -2673,6 +2763,8 @@ def main() -> None:
     if args.noun == "gc":
         if args.verb == "report":
             sys.exit(_cmd_gc_report(args))
+        if args.verb == "prune":
+            sys.exit(_cmd_gc_prune(args))
 
     if args.noun == "pdata":
         if args.verb == "add":
