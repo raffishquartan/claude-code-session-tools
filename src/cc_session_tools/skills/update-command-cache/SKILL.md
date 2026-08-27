@@ -3,11 +3,6 @@ name: update-command-cache
 description: Curate the SHA-256 command cache used by the bash-security-review hook. Reads recent safe-verdict fires from telemetry.db, identifies commands not yet cached, presents them for approval, and records approved ones via cccs_hooks.cache.cache_record(). Also supports manual --remove and --flip operations on existing cache entries. Use when the user says "update the command cache", "curate cached commands", "review cache fires", "promote fires to cache", "remove a cache entry", or notices the cache is stale or polluted.
 ---
 
-<!--
-Copyright (c) 2026 raffishquartan. All rights reserved.
-Licensed for personal use only.
--->
-
 # Update command cache
 
 The `bash-security-review` hook (when run with `CCCS_USE_COMMAND_CACHE=1`) records `safe`-verdict fires into the command cache at `~/.cache/claude/logs/command-cache.db` (SQLite; the legacy `command-cache.csv` is retired). Auto-fill is conservative - only verdicts that came back `safe` from the claude CLI escalation are stored. This skill is the curation tool for that cache: it lets you sweep the telemetry log for safe fires not yet captured, vet them, and bulk-promote the ones you want.
