@@ -1637,11 +1637,22 @@ def _cmd_ccsched_jobs_install(args: argparse.Namespace) -> int:
     upgrade (this command is one of install-everything's five steps, so it runs on every version
     bump) tells the operator they are out of sync with the shipped source instead of staying
     quiet about it. Neither state is ever auto-corrected here; `ccst doctor` surfaces the same
-    two states on an ongoing basis via `check_ccsched_job_registered`."""
-    from cc_session_tools.lib.scheduler import bundled_jobs, registry
+    two states on an ongoing basis via `check_ccsched_job_registered`.
+
+    A bundled job id that is missing but was previously installed on this machine (per
+    registry.bundled_install_ids() — a tombstone-free record `ccsched remove` cannot erase) means
+    the operator deliberately removed it, not that this machine has simply never seen it; it is
+    reported as "deleted" and never silently re-added — re-adding an intentional deletion on
+    every version bump would defeat the point of removing it. `--reinstall JOB_ID` (repeatable)
+    is the explicit override that brings one back."""
+    from cc_session_tools.lib.scheduler import bundled_jobs, registry, state
     from cc_session_tools.lib.scheduler.jobspec import validate_job_fields
 
     existing = {spec.job_id: spec for spec in registry.load_registry()}
+    ever_installed = registry.bundled_install_ids()
+    reinstall_requested = set(args.reinstall or [])
+    now = state.format_ts(datetime.datetime.now(datetime.timezone.utc))
+
     for job in bundled_jobs.BUNDLED_CCSCHED_JOBS:
         spec = existing.get(job.job_id)
         if spec is not None:
@@ -1656,9 +1667,20 @@ def _cmd_ccsched_jobs_install(args: argparse.Namespace) -> int:
                 print(f"  disabled (not touched): {job.job_id} - run 'ccsched enable {job.job_id}' to re-enable")
             else:
                 print(f"  already registered: {job.job_id}")
+            if args.apply and job.job_id not in ever_installed:
+                registry.mark_bundled_installed(job.job_id, now)
             continue
+
+        if job.job_id in ever_installed and job.job_id not in reinstall_requested:
+            print(
+                f"  deleted (not re-added): {job.job_id} - was previously installed and has "
+                f"since been removed; pass --reinstall {job.job_id} to bring it back"
+            )
+            continue
+
         if not args.apply:
-            print(f"  would register: {job.job_id}")
+            verb = "would reinstall" if job.job_id in ever_installed else "would register"
+            print(f"  {verb}: {job.job_id}")
             continue
         new_spec = validate_job_fields(
             job_id=job.job_id, cadence=job.cadence, coalesce=job.coalesce,
@@ -1667,7 +1689,8 @@ def _cmd_ccsched_jobs_install(args: argparse.Namespace) -> int:
             success_exit_codes=job.success_exit_codes,
         )
         registry.add_job(new_spec)
-        print(f"  registered: {job.job_id}")
+        registry.mark_bundled_installed(job.job_id, now)
+        print(f"  {'reinstalled' if job.job_id in ever_installed else 'registered'}: {job.job_id}")
 
     if not args.apply:
         print("\nDry run — re-run with --apply to register any missing job(s)")
@@ -1742,7 +1765,7 @@ def run_install_everything(
         (
             "Scheduled jobs",
             "ccsched-jobs",
-            argparse.Namespace(apply=apply),
+            argparse.Namespace(apply=apply, reinstall=[]),
         ),
     ]
 
@@ -2506,6 +2529,12 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     ccsched_jobs_install_parser.add_argument(
         "--apply", action="store_true", help="Register jobs (default: dry run)",
+    )
+    ccsched_jobs_install_parser.add_argument(
+        "--reinstall", action="append", metavar="JOB_ID", default=[],
+        help="Bring back a bundled job you previously removed with 'ccsched remove' "
+             "(repeatable). Without this, a deleted bundled job is reported but never "
+             "silently re-added.",
     )
 
     # ---- claude-md ----

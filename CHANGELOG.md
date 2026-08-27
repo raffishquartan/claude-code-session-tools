@@ -23,6 +23,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   realign, or that your customization was left alone. `lib/scheduler/bundled_jobs.diff_from_bundled`
   is the single comparison both call sites use, deliberately ignoring `enabled` (that's per-machine
   operational state, not part of a bundled definition).
+- `ccst ccsched-jobs install` now also tells a bundled job you deliberately removed with
+  `ccsched remove` apart from one this machine has simply never installed - the former is
+  reported as `deleted (not re-added)` and never silently re-registered on the next version
+  bump. A new `ccsched.db` table (`bundled_job_installs`) records every bundled job ever
+  installed on this machine, since `ccsched remove` itself leaves no trace to check against.
+  `--reinstall JOB_ID` (repeatable) is the explicit override that brings a deleted one back.
 
 ## [2.10.1] - 2026-08-27
 

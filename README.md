@@ -72,10 +72,13 @@ should be registered. `ccst ccsched-jobs install` (dry run by default; `--apply`
 idempotent and non-destructive: a missing job is registered, but an already-registered job whose
 fields have since diverged from its bundled definition — hand-edited via `ccsched edit`, or
 disabled via `ccsched disable` — is reported as **changed** or **disabled** and left untouched,
-never silently overwritten. `ccst doctor` (and its own bundled `ccst-doctor-drift-weekly` job)
-surfaces the same two states on an ongoing basis, not just at install time, so drift introduced
-between runs of `ccst ccsched-jobs install` (e.g. at every version upgrade, since it's one of
-`install-everything`'s five steps) doesn't go unnoticed until the next manual re-run.
+never silently overwritten. A bundled job you removed entirely with `ccsched remove` is reported
+as **deleted** and never silently re-added on the next upgrade either — `--reinstall JOB_ID`
+(repeatable) is the explicit override that brings one back. `ccst doctor` (and its own bundled
+`ccst-doctor-drift-weekly` job) surfaces the changed/disabled states on an ongoing basis, not just
+at install time, so drift introduced between runs of `ccst ccsched-jobs install` (e.g. at every
+version upgrade, since it's one of `install-everything`'s five steps) doesn't go unnoticed until
+the next manual re-run.
 
 See [CHANGELOG.md](CHANGELOG.md) for a full version history. See [TODO.md](TODO.md) for known follow-up work (including the notify-user skill integration).
 
