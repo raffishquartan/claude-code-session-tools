@@ -105,7 +105,12 @@ def test_update_command_cache_reminder_job_is_a_plain_echo():
 
 def test_telemetry_trim_weekly_job_command():
     job = _job("telemetry-trim-weekly")
-    assert job.command == ("ccst", "telemetry", "trim", "--max-size", "10", "--max-age-days", "90")
+    assert job.command == ("ccst", "telemetry", "trim", "--max-size", "50", "--max-age-days", "90")
+
+
+def test_clean_hook_sessions_weekly_job_is_anchored_for_drift_free_weekly_scheduling():
+    job = _job("clean-hook-sessions-weekly")
+    assert job.cadence == "every:7d@from=2026-08-28"
 
 
 def _spec_for(job: bundled_jobs.BundledJob, **overrides):

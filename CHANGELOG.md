@@ -29,6 +29,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   otherwise pile up by the thousands and pollute `claude --resume`/`--continue`. Its bundled
   `clean-hook-sessions-weekly` job resolves the script path from `Path.home()` at import time
   (never a literal machine path in source), matching wherever `ccst skills install` symlinks it.
+- `telemetry-trim-weekly` and `clean-hook-sessions-weekly`'s bundled definitions adopted two
+  live tweaks made by hand ahead of this release: `telemetry trim --max-size` raised from 10 to
+  50 (10 MB trimmed too aggressively in practice), and `clean-hook-sessions-weekly`'s cadence
+  anchored (`every:7d@from=2026-08-28`) instead of plain `every:7d`, for drift-free weekly
+  scheduling matching the pattern other anchored jobs already use.
 - `ccst ccsched-jobs install` and `ccst doctor` now detect when an already-registered bundled job
   has drifted from its shipped definition - hand-edited via `ccsched edit`, or disabled via
   `ccsched disable` - and report it as `changed (not touched)` / `disabled (not touched)` instead

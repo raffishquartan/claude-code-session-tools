@@ -98,11 +98,17 @@ BUNDLED_CCSCHED_JOBS: tuple[BundledJob, ...] = (
         catchup_window="28d",
         timeout="60s",
         surface=True,
-        command=("ccst", "telemetry", "trim", "--max-size", "10", "--max-age-days", "90"),
+        # --max-size 10 (MB) trimmed too aggressively in practice; 50 was adopted live and
+        # is the better default.
+        command=("ccst", "telemetry", "trim", "--max-size", "50", "--max-age-days", "90"),
     ),
     BundledJob(
         job_id="clean-hook-sessions-weekly",
-        cadence="every:7d",
+        # Anchored (@from=<date>) rather than plain every:7d so the weekly run lands on a
+        # fixed day, drift-free, matching the pattern already used for other anchored jobs
+        # (e.g. a user's own every:2w@from=... jobs) - the specific date only fixes which
+        # day of the week it recurs on, it does not restrict how far back it is owed.
+        cadence="every:7d@from=2026-08-28",
         coalesce="one",
         catchup_window="112d",
         timeout="120s",
