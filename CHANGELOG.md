@@ -13,27 +13,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Scheduled jobs are now a bundled, installable CCST component, on equal footing with skills
   and hooks.** `ccst ccsched-jobs install` (dry run by default, `--apply` to register) is one of
-  `install-everything`'s five steps, so all seven bundled jobs below get registered automatically
+  `install-everything`'s five steps, so all eight bundled jobs below get registered automatically
   on every fresh install and on every version upgrade, exactly like the bundled skills/hooks
   already do - no separate manual `ccsched add` step required. See the README's new "Bundled
   scheduled jobs" section for the full list and behaviour.
-- Five new bundled `ccsched` jobs: `ccst-doctor-drift-weekly` (`ccst doctor --drift`),
-  `update-command-cache-reminder`, `telemetry-trim-weekly` (`ccst telemetry trim`),
-  `ccsched-no-op-demoing-job-visibility` (confirms the scheduled-job notification pipeline is
-  reaching Telegram and the SessionStart digest), and `clean-hook-sessions-weekly` (weekly
-  unattended run of the new `clean-hook-sessions` skill's script) - alongside the two already
-  bundled (`pm-session-output-reconcile`, `pdata-verify-all`), for seven total.
+- Six new bundled `ccsched` jobs: `ccst-doctor-drift-weekly` (`ccst doctor --drift`),
+  `session-gc-report-weekly` (`ccst gc report`), `update-command-cache-reminder`,
+  `telemetry-trim-weekly` (`ccst telemetry trim`), `ccsched-no-op-demoing-job-visibility`
+  (confirms the scheduled-job notification pipeline is reaching Telegram and the SessionStart
+  digest), and `clean-hook-sessions-weekly` (weekly unattended run of the new
+  `clean-hook-sessions` skill's script) - alongside the two already bundled
+  (`pm-session-output-reconcile`, `pdata-verify-all`), for eight total.
 - New `clean-hook-sessions` skill (moved in from the personal `claude-code-config-sync` repo,
   relicensed from "personal use only" to this repo's MIT license): archives (tar.gz, verified)
   then deletes `bash-security-review`'s own hook-security-check session transcripts, which
   otherwise pile up by the thousands and pollute `claude --resume`/`--continue`. Its bundled
   `clean-hook-sessions-weekly` job resolves the script path from `Path.home()` at import time
   (never a literal machine path in source), matching wherever `ccst skills install` symlinks it.
-- `telemetry-trim-weekly` and `clean-hook-sessions-weekly`'s bundled definitions adopted two
-  live tweaks made by hand ahead of this release: `telemetry trim --max-size` raised from 10 to
-  50 (10 MB trimmed too aggressively in practice), and `clean-hook-sessions-weekly`'s cadence
-  anchored (`every:7d@from=2026-08-28`) instead of plain `every:7d`, for drift-free weekly
-  scheduling matching the pattern other anchored jobs already use.
+- Three bundled definitions adopted live tweaks made by hand ahead of this release, found by
+  diffing every bundled job's source against `ccsched show <id>`: `telemetry trim --max-size`
+  raised from 10 to 50 (10 MB trimmed too aggressively in practice); `clean-hook-sessions-weekly`'s
+  cadence anchored (`every:7d@from=2026-08-28`) instead of plain `every:7d`, for drift-free
+  weekly scheduling; and `pdata-verify-all`'s `surface` flipped from `False` to `True` (a
+  completed run always surfaces its result either way - the flag only gates the "launched,
+  running in background" notice at start, which turned out to be worth seeing for this job).
 - `ccst ccsched-jobs install` and `ccst doctor` now detect when an already-registered bundled job
   has drifted from its shipped definition - hand-edited via `ccsched edit`, or disabled via
   `ccsched disable` - and report it as `changed (not touched)` / `disabled (not touched)` instead

@@ -10,7 +10,7 @@ Three concerns, one repo, for life on the [Claude Code](https://docs.anthropic.c
 2. **Usage analytics** — parse `~/.claude/projects/**/*.jsonl` into tokens-and-dollars breakdowns by project, session, model, MCP server, plugin, and tool.
 3. **Hook library** — Python package (`cccs_hooks`) providing Claude Code SessionStart / PreToolUse / PostToolUse / UserPromptSubmit / Stop hook implementations, invokable via `ccst hooks run <name>`.
 
-The repo ships seven CLIs, one shell helper, ten bundled skills, ten bundled hooks, and seven
+The repo ships seven CLIs, one shell helper, ten bundled skills, ten bundled hooks, and eight
 bundled scheduled jobs:
 
 **CLIs and shell helper**
@@ -64,6 +64,7 @@ bundled scheduled jobs:
 | **`pm-session-output-reconcile`** | Weekly backfill of the session-output index (`ccst pdata reconcile-session-output --all-projects`) for anything the `pm-update-central-files` skill's own per-session registration step missed. |
 | **`pdata-verify-all`** | Daily integrity check (row-count parity, file_path resolution, suspicious double-updates) across every project's data store; a machine with no pdata-adopted projects yet counts as a pass, not a failure. |
 | **`ccst-doctor-drift-weekly`** | Weekly `ccst doctor --drift` run, surfacing un-muted configuration drift (see [Automatic install sync](#automatic-install-sync)). |
+| **`session-gc-report-weekly`** | Weekly `ccst gc report`, listing orphaned per-session-uuid entries across the scheduler, messaging, and session-env stores (never deletes anything itself). |
 | **`update-command-cache-reminder`** | Fortnightly reminder to curate the `bash-security-review` command cache from `fires.jsonl`. |
 | **`telemetry-trim-weekly`** | Weekly `ccst telemetry trim`, keeping `telemetry.db` bounded by size and age. |
 | **`ccsched-no-op-demoing-job-visibility`** | Twice-daily no-op whose only purpose is confirming the scheduled-job notification pipeline (Telegram delivery + the SessionStart digest) is actually working. |
