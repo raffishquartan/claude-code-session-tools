@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.11.0] - 2026-08-27
+
 ### Added
 
 - **Scheduled jobs are now a bundled, installable CCST component, on equal footing with skills
