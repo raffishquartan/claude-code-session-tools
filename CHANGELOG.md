@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.10.1] - 2026-08-27
+
+### Changed
+
+- `ccsched add`/`edit --help` now documents every option in full - cadence syntax, coalesce
+  modes, catchup-window/timeout formats, and what a non-zero success exit code means - instead
+  of leaving most flags with no help text at all. The two subcommands validate the same fields
+  via `jobspec.validate_job_fields`, so their help strings are built from one shared set of
+  constants rather than duplicated (and liable to drift) per subcommand. `ccsched show`'s
+  per-job field printer is factored out into `_print_job` and reused by `ccsched edit`, so a
+  successful edit now prints the job's resulting full spec instead of just an "updated <id>"
+  confirmation.
+
 ## [2.10.0] - 2026-08-25
 
 ### Added
