@@ -453,9 +453,9 @@ Run `claude-code-usage <subcommand> --help` for the full grammar. A few flags wo
 
 ## Bundled skills
 
-The repo ships seven Claude Code skills, designed to be symlinked into `~/.claude/skills/`. They're thin wrappers around the CLIs so a Claude Code session can invoke them on your behalf in response to natural-language prompts.
+The repo ships ten Claude Code skills, designed to be symlinked into `~/.claude/skills/`. They're thin wrappers around the CLIs so a Claude Code session can invoke them on your behalf in response to natural-language prompts.
 
-Install all seven at once with `ccst skills install --apply` (see [Install and set up](#install-and-set-up-recommended-path) above).
+Install all ten at once with `ccst skills install --apply` (see [Install and set up](#install-and-set-up-recommended-path) above).
 
 ### `find-claude-code-session`
 
@@ -486,6 +486,26 @@ Measures the persistent context — everything loaded into every session before 
 ### `context-override`
 
 Silences the `context-window-warning` Stop hook's 150k/200k nudges entirely for the current session. Triggers on `/context-override`, "stop the context warnings", "silence the compact nag", "I know about the context, stop warning me". Runs `ccst context-override <on|off|status>` (default `on`); the flag is keyed to the session and does not persist once it ends.
+
+### `generate-8digit-code`
+
+Generates a cryptographically random 8-digit confirmation code via `secrets.randbelow` — never a model-invented number, which would be predictable and statistically biased. Triggers on any gated action needing a fresh code: `delete-sessions`'s `--execute` confirmation, the `confirm-8digit` hook asking for one, or constructing a "Respond with NNNNNNNN" gate in plain text yourself.
+
+### `send-session-message`
+
+Composes and sends a durable cross-session message via `ccmsg send`. Triggers on discovering something relevant to a different project, handing a sub-task to a better-placed session, or two sessions in the same project needing to coordinate. Disambiguates the three addressing modes (`--to-session`, `--to-project`, `--to-description`) and confirms with you when the recipient is ambiguous.
+
+### `manage-recurring-cc-jobs-using-ccsched`
+
+Translates a natural-language cadence request ("run my Tesco shop every other Sunday at 09:00", "check X every morning") into a validated `ccsched add` call. Triggers on "run X every day", "schedule a local job", "add a recurring job". Disambiguates `ccsched` (local recurring jobs, reconciled on session start) from `/schedule` (cloud cron agents) and `/loop` (in-session polling) before doing anything.
+
+### `update-command-cache`
+
+Curates the SHA-256 command cache the `bash-security-review` hook reads (`CCCS_USE_COMMAND_CACHE=1`). Triggers on "update the command cache", "sweep the fires log for cacheable commands", "promote my recent claude-CLI safe fires". Reads recent `safe`-verdict fires from `telemetry.db`, identifies commands not yet cached, presents them for approval, and records approved ones. Also supports manual `--remove`/`--flip` on existing entries.
+
+### `clean-hook-sessions`
+
+Archives (tar.gz, verified) then deletes `bash-security-review`'s own hook-security-check session transcripts — those whose first user message begins "Review this shell command for security risks" — which otherwise pile up by the thousands and pollute `claude --resume`/`--continue`. Triggers on "clean up hook sessions", "archive old hook security sessions", or `--resume` being cluttered with security-check conversations. Dry-run by default; 8-digit gated for `--execute` (via `generate-8digit-code`). Also runs unattended weekly via the bundled `clean-hook-sessions-weekly` job (see [Scheduled-task catch-up](#scheduled-task-catch-up)).
 
 See `docs/design.md` for the full design and CLI contract.
 
