@@ -13,15 +13,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Scheduled jobs are now a bundled, installable CCST component, on equal footing with skills
   and hooks.** `ccst ccsched-jobs install` (dry run by default, `--apply` to register) is one of
-  `install-everything`'s five steps, so all six bundled jobs below get registered automatically
+  `install-everything`'s five steps, so all seven bundled jobs below get registered automatically
   on every fresh install and on every version upgrade, exactly like the bundled skills/hooks
   already do - no separate manual `ccsched add` step required. See the README's new "Bundled
   scheduled jobs" section for the full list and behaviour.
-- Four new bundled `ccsched` jobs: `ccst-doctor-drift-weekly` (`ccst doctor --drift`),
-  `update-command-cache-reminder`, `telemetry-trim-weekly` (`ccst telemetry trim`), and
+- Five new bundled `ccsched` jobs: `ccst-doctor-drift-weekly` (`ccst doctor --drift`),
+  `update-command-cache-reminder`, `telemetry-trim-weekly` (`ccst telemetry trim`),
   `ccsched-no-op-demoing-job-visibility` (confirms the scheduled-job notification pipeline is
-  reaching Telegram and the SessionStart digest) - alongside the two already bundled
-  (`pm-session-output-reconcile`, `pdata-verify-all`), for six total.
+  reaching Telegram and the SessionStart digest), and `clean-hook-sessions-weekly` (weekly
+  unattended run of the new `clean-hook-sessions` skill's script) - alongside the two already
+  bundled (`pm-session-output-reconcile`, `pdata-verify-all`), for seven total.
+- New `clean-hook-sessions` skill (moved in from the personal `claude-code-config-sync` repo,
+  relicensed from "personal use only" to this repo's MIT license): archives (tar.gz, verified)
+  then deletes `bash-security-review`'s own hook-security-check session transcripts, which
+  otherwise pile up by the thousands and pollute `claude --resume`/`--continue`. Its bundled
+  `clean-hook-sessions-weekly` job resolves the script path from `Path.home()` at import time
+  (never a literal machine path in source), matching wherever `ccst skills install` symlinks it.
 - `ccst ccsched-jobs install` and `ccst doctor` now detect when an already-registered bundled job
   has drifted from its shipped definition - hand-edited via `ccsched edit`, or disabled via
   `ccsched disable` - and report it as `changed (not touched)` / `disabled (not touched)` instead

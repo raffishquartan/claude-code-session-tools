@@ -10,7 +10,7 @@ Three concerns, one repo, for life on the [Claude Code](https://docs.anthropic.c
 2. **Usage analytics** — parse `~/.claude/projects/**/*.jsonl` into tokens-and-dollars breakdowns by project, session, model, MCP server, plugin, and tool.
 3. **Hook library** — Python package (`cccs_hooks`) providing Claude Code SessionStart / PreToolUse / PostToolUse / UserPromptSubmit / Stop hook implementations, invokable via `ccst hooks run <name>`.
 
-The repo ships seven CLIs, one shell helper, nine bundled skills, ten bundled hooks, and six
+The repo ships seven CLIs, one shell helper, ten bundled skills, ten bundled hooks, and seven
 bundled scheduled jobs:
 
 **CLIs and shell helper**
@@ -39,6 +39,7 @@ bundled scheduled jobs:
 | **`reduce-persistent-context`** | Measures the fixed per-session context footprint (CLAUDE.md, skill descriptions, MCP tool names, hooks, harness baseline), ranks reduction candidates by token-saved-per-risk, and applies approved reductions behind 8-digit confirmation. |
 | **`send-session-message`** | Guides recipient choice, message composition, and confirmation when sending an inter-session message via `ccmsg send`. |
 | **`manage-recurring-cc-jobs-using-ccsched`** | Translates natural-language cadence requests into `ccsched add` calls; disambiguates `ccsched` (local recurring jobs) vs `/schedule` (cloud cron) vs `/loop` (in-session poll). |
+| **`clean-hook-sessions`** | Archives (tar.gz, verified) then deletes `bash-security-review`'s own hook-security-check session transcripts, which otherwise pile up by the thousands and pollute `claude --resume`/`--continue`. Dry-run by default; 8-digit gated for `--execute`. Also runs unattended weekly via the bundled `clean-hook-sessions-weekly` job. |
 
 **Bundled hooks** (installed via `ccst hooks install`)
 
@@ -66,6 +67,7 @@ bundled scheduled jobs:
 | **`update-command-cache-reminder`** | Fortnightly reminder to curate the `bash-security-review` command cache from `fires.jsonl`. |
 | **`telemetry-trim-weekly`** | Weekly `ccst telemetry trim`, keeping `telemetry.db` bounded by size and age. |
 | **`ccsched-no-op-demoing-job-visibility`** | Twice-daily no-op whose only purpose is confirming the scheduled-job notification pipeline (Telegram delivery + the SessionStart digest) is actually working. |
+| **`clean-hook-sessions-weekly`** | Weekly unattended run of the `clean-hook-sessions` skill's script (`--older-than 28 --keep-n 50 --execute`), archiving then deleting old `bash-security-review` hook-check session transcripts. |
 
 Each bundled job is a `BundledJob` entry in `lib/scheduler/bundled_jobs.py` — the single source
 of truth both the installer and `ccst doctor` read, so the two can never disagree about what
