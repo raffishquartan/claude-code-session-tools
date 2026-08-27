@@ -3,11 +3,6 @@ name: move-session
 description: Use when copying, relocating, or renaming a Claude Code session - i.e. changing a `cc-sessions/<tag>/` directory's parent project, its tag suffix, or both, while keeping the `~/.claude/projects/<encoded-cwd>/<uuid>.jsonl` transcript resumable. Supports MOVE (different project cwd), RENAME (new tag suffix in place), and MOVE+RENAME (both at once). Triggers on "move session to", "relocate session", "copy CC session into another project", "this session belongs in a different folder", noticing a session was started under the wrong working directory, "rename my session", "rename session tag", "rename cc-sessions directory", "give my session a more descriptive tag/name", or any phrasing that implies changing the cc-sessions directory's parent or suffix without losing the transcript.
 ---
 
-<!--
-Copyright (c) 2026 raffishquartan. All rights reserved.
-Licensed for personal use only.
--->
-
 # Move session
 
 **Dry-run by default. Pass `--execute` to make any filesystem changes.** Without `--execute` the script prints a plan and exits 0. The user expects something to happen - check that you actually passed `--execute` before reporting success.

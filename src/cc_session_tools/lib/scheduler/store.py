@@ -43,6 +43,13 @@ CREATE TABLE IF NOT EXISTS reconcile_throttle (
     session_uuid       TEXT PRIMARY KEY,
     last_reconciled_at TEXT NOT NULL
 );
+-- Tombstone-free install history for lib/scheduler/bundled_jobs.py entries: a row here
+-- outlives `ccsched remove`, so `ccst ccsched-jobs install` can tell a job the operator
+-- deliberately removed apart from one this machine has simply never installed yet.
+CREATE TABLE IF NOT EXISTS bundled_job_installs (
+    job_id       TEXT PRIMARY KEY,
+    installed_at TEXT NOT NULL
+);
 """
 
 

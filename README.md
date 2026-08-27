@@ -10,7 +10,8 @@ Three concerns, one repo, for life on the [Claude Code](https://docs.anthropic.c
 2. **Usage analytics** — parse `~/.claude/projects/**/*.jsonl` into tokens-and-dollars breakdowns by project, session, model, MCP server, plugin, and tool.
 3. **Hook library** — Python package (`cccs_hooks`) providing Claude Code SessionStart / PreToolUse / PostToolUse / UserPromptSubmit / Stop hook implementations, invokable via `ccst hooks run <name>`.
 
-The repo ships seven CLIs, one shell helper, nine bundled skills, and nine bundled hooks:
+The repo ships seven CLIs, one shell helper, ten bundled skills, ten bundled hooks, and eight
+bundled scheduled jobs:
 
 **CLIs and shell helper**
 
@@ -38,6 +39,7 @@ The repo ships seven CLIs, one shell helper, nine bundled skills, and nine bundl
 | **`reduce-persistent-context`** | Measures the fixed per-session context footprint (CLAUDE.md, skill descriptions, MCP tool names, hooks, harness baseline), ranks reduction candidates by token-saved-per-risk, and applies approved reductions behind 8-digit confirmation. |
 | **`send-session-message`** | Guides recipient choice, message composition, and confirmation when sending an inter-session message via `ccmsg send`. |
 | **`manage-recurring-cc-jobs-using-ccsched`** | Translates natural-language cadence requests into `ccsched add` calls; disambiguates `ccsched` (local recurring jobs) vs `/schedule` (cloud cron) vs `/loop` (in-session poll). |
+| **`clean-hook-sessions`** | Archives (tar.gz, verified) then deletes `bash-security-review`'s own hook-security-check session transcripts, which otherwise pile up by the thousands and pollute `claude --resume`/`--continue`. Dry-run by default; 8-digit gated for `--execute`. Also runs unattended weekly via the bundled `clean-hook-sessions-weekly` job. |
 
 **Bundled hooks** (installed via `ccst hooks install`)
 
@@ -45,6 +47,7 @@ The repo ships seven CLIs, one shell helper, nine bundled skills, and nine bundl
 |---|---|
 | **`session-tag`** (SessionStart) | Writes a `<uuid>.tag` file so `claude-code-usage` can map session UUIDs to human-readable names. |
 | **`last-screenshot`** (UserPromptSubmit) | Resolves your newest screenshot for the `>lss` token and injects its path. Requires `CCST_SCREENSHOT_DIR`. |
+| **`bash-hard-deny`** (PreToolUse) | Categorical hard-deny gate for Bash: destructive file ops (`rm`/`rmdir`/`unlink`/`shred`, incl. inline python/node and script-file/heredoc forms), delete-by-move to a tmp-like location, `git branch`/`git push` branch deletion, `gh api`/`gh release` delete, destructive curl/wget methods, `sudo`, and direct telemetry-log reads. Runs before every other Bash hook; a match here can never be overridden in-session (the message tells you to run the command yourself in a separate terminal). |
 | **`bash-security-review`** (PreToolUse) | Tiered Bash command security review with an allowlist cache and LLM fallback. |
 | **`marker-allow`** (PreToolUse) | Auto-approves a bare `touch` of a skill marker under `~/.cache/claude/markers/` (and nothing else), so marker-gated skills can refresh their TTL marker without a permission prompt. |
 | **`confirm-8digit`** (PreToolUse) | Blocks a configurable set of high-stakes tool calls unless the user repeats back an 8-digit confirmation code. |
@@ -53,6 +56,33 @@ The repo ships seven CLIs, one shell helper, nine bundled skills, and nine bundl
 | **`messaging-deliver`** (SessionStart + UserPromptSubmit) | Sweeps `ccmsg.db` (under `~/.local/share/claude/`, overridable via `CCST_MESSAGES_ROOT`) for messages addressed to this session and injects a compact digest as additional context. Handles auto-read, read-receipts, first-claim-wins claims, and 14-day archival without prompting. |
 | **`catchup`** (SessionStart) | Reconciles the scheduled-job registry, launches owed jobs as detached workers, and surfaces previously-completed runs as a digest. |
 | **`catchup`** (UserPromptSubmit) | Surfaces (reaps) completed scheduled runs on a throttle (60 s), so a job launched at session start surfaces at the next prompt in the same session. |
+
+**Bundled scheduled jobs** (installed via `ccst ccsched-jobs install`)
+
+| | What it does |
+|---|---|
+| **`pm-session-output-reconcile`** | Weekly backfill of the session-output index (`ccst pdata reconcile-session-output --all-projects`) for anything the `pm-update-central-files` skill's own per-session registration step missed. |
+| **`pdata-verify-all`** | Daily integrity check (row-count parity, file_path resolution, suspicious double-updates) across every project's data store; a machine with no pdata-adopted projects yet counts as a pass, not a failure. |
+| **`ccst-doctor-drift-weekly`** | Weekly `ccst doctor --drift` run, surfacing un-muted configuration drift (see [Automatic install sync](#automatic-install-sync)). |
+| **`session-gc-report-weekly`** | Weekly `ccst gc report`, listing orphaned per-session-uuid entries across the scheduler, messaging, and session-env stores (never deletes anything itself — its output suggests `ccst gc prune` when it finds orphans). |
+| **`update-command-cache-reminder`** | Fortnightly reminder to curate the `bash-security-review` command cache from `fires.jsonl`. |
+| **`telemetry-trim-weekly`** | Weekly `ccst telemetry trim`, keeping `telemetry.db` bounded by size and age. |
+| **`ccsched-no-op-demoing-job-visibility`** | Twice-daily no-op whose only purpose is confirming the scheduled-job notification pipeline (Telegram delivery + the SessionStart digest) is actually working. |
+| **`clean-hook-sessions-weekly`** | Weekly unattended run of the `clean-hook-sessions` skill's script (`--older-than 28 --keep-n 50 --execute`), archiving then deleting old `bash-security-review` hook-check session transcripts. |
+
+Each bundled job is a `BundledJob` entry in `lib/scheduler/bundled_jobs.py` — the single source
+of truth both the installer and `ccst doctor` read, so the two can never disagree about what
+should be registered. `ccst ccsched-jobs install` (dry run by default; `--apply` to register) is
+idempotent and non-destructive: a missing job is registered, but an already-registered job whose
+fields have since diverged from its bundled definition — hand-edited via `ccsched edit`, or
+disabled via `ccsched disable` — is reported as **changed** or **disabled** and left untouched,
+never silently overwritten. A bundled job you removed entirely with `ccsched remove` is reported
+as **deleted** and never silently re-added on the next upgrade either — `--reinstall JOB_ID`
+(repeatable) is the explicit override that brings one back. `ccst doctor` (and its own bundled
+`ccst-doctor-drift-weekly` job) surfaces the changed/disabled states on an ongoing basis, not just
+at install time, so drift introduced between runs of `ccst ccsched-jobs install` (e.g. at every
+version upgrade, since it's one of `install-everything`'s five steps) doesn't go unnoticed until
+the next manual re-run.
 
 See [CHANGELOG.md](CHANGELOG.md) for a full version history. See [TODO.md](TODO.md) for known follow-up work (including the notify-user skill integration).
 
@@ -424,9 +454,9 @@ Run `claude-code-usage <subcommand> --help` for the full grammar. A few flags wo
 
 ## Bundled skills
 
-The repo ships seven Claude Code skills, designed to be symlinked into `~/.claude/skills/`. They're thin wrappers around the CLIs so a Claude Code session can invoke them on your behalf in response to natural-language prompts.
+The repo ships ten Claude Code skills, designed to be symlinked into `~/.claude/skills/`. They're thin wrappers around the CLIs so a Claude Code session can invoke them on your behalf in response to natural-language prompts.
 
-Install all seven at once with `ccst skills install --apply` (see [Install and set up](#install-and-set-up-recommended-path) above).
+Install all ten at once with `ccst skills install --apply` (see [Install and set up](#install-and-set-up-recommended-path) above).
 
 ### `find-claude-code-session`
 
@@ -457,6 +487,26 @@ Measures the persistent context — everything loaded into every session before 
 ### `context-override`
 
 Silences the `context-window-warning` Stop hook's 150k/200k nudges entirely for the current session. Triggers on `/context-override`, "stop the context warnings", "silence the compact nag", "I know about the context, stop warning me". Runs `ccst context-override <on|off|status>` (default `on`); the flag is keyed to the session and does not persist once it ends.
+
+### `generate-8digit-code`
+
+Generates a cryptographically random 8-digit confirmation code via `secrets.randbelow` — never a model-invented number, which would be predictable and statistically biased. Triggers on any gated action needing a fresh code: `delete-sessions`'s `--execute` confirmation, the `confirm-8digit` hook asking for one, or constructing a "Respond with NNNNNNNN" gate in plain text yourself.
+
+### `send-session-message`
+
+Composes and sends a durable cross-session message via `ccmsg send`. Triggers on discovering something relevant to a different project, handing a sub-task to a better-placed session, or two sessions in the same project needing to coordinate. Disambiguates the three addressing modes (`--to-session`, `--to-project`, `--to-description`) and confirms with you when the recipient is ambiguous.
+
+### `manage-recurring-cc-jobs-using-ccsched`
+
+Translates a natural-language cadence request ("run my Tesco shop every other Sunday at 09:00", "check X every morning") into a validated `ccsched add` call. Triggers on "run X every day", "schedule a local job", "add a recurring job". Disambiguates `ccsched` (local recurring jobs, reconciled on session start) from `/schedule` (cloud cron agents) and `/loop` (in-session polling) before doing anything.
+
+### `update-command-cache`
+
+Curates the SHA-256 command cache the `bash-security-review` hook reads (`CCCS_USE_COMMAND_CACHE=1`). Triggers on "update the command cache", "sweep the fires log for cacheable commands", "promote my recent claude-CLI safe fires". Reads recent `safe`-verdict fires from `telemetry.db`, identifies commands not yet cached, presents them for approval, and records approved ones. Also supports manual `--remove`/`--flip` on existing entries.
+
+### `clean-hook-sessions`
+
+Archives (tar.gz, verified) then deletes `bash-security-review`'s own hook-security-check session transcripts — those whose first user message begins "Review this shell command for security risks" — which otherwise pile up by the thousands and pollute `claude --resume`/`--continue`. Triggers on "clean up hook sessions", "archive old hook security sessions", or `--resume` being cluttered with security-check conversations. Dry-run by default; 8-digit gated for `--execute` (via `generate-8digit-code`). Also runs unattended weekly via the bundled `clean-hook-sessions-weekly` job (see [Scheduled-task catch-up](#scheduled-task-catch-up)).
 
 See `docs/design.md` for the full design and CLI contract.
 
@@ -569,6 +619,11 @@ validated `ccsched add` calls and disambiguates between:
 - `ccsched` — local recurring jobs, runs off the session critical path.
 - `/schedule` — cloud-hosted agents that run on a cron schedule.
 - `/loop` — in-session polling that runs while the session is open.
+
+### Bundled scheduled jobs
+
+See [Bundled scheduled jobs](#bundled-scheduled-jobs-installed-via-ccst-ccsched-jobs-install)
+above for the full list and `ccst ccsched-jobs install`'s drift-reporting behaviour.
 
 ### Registry
 

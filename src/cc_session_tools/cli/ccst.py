@@ -30,6 +30,10 @@ Current subcommands:
   gc report                      Report orphaned per-session-uuid entries across the
                                  scheduler, messaging, and session-env stores (never
                                  deletes anything).
+  gc prune                       Delete the orphaned entries `gc report` finds, gated
+                                 by --execute (default: dry run) and a --min-age-hours
+                                 floor (default 24) so a brand-new session's own state
+                                 is never mid-race deleted.
   pdata add                      Insert a new record into a project's SQLite data store (see
                                  ccst pdata --help for the full records/schema subcommand set).
   pdata reconcile-session-output Backfill the session-output index from cc-sessions/*/out/ on
@@ -55,7 +59,10 @@ Current subcommands:
   claude-md uninstall            Remove the messaging block from CLAUDE.md.
   ccsched-jobs install           Register CCST's bundled ccsched jobs (see
                                  lib/scheduler/bundled_jobs.py) if not already present.
-                                 Dry run by default; pass --apply to register.
+                                 Dry run by default; pass --apply to register. An
+                                 already-registered job whose fields no longer match its
+                                 bundled definition, or that has been disabled, is reported
+                                 as such and left untouched, never overwritten.
   install-everything             Run all install steps (skills, hooks, shell,
                                  claude-md, scheduled jobs) then health-check.
                                  Dry run by default; pass --apply to write changes.
@@ -885,6 +892,23 @@ def _cmd_gc_report(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_gc_prune(args: argparse.Namespace) -> int:
+    from cc_session_tools.lib.session_gc import format_prune_report, prune
+
+    result = prune(
+        min_age_hours=args.min_age_hours,
+        execute=args.execute,
+        only=frozenset(args.only) if args.only else None,
+        projects_dir=Path(args.projects_dir) if args.projects_dir else None,
+        scheduler_dir=Path(args.scheduler_dir) if args.scheduler_dir else None,
+        messages_root=Path(args.messages_root) if args.messages_root else None,
+        session_env_dir=Path(args.session_env_dir) if args.session_env_dir else None,
+        sessions_dir=Path(args.sessions_dir) if args.sessions_dir else None,
+    )
+    print(format_prune_report(result))
+    return 1 if result.any_failed else 0
+
+
 # ---------- pdata ----------
 
 
@@ -1627,26 +1651,67 @@ def _cmd_ccsched_jobs_install(args: argparse.Namespace) -> int:
     surprising footgun. "Already there" is decided by an explicit membership check against
     registry.load_registry()'s existing ids before add_job is ever called, not by attempting the
     add and catching ccsched add's own duplicate-id RegistryError (this repo's "no exceptions
-    for control flow" coding standard rules that out)."""
-    from cc_session_tools.lib.scheduler import bundled_jobs, registry
+    for control flow" coding standard rules that out).
+
+    An already-registered job that no longer matches its bundled definition — hand-edited fields,
+    or disabled — is reported as such rather than silently counted as "already registered", so an
+    upgrade (this command is one of install-everything's five steps, so it runs on every version
+    bump) tells the operator they are out of sync with the shipped source instead of staying
+    quiet about it. Neither state is ever auto-corrected here; `ccst doctor` surfaces the same
+    two states on an ongoing basis via `check_ccsched_job_registered`.
+
+    A bundled job id that is missing but was previously installed on this machine (per
+    registry.bundled_install_ids() — a tombstone-free record `ccsched remove` cannot erase) means
+    the operator deliberately removed it, not that this machine has simply never seen it; it is
+    reported as "deleted" and never silently re-added — re-adding an intentional deletion on
+    every version bump would defeat the point of removing it. `--reinstall JOB_ID` (repeatable)
+    is the explicit override that brings one back."""
+    from cc_session_tools.lib.scheduler import bundled_jobs, registry, state
     from cc_session_tools.lib.scheduler.jobspec import validate_job_fields
 
-    existing_ids = {spec.job_id for spec in registry.load_registry()}
+    existing = {spec.job_id: spec for spec in registry.load_registry()}
+    ever_installed = registry.bundled_install_ids()
+    reinstall_requested = set(args.reinstall or [])
+    now = state.format_ts(datetime.datetime.now(datetime.timezone.utc))
+
     for job in bundled_jobs.BUNDLED_CCSCHED_JOBS:
-        if job.job_id in existing_ids:
-            print(f"  already registered: {job.job_id}")
+        spec = existing.get(job.job_id)
+        if spec is not None:
+            changed = bundled_jobs.diff_from_bundled(spec, job)
+            if changed:
+                print(
+                    f"  changed (not touched): {job.job_id} - {', '.join(changed)} "
+                    f"differ from the bundled definition; run 'ccsched edit' to realign, or "
+                    f"leave as your intentional customization"
+                )
+            elif not spec.enabled:
+                print(f"  disabled (not touched): {job.job_id} - run 'ccsched enable {job.job_id}' to re-enable")
+            else:
+                print(f"  already registered: {job.job_id}")
+            if args.apply and job.job_id not in ever_installed:
+                registry.mark_bundled_installed(job.job_id, now)
             continue
+
+        if job.job_id in ever_installed and job.job_id not in reinstall_requested:
+            print(
+                f"  deleted (not re-added): {job.job_id} - was previously installed and has "
+                f"since been removed; pass --reinstall {job.job_id} to bring it back"
+            )
+            continue
+
         if not args.apply:
-            print(f"  would register: {job.job_id}")
+            verb = "would reinstall" if job.job_id in ever_installed else "would register"
+            print(f"  {verb}: {job.job_id}")
             continue
-        spec = validate_job_fields(
+        new_spec = validate_job_fields(
             job_id=job.job_id, cadence=job.cadence, coalesce=job.coalesce,
             command=list(job.command), surface=job.surface, enabled=True,
             catchup_window=job.catchup_window, timeout=job.timeout,
             success_exit_codes=job.success_exit_codes,
         )
-        registry.add_job(spec)
-        print(f"  registered: {job.job_id}")
+        registry.add_job(new_spec)
+        registry.mark_bundled_installed(job.job_id, now)
+        print(f"  {'reinstalled' if job.job_id in ever_installed else 'registered'}: {job.job_id}")
 
     if not args.apply:
         print("\nDry run — re-run with --apply to register any missing job(s)")
@@ -1721,7 +1786,7 @@ def run_install_everything(
         (
             "Scheduled jobs",
             "ccsched-jobs",
-            argparse.Namespace(apply=apply),
+            argparse.Namespace(apply=apply, reinstall=[]),
         ),
     ]
 
@@ -2180,6 +2245,75 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Directory holding sessions.db (default: from CCST_SESSIONS_DIR or data_home())",
     )
 
+    gc_prune_parser = gc_sub.add_parser(
+        "prune",
+        help=(
+            "Delete the orphaned entries `gc report` finds. Dry run by default "
+            "— pass --execute to actually delete."
+        ),
+    )
+    gc_prune_parser.add_argument(
+        "--execute",
+        action="store_true",
+        help="Actually delete (default: dry-run report only, same output shape plus what would happen)",
+    )
+    gc_prune_parser.add_argument(
+        "--min-age-hours",
+        type=float,
+        default=24.0,
+        metavar="N",
+        help="Exclude entries younger than this from deletion (default: 24)",
+    )
+    gc_prune_parser.add_argument(
+        "--only",
+        action="append",
+        default=[],
+        metavar="STORE",
+        # Kept as a literal list, not an import of session_gc.STORE_NAMES, to
+        # preserve this module's lazy-import-inside-handler convention for
+        # lib.session_gc (see _cmd_gc_report/_cmd_gc_prune) — parser
+        # construction runs on every `ccst` invocation, handlers only on a
+        # matching one. Update both if the 5 store names ever change.
+        choices=[
+            "scheduler-reconcile-markers",
+            "scheduler-cursors",
+            "messages-cursors",
+            "session-env",
+            "sessions-index",
+        ],
+        help="Restrict to one store (may repeat); default: all 5",
+    )
+    gc_prune_parser.add_argument(
+        "--projects-dir",
+        default=None,
+        metavar="PATH",
+        help="Transcript projects directory (default: ~/.claude/projects/)",
+    )
+    gc_prune_parser.add_argument(
+        "--scheduler-dir",
+        default=None,
+        metavar="PATH",
+        help="Scheduler directory holding ccsched.db (default: from CC_SCHEDULER_DIR or data_home())",
+    )
+    gc_prune_parser.add_argument(
+        "--messages-root",
+        default=None,
+        metavar="PATH",
+        help="Messaging store directory holding ccmsg.db (default: from CCST_MESSAGES_ROOT or data_home())",
+    )
+    gc_prune_parser.add_argument(
+        "--session-env-dir",
+        default=None,
+        metavar="PATH",
+        help="Session-env directory (default: ~/.claude/session-env/)",
+    )
+    gc_prune_parser.add_argument(
+        "--sessions-dir",
+        default=None,
+        metavar="PATH",
+        help="Directory holding sessions.db (default: from CCST_SESSIONS_DIR or data_home())",
+    )
+
     # ---- pdata ----
     pdata_parser = sub.add_parser("pdata", help="Per-project SQLite data store commands")
     pdata_sub = pdata_parser.add_subparsers(dest="verb", metavar="<verb>")
@@ -2486,6 +2620,12 @@ def _build_parser() -> argparse.ArgumentParser:
     ccsched_jobs_install_parser.add_argument(
         "--apply", action="store_true", help="Register jobs (default: dry run)",
     )
+    ccsched_jobs_install_parser.add_argument(
+        "--reinstall", action="append", metavar="JOB_ID", default=[],
+        help="Bring back a bundled job you previously removed with 'ccsched remove' "
+             "(repeatable). Without this, a deleted bundled job is reported but never "
+             "silently re-added.",
+    )
 
     # ---- claude-md ----
     cmd_parser = sub.add_parser("claude-md", help="Manage the global CLAUDE.md messaging block")
@@ -2623,6 +2763,8 @@ def main() -> None:
     if args.noun == "gc":
         if args.verb == "report":
             sys.exit(_cmd_gc_report(args))
+        if args.verb == "prune":
+            sys.exit(_cmd_gc_prune(args))
 
     if args.noun == "pdata":
         if args.verb == "add":

@@ -3,11 +3,6 @@ name: list-empty-sessions
 description: Use when the user wants to find sessions they never actually typed in. Triggers on "list empty sessions", "find sessions I never used", "which sessions are empty", "show me sessions with no messages", "show abandoned sessions", "find sessions with no user input", "which sessions did I never start", "/list-empty-sessions". Also use proactively when the user complains about session clutter from accidental ccd invocations or abandoned starts.
 ---
 
-<!--
-Copyright (c) 2026 raffishquartan. All rights reserved.
-Licensed for personal use only.
--->
-
 # List empty sessions
 
 Find sessions whose transcript contains no user-typed messages — the kind of

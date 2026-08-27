@@ -3,11 +3,6 @@ name: find-claude-code-session
 description: Use when locating a previous Claude Code session - "find my session about X", "what session was I in when Y", "search my cc-sessions for Z", "did I work on foo before", "/find-claude-code-session", "remind me what I called the session where I X". Also use proactively when the user references prior CC work without naming the session, so you can resume with `ccr` instead of starting fresh. Wraps the `ccs` CLI (already on PATH).
 ---
 
-<!--
-Copyright (c) 2026 raffishquartan. All rights reserved.
-Licensed for personal use only.
--->
-
 # Find a Claude Code session
 
 Locate a prior `cc-sessions/<YYYYMMDD>-<tag>/` directory by name or content, then offer the user a `ccr <fragment>` command to resume it.

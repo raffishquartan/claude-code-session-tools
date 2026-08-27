@@ -7,6 +7,76 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `ccst gc prune` — the execute half of `ccst gc report`, which has been report-only since it
+  shipped. Deletes the same orphaned per-session-uuid entries `gc report` identifies (same
+  orphan definition, reused unchanged), gated by an explicit `--execute` flag (default: dry
+  run) and a `--min-age-hours` floor (default 24) so a brand-new session's own
+  scheduler/messaging state is never deleted out from under it before its transcript exists.
+  Two of the five stores (`scheduler-cursors`, `messages-cursors`) have no timestamp column of
+  their own — the floor is computed once per uuid from the three stores that do, and a uuid
+  with no age evidence anywhere is reported as `skipped (age-unknown)`, never deleted regardless
+  of the floor. `--only STORE` (repeatable) restricts to a subset of the five stores. `ccst gc
+  report`'s output now suggests running `ccst gc prune` whenever it finds orphans.
+
+## [2.11.0] - 2026-08-27
+
+### Added
+
+- **Scheduled jobs are now a bundled, installable CCST component, on equal footing with skills
+  and hooks.** `ccst ccsched-jobs install` (dry run by default, `--apply` to register) is one of
+  `install-everything`'s five steps, so all eight bundled jobs below get registered automatically
+  on every fresh install and on every version upgrade, exactly like the bundled skills/hooks
+  already do - no separate manual `ccsched add` step required. See the README's new "Bundled
+  scheduled jobs" section for the full list and behaviour.
+- Six new bundled `ccsched` jobs: `ccst-doctor-drift-weekly` (`ccst doctor --drift`),
+  `session-gc-report-weekly` (`ccst gc report`), `update-command-cache-reminder`,
+  `telemetry-trim-weekly` (`ccst telemetry trim`), `ccsched-no-op-demoing-job-visibility`
+  (confirms the scheduled-job notification pipeline is reaching Telegram and the SessionStart
+  digest), and `clean-hook-sessions-weekly` (weekly unattended run of the new
+  `clean-hook-sessions` skill's script) - alongside the two already bundled
+  (`pm-session-output-reconcile`, `pdata-verify-all`), for eight total.
+- New `clean-hook-sessions` skill (moved in from the personal `claude-code-config-sync` repo,
+  relicensed from "personal use only" to this repo's MIT license): archives (tar.gz, verified)
+  then deletes `bash-security-review`'s own hook-security-check session transcripts, which
+  otherwise pile up by the thousands and pollute `claude --resume`/`--continue`. Its bundled
+  `clean-hook-sessions-weekly` job resolves the script path from `Path.home()` at import time
+  (never a literal machine path in source), matching wherever `ccst skills install` symlinks it.
+- Three bundled definitions adopted live tweaks made by hand ahead of this release, found by
+  diffing every bundled job's source against `ccsched show <id>`: `telemetry trim --max-size`
+  raised from 10 to 50 (10 MB trimmed too aggressively in practice); `clean-hook-sessions-weekly`'s
+  cadence anchored (`every:7d@from=2026-08-28`) instead of plain `every:7d`, for drift-free
+  weekly scheduling; and `pdata-verify-all`'s `surface` flipped from `False` to `True` (a
+  completed run always surfaces its result either way - the flag only gates the "launched,
+  running in background" notice at start, which turned out to be worth seeing for this job).
+- `ccst ccsched-jobs install` and `ccst doctor` now detect when an already-registered bundled job
+  has drifted from its shipped definition - hand-edited via `ccsched edit`, or disabled via
+  `ccsched disable` - and report it as `changed (not touched)` / `disabled (not touched)` instead
+  of silently counting it as `already registered`. Neither state is ever auto-corrected; the
+  install-time report tells you what to run (`ccsched edit`/`ccsched enable`) if you want to
+  realign, or that your customization was left alone. `lib/scheduler/bundled_jobs.diff_from_bundled`
+  is the single comparison both call sites use, deliberately ignoring `enabled` (that's per-machine
+  operational state, not part of a bundled definition).
+- `ccst ccsched-jobs install` now also tells a bundled job you deliberately removed with
+  `ccsched remove` apart from one this machine has simply never installed - the former is
+  reported as `deleted (not re-added)` and never silently re-registered on the next version
+  bump. A new `ccsched.db` table (`bundled_job_installs`) records every bundled job ever
+  installed on this machine, since `ccsched remove` itself leaves no trace to check against.
+  `--reinstall JOB_ID` (repeatable) is the explicit override that brings a deleted one back.
+- `bash_hard_deny.py` now hard-blocks two more categories: `git branch` force-delete (`-D`,
+  or `-d`/`--delete` combined with `-f`/`--force`, any order, including combined short flags
+  like `-Df`/`-fd` - plain `git branch -d`, which git itself refuses on unmerged work, is
+  unaffected) and `git push` branch deletion (`--delete`/`-d`, or the `:<branch>` empty-refspec
+  form). Both require the user to run the command themselves in their own terminal, matching
+  the existing `sudo`/`gh release delete` precedent - not an 8-digit-confirmable action, since
+  `confirm_8digit.py` currently gates by exact MCP tool name only, not Bash-command pattern.
+
+### Documentation
+
+- README's "Bundled hooks" table gains the missing `bash-hard-deny` row (categorical Bash
+  hard-deny gate) - every other PreToolUse Bash hook already had one.
+
 ## [2.10.1] - 2026-08-27
 
 ### Changed

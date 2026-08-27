@@ -3,11 +3,6 @@ name: delete-sessions
 description: Use when the user wants to permanently delete one or more Claude Code sessions. Triggers on "delete session", "delete sessions", "remove empty sessions", "clean up sessions", "delete these sessions", "remove these cc-sessions", "/delete-sessions". Inputs must be explicit session basenames; the user (or the list-empty-sessions skill) must supply them. Gates every deletion behind an 8-digit confirmation code.
 ---
 
-<!--
-Copyright (c) 2026 raffishquartan. All rights reserved.
-Licensed for personal use only.
--->
-
 # Delete sessions
 
 Permanently delete one or more Claude Code sessions: the `cc-sessions/<basename>/`

@@ -1,7 +1,4 @@
 #!/usr/bin/env python3
-# Copyright (c) 2026 raffishquartan. All rights reserved.
-# Licensed for personal use only.
-
 """Curate the bash-security-review command cache.
 
 Reads telemetry.db's telemetry_events table (hook='bash-security-review'),

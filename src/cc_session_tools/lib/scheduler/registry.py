@@ -110,3 +110,31 @@ def set_enabled(job_id: str, enabled: bool) -> None:
             raise RegistryError(f"unknown job id: {job_id!r}")
     finally:
         conn.close()
+
+
+def mark_bundled_installed(job_id: str, installed_at: str) -> None:
+    """Record that a CCST-bundled job (lib/scheduler/bundled_jobs.py) has been installed on this
+    machine, so a later `ccsched remove` can be told apart from "never installed" by
+    bundled_install_ids(). INSERT OR REPLACE: called on every successful
+    `ccst ccsched-jobs install --apply`, including a job already registered from before this
+    table existed, so it self-backfills rather than needing a one-shot migration."""
+    conn = store.connect()
+    try:
+        conn.execute(
+            "INSERT OR REPLACE INTO bundled_job_installs (job_id, installed_at) VALUES (?, ?)",
+            (job_id, installed_at),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def bundled_install_ids() -> set[str]:
+    """Every bundled job id ever installed on this machine via
+    `ccst ccsched-jobs install --apply`, whether or not it is still registered now."""
+    conn = store.connect()
+    try:
+        rows = conn.execute("SELECT job_id FROM bundled_job_installs").fetchall()
+    finally:
+        conn.close()
+    return {row["job_id"] for row in rows}

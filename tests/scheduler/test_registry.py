@@ -130,3 +130,44 @@ def test_concurrent_edits_to_different_jobs_all_land(
     assert errors == []
     disabled = {s.job_id: s.enabled for s in reg.load_registry()}
     assert all(disabled[jid] is False for jid in ids)  # every edit landed
+
+
+# ---------- bundled-job install history ----------
+
+
+def test_bundled_install_ids_is_empty_before_any_mark(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("CC_SCHEDULER_DIR", str(tmp_path))
+    assert reg.bundled_install_ids() == set()
+
+
+def test_mark_bundled_installed_is_visible_in_bundled_install_ids(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("CC_SCHEDULER_DIR", str(tmp_path))
+    reg.mark_bundled_installed("pdata-verify-all", "2026-08-27T00:00:00Z")
+    assert reg.bundled_install_ids() == {"pdata-verify-all"}
+
+
+def test_mark_bundled_installed_survives_a_later_remove_job(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The whole point of this table: ccsched remove deletes the `jobs` row, but the install
+    history is a separate table, so a machine that once installed a bundled job and later
+    removed it is still distinguishable from one that never installed it at all."""
+    monkeypatch.setenv("CC_SCHEDULER_DIR", str(tmp_path))
+    reg.add_job(_spec("pdata-verify-all"))
+    reg.mark_bundled_installed("pdata-verify-all", "2026-08-27T00:00:00Z")
+    reg.remove_job("pdata-verify-all")
+    assert reg.load_registry() == []
+    assert reg.bundled_install_ids() == {"pdata-verify-all"}
+
+
+def test_mark_bundled_installed_twice_does_not_duplicate(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("CC_SCHEDULER_DIR", str(tmp_path))
+    reg.mark_bundled_installed("pdata-verify-all", "2026-08-27T00:00:00Z")
+    reg.mark_bundled_installed("pdata-verify-all", "2026-08-28T00:00:00Z")
+    assert reg.bundled_install_ids() == {"pdata-verify-all"}

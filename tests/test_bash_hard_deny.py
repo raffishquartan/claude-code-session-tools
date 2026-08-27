@@ -967,3 +967,84 @@ def test_main_handles_malformed_json(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("sys.stdout", out)
     assert main() == 0
     assert out.getvalue() == ""
+
+
+# --- git branch force-delete should be blocked ---
+
+
+def test_blocks_git_branch_uppercase_d(monkeypatch: pytest.MonkeyPatch) -> None:
+    _assert_blocked(monkeypatch, "git branch -D f/2.10.1", "git branch")
+
+
+def test_blocks_git_branch_delete_and_force_long_flags(monkeypatch: pytest.MonkeyPatch) -> None:
+    _assert_blocked(monkeypatch, "git branch --delete --force f/2.10.1", "git branch")
+
+
+def test_blocks_git_branch_delete_long_force_short(monkeypatch: pytest.MonkeyPatch) -> None:
+    _assert_blocked(monkeypatch, "git branch --delete -f f/2.10.1", "git branch")
+
+
+def test_blocks_git_branch_combined_short_flags_df(monkeypatch: pytest.MonkeyPatch) -> None:
+    _assert_blocked(monkeypatch, "git branch -df f/2.10.1", "git branch")
+
+
+def test_blocks_git_branch_combined_short_flags_fd(monkeypatch: pytest.MonkeyPatch) -> None:
+    _assert_blocked(monkeypatch, "git branch -fd f/2.10.1", "git branch")
+
+
+def test_blocks_git_branch_force_delete_multiple_branches(monkeypatch: pytest.MonkeyPatch) -> None:
+    _assert_blocked(monkeypatch, "git branch -D f/2.10.1 f/2.9.1", "git branch")
+
+
+def test_blocks_git_branch_force_delete_after_and(monkeypatch: pytest.MonkeyPatch) -> None:
+    rc, _out, _err = _run_bash(monkeypatch, "git checkout main && git branch -D old-branch")
+    assert rc == 2
+
+
+def test_allows_plain_git_branch_delete(monkeypatch: pytest.MonkeyPatch) -> None:
+    """-d (lowercase, no force) is merge-checked by git itself and refuses on
+    anything not actually merged - not blocked."""
+    _assert_allowed(monkeypatch, "git branch -d f/2.10.1")
+
+
+def test_allows_git_branch_force_without_delete(monkeypatch: pytest.MonkeyPatch) -> None:
+    """-f/--force alone (no -d/--delete) is a real, non-deleting git-branch flag:
+    it force-resets a branch to a new start point."""
+    _assert_allowed(monkeypatch, "git branch -f main origin/main")
+
+
+def test_allows_git_branch_list(monkeypatch: pytest.MonkeyPatch) -> None:
+    _assert_allowed(monkeypatch, "git branch -v")
+
+
+def test_allows_git_branch_mentioned_in_a_quoted_string(monkeypatch: pytest.MonkeyPatch) -> None:
+    _assert_allowed(monkeypatch, "echo 'remember to git branch -D old-branch later'")
+
+
+# --- git push branch deletion should be blocked ---
+
+
+def test_blocks_git_push_delete_long_flag(monkeypatch: pytest.MonkeyPatch) -> None:
+    _assert_blocked(monkeypatch, "git push --delete origin old-branch", "git push")
+
+
+def test_blocks_git_push_delete_short_flag(monkeypatch: pytest.MonkeyPatch) -> None:
+    _assert_blocked(monkeypatch, "git push -d origin old-branch", "git push")
+
+
+def test_blocks_git_push_delete_flag_after_remote(monkeypatch: pytest.MonkeyPatch) -> None:
+    _assert_blocked(monkeypatch, "git push origin --delete old-branch", "git push")
+
+
+def test_blocks_git_push_empty_refspec(monkeypatch: pytest.MonkeyPatch) -> None:
+    _assert_blocked(monkeypatch, "git push origin :old-branch", "git push")
+
+
+def test_allows_plain_git_push(monkeypatch: pytest.MonkeyPatch) -> None:
+    _assert_allowed(monkeypatch, "git push origin f/2.11.0")
+
+
+def test_allows_git_push_with_a_refspec_that_is_not_a_delete(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _assert_allowed(monkeypatch, "git push origin main:main")

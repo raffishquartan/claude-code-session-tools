@@ -1182,6 +1182,51 @@ def test_check_ccsched_job_registered_warns_when_disabled(monkeypatch, tmp_path)
     assert "disabled" in result.reason
 
 
+def test_check_ccsched_job_registered_warns_on_drift_from_bundled_definition(
+    monkeypatch, tmp_path
+) -> None:
+    monkeypatch.setenv("CCST_DATA_HOME", str(tmp_path))
+    from cc_session_tools.lib.scheduler import bundled_jobs, registry
+    from cc_session_tools.lib.scheduler.jobspec import validate_job_fields
+
+    job = next(
+        j for j in bundled_jobs.BUNDLED_CCSCHED_JOBS if j.job_id == "telemetry-trim-weekly"
+    )
+    spec = validate_job_fields(
+        job_id=job.job_id, cadence=job.cadence, coalesce=job.coalesce,
+        command=list(job.command), surface=job.surface, enabled=True,
+        catchup_window=job.catchup_window, timeout="9s",
+        success_exit_codes=job.success_exit_codes,
+    )
+    registry.add_job(spec)
+
+    result = check_ccsched_job_registered(job.job_id, expected=job)
+    assert result.status == Status.WARN
+    assert "timeout" in result.reason
+
+
+def test_check_ccsched_job_registered_ok_when_matching_bundled_definition(
+    monkeypatch, tmp_path
+) -> None:
+    monkeypatch.setenv("CCST_DATA_HOME", str(tmp_path))
+    from cc_session_tools.lib.scheduler import bundled_jobs, registry
+    from cc_session_tools.lib.scheduler.jobspec import validate_job_fields
+
+    job = next(
+        j for j in bundled_jobs.BUNDLED_CCSCHED_JOBS if j.job_id == "telemetry-trim-weekly"
+    )
+    spec = validate_job_fields(
+        job_id=job.job_id, cadence=job.cadence, coalesce=job.coalesce,
+        command=list(job.command), surface=job.surface, enabled=True,
+        catchup_window=job.catchup_window, timeout=job.timeout,
+        success_exit_codes=job.success_exit_codes,
+    )
+    registry.add_job(spec)
+
+    result = check_ccsched_job_registered(job.job_id, expected=job)
+    assert result.status == Status.OK
+
+
 def test_run_all_checks_includes_bundled_ccsched_job_checks(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setenv("CCST_DATA_HOME", str(tmp_path))
     settings = tmp_path / "settings.json"
