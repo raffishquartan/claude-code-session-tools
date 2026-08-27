@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 from cc_session_tools.lib.scheduler import bundled_jobs
 from cc_session_tools.lib.scheduler.bundled_jobs import diff_from_bundled
 from cc_session_tools.lib.scheduler.jobspec import validate_job_fields
@@ -69,7 +71,22 @@ def test_bundled_jobs_contains_the_2026_08_batch():
         "update-command-cache-reminder",
         "telemetry-trim-weekly",
         "ccsched-no-op-demoing-job-visibility",
+        "clean-hook-sessions-weekly",
     }
+
+
+def test_clean_hook_sessions_weekly_job_command_points_at_the_bundled_skill_script():
+    """The path is resolved against Path.home() at import time, never a literal - it must
+    match wherever `ccst skills install` symlinks the clean-hook-sessions skill on THIS
+    machine, not any one hardcoded machine's home directory."""
+    job = _job("clean-hook-sessions-weekly")
+    assert job.command[0] == "python3"
+    expected_script = str(
+        Path.home() / ".claude" / "skills" / "clean-hook-sessions" / "scripts"
+        / "clean-hook-sessions.py"
+    )
+    assert job.command[1] == expected_script
+    assert job.command[2:] == ("--older-than", "28", "--keep-n", "50", "--execute")
 
 
 def test_doctor_drift_job_treats_found_drift_as_success():

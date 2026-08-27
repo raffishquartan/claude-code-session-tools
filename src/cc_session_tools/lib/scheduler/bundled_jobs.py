@@ -11,10 +11,18 @@ deliberately excludes `enabled`: that is per-machine operational state a human t
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from cc_session_tools.lib.scheduler.jobspec import JobSpec
+
+# Resolved at import time against *this* machine's home dir, never baked in as a literal -
+# ccst skills install symlinks the bundled clean-hook-sessions skill to exactly this path, so
+# the two can never point at different copies of the script.
+_CLEAN_HOOK_SESSIONS_SCRIPT = str(
+    Path.home() / ".claude" / "skills" / "clean-hook-sessions" / "scripts" / "clean-hook-sessions.py"
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -91,6 +99,18 @@ BUNDLED_CCSCHED_JOBS: tuple[BundledJob, ...] = (
         timeout="60s",
         surface=True,
         command=("ccst", "telemetry", "trim", "--max-size", "10", "--max-age-days", "90"),
+    ),
+    BundledJob(
+        job_id="clean-hook-sessions-weekly",
+        cadence="every:7d",
+        coalesce="one",
+        catchup_window="112d",
+        timeout="120s",
+        surface=True,
+        command=(
+            "python3", _CLEAN_HOOK_SESSIONS_SCRIPT,
+            "--older-than", "28", "--keep-n", "50", "--execute",
+        ),
     ),
     BundledJob(
         job_id="ccsched-no-op-demoing-job-visibility",
