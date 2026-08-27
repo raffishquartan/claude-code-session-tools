@@ -43,6 +43,11 @@ there is no equivalent exemption for those.
  10. ``sudo`` (any form, incl. after a pipe or ``&&``).
  11. ``opentabs tool call plugin_mark_reviewed`` (self-approval prevention).
  12. Direct reads of the telemetry log (fires.jsonl* or sqlite3 telemetry.db).
+ 13. ``git branch`` force-delete: ``-D``, or ``-d``/``--delete`` combined with
+     ``-f``/``--force`` (any order, including combined short flags like ``-Df``).
+     Plain ``git branch -d`` (merge-checked, refuses on unmerged work) is unaffected.
+ 14. ``git push`` branch deletion: ``--delete``/``-d``, or the ``:<branch>`` empty-refspec
+     form (e.g. ``git push origin :old-branch``).
 
 NOTE: deny rules in settings.json take precedence over this hook's "allow". So
 even if this hook approves a command, a matching deny rule will still block it.
@@ -193,6 +198,75 @@ def _detect_mv_to_tmp(cmd: str) -> bool:
         if _mv_segment_violates(seg):
             return True
     return False
+
+
+# ---- Helpers: git branch/push destructive-delete detection ----
+
+
+def _branch_segment_force_deletes(seg: str) -> bool:
+    """True if *seg* is a `git branch` invocation that force-deletes: `-D`, or `-d`/
+    `--delete` combined with `-f`/`--force` in any order (including combined short
+    flags like `-Df`/`-fd`). Plain `-d` alone (merge-checked) does not count, and
+    neither does bare `-f`/`--force` (a real, non-deleting git-branch flag on its
+    own — it force-resets a branch to a new start point)."""
+    tokens = seg.split()
+    i = 0
+    while i < len(tokens) and _ENV_ASSIGN_RE.match(tokens[i]):
+        i += 1
+    # `git` must be the segment's own command, not e.g. inside a quoted string
+    # (mirrors the same discipline `_mv_segment_violates` uses for `mv`).
+    if i >= len(tokens) or tokens[i] != "git":
+        return False
+    try:
+        branch_idx = tokens.index("branch", i + 1)
+    except ValueError:
+        return False
+    has_delete = False
+    has_force = False
+    for t in tokens[branch_idx + 1:]:
+        if t == "--delete":
+            has_delete = True
+        elif t == "--force":
+            has_force = True
+        elif t.startswith("-") and not t.startswith("--"):
+            letters = t[1:]
+            if "D" in letters:
+                return True
+            if "d" in letters:
+                has_delete = True
+            if "f" in letters:
+                has_force = True
+    return has_delete and has_force
+
+
+def _push_segment_deletes_a_branch(seg: str) -> bool:
+    """True if *seg* is a `git push` invocation that deletes a remote branch: an
+    explicit `--delete`/`-d` flag, or the `:<branch>` empty-refspec form
+    (e.g. `git push origin :old-branch`)."""
+    tokens = seg.split()
+    i = 0
+    while i < len(tokens) and _ENV_ASSIGN_RE.match(tokens[i]):
+        i += 1
+    if i >= len(tokens) or tokens[i] != "git":
+        return False
+    try:
+        push_idx = tokens.index("push", i + 1)
+    except ValueError:
+        return False
+    for t in tokens[push_idx + 1:]:
+        if t in ("--delete", "-d"):
+            return True
+        if t.startswith(":") and len(t) > 1:
+            return True
+    return False
+
+
+def _detect_git_branch_force_delete(cmd: str) -> bool:
+    return any(_branch_segment_force_deletes(seg) for seg in _STATEMENT_SEP_RE.split(cmd))
+
+
+def _detect_git_push_branch_delete(cmd: str) -> bool:
+    return any(_push_segment_deletes_a_branch(seg) for seg in _STATEMENT_SEP_RE.split(cmd))
 
 
 # Leading `\.` covers both qualified (shutil.move, fs.renameSync) and chained
@@ -592,6 +666,25 @@ def check_command(command: str) -> str | None:
                 f"set CCCS_FIRES_ACCESS=1 in the environment. (DB lives at "
                 f"{_TELEMETRY_DB_PATH}.)"
             )
+
+    # 13. git branch force-delete (-D, or -d/--delete + -f/--force).
+    if _detect_git_branch_force_delete(command):
+        return (
+            "BLOCKED: git branch force-delete (-D, or -d/--delete combined with "
+            "-f/--force). If this branch's work already landed (e.g. a squash-merged "
+            "PR), tell the user the exact command and branch name and ask them to run "
+            "it themselves in their own terminal. Plain 'git branch -d <name>' (refuses "
+            "on anything not actually merged) is not blocked."
+        )
+
+    # 14. git push branch deletion (--delete/-d, or the :<branch> empty-refspec form).
+    if _detect_git_push_branch_delete(command):
+        return (
+            "BLOCKED: git push branch deletion (--delete/-d, or 'git push <remote> "
+            ":<branch>'). Deleting a remote branch affects every other clone and any "
+            "CI/PR referencing it - tell the user the exact command and branch name and "
+            "ask them to run it themselves in their own terminal."
+        )
 
     return None
 

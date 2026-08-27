@@ -23,6 +23,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   realign, or that your customization was left alone. `lib/scheduler/bundled_jobs.diff_from_bundled`
   is the single comparison both call sites use, deliberately ignoring `enabled` (that's per-machine
   operational state, not part of a bundled definition).
+- `bash_hard_deny.py` now hard-blocks two more categories: `git branch` force-delete (`-D`,
+  or `-d`/`--delete` combined with `-f`/`--force`, any order, including combined short flags
+  like `-Df`/`-fd` - plain `git branch -d`, which git itself refuses on unmerged work, is
+  unaffected) and `git push` branch deletion (`--delete`/`-d`, or the `:<branch>` empty-refspec
+  form). Both require the user to run the command themselves in their own terminal, matching
+  the existing `sudo`/`gh release delete` precedent - not an 8-digit-confirmable action, since
+  `confirm_8digit.py` currently gates by exact MCP tool name only, not Bash-command pattern.
 - `ccst ccsched-jobs install` now also tells a bundled job you deliberately removed with
   `ccsched remove` apart from one this machine has simply never installed - the former is
   reported as `deleted (not re-added)` and never silently re-registered on the next version
