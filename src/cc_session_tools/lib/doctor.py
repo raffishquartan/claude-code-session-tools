@@ -29,6 +29,7 @@ from cc_session_tools.lib.pdata.init_paths import (
 
 if TYPE_CHECKING:
     from cc_session_tools.lib.install_sync import FailedAttempt
+    from cc_session_tools.lib.scheduler.bundled_jobs import BundledJob
 
 
 class Status(str, Enum):
@@ -233,11 +234,18 @@ def check_skill_symlink(skill_name: str, skill_src: Path, skills_dir: Path) -> C
     )
 
 
-def check_ccsched_job_registered(job_id: str) -> CheckResult:
-    """WARN (not FAIL) if a CCST-bundled ccsched job (lib/scheduler/bundled_jobs.py) is missing
-    or disabled — recoverable by re-running `ccst ccsched-jobs install --apply` /
-    `ccsched enable <id>`, not a silent-data-loss risk (this repo's version policy reserves FAIL
-    for breaking on-disk migrations, which this is not)."""
+def check_ccsched_job_registered(
+    job_id: str, expected: "BundledJob | None" = None
+) -> CheckResult:
+    """WARN (not FAIL) if a CCST-bundled ccsched job (lib/scheduler/bundled_jobs.py) is missing,
+    disabled, or — when `expected` is given — no longer matches its bundled definition.
+    Recoverable by re-running `ccst ccsched-jobs install --apply` / `ccsched enable <id>` /
+    `ccsched edit`, not a silent-data-loss risk (this repo's version policy reserves FAIL for
+    breaking on-disk migrations, which this is not).
+
+    `expected` is optional (default None, meaning "skip the drift check") so a caller checking a
+    job id with no corresponding BundledJob at hand — or an older call site — keeps its existing
+    missing/disabled-only behaviour unchanged."""
     from cc_session_tools.lib.scheduler import registry
 
     name = f"ccsched-job:{job_id}"
@@ -247,6 +255,19 @@ def check_ccsched_job_registered(job_id: str) -> CheckResult:
         return CheckResult(name=name, status=Status.WARN, reason=f"ccsched.db unreadable: {exc}")
     for spec in specs:
         if spec.job_id == job_id:
+            if expected is not None:
+                from cc_session_tools.lib.scheduler.bundled_jobs import diff_from_bundled
+
+                changed = diff_from_bundled(spec, expected)
+                if changed:
+                    return CheckResult(
+                        name=name, status=Status.WARN,
+                        reason=(
+                            f"registered but {', '.join(changed)} differ from the bundled "
+                            f"definition — run 'ccst ccsched-jobs install --apply' to see the "
+                            f"diff, or 'ccsched edit {job_id}' if this was intentional"
+                        ),
+                    )
             if spec.enabled:
                 return CheckResult(name=name, status=Status.OK, reason="registered and enabled")
             return CheckResult(
@@ -889,7 +910,7 @@ def run_all_checks(
     from cc_session_tools.lib.scheduler import bundled_jobs
 
     for job in bundled_jobs.BUNDLED_CCSCHED_JOBS:
-        results.append(check_ccsched_job_registered(job.job_id))
+        results.append(check_ccsched_job_registered(job.job_id, expected=job))
 
     # Data stores
     if store_paths is not None:
