@@ -10,7 +10,8 @@ Three concerns, one repo, for life on the [Claude Code](https://docs.anthropic.c
 2. **Usage analytics** — parse `~/.claude/projects/**/*.jsonl` into tokens-and-dollars breakdowns by project, session, model, MCP server, plugin, and tool.
 3. **Hook library** — Python package (`cccs_hooks`) providing Claude Code SessionStart / PreToolUse / PostToolUse / UserPromptSubmit / Stop hook implementations, invokable via `ccst hooks run <name>`.
 
-The repo ships seven CLIs, one shell helper, nine bundled skills, and nine bundled hooks:
+The repo ships seven CLIs, one shell helper, nine bundled skills, nine bundled hooks, and six
+bundled scheduled jobs:
 
 **CLIs and shell helper**
 
@@ -53,6 +54,28 @@ The repo ships seven CLIs, one shell helper, nine bundled skills, and nine bundl
 | **`messaging-deliver`** (SessionStart + UserPromptSubmit) | Sweeps `ccmsg.db` (under `~/.local/share/claude/`, overridable via `CCST_MESSAGES_ROOT`) for messages addressed to this session and injects a compact digest as additional context. Handles auto-read, read-receipts, first-claim-wins claims, and 14-day archival without prompting. |
 | **`catchup`** (SessionStart) | Reconciles the scheduled-job registry, launches owed jobs as detached workers, and surfaces previously-completed runs as a digest. |
 | **`catchup`** (UserPromptSubmit) | Surfaces (reaps) completed scheduled runs on a throttle (60 s), so a job launched at session start surfaces at the next prompt in the same session. |
+
+**Bundled scheduled jobs** (installed via `ccst ccsched-jobs install`)
+
+| | What it does |
+|---|---|
+| **`pm-session-output-reconcile`** | Weekly backfill of the session-output index (`ccst pdata reconcile-session-output --all-projects`) for anything the `pm-update-central-files` skill's own per-session registration step missed. |
+| **`pdata-verify-all`** | Daily integrity check (row-count parity, file_path resolution, suspicious double-updates) across every project's data store; a machine with no pdata-adopted projects yet counts as a pass, not a failure. |
+| **`ccst-doctor-drift-weekly`** | Weekly `ccst doctor --drift` run, surfacing un-muted configuration drift (see [Automatic install sync](#automatic-install-sync)). |
+| **`update-command-cache-reminder`** | Fortnightly reminder to curate the `bash-security-review` command cache from `fires.jsonl`. |
+| **`telemetry-trim-weekly`** | Weekly `ccst telemetry trim`, keeping `telemetry.db` bounded by size and age. |
+| **`ccsched-no-op-demoing-job-visibility`** | Twice-daily no-op whose only purpose is confirming the scheduled-job notification pipeline (Telegram delivery + the SessionStart digest) is actually working. |
+
+Each bundled job is a `BundledJob` entry in `lib/scheduler/bundled_jobs.py` — the single source
+of truth both the installer and `ccst doctor` read, so the two can never disagree about what
+should be registered. `ccst ccsched-jobs install` (dry run by default; `--apply` to register) is
+idempotent and non-destructive: a missing job is registered, but an already-registered job whose
+fields have since diverged from its bundled definition — hand-edited via `ccsched edit`, or
+disabled via `ccsched disable` — is reported as **changed** or **disabled** and left untouched,
+never silently overwritten. `ccst doctor` (and its own bundled `ccst-doctor-drift-weekly` job)
+surfaces the same two states on an ongoing basis, not just at install time, so drift introduced
+between runs of `ccst ccsched-jobs install` (e.g. at every version upgrade, since it's one of
+`install-everything`'s five steps) doesn't go unnoticed until the next manual re-run.
 
 See [CHANGELOG.md](CHANGELOG.md) for a full version history. See [TODO.md](TODO.md) for known follow-up work (including the notify-user skill integration).
 
@@ -569,6 +592,11 @@ validated `ccsched add` calls and disambiguates between:
 - `ccsched` — local recurring jobs, runs off the session critical path.
 - `/schedule` — cloud-hosted agents that run on a cron schedule.
 - `/loop` — in-session polling that runs while the session is open.
+
+### Bundled scheduled jobs
+
+See [Bundled scheduled jobs](#bundled-scheduled-jobs-installed-via-ccst-ccsched-jobs-install)
+above for the full list and `ccst ccsched-jobs install`'s drift-reporting behaviour.
 
 ### Registry
 

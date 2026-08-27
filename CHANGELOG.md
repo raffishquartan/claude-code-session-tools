@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Four new bundled `ccsched` jobs: `ccst-doctor-drift-weekly` (`ccst doctor --drift`),
+  `update-command-cache-reminder`, `telemetry-trim-weekly` (`ccst telemetry trim`), and
+  `ccsched-no-op-demoing-job-visibility` (confirms the scheduled-job notification pipeline is
+  reaching Telegram and the SessionStart digest) - alongside the two already bundled
+  (`pm-session-output-reconcile`, `pdata-verify-all`). All six are registered by
+  `ccst ccsched-jobs install --apply`, part of `install-everything`.
+- `ccst ccsched-jobs install` and `ccst doctor` now detect when an already-registered bundled job
+  has drifted from its shipped definition - hand-edited via `ccsched edit`, or disabled via
+  `ccsched disable` - and report it as `changed (not touched)` / `disabled (not touched)` instead
+  of silently counting it as `already registered`. Neither state is ever auto-corrected; the
+  install-time report tells you what to run (`ccsched edit`/`ccsched enable`) if you want to
+  realign, or that your customization was left alone. `lib/scheduler/bundled_jobs.diff_from_bundled`
+  is the single comparison both call sites use, deliberately ignoring `enabled` (that's per-machine
+  operational state, not part of a bundled definition).
+
 ## [2.10.1] - 2026-08-27
 
 ### Changed
