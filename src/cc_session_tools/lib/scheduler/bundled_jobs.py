@@ -1,10 +1,20 @@
 """Single source of truth for ccsched jobs CCST provisions automatically at install time. Both
 `ccst ccsched-jobs install` (cli/ccst.py) and the `ccst doctor` check (lib/doctor.py) import this
 list so the installer and the health check can never disagree about what should be registered.
-Add a new BundledJob here — do not invent a second place to list one."""
+Add a new BundledJob here — do not invent a second place to list one.
+
+`diff_from_bundled` is the one comparison both callers use to decide whether an already-registered
+job still matches its bundled definition, so "changed" is defined identically in both places. It
+deliberately excludes `enabled`: that is per-machine operational state a human toggles via
+`ccsched enable`/`disable`, not something a bundled definition ever expresses an opinion on — see
+`_cmd_ccsched_jobs_install` and `doctor.check_ccsched_job_registered`, the two callers."""
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from cc_session_tools.lib.scheduler.jobspec import JobSpec
 
 
 @dataclass(frozen=True, slots=True)
@@ -46,4 +56,75 @@ BUNDLED_CCSCHED_JOBS: tuple[BundledJob, ...] = (
         # here, so it still counts as a failure.
         success_exit_codes=(0, 2),
     ),
+    BundledJob(
+        job_id="ccst-doctor-drift-weekly",
+        cadence="every:7d",
+        coalesce="one",
+        catchup_window="28d",
+        timeout="60s",
+        surface=True,
+        command=("ccst", "doctor", "--drift"),
+        # `--drift` exits 1 when it finds un-muted drift to report (see doctor.py's drift
+        # monitor) — that is the job doing its job, not a crash, so it must not count against
+        # auto-suspend or the weekly nudge would stop firing after ten quiet weeks.
+        success_exit_codes=(0, 1),
+    ),
+    BundledJob(
+        job_id="update-command-cache-reminder",
+        cadence="every:2w",
+        coalesce="one",
+        catchup_window="7d",
+        timeout="30s",
+        surface=True,
+        command=(
+            "echo",
+            "Reminder: curate the bash-security-review command cache - run the "
+            "update-command-cache skill to sweep fires.jsonl for new safe-verdict commands "
+            "and promote the ones you approve.",
+        ),
+    ),
+    BundledJob(
+        job_id="telemetry-trim-weekly",
+        cadence="every:7d",
+        coalesce="one",
+        catchup_window="28d",
+        timeout="60s",
+        surface=True,
+        command=("ccst", "telemetry", "trim", "--max-size", "10", "--max-age-days", "90"),
+    ),
+    BundledJob(
+        job_id="ccsched-no-op-demoing-job-visibility",
+        cadence="every:12h",
+        coalesce="one",
+        catchup_window="1d",
+        timeout="10s",
+        surface=True,
+        command=(
+            "echo",
+            "ccsched notification check: this output reaching Telegram and the next "
+            "SessionStart digest confirms the scheduled-job notification pipeline is working.",
+        ),
+    ),
 )
+
+
+def diff_from_bundled(spec: "JobSpec", job: BundledJob) -> tuple[str, ...]:
+    """Names of the fields where a registered JobSpec no longer matches its bundled
+    definition, in declaration order; empty if it matches exactly. Deliberately ignores
+    `enabled` — see module docstring."""
+    differing: list[str] = []
+    if spec.cadence != job.cadence:
+        differing.append("cadence")
+    if spec.coalesce.value != job.coalesce:
+        differing.append("coalesce")
+    if spec.catchup_window != job.catchup_window:
+        differing.append("catchup_window")
+    if spec.timeout != job.timeout:
+        differing.append("timeout")
+    if spec.surface != job.surface:
+        differing.append("surface")
+    if spec.command != job.command:
+        differing.append("command")
+    if spec.success_exit_codes != job.success_exit_codes:
+        differing.append("success_exit_codes")
+    return tuple(differing)

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from cc_session_tools.lib.scheduler import bundled_jobs
+from cc_session_tools.lib.scheduler.bundled_jobs import diff_from_bundled
+from cc_session_tools.lib.scheduler.jobspec import validate_job_fields
 
 
 def test_bundled_jobs_contains_session_output_reconcile_job():
@@ -54,3 +56,72 @@ def test_session_output_job_uses_default_success_exit_codes():
         if j.job_id == "pm-session-output-reconcile"
     )
     assert job.success_exit_codes == (0,)
+
+
+def _job(job_id: str) -> bundled_jobs.BundledJob:
+    return next(j for j in bundled_jobs.BUNDLED_CCSCHED_JOBS if j.job_id == job_id)
+
+
+def test_bundled_jobs_contains_the_2026_08_batch():
+    ids = {job.job_id for job in bundled_jobs.BUNDLED_CCSCHED_JOBS}
+    assert ids >= {
+        "ccst-doctor-drift-weekly",
+        "update-command-cache-reminder",
+        "telemetry-trim-weekly",
+        "ccsched-no-op-demoing-job-visibility",
+    }
+
+
+def test_doctor_drift_job_treats_found_drift_as_success():
+    """`ccst doctor --drift` exits 1 when it finds un-muted drift to report - that's the job
+    doing its job, not a crash, so it must not count toward auto-suspend."""
+    job = _job("ccst-doctor-drift-weekly")
+    assert job.command == ("ccst", "doctor", "--drift")
+    assert job.success_exit_codes == (0, 1)
+
+
+def test_update_command_cache_reminder_job_is_a_plain_echo():
+    job = _job("update-command-cache-reminder")
+    assert job.command[0] == "echo"
+    assert job.cadence == "every:2w"
+
+
+def test_telemetry_trim_weekly_job_command():
+    job = _job("telemetry-trim-weekly")
+    assert job.command == ("ccst", "telemetry", "trim", "--max-size", "10", "--max-age-days", "90")
+
+
+def _spec_for(job: bundled_jobs.BundledJob, **overrides):
+    fields = dict(
+        job_id=job.job_id, cadence=job.cadence, coalesce=job.coalesce,
+        command=list(job.command), surface=job.surface, enabled=True,
+        catchup_window=job.catchup_window, timeout=job.timeout,
+        success_exit_codes=job.success_exit_codes,
+    )
+    fields.update(overrides)
+    return validate_job_fields(**fields)
+
+
+def test_diff_from_bundled_is_empty_for_an_untouched_job():
+    job = _job("pdata-verify-all")
+    assert diff_from_bundled(_spec_for(job), job) == ()
+
+
+def test_diff_from_bundled_ignores_enabled_state():
+    """enabled is per-machine operational state a human toggles via ccsched enable/disable, not
+    part of a job's bundled definition, so a disabled job with everything else untouched is not
+    'changed'."""
+    job = _job("pdata-verify-all")
+    assert diff_from_bundled(_spec_for(job, enabled=False), job) == ()
+
+
+def test_diff_from_bundled_names_every_differing_field():
+    job = _job("pdata-verify-all")
+    spec = _spec_for(job, cadence="every:3d", timeout="30s")
+    assert diff_from_bundled(spec, job) == ("cadence", "timeout")
+
+
+def test_diff_from_bundled_detects_a_changed_command():
+    job = _job("pdata-verify-all")
+    spec = _spec_for(job, command=["ccst", "pdata", "verify", "--project", "x"])
+    assert diff_from_bundled(spec, job) == ("command",)
