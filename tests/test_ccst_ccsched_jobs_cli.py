@@ -63,6 +63,7 @@ def test_apply_registers_every_bundled_job(base_env):
         "telemetry-trim-weekly",
         "ccsched-no-op-demoing-job-visibility",
         "clean-hook-sessions-weekly",
+        "session-gc-report-weekly",
     ):
         assert f"registered: {job_id}" in r.stdout
 

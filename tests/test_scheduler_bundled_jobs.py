@@ -39,7 +39,7 @@ def test_pdata_verify_all_job_command_and_cadence():
     assert job.command == ("ccst", "pdata", "verify", "--all-projects")
     assert job.cadence == "daily@03:00"  # avoids interactive-session hours
     assert job.coalesce == "one"
-    assert job.surface is False  # results reach ccst doctor, not a direct interrupt (spec §8.2)
+    assert job.surface is True  # also shows the launch notice, not just the eventual result
 
 
 def test_pdata_verify_all_job_treats_no_projects_yet_as_success():
@@ -72,7 +72,14 @@ def test_bundled_jobs_contains_the_2026_08_batch():
         "telemetry-trim-weekly",
         "ccsched-no-op-demoing-job-visibility",
         "clean-hook-sessions-weekly",
+        "session-gc-report-weekly",
     }
+
+
+def test_session_gc_report_weekly_job_command():
+    job = _job("session-gc-report-weekly")
+    assert job.command == ("ccst", "gc", "report")
+    assert job.cadence == "every:7d"
 
 
 def test_clean_hook_sessions_weekly_job_command_points_at_the_bundled_skill_script():

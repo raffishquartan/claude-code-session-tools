@@ -53,7 +53,12 @@ BUNDLED_CCSCHED_JOBS: tuple[BundledJob, ...] = (
         coalesce="one",
         catchup_window="7d",
         timeout="300s",
-        surface=False,
+        # A completed run always surfaces its result regardless of this flag (surface.py:
+        # only a LAUNCH notice - "started, running in background" - respects it); True means
+        # you also see that launch notice, not just the eventual "ran: OK/issues" line.
+        # Adopted from a live tweak - False was the original default, but the daily launch
+        # notice for a fast job like this one turned out to be worth seeing after all.
+        surface=True,
         command=("ccst", "pdata", "verify", "--all-projects"),
         # `verify --all-projects` exits 2 for "zero project .db files found" (plan Decision 8,
         # 2026-07-30-ccst-pdata-verify-and-skills.md) — a deliberate, distinct-from-clean CLI
@@ -76,6 +81,15 @@ BUNDLED_CCSCHED_JOBS: tuple[BundledJob, ...] = (
         # monitor) — that is the job doing its job, not a crash, so it must not count against
         # auto-suspend or the weekly nudge would stop firing after ten quiet weeks.
         success_exit_codes=(0, 1),
+    ),
+    BundledJob(
+        job_id="session-gc-report-weekly",
+        cadence="every:7d",
+        coalesce="one",
+        catchup_window="28d",
+        timeout="60s",
+        surface=True,
+        command=("ccst", "gc", "report"),
     ),
     BundledJob(
         job_id="update-command-cache-reminder",
