@@ -55,7 +55,10 @@ Current subcommands:
   claude-md uninstall            Remove the messaging block from CLAUDE.md.
   ccsched-jobs install           Register CCST's bundled ccsched jobs (see
                                  lib/scheduler/bundled_jobs.py) if not already present.
-                                 Dry run by default; pass --apply to register.
+                                 Dry run by default; pass --apply to register. An
+                                 already-registered job whose fields no longer match its
+                                 bundled definition, or that has been disabled, is reported
+                                 as such and left untouched, never overwritten.
   install-everything             Run all install steps (skills, hooks, shell,
                                  claude-md, scheduled jobs) then health-check.
                                  Dry run by default; pass --apply to write changes.
@@ -1627,25 +1630,43 @@ def _cmd_ccsched_jobs_install(args: argparse.Namespace) -> int:
     surprising footgun. "Already there" is decided by an explicit membership check against
     registry.load_registry()'s existing ids before add_job is ever called, not by attempting the
     add and catching ccsched add's own duplicate-id RegistryError (this repo's "no exceptions
-    for control flow" coding standard rules that out)."""
+    for control flow" coding standard rules that out).
+
+    An already-registered job that no longer matches its bundled definition — hand-edited fields,
+    or disabled — is reported as such rather than silently counted as "already registered", so an
+    upgrade (this command is one of install-everything's five steps, so it runs on every version
+    bump) tells the operator they are out of sync with the shipped source instead of staying
+    quiet about it. Neither state is ever auto-corrected here; `ccst doctor` surfaces the same
+    two states on an ongoing basis via `check_ccsched_job_registered`."""
     from cc_session_tools.lib.scheduler import bundled_jobs, registry
     from cc_session_tools.lib.scheduler.jobspec import validate_job_fields
 
-    existing_ids = {spec.job_id for spec in registry.load_registry()}
+    existing = {spec.job_id: spec for spec in registry.load_registry()}
     for job in bundled_jobs.BUNDLED_CCSCHED_JOBS:
-        if job.job_id in existing_ids:
-            print(f"  already registered: {job.job_id}")
+        spec = existing.get(job.job_id)
+        if spec is not None:
+            changed = bundled_jobs.diff_from_bundled(spec, job)
+            if changed:
+                print(
+                    f"  changed (not touched): {job.job_id} - {', '.join(changed)} "
+                    f"differ from the bundled definition; run 'ccsched edit' to realign, or "
+                    f"leave as your intentional customization"
+                )
+            elif not spec.enabled:
+                print(f"  disabled (not touched): {job.job_id} - run 'ccsched enable {job.job_id}' to re-enable")
+            else:
+                print(f"  already registered: {job.job_id}")
             continue
         if not args.apply:
             print(f"  would register: {job.job_id}")
             continue
-        spec = validate_job_fields(
+        new_spec = validate_job_fields(
             job_id=job.job_id, cadence=job.cadence, coalesce=job.coalesce,
             command=list(job.command), surface=job.surface, enabled=True,
             catchup_window=job.catchup_window, timeout=job.timeout,
             success_exit_codes=job.success_exit_codes,
         )
-        registry.add_job(spec)
+        registry.add_job(new_spec)
         print(f"  registered: {job.job_id}")
 
     if not args.apply:

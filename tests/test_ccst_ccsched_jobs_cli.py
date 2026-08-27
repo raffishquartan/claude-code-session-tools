@@ -52,3 +52,50 @@ def test_apply_registers_pdata_verify_all_with_success_exit_codes(base_env):
     )
     assert r.returncode == 0, r.stderr
     assert re.search(r"success_exit_codes:\s+0,2", r.stdout)
+
+
+def test_apply_registers_every_bundled_job(base_env):
+    r = _run(base_env, "ccsched-jobs", "install", "--apply")
+    assert r.returncode == 0, r.stderr
+    for job_id in (
+        "ccst-doctor-drift-weekly",
+        "update-command-cache-reminder",
+        "telemetry-trim-weekly",
+        "ccsched-no-op-demoing-job-visibility",
+    ):
+        assert f"registered: {job_id}" in r.stdout
+
+
+def test_disabled_job_is_reported_not_touched(base_env):
+    _run(base_env, "ccsched-jobs", "install", "--apply")
+    r = subprocess.run(
+        [sys.executable, "-m", "cc_session_tools.cli.ccsched", "disable", "telemetry-trim-weekly"],
+        capture_output=True, text=True, cwd=str(Path(__file__).parent), env=base_env,
+    )
+    assert r.returncode == 0, r.stderr
+
+    r = _run(base_env, "ccsched-jobs", "install", "--apply")
+    assert r.returncode == 0, r.stderr
+    assert "disabled (not touched): telemetry-trim-weekly" in r.stdout
+    assert "already registered: telemetry-trim-weekly" not in r.stdout
+
+
+def test_changed_job_is_reported_not_touched_and_not_overwritten(base_env):
+    _run(base_env, "ccsched-jobs", "install", "--apply")
+    r = subprocess.run(
+        [sys.executable, "-m", "cc_session_tools.cli.ccsched", "edit",
+         "telemetry-trim-weekly", "--timeout", "9s"],
+        capture_output=True, text=True, cwd=str(Path(__file__).parent), env=base_env,
+    )
+    assert r.returncode == 0, r.stderr
+
+    r = _run(base_env, "ccsched-jobs", "install", "--apply")
+    assert r.returncode == 0, r.stderr
+    assert "changed (not touched): telemetry-trim-weekly - timeout" in r.stdout
+    assert "already registered: telemetry-trim-weekly" not in r.stdout
+
+    show = subprocess.run(
+        [sys.executable, "-m", "cc_session_tools.cli.ccsched", "show", "telemetry-trim-weekly"],
+        capture_output=True, text=True, cwd=str(Path(__file__).parent), env=base_env,
+    )
+    assert re.search(r"timeout:\s+9s", show.stdout)
