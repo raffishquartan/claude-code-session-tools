@@ -64,7 +64,7 @@ bundled scheduled jobs:
 | **`pm-session-output-reconcile`** | Weekly backfill of the session-output index (`ccst pdata reconcile-session-output --all-projects`) for anything the `pm-update-central-files` skill's own per-session registration step missed. |
 | **`pdata-verify-all`** | Daily integrity check (row-count parity, file_path resolution, suspicious double-updates) across every project's data store; a machine with no pdata-adopted projects yet counts as a pass, not a failure. |
 | **`ccst-doctor-drift-weekly`** | Weekly `ccst doctor --drift` run, surfacing un-muted configuration drift (see [Automatic install sync](#automatic-install-sync)). |
-| **`session-gc-report-weekly`** | Weekly `ccst gc report`, listing orphaned per-session-uuid entries across the scheduler, messaging, and session-env stores (never deletes anything itself). |
+| **`session-gc-report-weekly`** | Weekly `ccst gc report`, listing orphaned per-session-uuid entries across the scheduler, messaging, and session-env stores (never deletes anything itself — its output suggests `ccst gc prune` when it finds orphans). |
 | **`update-command-cache-reminder`** | Fortnightly reminder to curate the `bash-security-review` command cache from `fires.jsonl`. |
 | **`telemetry-trim-weekly`** | Weekly `ccst telemetry trim`, keeping `telemetry.db` bounded by size and age. |
 | **`ccsched-no-op-demoing-job-visibility`** | Twice-daily no-op whose only purpose is confirming the scheduled-job notification pipeline (Telegram delivery + the SessionStart digest) is actually working. |

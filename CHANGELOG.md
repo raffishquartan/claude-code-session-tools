@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `ccst gc prune` — the execute half of `ccst gc report`, which has been report-only since it
+  shipped. Deletes the same orphaned per-session-uuid entries `gc report` identifies (same
+  orphan definition, reused unchanged), gated by an explicit `--execute` flag (default: dry
+  run) and a `--min-age-hours` floor (default 24) so a brand-new session's own
+  scheduler/messaging state is never deleted out from under it before its transcript exists.
+  Two of the five stores (`scheduler-cursors`, `messages-cursors`) have no timestamp column of
+  their own — the floor is computed once per uuid from the three stores that do, and a uuid
+  with no age evidence anywhere is reported as `skipped (age-unknown)`, never deleted regardless
+  of the floor. `--only STORE` (repeatable) restricts to a subset of the five stores. `ccst gc
+  report`'s output now suggests running `ccst gc prune` whenever it finds orphans.
+
 ## [2.11.0] - 2026-08-27
 
 ### Added
