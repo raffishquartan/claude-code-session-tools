@@ -10,7 +10,7 @@ Three concerns, one repo, for life on the [Claude Code](https://docs.anthropic.c
 2. **Usage analytics** — parse `~/.claude/projects/**/*.jsonl` into tokens-and-dollars breakdowns by project, session, model, MCP server, plugin, and tool.
 3. **Hook library** — Python package (`cccs_hooks`) providing Claude Code SessionStart / PreToolUse / PostToolUse / UserPromptSubmit / Stop hook implementations, invokable via `ccst hooks run <name>`.
 
-The repo ships seven CLIs, one shell helper, nine bundled skills, nine bundled hooks, and six
+The repo ships seven CLIs, one shell helper, nine bundled skills, ten bundled hooks, and six
 bundled scheduled jobs:
 
 **CLIs and shell helper**
@@ -46,6 +46,7 @@ bundled scheduled jobs:
 |---|---|
 | **`session-tag`** (SessionStart) | Writes a `<uuid>.tag` file so `claude-code-usage` can map session UUIDs to human-readable names. |
 | **`last-screenshot`** (UserPromptSubmit) | Resolves your newest screenshot for the `>lss` token and injects its path. Requires `CCST_SCREENSHOT_DIR`. |
+| **`bash-hard-deny`** (PreToolUse) | Categorical hard-deny gate for Bash: destructive file ops (`rm`/`rmdir`/`unlink`/`shred`, incl. inline python/node and script-file/heredoc forms), delete-by-move to a tmp-like location, `git branch`/`git push` branch deletion, `gh api`/`gh release` delete, destructive curl/wget methods, `sudo`, and direct telemetry-log reads. Runs before every other Bash hook; a match here can never be overridden in-session (the message tells you to run the command yourself in a separate terminal). |
 | **`bash-security-review`** (PreToolUse) | Tiered Bash command security review with an allowlist cache and LLM fallback. |
 | **`marker-allow`** (PreToolUse) | Auto-approves a bare `touch` of a skill marker under `~/.cache/claude/markers/` (and nothing else), so marker-gated skills can refresh their TTL marker without a permission prompt. |
 | **`confirm-8digit`** (PreToolUse) | Blocks a configurable set of high-stakes tool calls unless the user repeats back an 8-digit confirmation code. |
