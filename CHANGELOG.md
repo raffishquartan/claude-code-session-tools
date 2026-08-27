@@ -9,12 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Scheduled jobs are now a bundled, installable CCST component, on equal footing with skills
+  and hooks.** `ccst ccsched-jobs install` (dry run by default, `--apply` to register) is one of
+  `install-everything`'s five steps, so all six bundled jobs below get registered automatically
+  on every fresh install and on every version upgrade, exactly like the bundled skills/hooks
+  already do - no separate manual `ccsched add` step required. See the README's new "Bundled
+  scheduled jobs" section for the full list and behaviour.
 - Four new bundled `ccsched` jobs: `ccst-doctor-drift-weekly` (`ccst doctor --drift`),
   `update-command-cache-reminder`, `telemetry-trim-weekly` (`ccst telemetry trim`), and
   `ccsched-no-op-demoing-job-visibility` (confirms the scheduled-job notification pipeline is
   reaching Telegram and the SessionStart digest) - alongside the two already bundled
-  (`pm-session-output-reconcile`, `pdata-verify-all`). All six are registered by
-  `ccst ccsched-jobs install --apply`, part of `install-everything`.
+  (`pm-session-output-reconcile`, `pdata-verify-all`), for six total.
 - `ccst ccsched-jobs install` and `ccst doctor` now detect when an already-registered bundled job
   has drifted from its shipped definition - hand-edited via `ccsched edit`, or disabled via
   `ccsched disable` - and report it as `changed (not touched)` / `disabled (not touched)` instead
@@ -23,6 +28,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   realign, or that your customization was left alone. `lib/scheduler/bundled_jobs.diff_from_bundled`
   is the single comparison both call sites use, deliberately ignoring `enabled` (that's per-machine
   operational state, not part of a bundled definition).
+- `ccst ccsched-jobs install` now also tells a bundled job you deliberately removed with
+  `ccsched remove` apart from one this machine has simply never installed - the former is
+  reported as `deleted (not re-added)` and never silently re-registered on the next version
+  bump. A new `ccsched.db` table (`bundled_job_installs`) records every bundled job ever
+  installed on this machine, since `ccsched remove` itself leaves no trace to check against.
+  `--reinstall JOB_ID` (repeatable) is the explicit override that brings a deleted one back.
 - `bash_hard_deny.py` now hard-blocks two more categories: `git branch` force-delete (`-D`,
   or `-d`/`--delete` combined with `-f`/`--force`, any order, including combined short flags
   like `-Df`/`-fd` - plain `git branch -d`, which git itself refuses on unmerged work, is
@@ -30,12 +41,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   form). Both require the user to run the command themselves in their own terminal, matching
   the existing `sudo`/`gh release delete` precedent - not an 8-digit-confirmable action, since
   `confirm_8digit.py` currently gates by exact MCP tool name only, not Bash-command pattern.
-- `ccst ccsched-jobs install` now also tells a bundled job you deliberately removed with
-  `ccsched remove` apart from one this machine has simply never installed - the former is
-  reported as `deleted (not re-added)` and never silently re-registered on the next version
-  bump. A new `ccsched.db` table (`bundled_job_installs`) records every bundled job ever
-  installed on this machine, since `ccsched remove` itself leaves no trace to check against.
-  `--reinstall JOB_ID` (repeatable) is the explicit override that brings a deleted one back.
+
+### Documentation
+
+- README's "Bundled hooks" table gains the missing `bash-hard-deny` row (categorical Bash
+  hard-deny gate) - every other PreToolUse Bash hook already had one.
 
 ## [2.10.1] - 2026-08-27
 
