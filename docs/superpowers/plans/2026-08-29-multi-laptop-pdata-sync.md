@@ -187,7 +187,9 @@ git commit -m "pdata sync: add pure vector-clock comparison/merge primitives"
 ## Task 2: `pdata_meta` table + read/write against a real DB
 
 **Files:**
-- Modify: `src/cc_session_tools/lib/pdata/repository.py:30-47` (the `_BASE_DDL` string)
+- Modify: `src/cc_session_tools/lib/pdata/repository.py:30-51` (the `_BASE_DDL` string; re-check
+  the exact current line range before editing - Step 3's instruction is content-based, not
+  line-number-dependent, so append after `record_group_fields`'s closing `"""` regardless)
 - Create: `src/cc_session_tools/lib/pdata/vector_clock_store.py`
 - Test: `tests/pdata/test_vector_clock_store.py`
 
@@ -303,7 +305,8 @@ git commit -m "pdata sync: add pdata_meta table and its read/write helpers"
 - Modify: `src/cc_session_tools/lib/pdata/service.py` (`add_record:84`, `update_record:290`,
   `delete_record:378`, `restore_record:409`, `schema_add_field:422` - line numbers as of this
   plan's writing, re-check before editing)
-- Test: `tests/pdata/test_service.py` (extend existing file - do not create a new one)
+- Test: `tests/pdata/test_service.py` (extend this existing file - do not create a new one at
+  the repo top level)
 
 - [ ] **Step 1: Write the failing tests** (add to the existing test file; read it first to match
   its existing fixture conventions rather than inventing new ones)
@@ -358,8 +361,8 @@ Expected: FAIL - `pdata_meta` stays empty (the bump call doesn't exist yet).
     vector_clock_store.bump_own(conn, resolve_machine_id().machine_id)
 ```
 
-(`resolve_machine_id()` is Task 6's `machine_identity.resolve()` - this task has a hard dependency
-on Task 6 landing first; do Task 6 before this one if working through tasks out of order.)
+(`resolve_machine_id()` is Task 4's `machine_identity.resolve()` - this task has a hard dependency
+on Task 4 landing first; do Task 4 before this one if working through tasks out of order.)
 
 - [ ] **Step 4: Run to verify pass**
 
@@ -861,10 +864,12 @@ def sync_lock_is_locked(db_path: Path) -> bool:
     return sync_lock.is_locked(db_path)
 ```
 
-Note: `store.project_root()` does not exist yet at this point in the plan - it's added in Task 8
-(adopt-from-dump) since that's the first place a project *root* (as opposed to a project's `.db`
-path) is needed inside `lib/pdata/`. If implementing tasks out of order, do Task 8's `store.py`
-addition first, or stub `project_root()` temporarily and replace it when Task 8 lands.
+**Hard blocker, not a footnote:** `store.project_root()` does not exist yet at this point in the
+plan - it's added in Task 8 (adopt-from-dump), since that's the first place a project *root* (as
+opposed to a project's `.db` path) is needed inside `lib/pdata/`. Do Task 8's `store.py` addition
+(just that one function, not the rest of Task 8) **before** Step 4 below, even though Task 8 is
+numbered later - the tasks are numbered for in-order execution, but this one specific dependency
+runs backward. Do not stub it "temporarily" - implement the real function now.
 
 - [ ] **Step 5: Run to verify pass**
 
@@ -1221,8 +1226,9 @@ git commit -m "pdata sync: wire conflict notifications into existing Telegram + 
 
 **Files:**
 - Create: `src/cccs_hooks/pdata_sync.py`
-- Test: `tests/hooks/test_pdata_sync_hook.py` (check `tests/hooks/` or equivalent for the existing
-  per-hook test layout and match it - do not invent a new layout)
+- Test: `tests/pdata/test_pdata_sync_hook.py` (no `tests/hooks/` directory exists in this repo -
+  existing hook tests live flat in `tests/` or colocated in their nearest subsystem folder, e.g.
+  `tests/scheduler/test_catchup_hook.py`; `tests/pdata/` is the matching choice here)
 
 - [ ] **Step 1: Write the failing tests** - `on_session_start(cwd)`: occupancy-check (excluding
   own PID via `os.getppid()`) → if occupied, no-op; else `rehydrate.rehydrate(project)`, and on
@@ -1240,7 +1246,7 @@ git commit -m "pdata sync: wire conflict notifications into existing Telegram + 
 - [ ] **Step 4: Run to verify pass, `mypy --strict`, commit.**
 
 ```bash
-git add src/cccs_hooks/pdata_sync.py tests/hooks/test_pdata_sync_hook.py
+git add src/cccs_hooks/pdata_sync.py tests/pdata/test_pdata_sync_hook.py
 git commit -m "pdata sync: SessionStart/SessionEnd hook wiring"
 ```
 
