@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.11.1] - 2026-08-29
+
+### Fixed
+
+- `ccst pdata reconcile-session-output` (and `ccst pdata verify`'s underlying project discovery)
+  no longer treats `~/repos/*` dev repos as projects. `discover_projects_with_sessions()` scanned
+  both `$CLAUDE_SESSION_TOOLS_REPO_ROOT` and `$CLAUDE_SESSION_TOOLS_PROJ_ROOT`, so any dev repo
+  with its own `cc-sessions/` history (Claude Code run directly inside it) silently grew a
+  `project-db/<name>.db` purely for the session-output index — 19 such repos had one on
+  inspection. Scoped to `$CLAUDE_SESSION_TOOLS_PROJ_ROOT` only via a new
+  `roots.require_proj_root()`; `$CLAUDE_SESSION_TOOLS_REPO_ROOT` is no longer consulted by this
+  feature at all (it's still used, unchanged, by everything else that calls
+  `load_session_roots()` — session-tag rules, `ccr`/`ccd`/`ccs`, messaging, move-session).
+
 ### Added
 
 - `ccst gc prune` — the execute half of `ccst gc report`, which has been report-only since it

@@ -43,6 +43,38 @@ def proj_root() -> Path | None:
     return _resolve_env(PROJ_ROOT_ENV)
 
 
+def require_proj_root() -> Path:
+    """The strict (namespaced) root from CLAUDE_SESSION_TOOLS_PROJ_ROOT alone - for callers that
+    must never fall back to CLAUDE_SESSION_TOOLS_REPO_ROOT (e.g. the session-output index, spec
+    §8, which is project-scoped by design and must not treat an arbitrary ~/repos/* dev repo as a
+    project). Same validation and error-message shape as load_session_roots(), narrowed to one
+    env var.
+
+    Raises RootsConfigError (message starts with [CST-ROOTS-CONFIG-ERROR]) when
+    CLAUDE_SESSION_TOOLS_PROJ_ROOT is unset, empty, points at a nonexistent path, or points at a
+    file rather than a directory - regardless of whether CLAUDE_SESSION_TOOLS_REPO_ROOT is set.
+    """
+    raw = os.environ.get(PROJ_ROOT_ENV)
+    if not raw:
+        raise RootsConfigError(
+            f"{_MARKER} ${PROJ_ROOT_ENV} is not configured. Set it to the directory whose "
+            f"direct children are your projects (typical value: $HOME/cc)."
+        )
+    p = Path(raw).expanduser()
+    if not p.exists():
+        raise RootsConfigError(
+            f"{_MARKER} ${PROJ_ROOT_ENV} is set to '{raw}' but that path does not exist. "
+            f"Either create the directory, point the env var at an existing directory, or "
+            f"unset the env var."
+        )
+    if not p.is_dir():
+        raise RootsConfigError(
+            f"{_MARKER} ${PROJ_ROOT_ENV} is set to '{raw}' but that path is a file, not a "
+            f"directory. Point the env var at a directory or unset it."
+        )
+    return p.resolve()
+
+
 def load_session_roots() -> list[Path]:
     """All configured session roots, in REPO,PROJ order, deduped.
 

@@ -1318,8 +1318,7 @@ def _cmd_pdata_reconcile_session_output(args: argparse.Namespace) -> int:
             if root is None:
                 print(
                     f"ccst pdata: no project {args.project!r} found with a cc-sessions/ "
-                    f"directory under $CLAUDE_SESSION_TOOLS_REPO_ROOT or "
-                    f"$CLAUDE_SESSION_TOOLS_PROJ_ROOT",
+                    f"directory under $CLAUDE_SESSION_TOOLS_PROJ_ROOT",
                     file=sys.stderr,
                 )
                 return 1
