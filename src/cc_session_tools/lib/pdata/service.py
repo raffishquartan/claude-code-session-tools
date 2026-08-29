@@ -9,7 +9,8 @@ import re as _re
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 
-from cc_session_tools.lib.pdata import naming, repository, store
+from cc_session_tools.lib import machine_identity
+from cc_session_tools.lib.pdata import naming, repository, store, vector_clock_store
 
 # op is deliberately \S+ here (not the literal alternation of valid ops) — matching only a
 # literal alternation would make an invalid op (e.g. "~=") fail to match the whole regex at all,
@@ -110,6 +111,9 @@ def add_record(
             )
             if repository.extension_table_exists(conn, record_group):
                 repository.insert_extension_row(conn, record_group, record_id, fields)
+            # Binding invariant #1 (sync design spec) — every local write bumps this machine's
+            # own vector-clock revision in the same transaction as the data change.
+            vector_clock_store.bump_own(conn, machine_identity.resolve().machine_id)
         row = repository.get_base_record(conn, record_id)
         assert row is not None
         ext_row = repository.get_extension_row(conn, record_group, record_id)
@@ -337,6 +341,10 @@ def update_record(
             )
             if ok and fields:
                 repository.update_extension_row(conn, record_group, record_id, fields)
+            if ok:
+                # Binding invariant #1 — only a write that actually landed bumps the vector
+                # clock; a version conflict (ok=False) made no data change to report.
+                vector_clock_store.bump_own(conn, machine_identity.resolve().machine_id)
 
         if not ok:
             current_row = repository.get_base_record(conn, record_id)
@@ -389,6 +397,10 @@ def delete_record(
             ok = repository.soft_delete(
                 conn, record_id=record_id, expected_version=expected_version, deleted_at=ts,
             )
+            if ok:
+                # Binding invariant #1 — only a write that actually landed bumps the vector
+                # clock; a version conflict (ok=False) made no data change to report.
+                vector_clock_store.bump_own(conn, machine_identity.resolve().machine_id)
         if not ok:
             current_row = repository.get_base_record(conn, record_id)
             assert current_row is not None
@@ -415,6 +427,9 @@ def restore_record(*, project: str, record_id: int, restored_at: int | None = No
             raise RecordNotFoundError(record_id)
         with repository._immediate(conn):
             repository.restore(conn, record_id=record_id, restored_at=ts)
+            # Binding invariant #1 — every local write bumps this machine's own vector-clock
+            # revision in the same transaction as the data change.
+            vector_clock_store.bump_own(conn, machine_identity.resolve().machine_id)
     finally:
         conn.close()
 
@@ -442,6 +457,9 @@ def schema_add_field(
                     conn, record_group=record_group, field_name=field_name,
                     description=description, added_at=now,
                 )
+            # Binding invariant #1 — every local write bumps this machine's own vector-clock
+            # revision in the same transaction as the data change.
+            vector_clock_store.bump_own(conn, machine_identity.resolve().machine_id)
     finally:
         conn.close()
 
