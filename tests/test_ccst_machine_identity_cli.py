@@ -37,6 +37,18 @@ def test_confirm_requires_name(base_env):
     assert r.returncode == 2
 
 
+def test_confirm_rejects_an_empty_name(base_env):
+    r = _run(base_env, "machine-identity", "confirm", "--name", "")
+    assert r.returncode == 2
+    assert "ccst machine-identity:" in r.stderr
+
+
+def test_confirm_rejects_a_whitespace_only_name(base_env):
+    r = _run(base_env, "machine-identity", "confirm", "--name", "   ")
+    assert r.returncode == 2
+    assert "ccst machine-identity:" in r.stderr
+
+
 def test_confirm_then_show_reports_confirmed_name(base_env):
     r = _run(base_env, "machine-identity", "confirm", "--name", "ltxy")
     assert r.returncode == 0

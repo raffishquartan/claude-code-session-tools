@@ -1414,7 +1414,11 @@ def _cmd_machine_identity_show(args: argparse.Namespace) -> int:
 
 
 def _cmd_machine_identity_confirm(args: argparse.Namespace) -> int:
-    machine_identity.confirm(args.name)
+    try:
+        machine_identity.confirm(args.name)
+    except ValueError as exc:
+        print(f"ccst machine-identity: {exc}", file=sys.stderr)
+        return 2
     print(f"Confirmed machine id: {args.name}")
     return 0
 

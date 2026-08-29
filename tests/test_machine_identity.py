@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import socket
 
+import pytest
+
 from cc_session_tools.lib import machine_identity
 
 
@@ -39,3 +41,15 @@ def test_check_collision_flags_a_different_known_machine():
 def test_check_collision_is_fine_with_a_name_already_recorded_as_itself():
     vector = {"ltxy": 5}
     assert machine_identity.check_collision(proposed="ltxy", known_vector=vector) is False
+
+
+def test_confirm_rejects_an_empty_name(tmp_path, monkeypatch):
+    monkeypatch.setenv("CCST_DATA_HOME", str(tmp_path))
+    with pytest.raises(ValueError):
+        machine_identity.confirm("")
+
+
+def test_confirm_rejects_a_whitespace_only_name(tmp_path, monkeypatch):
+    monkeypatch.setenv("CCST_DATA_HOME", str(tmp_path))
+    with pytest.raises(ValueError):
+        machine_identity.confirm("   ")

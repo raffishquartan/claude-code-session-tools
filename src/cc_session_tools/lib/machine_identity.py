@@ -43,6 +43,8 @@ def resolve() -> MachineIdentity:
 
 
 def confirm(name: str) -> None:
+    if not name.strip():
+        raise ValueError("machine name must not be empty or whitespace-only")
     store = _store_path()
     store.parent.mkdir(parents=True, exist_ok=True)
     write_json_atomic(store, {"machine_id": name})
