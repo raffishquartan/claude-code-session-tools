@@ -45,6 +45,10 @@ Current subcommands:
   pdata verify                   Run the integrity-check backstop (row-count parity, file_path
                                  resolution, suspicious double-updates) for --project NAME or
                                  --all-projects and persist the result for ccst doctor.
+  machine-identity show          Print this laptop's resolved machine id and whether it's
+                                 confirmed.
+  machine-identity confirm       Store this laptop's confirmed machine id (--name NAME), used
+                                 by pdata's cross-machine vector clock.
   migrate ccsched                Migrate ccsched flat-file stores into ccsched.db
                                  (verify + tar-backup old files before removal).
   migrate ccmsg                  Migrate the flat-file message store into ccmsg.db
@@ -90,6 +94,7 @@ from cc_session_tools.hooks_install import (
     prune_stale_hooks,
     write_json_atomic,
 )
+from cc_session_tools.lib import machine_identity
 from cc_session_tools.lib.hook_registry import HOOK_DESCRIPTIONS, HOOK_VERBS
 
 
@@ -1393,6 +1398,27 @@ def _cmd_pdata_verify(args: argparse.Namespace) -> int:
     return worst
 
 
+# ---------- machine-identity show / confirm ----------
+
+
+def _cmd_machine_identity_show(args: argparse.Namespace) -> int:
+    identity = machine_identity.resolve()
+    if identity.confirmed:
+        print(f"{identity.machine_id} (confirmed)")
+    else:
+        print(
+            f"{identity.machine_id} (unconfirmed - run "
+            "'ccst machine-identity confirm --name <name>')"
+        )
+    return 0
+
+
+def _cmd_machine_identity_confirm(args: argparse.Namespace) -> int:
+    machine_identity.confirm(args.name)
+    print(f"Confirmed machine id: {args.name}")
+    return 0
+
+
 # ---------- hooks run ----------
 
 
@@ -2508,6 +2534,20 @@ def _build_parser() -> argparse.ArgumentParser:
              "the default one-line summary (--project always prints full detail)",
     )
 
+    # ---- machine-identity ----
+    machine_identity_parser = sub.add_parser(
+        "machine-identity", help="This laptop's identity for pdata's cross-machine vector clock"
+    )
+    machine_identity_sub = machine_identity_parser.add_subparsers(dest="verb", metavar="<verb>")
+    machine_identity_sub.required = True
+
+    machine_identity_sub.add_parser("show", help="Print the resolved machine id and its confirmed state")
+
+    machine_identity_confirm_parser = machine_identity_sub.add_parser(
+        "confirm", help="Store this laptop's confirmed machine id"
+    )
+    machine_identity_confirm_parser.add_argument("--name", required=True, metavar="NAME")
+
     # ---- sessions ----
     sessions_parser = sub.add_parser("sessions", help="sessions.db management commands")
     sessions_sub = sessions_parser.add_subparsers(dest="verb", metavar="<verb>")
@@ -2797,6 +2837,12 @@ def main() -> None:
             sys.exit(_cmd_pdata_reconcile_session_output(args))
         if args.verb == "verify":
             sys.exit(_cmd_pdata_verify(args))
+
+    if args.noun == "machine-identity":
+        if args.verb == "show":
+            sys.exit(_cmd_machine_identity_show(args))
+        if args.verb == "confirm":
+            sys.exit(_cmd_machine_identity_confirm(args))
 
     if args.noun == "sessions":
         if args.verb == "migrate":
