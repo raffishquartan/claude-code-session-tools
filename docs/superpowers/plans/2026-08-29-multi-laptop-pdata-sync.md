@@ -412,8 +412,8 @@ def test_resolve_falls_back_to_hostname_unconfirmed(monkeypatch):
 
 def test_check_collision_flags_a_different_known_machine():
     vector = {"macbook": 3}
-    assert machine_identity.check_collision(proposed="ltxy", known_vector=vector) is False
-    assert machine_identity.check_collision(proposed="macbook", known_vector=vector) is True
+    assert machine_identity.check_collision(proposed="ltxy", known_vector=vector) is True
+    assert machine_identity.check_collision(proposed="macbook", known_vector=vector) is False
 
 
 def test_check_collision_is_fine_with_a_name_already_recorded_as_itself():
