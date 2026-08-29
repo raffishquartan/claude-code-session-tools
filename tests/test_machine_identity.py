@@ -53,3 +53,10 @@ def test_confirm_rejects_a_whitespace_only_name(tmp_path, monkeypatch):
     monkeypatch.setenv("CCST_DATA_HOME", str(tmp_path))
     with pytest.raises(ValueError):
         machine_identity.confirm("   ")
+
+
+def test_confirm_strips_surrounding_whitespace(tmp_path, monkeypatch):
+    monkeypatch.setenv("CCST_DATA_HOME", str(tmp_path))
+    monkeypatch.delenv("CCST_MACHINE_NAME", raising=False)
+    machine_identity.confirm("  ltxy  ")
+    assert machine_identity.resolve().machine_id == "ltxy"
