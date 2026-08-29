@@ -48,6 +48,12 @@ CREATE TABLE IF NOT EXISTS record_group_fields (
     added_at INTEGER NOT NULL,
     PRIMARY KEY (record_group, field_name)
 );
+
+CREATE TABLE IF NOT EXISTS pdata_meta (
+    machine_id TEXT PRIMARY KEY,
+    revision INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+);
 """
 
 
