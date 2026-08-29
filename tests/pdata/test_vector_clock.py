@@ -14,7 +14,7 @@ def test_compare_dominated_when_local_strictly_ahead():
 
 
 def test_compare_equal_is_local_dominates_not_a_fork():
-    # Equal vectors mean nothing to do - treated as LOCAL_DOMINATES (a no-op, not DUMP_DOMINATES
+    # Equal vectors mean nothing to do — treated as LOCAL_DOMINATES (a no-op, not DUMP_DOMINATES
     # which would trigger a pointless rehydrate, and not FORK which would wrongly block).
     v = {"a": 1, "b": 2}
     assert compare(local=v, dump=dict(v)) == Comparison.LOCAL_DOMINATES
@@ -27,7 +27,7 @@ def test_compare_fork_when_each_side_has_something_the_other_lacks():
 
 
 def test_compare_handles_machine_known_to_only_one_side():
-    # dump knows about "c", local never has - missing entries default to 0.
+    # dump knows about "c", local never has — missing entries default to 0.
     local = {"a": 1}
     dump = {"a": 1, "c": 1}
     assert compare(local=local, dump=dump) == Comparison.DUMP_DOMINATES
