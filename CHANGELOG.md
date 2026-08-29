@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.11.2] - 2026-08-29
+
+### Fixed
+
+- `pm-update-central-files`'s session-output AUTO item (per-session registration of `out/`
+  deliverables, the primary path - `reconcile-session-output`, fixed in 2.11.1, is only the
+  7-day backfill) now skips entirely for a project outside `$CLAUDE_SESSION_TOOLS_PROJ_ROOT`,
+  instead of registering session output for any `~/repos/*` dev repo it happened to run in. Reuses
+  2.11.1's fix directly - the schema-only bootstrap step it already ran first now legitimately
+  fails for an out-of-scope project, and the skill stops there rather than proceeding. Applies
+  whether the skill runs mid-session or at session end - the check is about where the project
+  lives, not when in the session it's applied.
+
 ## [2.11.1] - 2026-08-29
 
 ### Fixed
