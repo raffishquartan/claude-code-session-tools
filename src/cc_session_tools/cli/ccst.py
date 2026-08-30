@@ -45,6 +45,15 @@ Current subcommands:
   pdata verify                   Run the integrity-check backstop (row-count parity, file_path
                                  resolution, suspicious double-updates) for --project NAME or
                                  --all-projects and persist the result for ccst doctor.
+  pdata dump                     Publish the current local DB state to
+                                 .pdata-db-dump/latest.sql for --project NAME or
+                                 --all-projects. Refuses (unless --force) to overwrite an
+                                 unresolved cross-machine fork.
+  pdata rehydrate                Fast-forward the local DB from the published dump for
+                                 --project NAME or --all-projects, if it's ahead. --force
+                                 fast-forwards even over a diverged local revision.
+  pdata resolve                  Diagnose (default, prints the diff) or apply per-record
+                                 --choice ID=local|dump resolutions for a cross-machine fork.
   machine-identity show          Print this laptop's resolved machine id and whether it's
                                  confirmed.
   machine-identity confirm       Store this laptop's confirmed machine id (--name NAME), used
@@ -1408,6 +1417,287 @@ def _cmd_pdata_verify(args: argparse.Namespace) -> int:
     return worst
 
 
+def _cmd_pdata_dump(args: argparse.Namespace) -> int:
+    from cc_session_tools.lib import machine_identity
+    from cc_session_tools.lib.pdata import (
+        dump, repository, store, vector_clock, vector_clock_store, verify,
+    )
+
+    projects = verify.discover_projects() if args.all_projects else [args.project]
+    if not projects:
+        print("ccst pdata dump: no project databases found", file=sys.stderr)
+        return 2
+
+    machine_id = machine_identity.resolve().machine_id
+    compact = args.all_projects
+    published = 0
+    refused = 0
+
+    for project in projects:
+        try:
+            project_root = store.project_root(project)
+            conn = repository.connect(project)
+        except ValueError as exc:
+            print(f"ccst pdata dump: {exc}", file=sys.stderr)
+            return 2
+        try:
+            local_vector = vector_clock_store.read_vector(conn)
+            existing = dump.read_latest(project_root)
+            # A missing/checksum-invalid dump (including the very first dump ever) is always
+            # safe to publish unconditionally. Otherwise, safe iff local strictly dominates (or
+            # equals) the published dump - compare()'s own "missing entries default to 0" rule
+            # already makes an empty/no-vector existing dump come out LOCAL_DOMINATES here, so
+            # there's no separate "dump has no vector at all" branch to write. FORK and
+            # DUMP_DOMINATES are both refused without --force: a plain `dump` publish is not
+            # itself a local write (see write_latest below - no vector bump), so overwriting
+            # either would silently discard revisions the other side may still need.
+            safe = not existing.checksum_valid or (
+                vector_clock.compare(local=local_vector, dump=existing.vector)
+                is vector_clock.Comparison.LOCAL_DOMINATES
+            )
+            if not safe and not args.force:
+                refused += 1
+                if not compact:
+                    print(
+                        f"ccst pdata dump: {project}: refusing to publish - local diverges "
+                        f"from the published dump (run `ccst pdata resolve --project "
+                        f"{project}` to resolve, or pass --force to publish local as the "
+                        f"winner anyway)",
+                        file=sys.stderr,
+                    )
+                continue
+            dump.write_latest(
+                conn, project_root=project_root, machine_id=machine_id, vector=local_vector,
+            )
+        finally:
+            conn.close()
+        published += 1
+        if not compact:
+            print(f"ccst pdata dump: {project}: published (machine_id={machine_id})")
+
+    if compact:
+        if refused:
+            print(
+                f"ccst pdata dump --all-projects: published {published}, refused {refused} "
+                f"(unresolved fork) of {len(projects)} project(s) - see `ccst pdata resolve "
+                f"--project NAME` for each"
+            )
+        else:
+            print(
+                f"ccst pdata dump --all-projects: published {published} of "
+                f"{len(projects)} project(s)"
+            )
+
+    return 1 if refused else 0
+
+
+def _cmd_pdata_rehydrate(args: argparse.Namespace) -> int:
+    from cc_session_tools.lib.pdata import rehydrate, verify
+
+    projects = verify.discover_projects() if args.all_projects else [args.project]
+    if not projects:
+        print("ccst pdata rehydrate: no project databases found", file=sys.stderr)
+        return 2
+
+    compact = args.all_projects
+    counts = {outcome.value: 0 for outcome in rehydrate.RehydrateOutcome}
+    worst = 0
+
+    for project in projects:
+        try:
+            result = rehydrate.rehydrate(project, force=args.force)
+        except ValueError as exc:
+            print(f"ccst pdata rehydrate: {project}: {exc}", file=sys.stderr)
+            worst = max(worst, 2)
+            continue
+        counts[result.outcome.value] += 1
+
+        if result.outcome is rehydrate.RehydrateOutcome.FAST_FORWARDED:
+            if not compact:
+                print(
+                    f"ccst pdata rehydrate: {project}: fast-forwarded from "
+                    f"{result.from_machine}"
+                )
+        elif result.outcome is rehydrate.RehydrateOutcome.NO_OP:
+            if not compact:
+                print(f"ccst pdata rehydrate: {project}: already up to date")
+        elif result.outcome is rehydrate.RehydrateOutcome.FORK:
+            worst = max(worst, 1)
+            if not compact:
+                print(
+                    f"ccst pdata rehydrate: {project}: unresolved fork with "
+                    f"{result.from_machine} - run `ccst pdata resolve --project {project}`",
+                    file=sys.stderr,
+                )
+        elif result.outcome is rehydrate.RehydrateOutcome.CHECKSUM_INVALID:
+            worst = max(worst, 1)
+            if not compact:
+                print(
+                    f"ccst pdata rehydrate: {project}: published dump fails its checksum "
+                    f"check - run `ccst pdata dump --force` on the machine with good data "
+                    f"to republish",
+                    file=sys.stderr,
+                )
+        else:
+            # DEFERRED - another writer holds sync_lock right now. Expected and transient, not
+            # an error (rehydrate.py's own RehydrateOutcome docstring: "retry later" rather than
+            # "surfaced, nothing written" like FORK/CHECKSUM_INVALID above) - exit 0, and never
+            # point at `ccst pdata resolve`, which would misdescribe this as a conflict.
+            if not compact:
+                print(
+                    f"ccst pdata rehydrate: {project}: another writer holds the lock - "
+                    f"retry later"
+                )
+
+    if compact:
+        print(
+            "ccst pdata rehydrate --all-projects: "
+            f"fast-forwarded {counts[rehydrate.RehydrateOutcome.FAST_FORWARDED.value]}, "
+            f"no-op {counts[rehydrate.RehydrateOutcome.NO_OP.value]}, "
+            f"fork {counts[rehydrate.RehydrateOutcome.FORK.value]}, "
+            f"checksum-invalid {counts[rehydrate.RehydrateOutcome.CHECKSUM_INVALID.value]}, "
+            f"deferred {counts[rehydrate.RehydrateOutcome.DEFERRED.value]} of "
+            f"{len(projects)} project(s)"
+        )
+
+    return worst
+
+
+def _parse_resolve_choice(raw: str) -> tuple[int, str]:
+    """Parse "ID=local|dump" into (record_id, choice). Only checks the shape - whether choice is
+    actually 'local'/'dump' is apply_resolution's own job (its error message is printed verbatim,
+    not re-derived here). Raises ValueError on malformed input."""
+    id_str, sep, choice = raw.partition("=")
+    if not sep or not id_str or not choice:
+        raise ValueError(f"malformed --choice (want ID=local|dump): {raw!r}")
+    try:
+        record_id = int(id_str)
+    except ValueError:
+        raise ValueError(f"malformed --choice (want ID=local|dump): {raw!r}") from None
+    return record_id, choice
+
+
+def _resolve_deleted_at(payload: dict[str, object]) -> object:
+    base = payload["base"]
+    assert isinstance(base, dict)
+    return base["deleted_at"]
+
+
+def _cmd_pdata_resolve(args: argparse.Namespace) -> int:
+    from cc_session_tools.lib.pdata import resolve, verify
+
+    if args.choice:
+        if args.all_projects:
+            print(
+                "ccst pdata resolve: --choice requires --project (not --all-projects)",
+                file=sys.stderr,
+            )
+            return 2
+        try:
+            choices = dict(_parse_resolve_choice(raw) for raw in args.choice)
+        except ValueError as exc:
+            print(f"ccst pdata resolve: {exc}", file=sys.stderr)
+            return 2
+        try:
+            resolve.apply_resolution(args.project, choices)
+        except ValueError as exc:
+            print(f"ccst pdata resolve: {exc}", file=sys.stderr)
+            return 1
+        print(f"ccst pdata resolve: {args.project}: resolved {len(choices)} record(s)")
+        return 0
+
+    projects = verify.discover_projects() if args.all_projects else [args.project]
+    if not projects:
+        print("ccst pdata resolve: no project databases found", file=sys.stderr)
+        return 2
+
+    compact = args.all_projects
+    outstanding = 0
+
+    for project in projects:
+        try:
+            diff = resolve.diff_against_dump(project)
+        except ValueError as exc:
+            print(f"ccst pdata resolve: {project}: {exc}", file=sys.stderr)
+            outstanding += 1
+            continue
+
+        has_diff = bool(diff.records) or bool(diff.schema_fields)
+        if has_diff:
+            outstanding += 1
+
+        if compact:
+            if has_diff:
+                print(
+                    f"{project}: {len(diff.records)} record(s) + "
+                    f"{len(diff.schema_fields)} schema field(s) outstanding"
+                )
+            else:
+                print(f"{project}: clean")
+            continue
+
+        if not has_diff:
+            print(f"{project}: clean - nothing to resolve")
+            continue
+
+        print(
+            f"{project}: {len(diff.records)} record(s) + {len(diff.schema_fields)} schema "
+            f"field(s) to resolve"
+        )
+        for rd in diff.records:
+            if rd.id_collision:
+                print(
+                    f"  record {rd.record_id} (group={rd.record_group}): id collision - "
+                    f"this id was independently assigned to two unrelated records on "
+                    f"different machines, not a genuine edit conflict; `ccst pdata resolve` "
+                    f"cannot apply a local/dump choice to this one, it needs manual, "
+                    f"out-of-band reconciliation"
+                )
+                continue
+            if rd.group_mismatch:
+                print(
+                    f"  record {rd.record_id} (group={rd.record_group}): group mismatch - "
+                    f"same id and created_at, but local and dump disagree on record_group; "
+                    f"compare content/file_path on each side before assuming this is a safe "
+                    f"`ccst pdata rename-group` rather than a same-second id collision - "
+                    f"`ccst pdata resolve` cannot apply a local/dump choice to this one"
+                )
+                continue
+            if rd.is_delete_vs_update:
+                assert rd.local is not None and rd.dump is not None
+                local_deleted = _resolve_deleted_at(rd.local) is not None
+                side = (
+                    "local deleted this record, dump has a live edit to it" if local_deleted
+                    else "dump deleted this record, local has a live edit to it"
+                )
+                print(
+                    f"  record {rd.record_id} (group={rd.record_group}): delete-vs-update - "
+                    f"{side}"
+                )
+                continue
+            if rd.local is None:
+                print(
+                    f"  record {rd.record_id} (group={rd.record_group}): dump-only "
+                    f"(not present locally)"
+                )
+            elif rd.dump is None:
+                print(
+                    f"  record {rd.record_id} (group={rd.record_group}): local-only "
+                    f"(not present in the dump)"
+                )
+            else:
+                print(
+                    f"  record {rd.record_id} (group={rd.record_group}): content differs "
+                    f"between local and dump"
+                )
+
+        for fd in diff.schema_fields:
+            side = "local only" if fd.present_locally else "dump only"
+            print(f"  schema field {fd.record_group}.{fd.field_name}: {side}")
+
+    return 1 if outstanding else 0
+
+
 # ---------- machine-identity show / confirm ----------
 
 
@@ -2548,6 +2838,53 @@ def _build_parser() -> argparse.ArgumentParser:
              "the default one-line summary (--project always prints full detail)",
     )
 
+    pdata_dump_parser = pdata_sub.add_parser(
+        "dump", help="Publish the current local DB state to .pdata-db-dump/latest.sql"
+    )
+    dump_target = pdata_dump_parser.add_mutually_exclusive_group(required=True)
+    dump_target.add_argument("--project", metavar="NAME")
+    dump_target.add_argument(
+        "--all-projects", action="store_true",
+        help="Dump every project with a .db under project-db/",
+    )
+    pdata_dump_parser.add_argument(
+        "--force", action="store_true",
+        help="Publish even if this would overwrite an unresolved fork, or a dump that's "
+             "ahead of local (the checksum-invalid-dump recovery path)",
+    )
+
+    pdata_rehydrate_parser = pdata_sub.add_parser(
+        "rehydrate", help="Fast-forward the local DB from the published dump, if it's ahead"
+    )
+    rehydrate_target = pdata_rehydrate_parser.add_mutually_exclusive_group(required=True)
+    rehydrate_target.add_argument("--project", metavar="NAME")
+    rehydrate_target.add_argument(
+        "--all-projects", action="store_true",
+        help="Rehydrate every project with a .db under project-db/",
+    )
+    pdata_rehydrate_parser.add_argument(
+        "--force", action="store_true",
+        help="Fast-forward even over a local revision the dump doesn't dominate",
+    )
+
+    pdata_resolve_parser = pdata_sub.add_parser(
+        "resolve",
+        help="Diagnose (default) or apply per-record local/dump choices for a "
+             "cross-machine fork",
+    )
+    resolve_target = pdata_resolve_parser.add_mutually_exclusive_group(required=True)
+    resolve_target.add_argument("--project", metavar="NAME")
+    resolve_target.add_argument(
+        "--all-projects", action="store_true",
+        help="Diagnose every project with a .db under project-db/ (diagnostic mode only - "
+             "--choice requires --project)",
+    )
+    pdata_resolve_parser.add_argument(
+        "--choice", action="append", default=[], metavar="ID=local|dump",
+        help="Apply a per-record resolution; may repeat. Requires --project. Without any "
+             "--choice, resolve runs in diagnostic (dry-run) mode and prints the diff.",
+    )
+
     # ---- machine-identity ----
     machine_identity_parser = sub.add_parser(
         "machine-identity", help="This laptop's identity for pdata's cross-machine vector clock"
@@ -2851,6 +3188,12 @@ def main() -> None:
             sys.exit(_cmd_pdata_reconcile_session_output(args))
         if args.verb == "verify":
             sys.exit(_cmd_pdata_verify(args))
+        if args.verb == "dump":
+            sys.exit(_cmd_pdata_dump(args))
+        if args.verb == "rehydrate":
+            sys.exit(_cmd_pdata_rehydrate(args))
+        if args.verb == "resolve":
+            sys.exit(_cmd_pdata_resolve(args))
 
     if args.noun == "machine-identity":
         if args.verb == "show":
