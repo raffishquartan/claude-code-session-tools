@@ -91,3 +91,27 @@ def test_archive_keeps_only_24_most_recent(tmp_path):
         dump.write_latest(con, project_root=project_root, machine_id="ltxy", vector={"ltxy": i})
     archived = list((project_root / ".pdata-db-dump" / "archive").glob("*.sql"))
     assert len(archived) == 24
+
+
+def test_archive_retention_keeps_the_newest_ones_not_a_mix(tmp_path):
+    """Regression test for a bug a code review found in an earlier version of the same-second
+    collision fix: appending a bare, unpadded numeric suffix only on collision avoided the
+    overwrite but broke sorted(archive_dir.glob(...))'s lexicographic ordering ("-10" sorts
+    before "-2"; any suffixed name sorts before a bare one at all), so _prune_archive ended up
+    keeping some of the *oldest* archived dumps and discarding some of the *newest* under the
+    exact same-second burst this whole mechanism exists to handle. Checking the count alone (the
+    test above) doesn't catch this - this test checks which 24 survive, by content."""
+    con = _build_db(tmp_path / "a.db", field_order=["owner"], row_order=[1])
+    project_root = tmp_path / "proj"
+    for i in range(30):
+        dump.write_latest(con, project_root=project_root, machine_id="ltxy", vector={"ltxy": i})
+    archive_dir = project_root / ".pdata-db-dump" / "archive"
+    surviving_vectors = set()
+    for archived_file in archive_dir.glob("*.sql"):
+        for line in archived_file.read_text().splitlines():
+            if line.startswith("-- vector:ltxy="):
+                surviving_vectors.add(int(line.removeprefix("-- vector:ltxy=")))
+    # write_latest call i archives the *previous* latest (vector i-1), so calls 1..29 archive
+    # vectors 0..28 (29 archived dumps total, in that creation order) - the 24 most recently
+    # created are vectors 5..28.
+    assert surviving_vectors == set(range(5, 29))

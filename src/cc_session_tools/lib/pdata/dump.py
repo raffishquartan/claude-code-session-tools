@@ -70,21 +70,40 @@ def _dump_dir(project_root: Path) -> Path:
     return project_root / ".pdata-db-dump"
 
 
-def _unique_archive_path(archive_dir: Path, timestamp: int) -> Path:
-    """A filename for this archived dump that does not already exist in archive_dir.
+def _unique_archive_path(archive_dir: Path) -> Path:
+    """A filename for this archived dump, unique within archive_dir, whose lexicographic sort
+    order (what _prune_archive relies on to find "most recent") always matches real chronological
+    order - including across files that were created, then deleted by pruning, then created again
+    under the same wall-clock second.
 
-    write_latest can run more than once within the same wall-clock second — e.g. the
-    archive-pruning test below, which loops 30 times with no sleep — so a bare `f"{timestamp}.sql"`
-    is not unique by itself: shutil.copy2 onto a colliding name silently overwrites the earlier
-    archived dump instead of keeping both, under-filling the archive regardless of how
-    _prune_archive's retention count is set. Appending an incrementing suffix on collision keeps
-    every write distinct regardless of the underlying clock's resolution."""
-    candidate = archive_dir / f"{timestamp}.sql"
-    suffix = 1
-    while candidate.exists():
-        candidate = archive_dir / f"{timestamp}-{suffix}.sql"
-        suffix += 1
-    return candidate
+    Keyed on nanosecond-resolution wall-clock time (time.time_ns(), zero-padded to a fixed width
+    so lexicographic and numeric order agree) rather than whole seconds, because write_latest can
+    run more than once within the same *second* - e.g. the archive-pruning test, which loops 30
+    times with no sleep - and integer-second timestamps collide in that case. Nanosecond
+    resolution makes a genuine collision between two real write_latest calls vanishingly unlikely
+    (they're separated by real disk I/O), but the loop below still guards against one explicitly
+    rather than assume it can't happen.
+
+    Two earlier, rejected approaches, left here because each looked correct until tested against
+    this exact archive-pruning scenario and wasn't:
+    - A bare per-second timestamp with no disambiguation: silently overwrites on collision via
+      shutil.copy2, under-filling the archive regardless of the retention count.
+    - A bare, unpadded collision suffix appended only when needed ("-1", "-2", ...): avoids the
+      overwrite, but "-10" sorts before "-2" lexicographically, and a suffixed name sorts before
+      a bare one at all ("-" < "."), so pruning ended up removing some of the newest entries and
+      keeping some of the oldest.
+    - A zero-padded suffix that still started counting from 0 on every call: fixed the sort order,
+      but once pruning deleted the lowest-numbered file, the *next* call's search-from-0 would
+      reuse that now-free slot for brand-new content - silently resetting that slot back to
+      "oldest" by name even though its content was the newest thing just written, so pruning
+      would immediately delete it again on the very next write. Traced directly: from the 25th
+      write_latest call onward, every new archive got written into the just-freed slot 0 and
+      pruned right back out, so vectors from call 25 onward never actually survived into the
+      archive at all. Nanosecond timestamps have no reusable "slot" to begin with."""
+    while True:
+        candidate = archive_dir / f"{time.time_ns():020d}.sql"
+        if not candidate.exists():
+            return candidate
 
 
 def write_latest(
@@ -102,7 +121,7 @@ def write_latest(
 
     latest = dump_dir / "latest.sql"
     if latest.exists():
-        shutil.copy2(latest, _unique_archive_path(archive_dir, int(time.time())))
+        shutil.copy2(latest, _unique_archive_path(archive_dir))
         _prune_archive(archive_dir)
 
     latest.write_text(full_text)
