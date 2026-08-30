@@ -79,6 +79,7 @@ def test_diff_pairs_base_and_extension_differences_into_one_record_diff(monkeypa
     assert diff.dump["extension"] == {"priority": 2}
     assert diff.is_delete_vs_update is False
     assert diff.id_collision is False
+    assert diff.group_mismatch is False
 
 
 @pytest.mark.parametrize("side", ["dump", "local"])
@@ -443,6 +444,217 @@ def test_apply_resolution_refuses_an_id_collision_record(monkeypatch, tmp_path):
 
     with pytest.raises(ValueError, match="id collision"):
         resolve.apply_resolution("proj", {record_id: "dump"})
+
+
+def test_diff_flags_a_group_rename_as_group_mismatch_not_an_id_collision(monkeypatch, tmp_path):
+    """`record_group` is NOT immutable - `ccst pdata rename-group` rewrites it in place
+    (rename_group._rename_in_db). A record renamed on one machine only therefore shows the same
+    id and the same created_at with different record_groups: a genuine rename, not two unrelated
+    rows that happened to be assigned the same id. Only created_at is conclusive for the latter."""
+    _setup_env(monkeypatch, tmp_path)
+    conn = repository.connect("proj")
+    try:
+        with repository._immediate(conn):
+            record_id = repository.insert_base_record(
+                conn, record_group="renamed", content="c", file_path=None,
+                created_at=100, updated_at=100,
+            )
+            vector_clock_store.write_vector(conn, {"ltxy": 2, "mbp": 1}, updated_at=1)
+    finally:
+        conn.close()
+    project_root = store.project_root("proj")
+
+    def build(remote_conn):
+        remote_conn.execute(
+            "INSERT INTO records (id, record_group, content, file_path, created_at, updated_at) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (record_id, "original", "c", None, 100, 100),
+        )
+
+    _publish_remote_dump(
+        project_root, remote_project="proj-remote", machine_id="mbp",
+        vector={"ltxy": 1, "mbp": 2}, build=build,
+    )
+
+    result = resolve.diff_against_dump("proj")
+
+    assert len(result.records) == 1
+    diff = result.records[0]
+    assert diff.group_mismatch is True
+    assert diff.id_collision is False
+    assert diff.is_delete_vs_update is False
+
+
+def test_diff_flags_an_id_collision_as_collision_only_even_when_groups_also_differ(
+    monkeypatch, tmp_path,
+):
+    """created_at differing is conclusive proof of an id collision; a differing record_group on
+    top of that adds nothing, so the record is reported as a collision and NOT additionally as a
+    group mismatch (the two categories are mutually exclusive, collision wins)."""
+    _setup_env(monkeypatch, tmp_path)
+    conn = repository.connect("proj")
+    try:
+        with repository._immediate(conn):
+            record_id = repository.insert_base_record(
+                conn, record_group="g", content="local-new", file_path=None,
+                created_at=100, updated_at=100,
+            )
+            vector_clock_store.write_vector(conn, {"ltxy": 2, "mbp": 1}, updated_at=1)
+    finally:
+        conn.close()
+    project_root = store.project_root("proj")
+
+    def build(remote_conn):
+        remote_conn.execute(
+            "INSERT INTO records (id, record_group, content, file_path, created_at, updated_at) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (record_id, "h", "dump-new", None, 200, 200),
+        )
+
+    _publish_remote_dump(
+        project_root, remote_project="proj-remote", machine_id="mbp",
+        vector={"ltxy": 1, "mbp": 2}, build=build,
+    )
+
+    result = resolve.diff_against_dump("proj")
+
+    assert len(result.records) == 1
+    diff = result.records[0]
+    assert diff.id_collision is True
+    assert diff.group_mismatch is False
+
+
+def test_apply_resolution_refuses_a_group_mismatch_record(monkeypatch, tmp_path):
+    _setup_env(monkeypatch, tmp_path)
+    conn = repository.connect("proj")
+    try:
+        with repository._immediate(conn):
+            record_id = repository.insert_base_record(
+                conn, record_group="renamed", content="c", file_path=None,
+                created_at=100, updated_at=100,
+            )
+            vector_clock_store.write_vector(conn, {"ltxy": 2, "mbp": 1}, updated_at=1)
+    finally:
+        conn.close()
+    project_root = store.project_root("proj")
+
+    def build(remote_conn):
+        remote_conn.execute(
+            "INSERT INTO records (id, record_group, content, file_path, created_at, updated_at) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (record_id, "original", "c", None, 100, 100),
+        )
+
+    _publish_remote_dump(
+        project_root, remote_project="proj-remote", machine_id="mbp",
+        vector={"ltxy": 1, "mbp": 2}, build=build,
+    )
+
+    with pytest.raises(ValueError, match="renamed on one side") as excinfo:
+        resolve.apply_resolution("proj", {record_id: "dump"})
+
+    # ...and the refusal is specifically NOT the id-collision one: the two situations need
+    # different manual fixes, so the message must not misdescribe which one this is.
+    assert "id collision" not in str(excinfo.value)
+
+
+def test_apply_resolution_refuses_a_partial_resolve_naming_the_missing_record_ids(
+    monkeypatch, tmp_path,
+):
+    """All-or-nothing: resolving a subset would bump+merge the vector as if the dump machine were
+    fully incorporated while leaving the unchosen records unreconciled - the remote's next
+    rehydrate would then see DUMP_DOMINATES and wholesale-replace its own real edits."""
+    _setup_env(monkeypatch, tmp_path)
+    conn = repository.connect("proj")
+    try:
+        with repository._immediate(conn):
+            id1 = repository.insert_base_record(
+                conn, record_group="g", content="local-1", file_path=None,
+                created_at=1, updated_at=1,
+            )
+            id2 = repository.insert_base_record(
+                conn, record_group="g", content="local-2", file_path=None,
+                created_at=1, updated_at=1,
+            )
+            id3 = repository.insert_base_record(
+                conn, record_group="g", content="local-3", file_path=None,
+                created_at=1, updated_at=1,
+            )
+            vector_clock_store.write_vector(conn, {"ltxy": 3, "mbp": 1}, updated_at=1)
+    finally:
+        conn.close()
+    project_root = store.project_root("proj")
+
+    def build(remote_conn):
+        for record_id in (id1, id2, id3):
+            remote_conn.execute(
+                "INSERT INTO records (id, record_group, content, file_path, created_at, "
+                "updated_at) VALUES (?, ?, ?, ?, ?, ?)",
+                (record_id, "g", f"dump-{record_id}", None, 1, 9),
+            )
+
+    _publish_remote_dump(
+        project_root, remote_project="proj-remote", machine_id="mbp",
+        vector={"ltxy": 1, "mbp": 5}, build=build,
+    )
+
+    with pytest.raises(ValueError, match=rf"\[{id2}, {id3}\]"):
+        resolve.apply_resolution("proj", {id1: "dump"})
+
+    # Nothing was written: not the row, not the vector, not a fresh dump.
+    conn = repository.connect("proj")
+    try:
+        assert repository.get_base_record(conn, id1)["content"] == "local-1"
+        assert vector_clock_store.read_vector(conn) == {"ltxy": 3, "mbp": 1}
+    finally:
+        conn.close()
+    assert dump.read_latest(project_root).vector == {"ltxy": 1, "mbp": 5}
+
+
+def test_apply_resolution_bumps_the_merged_vector_not_the_pre_merge_local_vector(
+    monkeypatch, tmp_path,
+):
+    """`rehydrate --force` replaces pdata_meta wholesale and can roll local's own counter
+    backward, after which a remote dump can hold a HIGHER value for local's own machine than
+    local's DB does. Bump-then-merge would then produce a vector merely EQUAL to the dump's, which
+    the remote reads as LOCAL_DOMINATES - it never fast-forwards and the resolve is lost. Merging
+    first and bumping the merged result always lands strictly above both inputs."""
+    _setup_env(monkeypatch, tmp_path)
+    conn = repository.connect("proj")
+    try:
+        with repository._immediate(conn):
+            record_id = repository.insert_base_record(
+                conn, record_group="g", content="local-content", file_path=None,
+                created_at=1, updated_at=1,
+            )
+            vector_clock_store.write_vector(conn, {"ltxy": 1, "mbp": 1}, updated_at=1)
+    finally:
+        conn.close()
+    project_root = store.project_root("proj")
+
+    def build(remote_conn):
+        remote_conn.execute(
+            "INSERT INTO records (id, record_group, content, file_path, created_at, updated_at) "
+            "VALUES (?, ?, ?, ?, ?, ?)", (record_id, "g", "dump-content", None, 1, 9),
+        )
+
+    # dump_vector["ltxy"] (5) > local_vector["ltxy"] (1): the post-`--force`-rollback shape.
+    _publish_remote_dump(
+        project_root, remote_project="proj-remote", machine_id="mbp",
+        vector={"ltxy": 5, "mbp": 2}, build=build,
+    )
+
+    resolve.apply_resolution("proj", {record_id: "dump"})
+
+    conn = repository.connect("proj")
+    try:
+        vector = vector_clock_store.read_vector(conn)
+    finally:
+        conn.close()
+    # merge-then-bump: max(1, 5) = 5, then +1 = 6. Bump-then-merge would give max(1+1, 5) = 5 —
+    # exactly the dump's own value, which the remote reads as LOCAL_DOMINATES and never adopts.
+    assert vector == {"ltxy": 6, "mbp": 2}
+    assert dump.read_latest(project_root).vector == {"ltxy": 6, "mbp": 2}
 
 
 def test_diff_against_dump_rejects_a_checksum_invalid_dump(monkeypatch, tmp_path):

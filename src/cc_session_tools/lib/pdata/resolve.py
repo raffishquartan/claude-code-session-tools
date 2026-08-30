@@ -8,7 +8,9 @@ overwrite (that is rehydrate.py's job for the clean fast-forward case; this modu
 
 Never auto-merges, never silently keeps one side and discards the other — every record surfaced
 here needs an explicit choice from the caller (ultimately Chris, via the CLI/skill), matching the
-existing `pm-pdata-conflict-resolution` skill's single-file-conflict framing exactly.
+existing `pm-pdata-conflict-resolution` skill's single-file-conflict framing exactly. Every
+record: `apply_resolution` is all-or-nothing over the whole diff, for the reasons in its own
+docstring.
 """
 from __future__ import annotations
 
@@ -40,6 +42,10 @@ class RecordDiff:
     the shape `{"base": {...six records columns...}, "extension": {...columns...} | None}` —
     `extension` is `None` when the record's group has no ext_<group> table on that side at all,
     and a (possibly empty) dict of column->value when it does.
+
+    `record_group` is whichever side's snapshot was available (local's when both are) — when
+    `group_mismatch` is True the two sides disagree on it, so read the per-side payload rather
+    than this field.
     """
 
     record_id: int
@@ -48,6 +54,7 @@ class RecordDiff:
     dump: dict[str, object] | None
     is_delete_vs_update: bool
     id_collision: bool
+    group_mismatch: bool
 
 
 @dataclass(frozen=True, slots=True)
@@ -70,8 +77,9 @@ class ResolveDiff:
 
 @dataclass(frozen=True, slots=True)
 class _Snapshot:
-    """One side's view of one record_id — record_group kept separate from payload so id-collision
-    detection (see `_classify`) can compare it without reaching into the payload dict."""
+    """One side's view of one record_id — record_group kept separate from payload so
+    group-mismatch detection (see `_classify`) can compare it without reaching into the payload
+    dict."""
 
     record_group: str
     payload: dict[str, object]  # {"base": {...}, "extension": {...} | None}
@@ -109,12 +117,20 @@ def diff_against_dump(project: str) -> ResolveDiff:
 
 
 def apply_resolution(project: str, choices: dict[int, str]) -> None:
-    """Apply choices (`{record_id: "local" | "dump"}`) for every RecordDiff the caller wants
-    resolved — only record_ids appearing in choices are touched; anything not chosen is left
-    as-is. One call is one transaction covering every chosen record plus the post-resolve
-    vector-clock bookkeeping, followed by an immediate re-dump once that transaction commits
-    (spec's exact three-step "Post-resolve vector-clock update", plus rehydrate.py's "always
-    immediately re-dump" rule applied here for the identical reason)."""
+    """Apply choices (`{record_id: "local" | "dump"}`) for the current diff. All-or-nothing:
+    `choices` must name EVERY record_id in `diff_against_dump(project).records`, no more and no
+    fewer, or nothing is applied at all.
+
+    A partial resolve is refused because the vector-clock bookkeeping below is not per-record —
+    it declares the dump machine's revision fully incorporated for the whole project. Publishing
+    that while some records were left unreconciled would tell the other machine its state is
+    already absorbed; its next check would read DUMP_DOMINATES and wholesale-replace its own real
+    edits with this side's, with no prompt. Refusing also closes the id-collision guard, which a
+    subset call could otherwise sidestep by simply omitting the colliding id.
+
+    One call is one transaction covering every chosen record plus the post-resolve vector-clock
+    bookkeeping, followed by an immediate re-dump once that transaction commits (the spec's exact
+    three-step "Post-resolve vector-clock update", whose step 3 is that immediate re-dump)."""
     if not choices:
         raise ValueError("apply_resolution requires at least one record_id in choices")
     for record_id, choice in choices.items():
@@ -127,11 +143,14 @@ def apply_resolution(project: str, choices: dict[int, str]) -> None:
     diff = diff_against_dump(project)
     by_id = {record_diff.record_id: record_diff for record_diff in diff.records}
 
-    missing = sorted(set(choices) - set(by_id))
-    if missing:
-        raise ValueError(f"record_id(s) {missing} are not part of the current diff")
+    unknown = sorted(set(choices) - set(by_id))
+    if unknown:
+        raise ValueError(f"record_id(s) {unknown} are not part of the current diff")
 
-    collisions = sorted(rid for rid in choices if by_id[rid].id_collision)
+    # Checked across the whole diff, not just `choices`: these records can never be resolved by a
+    # local/dump pick, so the all-or-nothing requirement below is unsatisfiable while they are in
+    # the diff — say why up front instead of reporting them as merely "missing from choices".
+    collisions = sorted(rid for rid, rd in by_id.items() if rd.id_collision)
     if collisions:
         raise ValueError(
             f"record_id(s) {collisions} are an id collision — two unrelated records were "
@@ -139,6 +158,27 @@ def apply_resolution(project: str, choices: dict[int, str]) -> None:
             f"a genuine edit conflict on one record. A local/dump choice would silently discard "
             f"one side's real, unrelated record, so apply_resolution refuses these; they need a "
             f"manual, out-of-band reconciliation, not a per-record local/dump pick"
+        )
+
+    group_mismatches = sorted(rid for rid, rd in by_id.items() if rd.group_mismatch)
+    if group_mismatches:
+        raise ValueError(
+            f"record_id(s) {group_mismatches} sit in a record_group that was renamed on one side "
+            f"only (`ccst pdata rename-group`) — same record, two different group names. This is "
+            f"not two unrelated records sharing an id; it is one record whose group disagrees, so "
+            f"a local/dump pick has no single ext_<group> table to write and apply_resolution "
+            f"refuses these. Re-run the same rename-group on the machine that has not had it, so "
+            f"both sides agree on the name, then resolve again"
+        )
+
+    missing = sorted(set(by_id) - set(choices))
+    if missing:
+        raise ValueError(
+            f"record_id(s) {missing} are in the current diff but have no choice — resolution is "
+            f"all-or-nothing: every differing record must get a 'local'/'dump' choice in one "
+            f"call, or none are applied. A partial resolve would publish a vector claiming the "
+            f"dump machine is fully incorporated while leaving these records unreconciled, and "
+            f"the other machine would then overwrite its own unmerged edits without prompting"
         )
 
     dumpless = sorted(
@@ -162,23 +202,38 @@ def apply_resolution(project: str, choices: dict[int, str]) -> None:
 
                 machine_id = machine_identity.resolve().machine_id
                 local_vector = vector_clock_store.read_vector(local_conn)
-                # Step 1 (spec): the resolve itself counts as exactly one local write, regardless
-                # of how many records this call touched.
-                vector_clock.bump_own(local_vector, machine_id)
-                # Step 2 (spec): adopt the dump machine's revision as fully incorporated, max
-                # every other machine — vector_clock.merge() is exactly that, applied on top of
-                # the bump from step 1, not instead of it. See resolve.py's module-level note in
-                # the implementation report on why this order and merge-then-bump are equivalent
-                # under this system's own "a machine's live revision is never behind what any
-                # remote dump believes about it" invariant.
+                # Spec's "Post-resolve vector-clock update" steps 2 then 1, in that order: merge
+                # first (adopt the dump machine's revision as fully incorporated, elementwise max
+                # for every other machine), then bump local's own counter once for the resolve
+                # itself — one bump regardless of how many records this call touched.
+                #
+                # The spec numbers the bump first, and the two orders give the identical vector
+                # whenever dump_vector[machine_id] <= local_vector[machine_id]: writing n for
+                # local's own entry and d for the dump's value of it, bump-then-merge is
+                # max(n+1, d) and merge-then-bump is max(n, d)+1, and those agree exactly when
+                # d <= n. That inequality holds under normal forward-only propagation, where a
+                # machine's live revision is never behind what a remote dump believes about it.
+                # It is not unconditional, though:
+                # `ccst pdata rehydrate --force` replaces the local DB wholesale, pdata_meta
+                # included, and can roll local's own counter backward — after which a remote dump
+                # can legitimately hold a HIGHER value for local's own machine than local does.
+                # With d > n, bumping first yields max(n+1, d) == d whenever d >= n+1 — a vector
+                # merely EQUAL to the dump's on this entry, which the other machine's compare()
+                # reads as LOCAL_DOMINATES: it never fast-forwards, and this resolve is silently
+                # lost. Merging first and bumping the merged result gives max(n, d)+1, strictly
+                # above both n and d whatever the rollback history, so the published vector
+                # always strictly dominates both forked inputs.
                 merged_vector = vector_clock.merge(local_vector, diff.dump_vector)
+                vector_clock.bump_own(merged_vector, machine_id)
                 vector_clock_store.write_vector(
                     local_conn, merged_vector, updated_at=int(time.time()),
                 )
-            # Step 3 (spec): re-dump immediately, after commit — a filesystem write, matching
-            # rehydrate.rehydrate()'s own "always immediately re-dump" rule and for the identical
-            # reason: publish the merged state right away so the other machine's next check sees
-            # a dominating fast-forward, not a repeat of this fork.
+            # Step 3 (spec): re-dump immediately, after commit — a filesystem write. The spec
+            # states the reason directly: "publishing right away means the other machine's next
+            # check sees a dominating fast-forward, not a repeat of the same fork". The spec's
+            # "Triggers" section mandates the same immediate re-dump after a rehydrate; that half
+            # belongs to the hook/CLI orchestration and is not built yet, so this is the only
+            # caller of dump.write_latest anywhere in src/ today.
             dump.write_latest(
                 local_conn, project_root=project_root, machine_id=machine_id, vector=merged_vector,
             )
@@ -235,8 +290,11 @@ def _snapshot(conn: sqlite3.Connection, record_id: int) -> _Snapshot | None:
     return _Snapshot(record_group=record_group, payload=payload)
 
 
-def _classify(local_snap: _Snapshot | None, dump_snap: _Snapshot | None) -> tuple[bool, bool]:
-    """Returns `(id_collision, is_delete_vs_update)` for one record_id's two snapshots.
+def _classify(
+    local_snap: _Snapshot | None, dump_snap: _Snapshot | None,
+) -> tuple[bool, bool, bool]:
+    """Returns `(id_collision, group_mismatch, is_delete_vs_update)` for one record_id's two
+    snapshots. The three are mutually exclusive: a collision is decided first and reported alone.
 
     id_collision: true iff both sides have a row for this id but it is not the same logical
     record. `records.id` has no AUTOINCREMENT (repository.py's `_BASE_DDL`) — it is SQLite's bare
@@ -245,23 +303,36 @@ def _classify(local_snap: _Snapshot | None, dump_snap: _Snapshot | None) -> tupl
     brand-new records can legitimately allocate the SAME id to two entirely unrelated rows — this
     is not a hypothetical edge case, it is the expected outcome whenever both sides add the same
     number of new records to the same record_group after diverging (both start from the same
-    max(id), both increment by the same count). `record_group` and `created_at` are both set once
-    at insert time and never mutated by any write path in repository.py
-    (`update_base_record`/`soft_delete`/`restore` all leave both alone) — so for the SAME logical
-    record, both must be identical on both sides forever; either one differing is conclusive proof
-    the id was independently assigned to two different rows, not proof of a genuine edit conflict
-    on one row. `apply_resolution` refuses to touch these — see its own docstring/error text."""
+    max(id), both increment by the same count). `created_at` is set once at insert time and never
+    mutated by any write path in the codebase (repository.py's
+    `update_base_record`/`soft_delete`/`restore` all leave it alone, and so does
+    rename_group.py's `_rename_in_db`) — so for the SAME logical record it must be identical on
+    both sides forever, and a difference is conclusive proof the id was independently assigned to
+    two different rows rather than proof of a genuine edit conflict on one row. It is the ONLY
+    column with that property: `record_group` is deliberately excluded from this test because
+    `ccst pdata rename-group` mutates it in place (rename_group._rename_in_db), so treating a
+    record_group difference as proof of collision would misdiagnose every record of a group
+    renamed on one machine only.
+
+    group_mismatch: true iff the two sides agree it is the same logical record (created_at
+    matches) but disagree on its `record_group` — i.e. exactly the rename-on-one-side case above.
+    It gets its own category rather than being folded into an ordinary content diff because a
+    local/dump pick cannot express it: `RecordDiff.record_group` carries one arbitrary side's
+    name, so applying a choice would target that side's `ext_<group>` table for a row whose real
+    group may be the other one.
+
+    `apply_resolution` refuses to touch either category — see its own docstring/error text."""
     if local_snap is None or dump_snap is None:
-        return False, False
-    if local_snap.record_group != dump_snap.record_group:
-        return True, False
+        return False, False, False
     local_base = local_snap.payload["base"]
     dump_base = dump_snap.payload["base"]
     assert isinstance(local_base, dict) and isinstance(dump_base, dict)
     if local_base["created_at"] != dump_base["created_at"]:
-        return True, False
+        return True, False, False
+    if local_snap.record_group != dump_snap.record_group:
+        return False, True, False
     is_delete_vs_update = (local_base["deleted_at"] is None) != (dump_base["deleted_at"] is None)
-    return False, is_delete_vs_update
+    return False, False, is_delete_vs_update
 
 
 def _diff_records(
@@ -280,7 +351,7 @@ def _diff_records(
             assert dump_snap is not None  # the union of ids guarantees at least one side has it
             record_group = dump_snap.record_group
 
-        id_collision, is_delete_vs_update = _classify(local_snap, dump_snap)
+        id_collision, group_mismatch, is_delete_vs_update = _classify(local_snap, dump_snap)
         diffs.append(RecordDiff(
             record_id=record_id,
             record_group=record_group,
@@ -288,6 +359,7 @@ def _diff_records(
             dump=dump_snap.payload if dump_snap is not None else None,
             is_delete_vs_update=is_delete_vs_update,
             id_collision=id_collision,
+            group_mismatch=group_mismatch,
         ))
     return diffs
 

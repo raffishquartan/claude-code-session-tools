@@ -106,16 +106,31 @@ NAME`") until it's resolved. `ccst pdata resolve --project NAME` (Task 10) is wh
    through `apply_resolution` for these - they need a manual, out-of-band fix (e.g. re-inserting
    the discarded record under a fresh id on whichever machine needs it), never an automatic one.
 
-5. **Once Chris has decided every record he wants resolved, call `resolve.apply_resolution()`
-   with `{record_id: "local" | "dump"}` for exactly those ids.** Records not in the choices dict
-   are left untouched - a partial resolve (some records now, the rest later) is fine; each call
-   is its own atomic transaction. The whole resolve counts as exactly one local write for the
-   vector clock, regardless of how many records it touched, and the store re-publishes a fresh
-   dump immediately after committing - the same "publish right away so the other machine's next
-   check sees a dominating fast-forward" reasoning `rehydrate()` already uses for a clean
-   fast-forward.
+5. **`RecordDiff.group_mismatch` is the other non-choosable category, and it is *not* an id
+   collision - don't describe it as one.** `record_group` is mutable (`ccst pdata rename-group`
+   rewrites it in place), so a group renamed on one machine only produces records with the same
+   id and the same `created_at` but two different group names. That is one logical record whose
+   group the two sides disagree on, so there is no single `ext_<group>` table a `local`/`dump`
+   pick could write; `apply_resolution()` refuses these outright, exactly as it does id
+   collisions. Same framing as point 4 - a manual, out-of-band fix, never an automatic one: here,
+   re-run the same `ccst pdata rename-group` on whichever machine has not had it, so both sides
+   agree on the name, then resolve again.
 
-6. **A checksum-invalid dump is a different failure entirely - there's nothing to diff.**
+6. **Resolution is all-or-nothing per `apply_resolution()` call.** Once Chris has decided *every*
+   differing record, call `resolve.apply_resolution()` with `{record_id: "local" | "dump"}`
+   covering every `record_id` in the current diff - no more and no fewer. Omitting any of them
+   raises (naming the missing ids) and applies nothing. A partial resolve is not supported and is
+   not safe: the vector-clock bookkeeping is per-project, not per-record, so publishing after a
+   subset would declare the other machine fully incorporated while leaving records unreconciled,
+   and that machine's next check would read `DUMP_DOMINATES` and overwrite its own unmerged edits
+   with no prompt. If some records are blocked (point 4 or 5), the whole resolve stays blocked
+   until they are fixed out-of-band - that is deliberate. The call is one atomic transaction; the
+   whole resolve counts as exactly one local write for the vector clock regardless of how many
+   records it touched, and the store re-publishes a fresh dump immediately after committing, so
+   the other machine's next check sees a dominating fast-forward rather than a repeat of the same
+   fork.
+
+7. **A checksum-invalid dump is a different failure entirely - there's nothing to diff.**
    `diff_against_dump()` raises rather than returning an empty diff in that case; the fix is
    `ccst pdata dump --force` (republish from local, the only trustworthy side), not a per-record
    resolve.
