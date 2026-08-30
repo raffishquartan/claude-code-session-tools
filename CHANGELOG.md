@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.12.2] - 2026-08-30
+
+### Fixed
+
+- `ccsched status <job>` now prints the ledger's captured diagnostic text under each row when
+  present, instead of silently dropping it. The `error` column was already being written on every
+  run/fail event - diagnosing a scheduled-job failure previously meant going around the CLI to
+  query `telemetry.db`'s `catchup_events` table directly.
+- The scheduler's crash-path capture (`worker.classify_outcome`) now falls back to stdout's tail
+  when a crashed run's stderr is empty, instead of recording no detail at all. A controlled
+  `sys.exit(1)` after a clean, expected-shape failure - e.g. `ccst pdata verify`'s "ISSUES in N of
+  M project(s)" summary - prints its diagnostic to stdout, not stderr; the ledger's `error` field
+  was silently `null` for exactly that kind of failure, the one case where the tool actually did
+  explain itself.
+- `ccst pdata verify --all-projects` no longer lets one project's unexpected exception (a corrupt
+  `.db`, a transient race with a concurrent writer, a genuine bug) silently abort the rest of the
+  sweep - previously only the expected "no data store found" `ValueError` was caught, so anything
+  else propagated uncaught and no later project in the sweep was checked at all, with no ledger
+  detail to show why. Any other exception is now caught, reported to stderr, and followed by
+  exactly one automatic `--full` diagnostic rerun of that project - never chained further even if
+  the rerun crashes too, so a persistently broken project reports once and the sweep moves on
+  rather than retrying in a loop. Found live: a `pdata-verify-all` scheduled run crashed silently
+  on one project with an empty ledger `error` field and no other project's result visible from
+  that run's telemetry.
+
 ## [2.12.1] - 2026-08-30
 
 ### Fixed
