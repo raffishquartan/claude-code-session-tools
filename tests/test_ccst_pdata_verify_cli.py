@@ -110,3 +110,40 @@ def test_pdata_verify_project_not_found_exits_two(base_env):
     r = _run(base_env, "pdata", "verify", "--project", "never-touched-project")
     assert r.returncode == 2
     assert "no data store" in r.stderr.lower()
+
+
+def test_pdata_verify_all_crash_on_one_project_does_not_abort_the_sweep(base_env):
+    """A project whose run_verify() call crashes with something other than the
+    expected "no data store" ValueError (a corrupt .db, a transient race, a
+    genuine bug) must not take the whole --all-projects sweep down silently -
+    every other project still gets checked and reported."""
+    _run(base_env, "pdata", "add", "--project", "alpha", "--group", "notes",
+         "--content", "x")
+    _run(base_env, "pdata", "add", "--project", "broken", "--group", "notes",
+         "--content", "y")
+    db_path = Path(base_env["CCST_PROJECT_DB_DIR"]) / "broken.db"
+    db_path.write_bytes(b"not a sqlite database")
+
+    r = _run(base_env, "pdata", "verify", "--all-projects")
+
+    assert r.returncode == 1
+    assert "ISSUES in 1 of 2 project(s)" in r.stdout  # alpha still checked and clean
+    assert "broken: crashed:" in r.stderr
+
+
+def test_pdata_verify_all_crash_diagnostic_rerun_happens_exactly_once(base_env):
+    """§ 1.5.4 fix: a crashed project gets exactly one automatic --full
+    diagnostic rerun, never a retry loop - a persistently broken project (the
+    corrupt-file case here) must report the rerun's own failure once and move
+    on, not hang or retry indefinitely."""
+    _run(base_env, "pdata", "add", "--project", "broken", "--group", "notes",
+         "--content", "y")
+    db_path = Path(base_env["CCST_PROJECT_DB_DIR"]) / "broken.db"
+    db_path.write_bytes(b"not a sqlite database")
+
+    r = _run(base_env, "pdata", "verify", "--all-projects")
+
+    assert r.returncode == 1
+    assert r.stderr.count("broken: crashed:") == 1
+    assert r.stderr.count("diagnostic rerun") == 1
+    assert "diagnostic rerun also crashed" in r.stderr

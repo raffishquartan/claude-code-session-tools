@@ -68,8 +68,12 @@ class OutcomeCapture:
     coalesce/backfill loop may override a RUN to BACKFILL itself afterwards;
     that decision needs owed/succeeded counts this function doesn't have, so
     it's out of scope here), and the truncated text recorded to the ledger
-    and pushed — stderr's tail on crash (see `_crash_detail`, falling back to
-    "timed out" when empty), stdout's head on success (1000 chars, captured
+    and pushed — stderr's tail on crash (see `_crash_detail`), falling back to
+    stdout's tail when stderr is empty (a controlled `sys.exit(1)` after a
+    clean, expected-shape failure — e.g. `ccst pdata verify`'s "issues found"
+    summary — prints its diagnostic to stdout, not stderr, and previously lost
+    that text entirely on the crash path), then to "timed out" only when both
+    streams are empty; stdout's head on success (1000 chars, captured
     unconditionally so a clean run's output still reaches the ledger/push,
     not just a nonzero "found something" exit)."""
     crashed: bool
@@ -135,6 +139,8 @@ def classify_outcome(
     )
     if crashed:
         detail = _crash_detail(outcome.stderr) if outcome else None
+        if detail is None and outcome is not None and not outcome.timed_out:
+            detail = _crash_detail(outcome.stdout)
         if detail is None and outcome is not None and outcome.timed_out:
             detail = "timed out"
         if push:

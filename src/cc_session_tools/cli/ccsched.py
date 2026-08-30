@@ -340,6 +340,9 @@ def _cmd_status(args: argparse.Namespace) -> int:
     for r in rows:
         print(f"{r.get('ts','')} {r.get('job_id',''):<24} {r.get('event',''):<12} "
               f"ran={r.get('ran')} exit={r.get('exit_code')}")
+        error = r.get("error")
+        if error:
+            print(f"    {error}")
     return 0
 
 
