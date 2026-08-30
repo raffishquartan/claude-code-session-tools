@@ -260,6 +260,48 @@ def test_decide_publish_refuses_publishing_over_a_dominating_dump() -> None:
     ) is vector_clock.Comparison.DUMP_DOMINATES
 
 
+# ---------- is_no_op_publish: the additive "would this write anything new" check ----------
+#
+# Separate from decide_publish() on purpose - the CLI and SessionEnd hook may reasonably still
+# want to republish when unchanged (e.g. to refresh machine_id/dumped_at after fixing a checksum
+# failure), so this check is opt-in for a caller like the hourly ccsched job that would otherwise
+# call write_latest() every cycle regardless of activity.
+
+
+def test_is_no_op_publish_is_false_for_a_missing_dump() -> None:
+    """Nothing to be equal to yet - always worth publishing, matching decide_publish()'s own
+    unconditional-safe branch for this case."""
+    assert dump.is_no_op_publish(
+        local_vector={"ltxy": 1},
+        existing=dump.DumpInfo(checksum_valid=False, machine_id=None, vector={}),
+    ) is False
+
+
+def test_is_no_op_publish_is_false_for_a_checksum_invalid_dump() -> None:
+    assert dump.is_no_op_publish(
+        local_vector={"ltxy": 1},
+        existing=dump.DumpInfo(checksum_valid=False, machine_id="mbp", vector={"mbp": 9}),
+    ) is False
+
+
+def test_is_no_op_publish_is_true_when_local_exactly_equals_the_published_vector() -> None:
+    existing = dump.DumpInfo(checksum_valid=True, machine_id="mbp", vector={"ltxy": 1})
+    assert dump.is_no_op_publish(local_vector={"ltxy": 1}, existing=existing) is True
+
+
+def test_is_no_op_publish_is_false_when_local_strictly_dominates() -> None:
+    existing = dump.DumpInfo(checksum_valid=True, machine_id="mbp", vector={"ltxy": 1})
+    assert dump.is_no_op_publish(local_vector={"ltxy": 2}, existing=existing) is False
+
+
+def test_is_no_op_publish_is_false_for_a_fork_or_dump_dominating() -> None:
+    """Not the check's job to decide safety - decide_publish() already refuses these; a caller
+    checks decide_publish() first and only reaches is_no_op_publish() once that says safe."""
+    existing = dump.DumpInfo(checksum_valid=True, machine_id="mbp", vector={"ltxy": 1, "mbp": 2})
+    assert dump.is_no_op_publish(local_vector={"ltxy": 2, "mbp": 1}, existing=existing) is False
+    assert dump.is_no_op_publish(local_vector={"ltxy": 1}, existing=existing) is False
+
+
 def test_format_dumped_at_renders_the_shared_human_format() -> None:
     """The single source of truth for this format string - init_service.py's adoption message
     and the SessionStart hook's re-hydration message both call it."""

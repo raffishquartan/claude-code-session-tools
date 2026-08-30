@@ -210,6 +210,30 @@ def decide_publish(
     return comparison
 
 
+def is_no_op_publish(*, local_vector: dict[str, int], existing: DumpInfo) -> bool:
+    """True iff `local_vector` exactly equals the currently-published dump's vector - a
+    `decide_publish()`-safe write right now would produce byte-identical data and vector content,
+    refreshing only the `machine_id`/`dumped_at` header fields.
+
+    A separate, additive check rather than folded into `decide_publish()` itself: an *explicit*
+    trigger (`ccst pdata dump`, or a session ending with `on_session_end`) may reasonably still
+    want to republish even when unchanged - to refresh the header after fixing a checksum
+    failure, say - so neither of those two existing callers is changed by this function's
+    existence. An *automatic, unattended, repeating* trigger (the hourly `ccsched` job) is a
+    different case: calling `write_latest()` every single cycle regardless of activity means a
+    real archive-copy and a changed `latest.sql`/`latest.sha256` for every idle project, every
+    hour, forever - real disk churn and (since `.pdata-db-dump/` lives under a synced folder)
+    real OneDrive sync traffic for zero actual change. A caller in that position should check
+    this first and skip `write_latest()` entirely when it's `True`, rather than call
+    `decide_publish()` alone and treat every `None` result as "go ahead and write".
+
+    `existing.checksum_valid` is checked explicitly (not delegated to `decide_publish()`) because
+    a missing/invalid dump is never a no-op - there is nothing to be equal *to* yet, so it must
+    always be treated as "worth publishing", matching `decide_publish()`'s own unconditional-safe
+    branch for that case."""
+    return existing.checksum_valid and local_vector == existing.vector
+
+
 def refusal_detail(project: str) -> str:
     """The one wording for "local diverges from the published dump, refusing to publish", shared
     by `ccst pdata dump`'s stderr line and the SessionEnd hook's conflict notification. Kept in
