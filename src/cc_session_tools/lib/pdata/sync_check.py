@@ -81,6 +81,28 @@ def _rehydrate_half(
 ) -> SyncCheckResult | None:
     """The spec's step (1). `None` means "no rehydrate happened and the dump-check is safe to
     run" - every other return value is terminal for this project this cycle."""
+    if occupancy.is_occupied(project_root):
+        # Spec "Process safety" puts this check first, unconditionally, before any evaluation of
+        # the published dump's own state (Triggers table, SessionStart row: "First, the...
+        # occupancy check... Otherwise: [checksum/fork evaluation]") - matching Task 12's
+        # on_session_start(), which the hourly row says to follow "exactly". A project that is
+        # both occupied AND sitting behind a corrupted dump must skip silently, the same as any
+        # other occupied project - checking checksum validity first would report that corruption
+        # as a conflict (Telegram + digest) every hour for as long as the session stays open,
+        # even though nothing about the corrupted dump is this cycle's business while a live
+        # session owns the project.
+        #
+        # No exclude_pid, unlike the SessionStart hook - the detached `ccsched _run-job` worker
+        # this runs in is not itself a `claude` process, so there is nothing of its own to
+        # exclude.
+        #
+        # Terminal, not a fall-through to the dump-check: skipping the rehydrate leaves the
+        # local-vs-dump relationship unestablished, so a bare dump-check could legitimately come
+        # back DUMP_DOMINATES and get reported as a conflict every hour for as long as the
+        # session stays open. Nothing is lost - the SessionEnd hook dumps that project when the
+        # session closes, and the next cycle then covers it normally.
+        return SyncCheckResult(outcome=SyncOutcome.OCCUPIED)
+
     if not existing.checksum_valid:
         # A dump exists and cannot be trusted. Reported rather than published over: the recovery
         # path is a deliberate `ccst pdata dump --force` from the machine with good data, and an
@@ -93,19 +115,6 @@ def _rehydrate_half(
                 project=project,
             ),
         )
-
-    if occupancy.is_occupied(project_root):
-        # Spec "Process safety": the hourly job, like SessionStart, never swaps a project's .db
-        # out from under a live session. No exclude_pid, unlike the SessionStart hook - the
-        # detached `ccsched _run-job` worker this runs in is not itself a `claude` process, so
-        # there is nothing of its own to exclude.
-        #
-        # Terminal, not a fall-through to the dump-check: skipping the rehydrate leaves the
-        # local-vs-dump relationship unestablished, so a bare dump-check could legitimately come
-        # back DUMP_DOMINATES and get reported as a conflict every hour for as long as the
-        # session stays open. Nothing is lost - the SessionEnd hook dumps that project when the
-        # session closes, and the next cycle then covers it normally.
-        return SyncCheckResult(outcome=SyncOutcome.OCCUPIED)
 
     result = rehydrate.rehydrate(project)  # never force: an automatic trigger must not override
     if result.outcome is rehydrate.RehydrateOutcome.FAST_FORWARDED:

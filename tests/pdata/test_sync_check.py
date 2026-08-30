@@ -150,6 +150,33 @@ def test_a_corrupt_published_dump_is_reported_as_a_conflict(notified):
     assert notified[0][1] == "checksum_invalid"
 
 
+def test_an_occupied_project_with_a_corrupt_dump_is_skipped_not_reported(monkeypatch, notified):
+    """Regression test for a code-review finding: the occupancy check must run before the
+    checksum-validity check, not after, matching the spec's own ordering (Triggers table,
+    SessionStart row: "First, the... occupancy check... Otherwise: [checksum/fork evaluation]")
+    and Task 12's on_session_start(), which the hourly row explicitly says to follow "exactly".
+    An earlier version of check_project() checked checksum validity first, so a project that was
+    both occupied by a live session AND sitting behind a corrupted published dump got reported
+    as a conflict (Telegram + digest) every hourly cycle instead of silently skipping like any
+    other occupied project."""
+    _build_local("proj", vector={MACHINE: 1})
+    project_root = store.project_root("proj")
+    _publish_dump(
+        project_root, remote_project="proj-remote", content="remote",
+        vector={"mbp": 1}, machine_id="mbp",
+    )
+    latest = project_root / ".pdata-db-dump" / "latest.sql"
+    latest.write_text(latest.read_text() + "\n-- tampered\n")
+    monkeypatch.setattr(
+        sync_check.occupancy, "is_occupied", lambda root, *, exclude_pid=None: True
+    )
+
+    result = sync_check.check_project("proj")
+
+    assert result.outcome is sync_check.SyncOutcome.OCCUPIED
+    assert notified == []
+
+
 def test_deferred_is_terminal_and_never_reported_as_a_conflict(notified, tmp_path):
     """rehydrate() only returns DEFERRED after compare() already came back DUMP_DOMINATES, so
     falling through to the dump-check would make decide_publish() re-derive that same
