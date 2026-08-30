@@ -59,6 +59,17 @@ oneshot, pbt, pod`, plus any added later under `CCST_PROJECTS_ROOT`).
   `project_db_dir()`/`db_path()`) - but fixing that means touching code the session-output
   reconciliation fix already owns, and has its own migration needs for ~29 existing files on
   disk. Deliberately left out of this spec (see "Open items") rather than half-adopted here.
+  **Confirmed not a blocker for this spec specifically:** this spec only ever synchronises the 10
+  `~/cc`-rooted projects - anything inside a `~/repos` dev repo is assumed to move machine-to-
+  machine via git, never via this mechanism. The collision risk is about two different local
+  `.db` files accidentally becoming one on a single machine (a `~/cc` project and a same-named
+  `~/repos` repo both resolving to the same `project-db/<name>.db`), not about cross-machine sync
+  - real, but independent of, and not created or worsened by, anything in this spec. It's also
+  now lower-probability in practice than when first flagged: the `reconcile-session-output`
+  (2.11.1) and `pm-update-central-files` (2.11.2) fixes mean neither of the two automatic paths
+  that used to write session-output rows for a `~/repos` project will do so any more - the
+  remaining risk is a human explicitly creating a same-named project under both roots, not
+  something either automatic mechanism can trigger today.
 
 ### Machine identity
 
@@ -66,9 +77,37 @@ oneshot, pbt, pod`, plus any added later under `CCST_PROJECTS_ROOT`).
 from the superseded 2026-08-02 spec (§4.2): hostname auto-detected as the default; the first time
 this tooling runs on a given laptop it prompts once to confirm or override, then stores the
 confirmed value locally (`CCST_MACHINE_NAME` env var convention, or an equivalent small local
-config file - not synced) so it survives a later hostname change. No new *design* needed here -
-`lib/machine_identity.py` is specified (not yet built) by the prior spec's Plan 2; implement it
-from that design rather than re-deriving it, but it does not exist on disk yet.
+config file - not synced) so it survives a later hostname change. No new *design* needed for this
+part - `lib/machine_identity.py` is specified (not yet built) by the prior spec's Plan 2;
+implement it from that design rather than re-deriving it, but it does not exist on disk yet.
+
+**Two distinct checks, not one - stated precisely to avoid the ambiguity an earlier draft of this
+section had:**
+
+1. **Naming the machine (machine-wide, asked once ever).** The first time this tooling runs on a
+   given laptop *at all* - i.e. no stored `CCST_MACHINE_NAME`/config file exists yet - prompt to
+   confirm or override the auto-detected hostname, then store it. This value is reused for every
+   project this machine ever touches; it is never re-prompted on this machine again just because
+   a new project is touched.
+2. **Collision check (per-project, runs every time, not just once).** A plain hostname is not
+   guaranteed unique (a freshly-imaged corporate laptop or a default "MacBook-Pro" is a real risk,
+   independent of whether Chris's own two machines happen to collide today) - and a check that
+   only ran during step 1 would protect only whichever project happens to be touched first on
+   this machine, never any project touched afterward. So: every time this machine's *already-
+   confirmed* name is about to be written into a *project's* `pdata_meta` for the first time
+   (whether that's the very first project this machine ever touches, or the fifth), check that
+   name against every `machine_id` *that specific project* already knows - from its local `.db`
+   if one exists, or from `.pdata-db-dump/latest.sql` if not (see "adopt-from-dump" below). Two
+   outcomes:
+   - Name not present in this project's known machines → proceed, write it in.
+   - Name already present as a *different* machine's entry in this project's vector → cannot be
+     resolved automatically (software cannot tell "this is the same physical machine reconnecting
+     after losing local state" apart from "genuine collision with a different machine") - surface
+     both readings plainly and require an explicit choice: confirm anyway (same machine,
+     continuing - this project's history under that name is fine), or change the machine-wide name
+     now (genuine collision - a prior project's already-written history keeps the old name
+     permanently; that's a harmless label, since the vector-clock math keys off the `machine_id`
+     value recorded at the time, not off whatever name is configured later).
 
 ## The vector clock (`pdata_meta` table)
 
@@ -106,21 +145,52 @@ machine's current vector clock - generalises cleanly to any number of machines (
 
 ## Dump format
 
-Deterministic text (`sqlite3 .dump`-equivalent output, SQL statements in primary-key order - not
-NDJSON, not a raw binary copy of the `.db` file). Reasons: SQLite's on-disk byte layout isn't
-deterministic for identical logical content (page ordering, vacuum state), so a binary checksum
-would falsely flag unchanged content as changed; a text format diffs/compresses sanely; it's
-human-inspectable for the conflict-resolution tooling below.
+Deterministic text, **not** `sqlite3.Connection.iterdump()` used as-is, and not a raw binary copy
+of the `.db` file. Binary is ruled out because SQLite's on-disk byte layout isn't deterministic
+for identical logical content (page ordering, vacuum state), so a binary checksum would falsely
+flag unchanged content as changed. `iterdump()` was tested directly (three scripted checks against
+this exact schema, reproducible) rather than assumed, and turned out to be *only partially*
+deterministic:
+
+- Tables and indices are emitted in a fixed, content-only order (confirmed: alphabetical by name,
+  not creation order) - safe regardless of each machine's own schema-evolution history.
+- A table whose primary key is a bare `INTEGER PRIMARY KEY` (true of `records` and every
+  `ext_<record_group>` table, which key on `record_id INTEGER PRIMARY KEY REFERENCES
+  records(id)`) dumps in ascending key order regardless of insertion order, because that column
+  *is* the table's rowid - confirmed by inserting the same three logical rows in reverse order
+  across two separate databases and diffing their dumps byte-for-byte (identical).
+- **A table with a composite or non-integer primary key does not** - `record_group_fields`
+  (`PRIMARY KEY (record_group, field_name)`) dumped in *insertion* order, not key order, in the
+  same test - two databases holding the identical three rows, inserted in a different sequence on
+  each, produced different dump bytes. This would make the dump falsely appear to change (or fail
+  to change) across machines whose schema/field-history diverged, for reasons having nothing to
+  do with their actual content.
+- No PRAGMA or other file-level setting (page size, encoding, journal mode) appears in `iterdump()`
+  output in any of these tests - confirmed, not assumed.
+
+Because of the composite-PK finding, the dump routine is a **thin custom wrapper**, not raw
+`iterdump()`: enumerate tables/indices from `sqlite_master` sorted by name (matching the safe
+behaviour observed, but made explicit rather than relied upon as undocumented), and for each
+table's rows run `SELECT * FROM "<table>" ORDER BY <that table's primary-key columns>` rather than
+`iterdump()`'s unordered per-table fetch - giving every table the same "ordered by content, not by
+history" guarantee the `INTEGER PRIMARY KEY` tables already get for free. `sqlite3` (not a system
+dependency - this machine has no `sqlite3` CLI binary installed, confirmed) is never shelled out
+to; everything here is the Python stdlib `sqlite3` module.
 
 Each dump file embeds: `machine_id`, the full `pdata_meta` vector, `dumped_at`, and is paired with
 a `.sha256` checksum of its own content - a truncated/corrupted dump (e.g. caught mid-OneDrive
 upload) is detected as a checksum failure, distinct from a genuine fork (see "Conflict handling").
 
+**Required test, not optional** (ties to the empirical checks above): an automated test must
+create two independently-built databases holding identical logical content via different
+insertion/schema-evolution histories (mirroring the manual checks just run) and assert their dumps
+are byte-identical - this is what actually proves determinism, not a docstring claim.
+
 ## Triggers
 
 | Trigger | Direction | Condition to act |
 |---|---|---|
-| SessionStart (this project) | Rehydrate only | `latest.sql`'s checksum validates **and** its vector dominates `V_db` → rehydrate, then immediately re-dump (publishes the merged state right away, see below). Checksum failure or fork → abort, surface (see below); DB is left untouched, session continues normally. |
+| SessionStart (this project) | Rehydrate only | First, the same project-occupancy check as the hourly job (see "Process safety") - excluding this brand-new session's own just-launched process - and skip straight to "no-op" if another live session is already working in this project, even on this same machine. Otherwise: `latest.sql`'s checksum validates **and** its vector dominates `V_db` → rehydrate, then immediately re-dump (publishes the merged state right away, see below). Checksum failure or fork → abort, surface (see below); DB is left untouched, session continues normally. |
 | SessionEnd (this project) | Dump only | `V_db[self] > V_dump[self]` **and** `V_dump[k] == V_db[k]` for every other machine `k` (dump isn't behind on anything local already knows) → write a fresh dump. If the dump shows un-incorporated foreign updates instead, or fails its own checksum, abort the dump and surface a conflict (below) rather than publish over it. |
 | Hourly `ccsched` job | Both, in order | (1) Rehydrate-check exactly as SessionStart's rule - safe here because cron runs with no live session, so none of SessionStart's process-gate concern applies. (2) If no rehydrate happened, dump-check exactly as SessionEnd's rule. (3) Otherwise no-op, or surface a fork. |
 | `ccst pdata rehydrate [--project NAME \| --all] [--force]` | Rehydrate only | Same rule as SessionStart without `--force`. With `--force`: adopt the dump's content regardless, discarding local's unpublished writes ("dump wins"). |
@@ -148,6 +218,29 @@ rather than the whole machine:
   swap; if another writer holds it right now, skip this attempt and let the next trigger retry.
   The swap itself writes to a fresh temp file, verifies its checksum, then atomically
   `os.replace()`s it over the live path - matching the atomicity invariant above.
+- **Both the hourly cron job and SessionStart skip rehydrating a project if a live Claude Code
+  session is already working in it** - a layer above the lock check, about not surprising a live
+  session by changing its data mid-task even when no write happens to coincide with the exact
+  rehydrate instant. This applies to SessionStart too, not only cron: two sessions can be open in
+  the *same* project on the *same* laptop (two terminal tabs both `cd`'d into it) - the
+  newly-starting one must not rehydrate out from under the one already mid-task, which "this
+  session hasn't done anything yet" does not rule out when a *different*, already-running session
+  for the same project is the one at risk. Tested directly, not assumed: `pgrep -x claude` lists
+  every running `claude` process by PID; on Linux/WSL2, `readlink /proc/<pid>/cwd` resolves that
+  process's actual working directory with no ambiguity - verified against this session's own
+  `claude` process just now, which resolved to exactly this project's root, confirming the PID
+  found by `pgrep` really does map to a real, comparable project directory. A project is
+  "occupied" if any `claude` process's resolved cwd equals that project's root exactly (same
+  equality test `roots.matched_session_root()` already uses) - **SessionStart excludes its own
+  just-launched process from this check** (resolvable via its own PPID, verified to be the
+  launching `claude` process's PID this session), since by the time its hook fires its own process
+  already exists and would otherwise always make the project look "occupied" by itself; cron has
+  no such self to exclude. macOS has no `/proc` - the equivalent there is parsing `lsof -a -p <pid>
+  -d cwd -Fn` for the `n`-prefixed path line; this needs confirming on the Mac specifically during
+  implementation, since it could only be tested on the WSL2 side this session. If the check cannot
+  be performed at all (neither mechanism available, or a permission error) the project is treated
+  as occupied - fail safe, never fail open - and SessionStart simply skips this session (caught up
+  by the next trigger where the check *can* run), same as a cron tick retrying next hour.
 
 ## Conflict handling & notification
 
@@ -172,6 +265,42 @@ cron, manual `dump`/`rehydrate` without `--force`):
 work - every invocation prints a short warning banner ("unresolved sync conflict - see `ccst
 pdata resolve --project NAME`") but is never blocked. Blocking real work over an open sync
 conflict was considered and rejected - the warning is the deterrent, not a hard stop.
+
+**Resolution must preserve relational integrity, not just pick a side per record.** The schema
+has real structure `ccst pdata resolve` cannot ignore:
+
+- Every `ext_<record_group>` row is 1:1 with a `records` row via `record_id INTEGER PRIMARY KEY
+  REFERENCES records(id)` - resolving a record means resolving its base row *and* its extension
+  row together, atomically, in one transaction. Taking one side's base row with the other side's
+  extension row is corruption, not a valid outcome.
+- `record_group_fields` (the schema catalog) can itself diverge independently of any data row - a
+  `schema add-field` run on one machine and not the other. Diffing must include schema-catalog
+  rows as their own category, not only `records`/`ext_*` content, and a record can only be
+  considered "resolved" once its `record_group`'s schema is reconciled on the side that adopts it
+  (an extension column present in the source but missing on the target gets added via the
+  existing `ALTER TABLE ADD COLUMN` path *before* that row is inserted) - resolving a record must
+  never silently drop a field present in the schema one side already knows about.
+- A delete-vs-update conflict (one machine soft-deleted a record via `deleted_at`, the other
+  updated the same record) is its own case, not reducible to "diff the content" - `ccst pdata
+  resolve` must present it explicitly as delete-vs-update, never silently resurrect a deleted
+  record by applying an update over it, nor silently drop an update by keeping the delete.
+
+**Post-resolve vector-clock update - binding, not optional.** A resolved fork produces content
+neither machine's vector alone describes, and the whole fast-forward/fork distinction depends on
+every vector accurately reflecting what's actually been incorporated - getting this wrong risks
+the same fork being re-detected forever, or a resolved state being silently treated as dominated
+when it should dominate. `ccst pdata resolve` therefore, as one atomic step immediately on
+completion (same transaction as the last content write, same spirit as invariant #1 above):
+
+1. Increments the local machine's own `pdata_meta` revision by one (the resolve itself counts as
+   a single local write, regardless of how many individual records it touched).
+2. Adopts the other machine's revision from the dump being resolved against as fully incorporated
+   (sets that machine's row in local `pdata_meta` to the dump's value for it) - and for every
+   *other* machine mentioned in either vector, takes the elementwise max, exactly as a clean
+   fast-forward would - so the resulting vector dominates both of the forked inputs, not just one.
+3. **Immediately re-dumps** the merged state - identical to what a clean rehydrate already does
+   (see "Triggers" below) and for the identical reason: publishing right away means the other
+   machine's next check sees a dominating fast-forward, not a repeat of the same fork.
 
 **Conflict-resolution documentation:** extend the existing `pm-pdata-conflict-resolution` skill
 with a second section for this cross-machine case, alongside its existing single-file
@@ -200,6 +329,17 @@ pdata from sync dump (published by <machine>, <timestamp>) - skipping file class
 vs. the normal flow's classification report). If the dump exists but fails its checksum, `init`
 fails with the same corrupt-dump guidance as any other rehydrate attempt (see "Conflict
 handling") rather than silently falling through to a fresh import.
+
+**This is not only a manual-`init` concern.** "No local `.db` yet, but a dump exists" is simply
+the limiting case of the rehydrate comparison in "Triggers" below - an absent local vector is
+trivially dominated by any dump's vector. SessionStart and the hourly cron job therefore both
+handle it automatically too, via the same adopt-from-dump path: a project with no local `.db` that
+has a valid `.pdata-db-dump/latest.sql` gets its local store created and populated by SessionStart
+the first time a session opens there, or by the next hourly cron tick, with no manual `ccst pdata
+init` required - `init`'s adopt-from-dump path exists for the deliberate/explicit case (setting up
+a new machine before ever starting a session there), but isn't the only way it happens. The
+machine-identity confirm-once prompt (above) still runs as part of whichever path first
+establishes this machine's presence in that project.
 
 ## Manual end-to-end verification (post-implementation, using `home`)
 
@@ -270,8 +410,14 @@ the session's own folder, not repo content).
   vector-clock-aware (tentatively no - the vector clock is DB-wide, not per-record-group).
 - Confirm current Claude Code hook name for "session end" (referred to here as SessionEnd) against
   the installed hook schema before wiring it.
-- Exact `ccsched` job id/cadence registration (bundled job, matching the existing
-  `pdata-verify-all`/`pm-session-output-reconcile` pattern).
+- The hourly sync job must be registered in `lib/scheduler/bundled_jobs.py` as a **bundled** job
+  (not a manually-`ccsched add`ed one) - same treatment as the existing `pdata-verify-all`/
+  `pm-session-output-reconcile` entries, so `ccst ccsched-jobs install` (one of
+  `install-everything`'s steps) registers it automatically on every fresh install and version
+  upgrade, with no separate manual step. The hourly cadence itself is fixed by this spec
+  (Triggers, above) - only the job id and its `ccsched` registration mechanics are open.
+- Confirm the macOS `lsof -a -p <pid> -d cwd -Fn` occupancy-check fallback (Process safety) on an
+  actual Mac - only the Linux/WSL2 `/proc` path was verified this session.
 - `ccst pdata resolve`'s exact per-record diff UX - design during implementation, reusing
   `pm-pdata-conflict-resolution`'s existing display code where possible rather than duplicating it.
 - Version bump and CHANGELOG entry for this feature - separate from, and after, the unrelated

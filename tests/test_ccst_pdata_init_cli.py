@@ -240,3 +240,34 @@ def test_pdata_init_rehearse_does_not_touch_real_project(base_env, tmp_path):
     assert "first" not in r_list_real.stdout
     # the rehearsal's backup tarball must never land in the real backup dir
     assert not real_backup_dir.exists() or not any(real_backup_dir.iterdir())
+
+
+def test_pdata_init_write_adopts_from_an_existing_dump(base_env, tmp_path, monkeypatch):
+    """A second machine's first-ever `ccst pdata init --write` for an already-migrated project
+    must adopt the existing sync dump, not classify/import this machine's files as if it were a
+    fresh migration - and the CLI output must say so plainly, not print "Wrote 0 record(s)" /
+    "Backup: None" as if nothing happened or something went wrong (the library-level behaviour
+    was already correct; this test covers the CLI message a human actually sees)."""
+    from cc_session_tools.lib.pdata import dump, repository, vector_clock_store
+
+    project_dir = tmp_path / "projects" / "demo"
+    project_dir.mkdir(parents=True)
+
+    # Build the dump via this test process's own in-memory library calls (not the subprocess
+    # CLI) - monkeypatch, not a raw os.environ write, so it's scoped to this test only.
+    monkeypatch.setenv("CCST_PROJECT_DB_DIR", base_env["CCST_PROJECT_DB_DIR"])
+    con = repository.connect("demo")
+    with repository._immediate(con):
+        vector_clock_store.write_vector(con, {"macbook": 3}, updated_at=100)
+    dump.write_latest(con, project_root=project_dir, machine_id="macbook", vector={"macbook": 3})
+    con.close()
+    (Path(base_env["CCST_PROJECT_DB_DIR"]) / "demo.db").unlink()  # no local .db yet
+
+    r = _run(base_env, "pdata", "init", "--project", "demo", "--write")
+
+    assert r.returncode == 0, r.stderr
+    assert "Wrote 0 record" not in r.stdout
+    assert "Backup: None" not in r.stdout
+    assert "Adopting existing pdata from sync dump" in r.stdout
+    assert "macbook" in r.stdout
+    assert "SUCCESS" in r.stdout

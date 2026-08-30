@@ -45,6 +45,23 @@ Current subcommands:
   pdata verify                   Run the integrity-check backstop (row-count parity, file_path
                                  resolution, suspicious double-updates) for --project NAME or
                                  --all-projects and persist the result for ccst doctor.
+  pdata dump                     Publish the current local DB state to
+                                 .pdata-db-dump/latest.sql for --project NAME or
+                                 --all-projects. Refuses (unless --force) to overwrite an
+                                 unresolved cross-machine fork.
+  pdata rehydrate                Fast-forward the local DB from the published dump for
+                                 --project NAME or --all-projects, if it's ahead. --force
+                                 fast-forwards even over a diverged local revision.
+  pdata resolve                  Diagnose (default, prints the diff) or apply per-record
+                                 --choice ID=local|dump resolutions for a cross-machine fork.
+  pdata sync-check               Do whichever of rehydrate/dump each project needs, in that
+                                 order, for --project NAME or --all-projects. The unattended
+                                 trigger behind the hourly pdata-sync-hourly ccsched job:
+                                 skips an unchanged republish and never overrides a fork.
+  machine-identity show          Print this laptop's resolved machine id and whether it's
+                                 confirmed.
+  machine-identity confirm       Store this laptop's confirmed machine id (--name NAME), used
+                                 by pdata's cross-machine vector clock.
   migrate ccsched                Migrate ccsched flat-file stores into ccsched.db
                                  (verify + tar-backup old files before removal).
   migrate ccmsg                  Migrate the flat-file message store into ccmsg.db
@@ -81,7 +98,7 @@ import os
 import sys
 from enum import Enum
 from pathlib import Path
-from typing import Any, TextIO, cast
+from typing import TYPE_CHECKING, Any, TextIO, cast
 
 from cc_session_tools import __version__
 from cc_session_tools.hooks_install import (
@@ -90,7 +107,15 @@ from cc_session_tools.hooks_install import (
     prune_stale_hooks,
     write_json_atomic,
 )
+from cc_session_tools.lib import machine_identity
 from cc_session_tools.lib.hook_registry import HOOK_DESCRIPTIONS, HOOK_VERBS
+
+if TYPE_CHECKING:
+    # Type-only, so the handler's own lazy `from ... import sync_check` (this file's convention:
+    # pdata modules are imported inside the handler that needs them, never at module scope) is
+    # still the only runtime import.
+    from cc_session_tools.lib.pdata.resolve import RecordPayload
+    from cc_session_tools.lib.pdata.sync_check import SyncCheckResult
 
 
 # ---------- path discovery ----------
@@ -1161,6 +1186,16 @@ def _cmd_pdata_init(args: argparse.Namespace) -> int:
             print(f"ERROR: verification failed ({len(write_result.failure.reasons)} reason(s))")
             return 1
 
+        if write_result.adopted_from_dump:
+            # A second machine's first-ever init for an already-migrated project - nothing was
+            # classified or cut over here, so the ordinary "Wrote N records"/"Backup: ..."/
+            # doc-update-reminders below would be actively misleading (they read as if nothing
+            # happened, or that something went wrong, rather than "adoption succeeded").
+            print(write_result.report)
+            print(f"\nVerify: ccst pdata verify --project {args.project} --full")
+            print("SUCCESS")
+            return 0
+
         print(
             f"Wrote {len(write_result.created_record_ids)} record(s) across "
             f"{len(write_result.entries_written)} file(s)."
@@ -1391,6 +1426,393 @@ def _cmd_pdata_verify(args: argparse.Namespace) -> int:
         else:
             print(f"ccst pdata verify --all-projects: OK ({len(projects)} project(s), 0 issue(s))")
     return worst
+
+
+def _cmd_pdata_dump(args: argparse.Namespace) -> int:
+    from cc_session_tools.lib import machine_identity
+    from cc_session_tools.lib.pdata import (
+        dump, repository, store, sync_notify, vector_clock_store, verify,
+    )
+
+    projects = verify.discover_projects() if args.all_projects else [args.project]
+    if not projects:
+        print("ccst pdata dump: no project databases found", file=sys.stderr)
+        return 2
+
+    machine_id = machine_identity.resolve().machine_id
+    compact = args.all_projects
+    published = 0
+    refused = 0
+    errors = 0
+
+    for project in projects:
+        try:
+            project_root = store.project_root(project)
+            conn = repository.connect(project)
+        except ValueError as exc:
+            # Matches the sibling _cmd_pdata_rehydrate/_cmd_pdata_resolve handlers: record and
+            # continue rather than abort the whole --all-projects loop on one bad project.
+            print(f"ccst pdata dump: {project}: {exc}", file=sys.stderr)
+            errors += 1
+            continue
+        try:
+            local_vector = vector_clock_store.read_vector(conn)
+            existing = dump.read_latest(project_root)
+            # Shared with the SessionEnd hook (cccs_hooks.pdata_sync) - the spec's dump trigger
+            # is one rule, so it lives in one function rather than inline in both callers.
+            # `None` means safe to publish; anything else is the Comparison that refuses it.
+            comparison = dump.decide_publish(local_vector=local_vector, existing=existing)
+            if comparison is not None and not args.force:
+                refused += 1
+                detail = dump.refusal_detail(project)
+                sync_notify.notify_conflict(project, outcome=comparison.value, detail=detail)
+                if not compact:
+                    print(f"ccst pdata dump: {project}: {detail}", file=sys.stderr)
+                continue
+            dump.write_latest(
+                conn, project_root=project_root, machine_id=machine_id, vector=local_vector,
+            )
+        finally:
+            conn.close()
+        published += 1
+        if not compact:
+            print(f"ccst pdata dump: {project}: published (machine_id={machine_id})")
+
+    if compact:
+        if refused or errors:
+            print(
+                f"ccst pdata dump --all-projects: published {published}, refused {refused} "
+                f"(unresolved fork), errors {errors} of {len(projects)} project(s) - see "
+                f"`ccst pdata resolve --project NAME` for each"
+            )
+        else:
+            print(
+                f"ccst pdata dump --all-projects: published {published} of "
+                f"{len(projects)} project(s)"
+            )
+
+    return 2 if errors else (1 if refused else 0)
+
+
+def _cmd_pdata_rehydrate(args: argparse.Namespace) -> int:
+    from cc_session_tools.lib.pdata import rehydrate, sync_notify, verify
+
+    projects = verify.discover_projects() if args.all_projects else [args.project]
+    if not projects:
+        print("ccst pdata rehydrate: no project databases found", file=sys.stderr)
+        return 2
+
+    compact = args.all_projects
+    counts = {outcome.value: 0 for outcome in rehydrate.RehydrateOutcome}
+    worst = 0
+
+    for project in projects:
+        try:
+            result = rehydrate.rehydrate(project, force=args.force)
+        except ValueError as exc:
+            print(f"ccst pdata rehydrate: {project}: {exc}", file=sys.stderr)
+            worst = max(worst, 2)
+            continue
+        counts[result.outcome.value] += 1
+
+        if result.outcome is rehydrate.RehydrateOutcome.FAST_FORWARDED:
+            if not compact:
+                print(
+                    f"ccst pdata rehydrate: {project}: fast-forwarded from "
+                    f"{result.from_machine}"
+                )
+        elif result.outcome is rehydrate.RehydrateOutcome.NO_OP:
+            if not compact:
+                print(f"ccst pdata rehydrate: {project}: already up to date")
+        elif result.outcome in (
+            rehydrate.RehydrateOutcome.FORK, rehydrate.RehydrateOutcome.CHECKSUM_INVALID,
+        ):
+            worst = max(worst, 1)
+            # Shared with the SessionStart hook (cccs_hooks.pdata_sync) so the CLI and the hook
+            # can never describe the same conflict two different ways.
+            detail = rehydrate.conflict_detail(result, project=project)
+            sync_notify.notify_conflict(project, outcome=result.outcome.value, detail=detail)
+            if not compact:
+                print(f"ccst pdata rehydrate: {project}: {detail}", file=sys.stderr)
+        else:
+            # DEFERRED - another writer holds sync_lock right now. Expected and transient, not
+            # an error (rehydrate.py's own RehydrateOutcome docstring: "retry later" rather than
+            # "surfaced, nothing written" like FORK/CHECKSUM_INVALID above) - exit 0, and never
+            # point at `ccst pdata resolve`, which would misdescribe this as a conflict.
+            if not compact:
+                print(
+                    f"ccst pdata rehydrate: {project}: another writer holds the lock - "
+                    f"retry later"
+                )
+
+    if compact:
+        print(
+            "ccst pdata rehydrate --all-projects: "
+            f"fast-forwarded {counts[rehydrate.RehydrateOutcome.FAST_FORWARDED.value]}, "
+            f"no-op {counts[rehydrate.RehydrateOutcome.NO_OP.value]}, "
+            f"fork {counts[rehydrate.RehydrateOutcome.FORK.value]}, "
+            f"checksum-invalid {counts[rehydrate.RehydrateOutcome.CHECKSUM_INVALID.value]}, "
+            f"deferred {counts[rehydrate.RehydrateOutcome.DEFERRED.value]} of "
+            f"{len(projects)} project(s)"
+        )
+
+    return worst
+
+
+def _parse_resolve_choice(raw: str) -> tuple[int, str]:
+    """Parse "ID=local|dump" into (record_id, choice). Only checks the shape - whether choice is
+    actually 'local'/'dump' is apply_resolution's own job (its error message is printed verbatim,
+    not re-derived here). Raises ValueError on malformed input."""
+    id_str, sep, choice = raw.partition("=")
+    if not sep or not id_str or not choice:
+        raise ValueError(f"malformed --choice (want ID=local|dump): {raw!r}")
+    try:
+        record_id = int(id_str)
+    except ValueError:
+        raise ValueError(f"malformed --choice (want ID=local|dump): {raw!r}") from None
+    return record_id, choice
+
+
+def _resolve_deleted_at(payload: RecordPayload) -> int | None:
+    return payload["base"]["deleted_at"]
+
+
+def _cmd_pdata_resolve(args: argparse.Namespace) -> int:
+    from cc_session_tools.lib.pdata import resolve, verify
+
+    if args.choice:
+        if args.all_projects:
+            print(
+                "ccst pdata resolve: --choice requires --project (not --all-projects)",
+                file=sys.stderr,
+            )
+            return 2
+        try:
+            raw_choices = dict(_parse_resolve_choice(raw) for raw in args.choice)
+        except ValueError as exc:
+            print(f"ccst pdata resolve: {exc}", file=sys.stderr)
+            return 2
+        try:
+            # narrow_choices raises the same "invalid choice" ValueError apply_resolution's own
+            # runtime check does, from the same helper - so an unusable choice value still
+            # reports exactly one way, whichever of the two sees it first.
+            choices = resolve.narrow_choices(raw_choices)
+            outcome = resolve.apply_resolution(args.project, choices)
+        except ValueError as exc:
+            print(f"ccst pdata resolve: {exc}", file=sys.stderr)
+            return 1
+        if outcome is resolve.ApplyOutcome.LOCKED:
+            # Another writer holds sync_lock right now. Expected and transient, exactly like
+            # rehydrate's DEFERRED above - exit 0, nothing written, and never point at `ccst pdata
+            # resolve`, which would misdescribe lock contention as a conflict.
+            print(
+                f"ccst pdata resolve: {args.project}: another writer holds the lock - retry later"
+            )
+            return 0
+        print(f"ccst pdata resolve: {args.project}: resolved {len(choices)} record(s)")
+        return 0
+
+    projects = verify.discover_projects() if args.all_projects else [args.project]
+    if not projects:
+        print("ccst pdata resolve: no project databases found", file=sys.stderr)
+        return 2
+
+    compact = args.all_projects
+    outstanding = 0
+
+    for project in projects:
+        try:
+            diff = resolve.diff_against_dump(project)
+        except ValueError as exc:
+            print(f"ccst pdata resolve: {project}: {exc}", file=sys.stderr)
+            outstanding += 1
+            continue
+
+        has_diff = bool(diff.records) or bool(diff.schema_fields)
+        if has_diff:
+            outstanding += 1
+
+        if compact:
+            if has_diff:
+                print(
+                    f"{project}: {len(diff.records)} record(s) + "
+                    f"{len(diff.schema_fields)} schema field(s) outstanding"
+                )
+            else:
+                print(f"{project}: clean")
+            continue
+
+        if not has_diff:
+            print(f"{project}: clean - nothing to resolve")
+            continue
+
+        print(
+            f"{project}: {len(diff.records)} record(s) + {len(diff.schema_fields)} schema "
+            f"field(s) to resolve"
+        )
+        for rd in diff.records:
+            if rd.id_collision:
+                print(
+                    f"  record {rd.record_id} (group={rd.record_group}): id collision - "
+                    f"this id was independently assigned to two unrelated records on "
+                    f"different machines, not a genuine edit conflict; `ccst pdata resolve` "
+                    f"cannot apply a local/dump choice to this one, it needs manual, "
+                    f"out-of-band reconciliation"
+                )
+                continue
+            if rd.group_mismatch:
+                # Both sides' own group names, not rd.record_group: that field carries whichever
+                # side happened to be available, and RecordDiff's docstring says so - printing it
+                # alone in the one line whose whole point is which two names disagree would tell
+                # the reader neither which side they are seeing nor what the other side's is.
+                print(
+                    f"  record {rd.record_id} (local group={rd.local_record_group}, "
+                    f"dump group={rd.dump_record_group}): group mismatch - same id and "
+                    f"created_at, but local and dump disagree on record_group; compare "
+                    f"content/file_path on each side before assuming this is a safe "
+                    f"`ccst pdata rename-group` rather than a same-second id collision - "
+                    f"`ccst pdata resolve` cannot apply a local/dump choice to this one"
+                )
+                continue
+            if rd.is_delete_vs_update:
+                assert rd.local is not None and rd.dump is not None
+                local_deleted = _resolve_deleted_at(rd.local) is not None
+                side = (
+                    "local deleted this record, dump has a live edit to it" if local_deleted
+                    else "dump deleted this record, local has a live edit to it"
+                )
+                print(
+                    f"  record {rd.record_id} (group={rd.record_group}): delete-vs-update - "
+                    f"{side}"
+                )
+                continue
+            if rd.local is None:
+                print(
+                    f"  record {rd.record_id} (group={rd.record_group}): dump-only "
+                    f"(not present locally)"
+                )
+            elif rd.dump is None:
+                print(
+                    f"  record {rd.record_id} (group={rd.record_group}): local-only "
+                    f"(not present in the dump)"
+                )
+            else:
+                print(
+                    f"  record {rd.record_id} (group={rd.record_group}): content differs "
+                    f"between local and dump"
+                )
+
+        for fd in diff.schema_fields:
+            side = "local only" if fd.present_locally else "dump only"
+            print(f"  schema field {fd.record_group}.{fd.field_name}: {side}")
+
+    return 1 if outstanding else 0
+
+
+def _cmd_pdata_sync_check(args: argparse.Namespace) -> int:
+    """The spec's "Hourly `ccsched` job" trigger: per project, rehydrate-check and - only if no
+    rehydrate happened - dump-check. The whole decision lives in `pdata.sync_check` (shared with
+    nothing else today, but kept out of this handler for the same reason `dump.decide_publish`
+    and `rehydrate.rehydrate` are: this file holds argparse plumbing and printing, not sync
+    rules). This handler is the loop, the printing, and the exit-code mapping."""
+    import sqlite3
+
+    from cc_session_tools.lib.pdata import sync_check, verify
+
+    projects = verify.discover_projects() if args.all_projects else [args.project]
+    if not projects:
+        print("ccst pdata sync-check: no project databases found", file=sys.stderr)
+        return 2
+
+    compact = args.all_projects
+    counts = {outcome.value: 0 for outcome in sync_check.SyncOutcome}
+    errors = 0
+    worst = 0
+
+    for project in projects:
+        try:
+            result = sync_check.check_project(project)
+        except (OSError, ValueError, sqlite3.Error) as exc:
+            # Record and continue, matching _cmd_pdata_dump/_cmd_pdata_rehydrate: one bad or
+            # unreadable project must not abort the whole batch. The caught set is wider than
+            # those two siblings' bare ValueError, and matches `cccs_hooks.pdata_sync`'s instead,
+            # for the reason that module documents: this command's real caller is an unattended
+            # ccsched job, where an uncaught sqlite3.Error on project 3 of 12 both loses the
+            # other nine projects' cycle and counts as a crash toward auto-suspend. A genuinely
+            # corrupt <project>.db is the concrete case - discover_projects() finds it by
+            # filename, and opening it raises sqlite3.DatabaseError, not ValueError.
+            print(f"ccst pdata sync-check: {project}: {exc}", file=sys.stderr)
+            errors += 1
+            worst = max(worst, 2)
+            continue
+        counts[result.outcome.value] += 1
+
+        if result.outcome is sync_check.SyncOutcome.CONFLICT:
+            # sync_check.check_project has already pushed this through notify_conflict - the only
+            # channel that reaches anyone when this runs unattended. Printing it too is for the
+            # human who ran the command by hand.
+            worst = max(worst, 1)
+            if not compact:
+                print(f"ccst pdata sync-check: {project}: {result.detail}", file=sys.stderr)
+        elif not compact:
+            print(f"ccst pdata sync-check: {project}: {_sync_check_line(result)}")
+
+    if compact:
+        print(
+            "ccst pdata sync-check --all-projects: "
+            f"fast-forwarded {counts[sync_check.SyncOutcome.FAST_FORWARDED.value]}, "
+            f"published {counts[sync_check.SyncOutcome.PUBLISHED.value]}, "
+            f"unchanged {counts[sync_check.SyncOutcome.UNCHANGED.value]}, "
+            f"conflict {counts[sync_check.SyncOutcome.CONFLICT.value]}, "
+            f"deferred {counts[sync_check.SyncOutcome.DEFERRED.value]}, "
+            f"occupied {counts[sync_check.SyncOutcome.OCCUPIED.value]}, "
+            f"errors {errors} of {len(projects)} project(s)"
+        )
+
+    # Same convention as _cmd_pdata_rehydrate's `worst`: 2 for a hard error, 1 for an unresolved
+    # conflict, 0 otherwise. DEFERRED and OCCUPIED are transient, self-resolving states, not
+    # findings, and contribute 0 - exactly as DEFERRED does there.
+    return worst
+
+
+def _sync_check_line(result: SyncCheckResult) -> str:
+    """The one-line, --project-mode wording for each non-conflict sync-check outcome."""
+    from cc_session_tools.lib.pdata import sync_check
+
+    if result.outcome is sync_check.SyncOutcome.FAST_FORWARDED:
+        return f"fast-forwarded from {result.from_machine}"
+    if result.outcome is sync_check.SyncOutcome.PUBLISHED:
+        return f"published (machine_id={result.machine_id})"
+    if result.outcome is sync_check.SyncOutcome.UNCHANGED:
+        return "unchanged - nothing new to publish"
+    if result.outcome is sync_check.SyncOutcome.DEFERRED:
+        return "another writer holds the lock - retry later"
+    return "a live session is working in this project - skipped"
+
+
+# ---------- machine-identity show / confirm ----------
+
+
+def _cmd_machine_identity_show(args: argparse.Namespace) -> int:
+    identity = machine_identity.resolve()
+    if identity.confirmed:
+        print(f"{identity.machine_id} (confirmed)")
+    else:
+        print(
+            f"{identity.machine_id} (unconfirmed - run "
+            "'ccst machine-identity confirm --name <name>')"
+        )
+    return 0
+
+
+def _cmd_machine_identity_confirm(args: argparse.Namespace) -> int:
+    try:
+        machine_identity.confirm(args.name)
+    except ValueError as exc:
+        print(f"ccst machine-identity: {exc}", file=sys.stderr)
+        return 2
+    print(f"Confirmed machine id: {args.name}")
+    return 0
 
 
 # ---------- hooks run ----------
@@ -2508,6 +2930,82 @@ def _build_parser() -> argparse.ArgumentParser:
              "the default one-line summary (--project always prints full detail)",
     )
 
+    pdata_dump_parser = pdata_sub.add_parser(
+        "dump", help="Publish the current local DB state to .pdata-db-dump/latest.sql"
+    )
+    dump_target = pdata_dump_parser.add_mutually_exclusive_group(required=True)
+    dump_target.add_argument("--project", metavar="NAME")
+    dump_target.add_argument(
+        "--all-projects", action="store_true",
+        help="Dump every project with a .db under project-db/",
+    )
+    pdata_dump_parser.add_argument(
+        "--force", action="store_true",
+        help="Publish even if this would overwrite an unresolved fork, or a dump that's "
+             "ahead of local (the checksum-invalid-dump recovery path)",
+    )
+
+    pdata_rehydrate_parser = pdata_sub.add_parser(
+        "rehydrate", help="Fast-forward the local DB from the published dump, if it's ahead"
+    )
+    rehydrate_target = pdata_rehydrate_parser.add_mutually_exclusive_group(required=True)
+    rehydrate_target.add_argument("--project", metavar="NAME")
+    rehydrate_target.add_argument(
+        "--all-projects", action="store_true",
+        help="Rehydrate every project with a .db under project-db/",
+    )
+    pdata_rehydrate_parser.add_argument(
+        "--force", action="store_true",
+        help="Fast-forward even over a local revision the dump doesn't dominate",
+    )
+
+    pdata_resolve_parser = pdata_sub.add_parser(
+        "resolve",
+        help="Diagnose (default) or apply per-record local/dump choices for a "
+             "cross-machine fork",
+    )
+    resolve_target = pdata_resolve_parser.add_mutually_exclusive_group(required=True)
+    resolve_target.add_argument("--project", metavar="NAME")
+    resolve_target.add_argument(
+        "--all-projects", action="store_true",
+        help="Diagnose every project with a .db under project-db/ (diagnostic mode only - "
+             "--choice requires --project)",
+    )
+    pdata_resolve_parser.add_argument(
+        "--choice", action="append", default=[], metavar="ID=local|dump",
+        help="Apply a per-record resolution; may repeat. Requires --project. Without any "
+             "--choice, resolve runs in diagnostic (dry-run) mode and prints the diff.",
+    )
+
+    pdata_sync_check_parser = pdata_sub.add_parser(
+        "sync-check",
+        help="Rehydrate-check then (only if no rehydrate happened) dump-check - the unattended "
+             "trigger behind the hourly pdata-sync-hourly ccsched job",
+    )
+    sync_check_target = pdata_sync_check_parser.add_mutually_exclusive_group(required=True)
+    sync_check_target.add_argument("--project", metavar="NAME")
+    sync_check_target.add_argument(
+        "--all-projects", action="store_true",
+        help="Sync-check every project with a .db under project-db/",
+    )
+    # Deliberately no --force. This is the automatic, repeating trigger: overriding a fork or a
+    # checksum failure is a decision a human makes with `ccst pdata dump/rehydrate --force`,
+    # never one an hourly cron job makes on their behalf.
+
+    # ---- machine-identity ----
+    machine_identity_parser = sub.add_parser(
+        "machine-identity", help="This laptop's identity for pdata's cross-machine vector clock"
+    )
+    machine_identity_sub = machine_identity_parser.add_subparsers(dest="verb", metavar="<verb>")
+    machine_identity_sub.required = True
+
+    machine_identity_sub.add_parser("show", help="Print the resolved machine id and its confirmed state")
+
+    machine_identity_confirm_parser = machine_identity_sub.add_parser(
+        "confirm", help="Store this laptop's confirmed machine id"
+    )
+    machine_identity_confirm_parser.add_argument("--name", required=True, metavar="NAME")
+
     # ---- sessions ----
     sessions_parser = sub.add_parser("sessions", help="sessions.db management commands")
     sessions_sub = sessions_parser.add_subparsers(dest="verb", metavar="<verb>")
@@ -2797,6 +3295,20 @@ def main() -> None:
             sys.exit(_cmd_pdata_reconcile_session_output(args))
         if args.verb == "verify":
             sys.exit(_cmd_pdata_verify(args))
+        if args.verb == "dump":
+            sys.exit(_cmd_pdata_dump(args))
+        if args.verb == "rehydrate":
+            sys.exit(_cmd_pdata_rehydrate(args))
+        if args.verb == "resolve":
+            sys.exit(_cmd_pdata_resolve(args))
+        if args.verb == "sync-check":
+            sys.exit(_cmd_pdata_sync_check(args))
+
+    if args.noun == "machine-identity":
+        if args.verb == "show":
+            sys.exit(_cmd_machine_identity_show(args))
+        if args.verb == "confirm":
+            sys.exit(_cmd_machine_identity_confirm(args))
 
     if args.noun == "sessions":
         if args.verb == "migrate":

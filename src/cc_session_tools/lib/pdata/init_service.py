@@ -8,14 +8,17 @@ import csv
 import sqlite3
 from collections.abc import Callable
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 
 from cc_session_tools.lib import db
 from cc_session_tools.lib.pdata import (
     backup,
     cutover,
+    dump,
     init_paths,
     manifest,
+    rehydrate,
     repository,
     service,
     store,
@@ -86,6 +89,9 @@ class WriteResult:
     backup_path: Path | None
     failure: WriteFailure | None
     report: str = ""
+    # True when write() adopted an existing sync dump instead of classifying/importing this
+    # machine's current flat files (spec "ccst pdata init on a second machine (adopt-from-dump)").
+    adopted_from_dump: bool = False
 
 
 def _validate_no_conflicting_field_types(m: Manifest) -> None:
@@ -192,40 +198,131 @@ def _check_db_not_locked(project: str) -> None:
         conn.close()
 
 
+def _format_published_at(info: dump.DumpInfo, latest_path: Path) -> str:
+    """The dump's own embedded dumped_at, not latest_path's filesystem mtime - mtime reflects
+    when this machine's copy last changed on disk (local download/OneDrive-sync-settle time for
+    a synced file), not when the *source* machine actually published it, which is the whole point
+    of showing this to a human at all. Falls back to mtime only if dumped_at is somehow absent
+    (a dump written before this field existed) rather than raising over a cosmetic detail."""
+    if info.dumped_at is not None:
+        return dump.format_dumped_at(info.dumped_at)
+    return dump.format_dumped_at(int(latest_path.stat().st_mtime))
+
+
+def _adopt_from_dump(
+    *, project: str, project_root: Path, on_progress: Callable[[str], None] | None,
+) -> WriteResult | None:
+    """Spec "ccst pdata init on a second machine (adopt-from-dump)": a project already migrated
+    to pdata on another machine publishes a dump into <project_root>/.pdata-db-dump/latest.sql —
+    a machine with no local .db for this project yet must adopt that dump directly (same
+    mechanism as the ongoing rehydrate trigger) rather than classifying/importing this machine's
+    current flat files as if this were a first-ever migration, which would produce a DB
+    disconnected from the dump's vector-clock history and likely duplicate content already
+    captured elsewhere.
+
+    Returns the early WriteResult to hand straight back from write() when adoption ran; None when
+    there is nothing to adopt (no dump has ever been published for this project — the ordinary
+    classify/import flow proceeds exactly as before this feature existed) or when this machine
+    already has its own local .db for the project (already adopted/migrated here previously —
+    ccst pdata rehydrate, not ccst pdata init, is the ongoing sync path for that case).
+
+    Checked via the dump file's own existence, not DumpInfo.checksum_valid alone: read_latest()
+    returns checksum_valid=False both when no dump was ever published and when one exists but is
+    corrupt, and those two cases must not be treated the same — the first is the ordinary
+    first-ever migration, the second is a real problem that must be surfaced, never silently
+    papered over by falling through to classification."""
+    latest_path = project_root / ".pdata-db-dump" / "latest.sql"
+    if not latest_path.exists():
+        return None
+    info = dump.read_latest(project_root)
+    if not info.checksum_valid:
+        raise ValueError(
+            f"ccst pdata init --project {project}: the existing sync dump at {latest_path} "
+            "failed its checksum check — refusing to silently fall through to a fresh "
+            "classification/import, which would create a second, disconnected history for this "
+            "project. Publish a fresh dump from a known-good machine (ccst pdata dump --force) "
+            "or reconcile manually (ccst pdata resolve) once those commands exist."
+        )
+    if store.db_path(project).exists():
+        return None
+    published_at = _format_published_at(info, latest_path)
+    message = (
+        f"Adopting existing pdata from sync dump (published by {info.machine_id}, "
+        f"at {published_at}) - skipping file classification/import"
+    )
+    _emit(on_progress, message)
+    # Known limitation, flagged during review rather than silently left undocumented:
+    # rehydrate.rehydrate() resolves the dump location via its own store.project_root(project)
+    # (env-var based), not the rehearse-aware `project_root` this function was passed via
+    # init_paths.resolve_project_root(..., rehearse=rehearse) above. Under --rehearse, these can
+    # point at different directories, so the dump actually read here may not be the one this
+    # function just checksum-validated. Narrow in practice (--rehearse is an explicit manual
+    # opt-in, never an automatic trigger) - not fixed here since it requires making
+    # store.project_root() itself rehearse-aware, out of this task's scope.
+    result = rehydrate.rehydrate(project, force=True)
+    # Checking the outcome matters even though this function already checked checksum_valid
+    # itself moments ago: a lock race (DEFERRED) or the dump changing between that check and
+    # this call (CHECKSUM_INVALID) are both real, if narrow, possibilities - silently reporting
+    # adopted_from_dump=True when nothing was actually rehydrated would be exactly the kind of
+    # false success this task exists to prevent.
+    if result.outcome is not rehydrate.RehydrateOutcome.FAST_FORWARDED:
+        raise ValueError(
+            f"ccst pdata init --project {project}: adopting the existing sync dump did not "
+            f"complete (rehydrate reported {result.outcome.value!r}, not fast_forwarded) — "
+            "no local .db was created. Retry, or reconcile manually (ccst pdata resolve) once "
+            "that command exists."
+        )
+    return WriteResult(
+        created_record_ids=[], entries_written=[], backup_path=None, failure=None,
+        report=f"ccst pdata init — {project}: {message}.",
+        adopted_from_dump=True,
+    )
+
+
 def write(
     *, project: str, rehearse: Path | None = None,
     on_progress: Callable[[str], None] | None = None,
 ) -> WriteResult:
     project_root = init_paths.resolve_project_root(project, rehearse=rehearse)
-    proposal_path = project_root / init_paths.PROPOSAL_FILENAME
-    if not proposal_path.exists():
-        raise FileNotFoundError(
-            f"no classification proposal found at {proposal_path} — run "
-            f"'ccst pdata init --project {project}' (add --rehearse if rehearsing) first"
-        )
-    m = manifest.load(proposal_path)
-    _validate_no_conflicting_field_types(m)
 
-    created_ids: list[int] = []
-    reasons: list[str] = []
-    written_entries: list[ManifestEntry] = []
-    # (record_id, ImportRow) pairs per entry — kept (not just the id) so _verify can
-    # spot-check DB content against what was actually imported, and so the
-    # human-readable diff report (spec §7.1 step 4) has real content to show.
-    entry_rows: dict[str, list[tuple[int, ImportRow]]] = {}
-
-    # Both rehearsal-isolation seams are entered together for the whole
-    # write/verify/backup phase: project_db_dir_override redirects the .db (Plan
-    # A's CCST_PROJECT_DB_DIR seam), backup_dir_override redirects where
-    # backup.create_backup() below writes its tar.gz (this module's own
-    # CCST_PDATA_BACKUP_DIR seam). Without the second seam, a rehearsed --write
-    # would still deposit a real <project>-<YYYYMMDD-HHMMSS>.tar.gz into the production
-    # backup directory — indistinguishable by filename from a genuine migration's
-    # backup. Both are no-ops when rehearse is None.
+    # Both rehearsal-isolation seams are entered for the whole function, not just the
+    # write/verify/backup phase below: the adopt-from-dump check must run before the
+    # proposal-file requirement (a second machine adopting from a dump has never run dry_run
+    # here, so no proposal exists), and its store.db_path()/repository.connect() calls must
+    # resolve against the rehearsal-sandboxed .db when rehearsing — project_db_dir_override
+    # redirects the .db (Plan A's CCST_PROJECT_DB_DIR seam), backup_dir_override redirects where
+    # backup.create_backup() below writes its tar.gz (this module's own CCST_PDATA_BACKUP_DIR
+    # seam). Without the second seam, a rehearsed --write would still deposit a real
+    # <project>-<YYYYMMDD-HHMMSS>.tar.gz into the production backup directory —
+    # indistinguishable by filename from a genuine migration's backup. Both are no-ops when
+    # rehearse is None.
     with (
         init_paths.project_db_dir_override(rehearse),
         init_paths.backup_dir_override(rehearse),
     ):
+        adopted = _adopt_from_dump(
+            project=project, project_root=project_root, on_progress=on_progress,
+        )
+        if adopted is not None:
+            return adopted
+
+        proposal_path = project_root / init_paths.PROPOSAL_FILENAME
+        if not proposal_path.exists():
+            raise FileNotFoundError(
+                f"no classification proposal found at {proposal_path} — run "
+                f"'ccst pdata init --project {project}' (add --rehearse if rehearsing) first"
+            )
+        m = manifest.load(proposal_path)
+        _validate_no_conflicting_field_types(m)
+
+        created_ids: list[int] = []
+        reasons: list[str] = []
+        written_entries: list[ManifestEntry] = []
+        # (record_id, ImportRow) pairs per entry — kept (not just the id) so _verify can
+        # spot-check DB content against what was actually imported, and so the
+        # human-readable diff report (spec §7.1 step 4) has real content to show.
+        entry_rows: dict[str, list[tuple[int, ImportRow]]] = {}
+
         _check_db_not_locked(project)
 
         db_owned = [e for e in m.entries if e.classification == "db-owned"]

@@ -10,12 +10,13 @@ import pytest
 from pytest_mock import MockerFixture
 
 
-def _run(*args: str) -> subprocess.CompletedProcess[str]:
+def _run(*args: str, env: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         [sys.executable, "-m", "cc_session_tools.cli.ccst", *args],
         capture_output=True,
         text=True,
         cwd=str(Path(__file__).parent.parent),
+        env=env,
     )
 
 
@@ -86,8 +87,29 @@ def test_dry_run_does_not_write(tmp_path: Path) -> None:
 # ---------- apply mode ----------
 
 
+def _isolated_apply_env(tmp_path: Path) -> dict[str, str]:
+    """The other half of _isolated_apply_args, and NOT optional.
+
+    Step 5 of the six (Scheduled jobs) has no --target flag to point at
+    tmp_path: `ccst ccsched-jobs install --apply` writes into the ccsched
+    registry, whose location comes from CC_SCHEDULER_DIR / CCST_DATA_HOME,
+    not argv. An --apply test that passes _isolated_apply_args but keeps the
+    ambient environment therefore registers every BUNDLED_CCSCHED_JOBS entry
+    into the developer's real ~/.local/share/claude/ccsched.db - live,
+    enabled, and picked up by the next real session-start sweep. That was a
+    real incident: it silently provisioned a brand-new bundled job on the
+    developer's machine on every `pytest` run while that job was still being
+    written. Every --apply call site must pass this env.
+    """
+    env = os.environ.copy()
+    env["CCST_DATA_HOME"] = str(tmp_path / "data-home")
+    return env
+
+
 def _isolated_apply_args(tmp_path: Path, *extra: str) -> list[str]:
-    """--apply args pointing every step's write target at tmp_path.
+    """--apply args pointing every *flag-addressable* step's write target at
+    tmp_path. Always pair with _isolated_apply_env() - see its docstring for
+    the step this cannot cover.
 
     install-everything defaults every step's target to the real machine
     (~/.claude/skills, ~/.claude/settings.json, ~/.shellrc.d,
@@ -108,7 +130,7 @@ def _isolated_apply_args(tmp_path: Path, *extra: str) -> list[str]:
 
 def test_apply_flag_accepted(tmp_path: Path) -> None:
     # Verify --apply is a recognised flag (no argparse error) and changes output format.
-    result = _run(*_isolated_apply_args(tmp_path))
+    result = _run(*_isolated_apply_args(tmp_path), env=_isolated_apply_env(tmp_path))
     assert result.returncode == 0
     # Must not be an argparse error
     assert "unrecognized arguments" not in result.stderr
@@ -149,8 +171,7 @@ def test_no_pypi_flag_accepted() -> None:
 
 
 def test_install_everything_registers_bundled_ccsched_jobs(tmp_path: Path) -> None:
-    env = os.environ.copy()
-    env["CCST_DATA_HOME"] = str(tmp_path / "data-home")
+    env = _isolated_apply_env(tmp_path)
 
     result = subprocess.run(
         [sys.executable, "-m", "cc_session_tools.cli.ccst", *_isolated_apply_args(tmp_path)],
@@ -170,8 +191,7 @@ def test_apply_records_synced_version(tmp_path: Path) -> None:
     from cc_session_tools import __version__ as version
     from cc_session_tools.lib import install_sync
 
-    env = os.environ.copy()
-    env["CCST_DATA_HOME"] = str(tmp_path / "data-home")
+    env = _isolated_apply_env(tmp_path)
 
     result = subprocess.run(
         [sys.executable, "-m", "cc_session_tools.cli.ccst", *_isolated_apply_args(tmp_path)],
@@ -187,8 +207,7 @@ def test_apply_records_synced_version(tmp_path: Path) -> None:
 def test_dry_run_does_not_record_synced_version(tmp_path: Path) -> None:
     from cc_session_tools.lib import install_sync
 
-    env = os.environ.copy()
-    env["CCST_DATA_HOME"] = str(tmp_path / "data-home")
+    env = _isolated_apply_env(tmp_path)
 
     result = subprocess.run(
         [sys.executable, "-m", "cc_session_tools.cli.ccst", "install-everything", "--no-pypi"],
@@ -225,7 +244,11 @@ def test_apply_survives_a_write_error_recording_the_sync_marker(
     from cc_session_tools.lib import install_sync
 
     # Isolate the trailing health check too - it must run against a fresh,
-    # valid store, not the real ~/.local/share/claude/.
+    # valid store, not the real ~/.local/share/claude/. Same CCST_DATA_HOME target
+    # _isolated_apply_env() sets for this file's subprocess-based --apply tests, applied via
+    # monkeypatch.setenv rather than that helper's env dict, since this call is in-process
+    # (_cmd_install_everything called directly, no subprocess) - equivalent isolation, different
+    # mechanism because the call itself is different, not a call site that skipped isolation.
     monkeypatch.setenv("CCST_DATA_HOME", str(tmp_path / "data-home"))
     mocker.patch.object(
         install_sync, "record_synced",
@@ -249,8 +272,7 @@ def test_apply_records_synced_version_end_to_end_via_subprocess(tmp_path: Path) 
     from cc_session_tools import __version__ as version
     from cc_session_tools.lib import install_sync
 
-    env = os.environ.copy()
-    env["CCST_DATA_HOME"] = str(tmp_path / "data-home")
+    env = _isolated_apply_env(tmp_path)
 
     result = subprocess.run(
         [sys.executable, "-m", "cc_session_tools.cli.ccst", *_isolated_apply_args(tmp_path)],

@@ -554,6 +554,120 @@ def test_write_forwards_on_progress_into_backup_retry_attempts(monkeypatch, tmp_
     assert any("attempt 1/" in m for m in messages)
 
 
+def test_init_adopts_from_an_existing_valid_dump_instead_of_classifying(monkeypatch, tmp_path):
+    """Spec 'ccst pdata init on a second machine (adopt-from-dump)': a project migrated to pdata
+    elsewhere has published a dump into .pdata-db-dump/latest.sql, but this machine has no local
+    .db for the project yet. write() must adopt that dump directly — via the same rehydrate
+    mechanism as the ongoing sync trigger — rather than treating this as a first-ever migration
+    and classifying/importing the project's current flat files (which would produce a DB
+    disconnected from the dump's vector-clock history). No proposal file exists for this project
+    on this machine either, which would otherwise make write() raise FileNotFoundError first —
+    adoption must be checked before that proposal requirement, not after it."""
+    from cc_session_tools.lib.pdata import dump, repository, vector_clock_store
+
+    monkeypatch.setenv(init_paths.PROJECTS_ROOT_ENV, str(tmp_path))
+    monkeypatch.setenv("CCST_PROJECT_DB_DIR", str(tmp_path / "dbs"))
+    project_root = tmp_path / "proj"
+    project_root.mkdir()
+
+    # Build a dump as if another machine had already published one.
+    con = repository.connect("proj")  # writes to a DB this test then discards
+    with repository._immediate(con):
+        vector_clock_store.write_vector(con, {"macbook": 3}, updated_at=100)
+    dump.write_latest(con, project_root=project_root, machine_id="macbook", vector={"macbook": 3})
+    con.close()
+    (tmp_path / "dbs" / "proj.db").unlink()  # simulate: no local .db yet on *this* machine
+
+    result = init_service.write(project="proj", rehearse=None)
+
+    assert result.adopted_from_dump is True
+    assert result.failure is None
+    conn = repository.connect("proj")
+    try:
+        assert vector_clock_store.read_vector(conn) == {"macbook": 3}
+    finally:
+        conn.close()
+
+
+def test_init_refuses_to_classify_when_the_existing_dump_fails_its_checksum(monkeypatch, tmp_path):
+    """A corrupted/truncated dump (e.g. an interrupted OneDrive sync) must never be silently
+    treated as 'no dump published yet' — that would classify/import the project's current files
+    on top of a history this machine cannot actually verify connects to the dump's vector clock."""
+    import pytest
+
+    from cc_session_tools.lib.pdata import dump, repository, vector_clock_store
+
+    monkeypatch.setenv(init_paths.PROJECTS_ROOT_ENV, str(tmp_path))
+    monkeypatch.setenv("CCST_PROJECT_DB_DIR", str(tmp_path / "dbs"))
+    project_root = tmp_path / "proj"
+    project_root.mkdir()
+
+    con = repository.connect("proj")
+    with repository._immediate(con):
+        vector_clock_store.write_vector(con, {"macbook": 3}, updated_at=100)
+    dump.write_latest(con, project_root=project_root, machine_id="macbook", vector={"macbook": 3})
+    con.close()
+    (tmp_path / "dbs" / "proj.db").unlink()
+    (project_root / ".pdata-db-dump" / "latest.sha256").write_text("0" * 64)  # corrupt it
+
+    with pytest.raises(ValueError, match="checksum"):
+        init_service.write(project="proj", rehearse=None)
+
+
+def test_init_raises_rather_than_claiming_success_when_rehydrate_does_not_fast_forward(
+    monkeypatch, tmp_path,
+):
+    """Regression test for a code-review finding: _adopt_from_dump called rehydrate.rehydrate()
+    and discarded its result entirely - if that call returned anything other than
+    FAST_FORWARDED (a lock race mid-adoption, or the dump changing between this function's own
+    checksum check and the rehydrate call a moment later), write() would still report
+    adopted_from_dump=True with no failure, despite nothing having actually been rehydrated."""
+    import pytest
+
+    from cc_session_tools.lib.pdata import dump, rehydrate, repository, vector_clock_store
+
+    monkeypatch.setenv(init_paths.PROJECTS_ROOT_ENV, str(tmp_path))
+    monkeypatch.setenv("CCST_PROJECT_DB_DIR", str(tmp_path / "dbs"))
+    project_root = tmp_path / "proj"
+    project_root.mkdir()
+
+    con = repository.connect("proj")
+    with repository._immediate(con):
+        vector_clock_store.write_vector(con, {"macbook": 3}, updated_at=100)
+    dump.write_latest(con, project_root=project_root, machine_id="macbook", vector={"macbook": 3})
+    con.close()
+    (tmp_path / "dbs" / "proj.db").unlink()
+
+    monkeypatch.setattr(
+        rehydrate, "rehydrate",
+        lambda project, **kwargs: rehydrate.RehydrateResult(outcome=rehydrate.RehydrateOutcome.DEFERRED),
+    )
+
+    with pytest.raises(ValueError, match="deferred"):
+        init_service.write(project="proj", rehearse=None)
+
+
+def test_init_write_classifies_normally_when_no_dump_has_ever_been_published(monkeypatch, tmp_path):
+    """The common case: a genuinely first-ever migration, no dump directory at all. Must fall
+    through to the ordinary classify/import flow exactly as before this feature existed — this
+    project's own test_write_without_prior_dry_run_raises above already covers the no-proposal
+    failure mode; this test covers the success path alongside it so both ends of 'no dump present'
+    are exercised."""
+    monkeypatch.setenv(init_paths.PROJECTS_ROOT_ENV, str(tmp_path / "projects"))
+    monkeypatch.setenv("CCST_PROJECT_DB_DIR", str(tmp_path / "dbs"))
+    monkeypatch.setenv("CCST_PDATA_BACKUP_DIR", str(tmp_path / "backups"))
+    project_dir = tmp_path / "projects" / "demo"
+    project_dir.mkdir(parents=True)
+    (project_dir / "ideas.csv").write_text("idea\nfirst\n")
+
+    init_service.dry_run(project="demo")
+    result = init_service.write(project="demo")
+
+    assert result.failure is None
+    assert result.adopted_from_dump is False
+    assert len(result.created_record_ids) == 1
+
+
 def test_write_on_progress_defaults_to_silent(monkeypatch, tmp_path):
     """Existing callers (and every test above this one) call write() with no on_progress —
     must keep working exactly as before, silently."""

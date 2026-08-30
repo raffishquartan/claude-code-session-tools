@@ -7,6 +7,56 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.12.0] - 2026-08-30
+
+### Added
+
+- **Multi-laptop `ccst pdata` sync.** A `pdata`-migrated project's `.db` now stays in sync across
+  machines via `.pdata-db-dump/latest.sql`, published to (and read from) the project's own
+  OneDrive-synced folder — no server, no new dependency, machine-local per §-storage-layout intact.
+  - **Vector clock** (`lib/pdata/vector_clock.py`, `vector_clock_store.py`): a `pdata_meta` table
+    tracks each known machine's revision count; every local write bumps this machine's own entry
+    in the same transaction as the data change.
+  - **Machine identity** (`lib/machine_identity.py`, `ccst machine-identity show|confirm`):
+    `CCST_MACHINE_NAME` env override, else a confirmed on-disk name, else the raw hostname
+    (unconfirmed) — with a same-project collision check so two machines can never silently share
+    one identity.
+  - **Deterministic dump format** (`lib/pdata/dump.py`): explicit `ORDER BY` per table's primary
+    key rather than raw `sqlite3.iterdump()`, which was empirically confirmed non-deterministic
+    for a composite-PK table across two logically-identical DBs with different edit histories.
+    Header carries `machine_id`/`dumped_at`/the full vector; a sha256 checksum guards against a
+    half-written publish (crash, or an interrupted OneDrive sync).
+  - **Atomic rehydrate** (`lib/pdata/rehydrate.py`): a non-blocking exclusive lock check
+    immediately before the swap, then a temp-file-plus-`os.replace()` atomic swap over the live
+    `.db` — never a partial/torn write.
+  - **Process safety** (`lib/occupancy.py`): SessionStart and the hourly job never rehydrate a
+    project while a live `claude` process (this machine or otherwise) is already working in it —
+    `pgrep`/`/proc/<pid>/cwd` on Linux, `lsof -Fn` on macOS, failing safe (occupied) on any error.
+  - **Adopt-from-dump** (`lib/pdata/init_service.py`): `ccst pdata init` on a second machine, given
+    an existing published dump for that project, rehydrates from it directly instead of running
+    classification/import — the second machine's first-ever setup is just a fast-forward.
+  - **Cross-machine conflict resolution** (`lib/pdata/resolve.py`, `ccst pdata resolve`):
+    relational-integrity-safe (a base row and its extension row always resolve together),
+    all-or-nothing per call, with dedicated non-choosable categories for an id collision, a
+    group-rename ambiguity, a delete-vs-update conflict, and a schema-catalog-only fork — none of
+    which a blunt `local`/`dump` pick could resolve without silently discarding real data.
+  - **CLI**: `ccst pdata dump|rehydrate|resolve [--project NAME | --all-projects] [--force]`, and
+    `ccst pdata sync-check [--project NAME | --all-projects]` — the automatic-trigger algorithm
+    (rehydrate-check, then a dump-check that skips a genuinely-unchanged republish) shared by the
+    hourly job.
+  - **Notification** (`lib/pdata/sync_notify.py`): a genuine conflict (fork or checksum failure)
+    goes to Telegram and the existing SessionStart catch-up digest, on every trigger that can hit
+    one — SessionStart, SessionEnd, the hourly job, and a manual `dump`/`rehydrate` without
+    `--force`. Ordinary reads/writes on an affected project keep working throughout, with a
+    warning banner, never a hard block.
+  - **Automatic triggers**: `cccs_hooks.pdata_sync` (`ccst hooks run pdata-sync`) wires the above
+    into `SessionStart` (rehydrate-check) and `SessionEnd` (dump-check), and a new bundled
+    `pdata-sync-hourly` `ccsched` job (`every:1h`, defined but not auto-provisioned — run
+    `ccst ccsched-jobs install` to adopt it) covers the case where no session is open.
+  - `pm-pdata-conflict-resolution` skill extended with a "Cross-machine fork" section alongside
+    its existing single-record optimistic-concurrency guidance — one skill, one protocol,
+    regardless of which of the two mechanisms caught the conflict.
+
 ## [2.11.2] - 2026-08-29
 
 ### Fixed

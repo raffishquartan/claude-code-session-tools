@@ -120,6 +120,51 @@ def test_clean_hook_sessions_weekly_job_is_anchored_for_drift_free_weekly_schedu
     assert job.cadence == "every:7d@from=2026-08-28"
 
 
+def test_bundled_jobs_contains_the_hourly_pdata_sync_job():
+    ids = [job.job_id for job in bundled_jobs.BUNDLED_CCSCHED_JOBS]
+    assert "pdata-sync-hourly" in ids
+
+
+def test_pdata_sync_hourly_job_command_and_cadence():
+    job = _job("pdata-sync-hourly")
+    assert job.command == ("ccst", "pdata", "sync-check", "--all-projects")
+    assert job.cadence == "every:1h"
+    assert job.coalesce == "one"
+
+
+def test_pdata_sync_hourly_job_does_not_add_a_launch_notice():
+    """A completed run always surfaces regardless of this flag; surface=True only adds the
+    "started, running in background" notice. This is the most frequent bundled job (a sweep
+    happens at every session start), so that extra notice would be pure duplication."""
+    job = _job("pdata-sync-hourly")
+    assert job.surface is False
+
+
+def test_pdata_sync_hourly_job_treats_conflicts_and_no_projects_as_success():
+    """Exit 1 = at least one unresolved conflict (the job reporting a real finding, the
+    ccst-doctor-drift-weekly precedent); exit 2 = a hard error, which includes the sibling
+    "no project databases found" that is the expected state on every run on a machine that
+    hasn't adopted pdata (pdata-verify-all's own (0, 2) precedent, 24x more often). Neither must
+    count toward auto-suspend; a timeout still does, since worker.py treats timed_out as a crash
+    regardless of success_exit_codes."""
+    job = _job("pdata-sync-hourly")
+    assert job.success_exit_codes == (0, 1, 2)
+
+
+def test_pdata_sync_hourly_job_does_not_hoard_a_long_catchup_backlog():
+    """coalesce="one" pins the run count to 1 however many instants are owed, so catchup_window
+    cannot change what this job does - only the "(N overdue)" annotation digest.py prints. A
+    day-or-longer window on an hourly cadence turns every post-weekend digest line into
+    "(52 overdue)" for a job that reconciled everything in one pass."""
+    job = _job("pdata-sync-hourly")
+    assert job.catchup_window == "2h"
+
+
+def test_pdata_sync_hourly_job_allows_time_for_a_full_db_serialize():
+    job = _job("pdata-sync-hourly")
+    assert job.timeout == "300s"
+
+
 def _spec_for(job: bundled_jobs.BundledJob, **overrides):
     fields = dict(
         job_id=job.job_id, cadence=job.cadence, coalesce=job.coalesce,
@@ -129,6 +174,16 @@ def _spec_for(job: bundled_jobs.BundledJob, **overrides):
     )
     fields.update(overrides)
     return validate_job_fields(**fields)
+
+
+def test_every_bundled_job_is_a_valid_jobspec():
+    """`_cmd_ccsched_jobs_install --apply` is the only place a bundled definition meets
+    validate_job_fields (its dry run never calls it), so a malformed cadence/duration in this
+    file would otherwise only surface when someone provisions it for real on a live machine."""
+    for job in bundled_jobs.BUNDLED_CCSCHED_JOBS:
+        spec = _spec_for(job)
+        assert spec.job_id == job.job_id
+        assert diff_from_bundled(spec, job) == ()
 
 
 def test_diff_from_bundled_is_empty_for_an_untouched_job():
