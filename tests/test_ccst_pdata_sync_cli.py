@@ -97,6 +97,11 @@ def test_dump_rejects_both_project_and_all_projects(base_env):
     assert r.returncode == 2
 
 
+def test_dump_rejects_bad_project_name(base_env):
+    r = _run(base_env, "pdata", "dump", "--project", "../escape")
+    assert r.returncode == 2
+
+
 def test_dump_happy_path_first_ever_dump(base_env):
     _build_local("proj", vector={"ltxy": 1})
 

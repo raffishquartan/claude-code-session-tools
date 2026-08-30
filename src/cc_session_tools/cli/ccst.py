@@ -1432,14 +1432,18 @@ def _cmd_pdata_dump(args: argparse.Namespace) -> int:
     compact = args.all_projects
     published = 0
     refused = 0
+    errors = 0
 
     for project in projects:
         try:
             project_root = store.project_root(project)
             conn = repository.connect(project)
         except ValueError as exc:
-            print(f"ccst pdata dump: {exc}", file=sys.stderr)
-            return 2
+            # Matches the sibling _cmd_pdata_rehydrate/_cmd_pdata_resolve handlers: record and
+            # continue rather than abort the whole --all-projects loop on one bad project.
+            print(f"ccst pdata dump: {project}: {exc}", file=sys.stderr)
+            errors += 1
+            continue
         try:
             local_vector = vector_clock_store.read_vector(conn)
             existing = dump.read_latest(project_root)
@@ -1476,11 +1480,11 @@ def _cmd_pdata_dump(args: argparse.Namespace) -> int:
             print(f"ccst pdata dump: {project}: published (machine_id={machine_id})")
 
     if compact:
-        if refused:
+        if refused or errors:
             print(
                 f"ccst pdata dump --all-projects: published {published}, refused {refused} "
-                f"(unresolved fork) of {len(projects)} project(s) - see `ccst pdata resolve "
-                f"--project NAME` for each"
+                f"(unresolved fork), errors {errors} of {len(projects)} project(s) - see "
+                f"`ccst pdata resolve --project NAME` for each"
             )
         else:
             print(
@@ -1488,7 +1492,7 @@ def _cmd_pdata_dump(args: argparse.Namespace) -> int:
                 f"{len(projects)} project(s)"
             )
 
-    return 1 if refused else 0
+    return 2 if errors else (1 if refused else 0)
 
 
 def _cmd_pdata_rehydrate(args: argparse.Namespace) -> int:
