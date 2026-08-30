@@ -32,14 +32,16 @@ Do NOT use for:
 
 1. **WORKLOG.md** (`cc-sessions/<session>/working/WORKLOG.md`) - Rewrite in full reflecting the complete session history. NEVER ask permission - just do it. If it does not exist, create it.
 2. **Auto-memory** - Apply CLAUDE.md memory rules: write durable, non-obvious items (user / feedback / project / reference); update or remove stale entries; keep `MEMORY.md` index in sync. NEVER write memory for ephemeral session content or things derivable from git.
-3. **Session-output index** (`ccst pdata`, spec section 8) - for every file under this session's `cc-sessions/<session>/out/` that is not already registered, add it to the project's `session-output` index. `<project>` is the working directory's basename (the current project).
+3. **Session-output index** (`ccst pdata`, spec section 8) - for every file under this session's `cc-sessions/<session>/out/` that is not already registered, add it to the project's `session-output` index. `<project>` is the working directory's basename (the current project). **Project-rooted only** - this index exists for projects under `$CLAUDE_SESSION_TOOLS_PROJ_ROOT`, never for an ordinary dev repo under `$CLAUDE_SESSION_TOOLS_REPO_ROOT`, even one with its own `cc-sessions/` history. Applies regardless of whether this skill runs mid-session or at session end - the check is about *where* the project lives, not *when* in the session it's applied.
 
    First, ensure the extension schema (and its file_path index — see `ccst pdata
    reconcile-session-output`'s `--schema-only`) exists (idempotent - safe to re-run every time):
    ```
    ccst pdata reconcile-session-output --project <project> --schema-only
    ```
-   Then, for each file `<name>` under `cc-sessions/<session>/out/`, check whether it is already registered:
+   **If this command exits non-zero** (it fails with "no project `<project>` found with a cc-sessions/ directory under `$CLAUDE_SESSION_TOOLS_PROJ_ROOT`" for any project outside that root), stop here - skip the rest of this item entirely for this session, and say so in the Step 5 report (e.g. "Session-output index: skipped - `<project>` is not under `$CLAUDE_SESSION_TOOLS_PROJ_ROOT`"). This is a legitimate, mandated skip, not a judgement call - it is not the same as the "nothing in out/ looks important" skip the Red Flags section below forbids.
+
+   Otherwise, for each file `<name>` under `cc-sessions/<session>/out/`, check whether it is already registered:
    ```
    ccst pdata query --project <project> --group session-output --where "file_path = cc-sessions/<session>/out/<name>" --limit 1
    ```
@@ -129,7 +131,7 @@ Summarise: what auto-applied, what checkpoint-approved-and-applied, what skipped
 
 - About to ask "should I update WORKLOG.md" - STOP, just write it
 - Asking "should I add a memory entry" before applying CLAUDE.md memory rules - STOP, apply the rules
-- About to skip the session-output index step because "nothing in out/ looks important" - STOP, register every file, not just the ones that look significant
+- About to skip the session-output index step because "nothing in out/ looks important" - STOP, register every file, not just the ones that look significant. (Skipping because `<project>` is outside `$CLAUDE_SESSION_TOOLS_PROJ_ROOT` is a different, mandated case - see AUTO item 3.)
 - About to apply a CHECKPOINT item without showing the user what's about to change - STOP, present the table
 - Assuming no central coordination files exist without having listed the parent folder
 - Creating a `.v2` without confirming the existing file is already `.v1` or needs renaming
@@ -142,7 +144,7 @@ Summarise: what auto-applied, what checkpoint-approved-and-applied, what skipped
 |---|---|---|---|
 | WORKLOG.md | `cc-sessions/<session>/working/` | AUTO | Rewrite in full, no ask |
 | Memory + MEMORY.md | `~/.claude/projects/<...>/memory/` | AUTO | Apply CLAUDE.md memory rules, no ask |
-| Session-output index | `ccst pdata` `session-output` group | AUTO | Register new `out/` files, no ask; never update already-registered rows |
+| Session-output index | `ccst pdata` `session-output` group | AUTO | Register new `out/` files, no ask; never update already-registered rows; skip entirely outside `$CLAUDE_SESSION_TOOLS_PROJ_ROOT` |
 | Versioned deliverable (`.vN.ext`) | `cc-sessions/<session>/out/` | CHECKPOINT | Bump version, surface in table |
 | Unversioned deliverable | `cc-sessions/<session>/out/` | CHECKPOINT | Ask before renaming to `.v1.<ext>` |
 | Scratch | `cc-sessions/<session>/working/` | AUTO | Overwrite in place |
