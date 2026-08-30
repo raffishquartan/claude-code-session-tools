@@ -274,6 +274,22 @@ def test_status_empty_ok(tmp_path: Path) -> None:
     assert _run(["status"], sched, hooks).returncode == 0
 
 
+def test_status_shows_error_detail_line_when_present(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """§ 1.5.1 fix: the ledger's `error` column was captured but never
+    printed - a failed job's `ccsched status` output gave no clue why it
+    failed without going around the CLI to query telemetry.db directly."""
+    sched, hooks = _dirs(tmp_path)
+    monkeypatch.setenv("CC_SCHEDULER_DIR", str(sched))
+    monkeypatch.setenv("CCCS_HOOKS_DIR", str(hooks))
+    _add_direct("cal", ["sh", "-c", "echo boom 1>&2; exit 1"])
+    ccsched._cmd_run(argparse.Namespace(id="cal"), notify_push=lambda *a, **k: True)
+
+    res = _run(["status", "cal"], sched, hooks)
+
+    assert res.returncode == 0
+    assert "boom" in res.stdout
+
+
 def test_sweep_runs(tmp_path: Path) -> None:
     _add_ok(tmp_path)
     sched, hooks = _dirs(tmp_path)
