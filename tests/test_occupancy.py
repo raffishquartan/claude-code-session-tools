@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import subprocess
 
+import pytest
+
 import cc_session_tools.lib.occupancy as occupancy
 
 
@@ -103,12 +105,8 @@ def test_claude_pids_itself_raises_rather_than_swallowing_a_real_pgrep_failure(m
         raise subprocess.TimeoutExpired(cmd=["pgrep"], timeout=5)
 
     monkeypatch.setattr(subprocess, "run", raise_timeout)
-    try:
+    with pytest.raises(subprocess.TimeoutExpired):
         occupancy._claude_pids()
-    except subprocess.TimeoutExpired:
-        pass
-    else:
-        raise AssertionError("expected subprocess.TimeoutExpired to propagate, not be swallowed")
 
 
 def test_cwd_of_pid_on_darwin_raises_on_a_nonzero_lsof_exit(monkeypatch):
@@ -121,9 +119,5 @@ def test_cwd_of_pid_on_darwin_raises_on_a_nonzero_lsof_exit(monkeypatch):
         raise subprocess.CalledProcessError(1, ["lsof"])
 
     monkeypatch.setattr(subprocess, "run", raise_called_process_error)
-    try:
+    with pytest.raises(subprocess.CalledProcessError):
         occupancy._cwd_of_pid(111)
-    except subprocess.CalledProcessError:
-        pass
-    else:
-        raise AssertionError("expected subprocess.CalledProcessError to propagate")
