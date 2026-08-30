@@ -86,10 +86,10 @@ def test_read_latest_does_not_mistake_record_content_for_header_metadata(tmp_pat
 
 def test_serialize_output_replays_into_an_identical_fresh_database(tmp_path):
     """The actual point of this module existing: a dump must be valid, replayable SQL that
-    reconstructs the source database exactly, not just a string with nice properties. This is
-    also the test that would have caught the header-scanning bug above on its own, had it existed
-    first - once record content contains a raw "--" line, a body-unaware strip/scan anywhere in
-    the pipeline turns into a real SQL or data corruption, not just a cosmetic issue."""
+    reconstructs the source database exactly, not just a string with nice properties. This
+    doesn't catch the header-scanning bug above (that's read_latest()'s bug specifically, and
+    this test never calls read_latest()) - it's a separate, equally real gap the test suite had
+    until now: nothing verified serialize()'s output could actually be replayed at all."""
     con = _build_db(tmp_path / "a.db", field_order=["owner", "priority"], row_order=[3, 1, 2])
     with repository._immediate(con):
         con.execute(
