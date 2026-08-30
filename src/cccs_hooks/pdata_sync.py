@@ -115,10 +115,17 @@ def on_session_start(cwd: str, *, session_pid: int) -> str | None:
 
     result = rehydrate.rehydrate(project)
     if result.outcome is rehydrate.RehydrateOutcome.FAST_FORWARDED:
-        when = (
-            dump.format_dumped_at(result.dumped_at) if result.dumped_at is not None
-            else "an unknown time"
-        )
+        if result.dumped_at is not None:
+            when = dump.format_dumped_at(result.dumped_at)
+        else:
+            # Same fallback init_service.py's _format_published_at uses for the identical
+            # "dump written before dumped_at existed" edge case (currently unreachable - every
+            # dump this feature has ever written already carries dumped_at - but the two sibling
+            # formatters should render it the same way rather than diverge on a case neither can
+            # actually hit yet). mtime reflects local sync-settle time, not the source machine's
+            # actual publish time, but it beats an unhelpful "unknown" for a cosmetic detail.
+            latest_path = project_root / ".pdata-db-dump" / "latest.sql"
+            when = dump.format_dumped_at(int(latest_path.stat().st_mtime))
         # The design's required content is "machine + timestamp it rehydrated from"; this exact
         # wording is the plan's own quoted deliverable, so it is reproduced verbatim rather than
         # wrapped in this module's `[pdata-sync]` prefix like the conflict messages below.

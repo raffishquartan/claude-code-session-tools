@@ -244,7 +244,11 @@ def test_apply_survives_a_write_error_recording_the_sync_marker(
     from cc_session_tools.lib import install_sync
 
     # Isolate the trailing health check too - it must run against a fresh,
-    # valid store, not the real ~/.local/share/claude/.
+    # valid store, not the real ~/.local/share/claude/. Same CCST_DATA_HOME target
+    # _isolated_apply_env() sets for this file's subprocess-based --apply tests, applied via
+    # monkeypatch.setenv rather than that helper's env dict, since this call is in-process
+    # (_cmd_install_everything called directly, no subprocess) - equivalent isolation, different
+    # mechanism because the call itself is different, not a call site that skipped isolation.
     monkeypatch.setenv("CCST_DATA_HOME", str(tmp_path / "data-home"))
     mocker.patch.object(
         install_sync, "record_synced",

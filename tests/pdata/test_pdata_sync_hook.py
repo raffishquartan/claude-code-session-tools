@@ -216,6 +216,37 @@ def test_session_start_fast_forward_rehydrates_and_names_machine_and_timestamp(
     assert notified == []
 
 
+def test_session_start_fast_forward_falls_back_to_mtime_when_dumped_at_is_absent(
+    unoccupied: None, notified: list[tuple[str, str, str]],
+) -> None:
+    """A dump written before the dumped_at field existed - simulated here by hand-stripping the
+    header line and recomputing the checksum dump.write_latest() itself would have produced, the
+    same technique test_read_latest_does_not_mistake_record_content_for_header_metadata uses for
+    header-boundary edge cases. Message must fall back to latest.sql's own mtime, matching
+    init_service.py's _format_published_at sibling formatter for the identical case, not the
+    unhelpful "an unknown time" this hook used to print here."""
+    import hashlib
+
+    _build_local("proj", content="local-content", vector={MACHINE: 1})
+    _publish_dump("proj", content="remote-content", vector={MACHINE: 1, "mbp": 5}, machine_id="mbp")
+    latest = store.project_root("proj") / ".pdata-db-dump" / "latest.sql"
+    stripped = "\n".join(
+        line for line in latest.read_text().splitlines() if not line.startswith("-- dumped_at=")
+    ) + "\n"
+    latest.write_text(stripped)
+    (latest.parent / "latest.sha256").write_text(hashlib.sha256(stripped.encode()).hexdigest())
+
+    message = pdata_sync.on_session_start(_cwd_for("proj"), session_pid=1234)
+
+    assert _local_contents("proj") == ["remote-content"]
+    assert message is not None
+    expected_when = dump.format_dumped_at(int(latest.stat().st_mtime))
+    assert message == (
+        f"Re-hydrating project pdata DB based on updates made on `mbp` at `{expected_when}`"
+    )
+    assert notified == []
+
+
 def test_session_start_no_op_outcome_is_silent(
     unoccupied: None, notified: list[tuple[str, str, str]],
 ) -> None:
