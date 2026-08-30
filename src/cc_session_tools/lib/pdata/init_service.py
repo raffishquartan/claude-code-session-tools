@@ -244,7 +244,27 @@ def _adopt_from_dump(
         f"at {published_at}) - skipping file classification/import"
     )
     _emit(on_progress, message)
-    rehydrate.rehydrate(project, force=True)
+    # Known limitation, flagged during review rather than silently left undocumented:
+    # rehydrate.rehydrate() resolves the dump location via its own store.project_root(project)
+    # (env-var based), not the rehearse-aware `project_root` this function was passed via
+    # init_paths.resolve_project_root(..., rehearse=rehearse) above. Under --rehearse, these can
+    # point at different directories, so the dump actually read here may not be the one this
+    # function just checksum-validated. Narrow in practice (--rehearse is an explicit manual
+    # opt-in, never an automatic trigger) - not fixed here since it requires making
+    # store.project_root() itself rehearse-aware, out of this task's scope.
+    result = rehydrate.rehydrate(project, force=True)
+    # Checking the outcome matters even though this function already checked checksum_valid
+    # itself moments ago: a lock race (DEFERRED) or the dump changing between that check and
+    # this call (CHECKSUM_INVALID) are both real, if narrow, possibilities - silently reporting
+    # adopted_from_dump=True when nothing was actually rehydrated would be exactly the kind of
+    # false success this task exists to prevent.
+    if result.outcome is not rehydrate.RehydrateOutcome.FAST_FORWARDED:
+        raise ValueError(
+            f"ccst pdata init --project {project}: adopting the existing sync dump did not "
+            f"complete (rehydrate reported {result.outcome.value!r}, not fast_forwarded) — "
+            "no local .db was created. Retry, or reconcile manually (ccst pdata resolve) once "
+            "that command exists."
+        )
     return WriteResult(
         created_record_ids=[], entries_written=[], backup_path=None, failure=None,
         report=f"ccst pdata init — {project}: {message}.",

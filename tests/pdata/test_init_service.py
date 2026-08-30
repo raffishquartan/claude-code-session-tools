@@ -614,6 +614,39 @@ def test_init_refuses_to_classify_when_the_existing_dump_fails_its_checksum(monk
         init_service.write(project="proj", rehearse=None)
 
 
+def test_init_raises_rather_than_claiming_success_when_rehydrate_does_not_fast_forward(
+    monkeypatch, tmp_path,
+):
+    """Regression test for a code-review finding: _adopt_from_dump called rehydrate.rehydrate()
+    and discarded its result entirely - if that call returned anything other than
+    FAST_FORWARDED (a lock race mid-adoption, or the dump changing between this function's own
+    checksum check and the rehydrate call a moment later), write() would still report
+    adopted_from_dump=True with no failure, despite nothing having actually been rehydrated."""
+    import pytest
+
+    from cc_session_tools.lib.pdata import dump, rehydrate, repository, vector_clock_store
+
+    monkeypatch.setenv(init_paths.PROJECTS_ROOT_ENV, str(tmp_path))
+    monkeypatch.setenv("CCST_PROJECT_DB_DIR", str(tmp_path / "dbs"))
+    project_root = tmp_path / "proj"
+    project_root.mkdir()
+
+    con = repository.connect("proj")
+    with repository._immediate(con):
+        vector_clock_store.write_vector(con, {"macbook": 3}, updated_at=100)
+    dump.write_latest(con, project_root=project_root, machine_id="macbook", vector={"macbook": 3})
+    con.close()
+    (tmp_path / "dbs" / "proj.db").unlink()
+
+    monkeypatch.setattr(
+        rehydrate, "rehydrate",
+        lambda project, **kwargs: rehydrate.RehydrateResult(outcome=rehydrate.RehydrateOutcome.DEFERRED),
+    )
+
+    with pytest.raises(ValueError, match="deferred"):
+        init_service.write(project="proj", rehearse=None)
+
+
 def test_init_write_classifies_normally_when_no_dump_has_ever_been_published(monkeypatch, tmp_path):
     """The common case: a genuinely first-ever migration, no dump directory at all. Must fall
     through to the ordinary classify/import flow exactly as before this feature existed — this
