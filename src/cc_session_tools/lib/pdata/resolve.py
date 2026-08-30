@@ -163,12 +163,21 @@ def apply_resolution(project: str, choices: dict[int, str]) -> None:
     group_mismatches = sorted(rid for rid, rd in by_id.items() if rd.group_mismatch)
     if group_mismatches:
         raise ValueError(
-            f"record_id(s) {group_mismatches} sit in a record_group that was renamed on one side "
-            f"only (`ccst pdata rename-group`) — same record, two different group names. This is "
-            f"not two unrelated records sharing an id; it is one record whose group disagrees, so "
-            f"a local/dump pick has no single ext_<group> table to write and apply_resolution "
-            f"refuses these. Re-run the same rename-group on the machine that has not had it, so "
-            f"both sides agree on the name, then resolve again"
+            f"record_id(s) {group_mismatches}: same id, matching created_at, but the two sides "
+            f"disagree on record_group. This usually means one side ran `ccst pdata rename-group` "
+            f"and the other hasn't (the same record, two different group names) — but created_at "
+            f"is whole-second precision and is frequently caller-supplied from a file's mtime "
+            f"(see importers.py/session_output.py), so two UNRELATED records independently "
+            f"inserted into different groups in the same second (or imported from files sharing "
+            f"an mtime) can land here too, indistinguishable from a rename by id/created_at alone. "
+            f"Either way, a local/dump pick has no single ext_<group> table to write, so "
+            f"apply_resolution refuses these. Before re-running rename-group to make both sides "
+            f"agree: compare each side's content/file_path first — if they describe the same real "
+            f"thing, it's a rename, re-run it on the machine that hasn't had it, then resolve "
+            f"again; if they describe two different things, it's a same-second id collision (like "
+            f"the id_collision case above) and needs manual, out-of-band reconciliation instead — "
+            f"renaming to match would then let a local/dump pick silently discard one side's real, "
+            f"unrelated record"
         )
 
     missing = sorted(set(by_id) - set(choices))
@@ -314,9 +323,16 @@ def _classify(
     record_group difference as proof of collision would misdiagnose every record of a group
     renamed on one machine only.
 
-    group_mismatch: true iff the two sides agree it is the same logical record (created_at
-    matches) but disagree on its `record_group` — i.e. exactly the rename-on-one-side case above.
-    It gets its own category rather than being folded into an ordinary content diff because a
+    group_mismatch: true iff created_at matches but the two sides disagree on `record_group` —
+    the ordinary case is one record renamed on one side only. NOT airtight proof the two sides
+    agree it's the same logical record, unlike id_collision's guarantee above: created_at is
+    whole-second precision and is frequently caller-supplied from a file's mtime (see
+    importers.py/session_output.py), so two genuinely unrelated records inserted into different
+    groups in the same second (or imported from files sharing an mtime) can coincidentally match
+    on created_at too, indistinguishable from a rename by id/created_at alone — apply_resolution's
+    error text for this category says so and asks the caller to check content/file_path before
+    assuming it's safe to rename-group and retry. Regardless of which case it actually is, it
+    gets its own category rather than being folded into an ordinary content diff because a
     local/dump pick cannot express it: `RecordDiff.record_group` carries one arbitrary side's
     name, so applying a choice would target that side's `ext_<group>` table for a row whose real
     group may be the other one.

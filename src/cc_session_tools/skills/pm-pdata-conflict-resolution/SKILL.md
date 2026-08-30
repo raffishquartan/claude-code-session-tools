@@ -107,14 +107,23 @@ NAME`") until it's resolved. `ccst pdata resolve --project NAME` (Task 10) is wh
    the discarded record under a fresh id on whichever machine needs it), never an automatic one.
 
 5. **`RecordDiff.group_mismatch` is the other non-choosable category, and it is *not* an id
-   collision - don't describe it as one.** `record_group` is mutable (`ccst pdata rename-group`
-   rewrites it in place), so a group renamed on one machine only produces records with the same
-   id and the same `created_at` but two different group names. That is one logical record whose
-   group the two sides disagree on, so there is no single `ext_<group>` table a `local`/`dump`
-   pick could write; `apply_resolution()` refuses these outright, exactly as it does id
-   collisions. Same framing as point 4 - a manual, out-of-band fix, never an automatic one: here,
-   re-run the same `ccst pdata rename-group` on whichever machine has not had it, so both sides
-   agree on the name, then resolve again.
+   collision - don't describe it as one, and don't assume it's safe to fix by renaming without
+   checking first.** `record_group` is mutable (`ccst pdata rename-group` rewrites it in place),
+   so the ordinary cause is a group renamed on one machine only - same id, same `created_at`, two
+   different group names. But `created_at` is whole-second precision and is often
+   caller-supplied from a file's mtime, so two genuinely *unrelated* records independently
+   inserted into different groups in the same second (or imported from files sharing an mtime)
+   can coincidentally match on `created_at` too - indistinguishable from a rename by id/created_at
+   alone, and the same id-collision hazard as point 4 above, just wearing a different disguise.
+   Either way there is no single `ext_<group>` table a `local`/`dump` pick could write, so
+   `apply_resolution()` refuses these outright. **Before treating it as a rename**, compare each
+   side's `content`/`file_path` - if they describe the same real thing, it's a rename: re-run the
+   same `ccst pdata rename-group` on whichever machine has not had it, so both sides agree on the
+   name, then resolve again. If they describe two different things, it's a same-second id
+   collision, not a rename - treat it exactly like point 4 (manual, out-of-band fix, e.g.
+   re-inserting one record under a fresh id), and do NOT rename to make it match, since that would
+   turn it into an ordinary content diff and let a `local`/`dump` pick silently discard one side's
+   real, unrelated record.
 
 6. **Resolution is all-or-nothing per `apply_resolution()` call.** Once Chris has decided *every*
    differing record, call `resolve.apply_resolution()` with `{record_id: "local" | "dump"}`

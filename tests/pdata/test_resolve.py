@@ -550,12 +550,16 @@ def test_apply_resolution_refuses_a_group_mismatch_record(monkeypatch, tmp_path)
         vector={"ltxy": 1, "mbp": 2}, build=build,
     )
 
-    with pytest.raises(ValueError, match="renamed on one side") as excinfo:
+    with pytest.raises(ValueError, match="disagree on record_group") as excinfo:
         resolve.apply_resolution("proj", {record_id: "dump"})
 
-    # ...and the refusal is specifically NOT the id-collision one: the two situations need
-    # different manual fixes, so the message must not misdescribe which one this is.
-    assert "id collision" not in str(excinfo.value)
+    # Distinctly labeled as the group_mismatch case, not the id_collision one (matched above via
+    # "disagree on record_group", which is not id_collision's error text). The message must also
+    # not tell the caller renaming is unconditionally safe - created_at can coincidentally match
+    # for two genuinely unrelated records too (whole-second precision, often mtime-derived), so it
+    # must tell the caller to check content/file_path before assuming a rename is the right fix.
+    message = str(excinfo.value)
+    assert "content" in message and "file_path" in message
 
 
 def test_apply_resolution_refuses_a_partial_resolve_naming_the_missing_record_ids(
