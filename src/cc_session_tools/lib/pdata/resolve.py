@@ -14,10 +14,12 @@ docstring.
 """
 from __future__ import annotations
 
+import enum
 import sqlite3
 import time
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Literal, NamedTuple, TypedDict, TypeGuard
 
 from cc_session_tools.lib import machine_identity
 from cc_session_tools.lib.pdata import (
@@ -25,11 +27,53 @@ from cc_session_tools.lib.pdata import (
     naming,
     repository,
     store,
+    sync_lock,
     vector_clock,
     vector_clock_store,
 )
 
+Choice = Literal["local", "dump"]
+
 _VALID_CHOICES = frozenset({"local", "dump"})
+
+
+class ApplyOutcome(enum.Enum):
+    """What `apply_resolution` did. Every genuine refusal (an unresolvable diff, a malformed or
+    incomplete `choices`) still raises ValueError — see that function's docstring for why only
+    the transient lock case is modelled as a return value."""
+
+    APPLIED = "applied"  # the resolution was written and re-dumped
+    LOCKED = "locked"  # another writer holds this project's .db right now — retry shortly
+
+
+class BaseFields(TypedDict):
+    """The six `records` columns a resolve ever compares or applies. `id` and `record_group` are
+    deliberately absent: they identify the record rather than describing it, and both are carried
+    by `RecordDiff`'s own fields instead (`record_group` per side, since the two can disagree)."""
+
+    content: str
+    file_path: str | None
+    created_at: int
+    updated_at: int
+    version: int
+    deleted_at: int | None
+
+
+class RecordPayload(TypedDict):
+    """One side's view of one record. `extension` is a column->value dict whose keys are the
+    group's caller-defined extension fields — arbitrary per record_group, hence `object` values —
+    and `None` when that side has no ext_<group> table for the record's group at all.
+
+    That reading of `None` rests on an invariant this module does not itself enforce:
+    `repository.get_extension_row` returns `None` both for a missing table and for an existing
+    table with no row for this record_id, and it is `repository.insert_extension_row`'s "an
+    extension row is always created alongside its base row" guarantee that rules the second case
+    out. If that invariant were ever violated elsewhere (a partial migration, a hand-edited row),
+    a diff built here would describe the affected side as having no extension table rather than
+    surfacing the integrity violation."""
+
+    base: BaseFields
+    extension: dict[str, object] | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -38,20 +82,20 @@ class RecordDiff:
     between local and the dump, or exists on only one side. Base and extension are always paired
     here — never split into two separate diffs — per the spec's relational-integrity requirement.
 
-    `local`/`dump` are each `None` if the record does not exist on that side, otherwise a dict of
-    the shape `{"base": {...six records columns...}, "extension": {...columns...} | None}` —
-    `extension` is `None` when the record's group has no ext_<group> table on that side at all,
-    and a (possibly empty) dict of column->value when it does.
+    `local`/`dump` are each `None` if the record does not exist on that side, otherwise that
+    side's `RecordPayload`.
 
     `record_group` is whichever side's snapshot was available (local's when both are) — when
-    `group_mismatch` is True the two sides disagree on it, so read the per-side payload rather
-    than this field.
+    `group_mismatch` is True the two sides disagree on it, so read `local_record_group`/
+    `dump_record_group` (each `None` exactly when that side has no row) rather than this field.
     """
 
     record_id: int
     record_group: str
-    local: dict[str, object] | None
-    dump: dict[str, object] | None
+    local: RecordPayload | None
+    dump: RecordPayload | None
+    local_record_group: str | None
+    dump_record_group: str | None
     is_delete_vs_update: bool
     id_collision: bool
     group_mismatch: bool
@@ -82,44 +126,88 @@ class _Snapshot:
     dict."""
 
     record_group: str
-    payload: dict[str, object]  # {"base": {...}, "extension": {...} | None}
+    payload: RecordPayload
 
 
-def diff_against_dump(project: str) -> ResolveDiff:
-    """Diff project's live local `.db` against its published dump. Raises ValueError if the dump
-    fails its checksum — there is nothing reliable to diff against in that case (spec: "Checksum
-    failure... nothing reliable to diff"; the fix is `ccst pdata dump --force`, not a resolve)."""
-    project_root = store.project_root(project)
+def is_choice(value: str) -> TypeGuard[Choice]:
+    """True iff `value` is one of the two choices `apply_resolution` accepts, narrowing it to
+    `Choice` for the caller. The one sanctioned way to turn an untrusted string (CLI argument,
+    skill-supplied value) into the closed set the rest of this module is typed against."""
+    return value in _VALID_CHOICES
+
+
+def narrow_choices(choices: dict[int, str]) -> dict[int, Choice]:
+    """Validate a `{record_id: str}` mapping at the untrusted boundary and return it typed as
+    `{record_id: Choice}`, raising ValueError naming the first offending record_id otherwise.
+
+    `apply_resolution` re-checks the same thing at runtime (its parameter is statically closed,
+    but nothing stops an unchecked call from an untyped caller), so this is not the only guard —
+    it exists so a CLI/skill caller has a boundary at which arbitrary strings become `Choice`
+    without a cast, and so both paths raise the identical message."""
+    narrowed: dict[int, Choice] = {}
+    for record_id, choice in choices.items():
+        if not is_choice(choice):
+            raise ValueError(_invalid_choice_message(record_id, choice))
+        narrowed[record_id] = choice
+    return narrowed
+
+
+def _invalid_choice_message(record_id: int, choice: str) -> str:
+    return f"invalid choice {choice!r} for record_id {record_id}: must be 'local' or 'dump'"
+
+
+def _read_valid_dump_info(project: str, project_root: Path) -> dump.DumpInfo:
+    """The published dump's header (vector/machine_id), refusing a dump that fails its checksum —
+    there is nothing reliable to diff against in that case (spec: "Checksum failure... nothing
+    reliable to diff"; the fix is `ccst pdata dump --force`, not a resolve)."""
     info = dump.read_latest(project_root)
     if not info.checksum_valid:
         raise ValueError(
             f"dump for project {project!r} fails its checksum check — nothing reliable to diff "
             f"against (see `ccst pdata dump --force` to republish from local)"
         )
+    return info
 
-    dump_conn = _open_dump(project_root)
-    try:
-        local_conn = repository.connect(project)
-        try:
-            records = _diff_records(local_conn, dump_conn)
-            schema_fields = _diff_schema_fields(local_conn, dump_conn)
-        finally:
-            local_conn.close()
-    finally:
-        dump_conn.close()
 
+def _build_diff(
+    local_conn: sqlite3.Connection, dump_conn: sqlite3.Connection, info: dump.DumpInfo,
+) -> ResolveDiff:
+    """The whole diff, computed from one already-open pair of connections. Shared by
+    `diff_against_dump` (which opens, diffs, closes) and `apply_resolution` (which keeps the same
+    pair open across diff, validation and write) so the two can never diff differently."""
     return ResolveDiff(
-        records=records,
-        schema_fields=schema_fields,
+        records=_diff_records(local_conn, dump_conn),
+        schema_fields=_diff_schema_fields(local_conn, dump_conn),
         dump_vector=info.vector,
         dump_machine_id=info.machine_id,
     )
 
 
-def apply_resolution(project: str, choices: dict[int, str]) -> None:
+def diff_against_dump(project: str) -> ResolveDiff:
+    """Diff project's live local `.db` against its published dump. Raises ValueError if the dump
+    fails its checksum — there is nothing reliable to diff against in that case.
+
+    Display/diagnostic use only. `apply_resolution` deliberately does NOT call this: it builds
+    its own diff from the connections it then writes through, so the diff it validates `choices`
+    against and the data it applies come from one snapshot rather than two."""
+    project_root = store.project_root(project)
+    info = _read_valid_dump_info(project, project_root)
+
+    dump_conn = _open_dump(project_root)
+    try:
+        local_conn = repository.connect(project)
+        try:
+            return _build_diff(local_conn, dump_conn, info)
+        finally:
+            local_conn.close()
+    finally:
+        dump_conn.close()
+
+
+def apply_resolution(project: str, choices: dict[int, Choice]) -> ApplyOutcome:
     """Apply choices (`{record_id: "local" | "dump"}`) for the current diff. All-or-nothing:
-    `choices` must name EVERY record_id in `diff_against_dump(project).records`, no more and no
-    fewer, or nothing is applied at all.
+    `choices` must name EVERY record_id in the diff, no more and no fewer, or nothing is applied
+    at all.
 
     A partial resolve is refused because the vector-clock bookkeeping below is not per-record —
     it declares the dump machine's revision fully incorporated for the whole project. Publishing
@@ -130,18 +218,65 @@ def apply_resolution(project: str, choices: dict[int, str]) -> None:
 
     One call is one transaction covering every chosen record plus the post-resolve vector-clock
     bookkeeping, followed by an immediate re-dump once that transaction commits (the spec's exact
-    three-step "Post-resolve vector-clock update", whose step 3 is that immediate re-dump)."""
+    three-step "Post-resolve vector-clock update", whose step 3 is that immediate re-dump).
+
+    The diff is built here, from the same dump connection and the same local connection the write
+    below goes through, rather than by calling `diff_against_dump` (which opens and closes its
+    own pair). That is what makes one call internally consistent: the vector merged into
+    pdata_meta and the column types/field descriptions copied out of the dump all come from one
+    read of one dump, never from two independently-opened ones that a concurrent OneDrive
+    delivery or `ccst pdata dump --force` could have made disagree. It does NOT (and cannot)
+    guarantee that `choices` a human decided against an earlier diagnostic `ccst pdata resolve`
+    run still describes the same data minutes later — if something changed in between, the fresh
+    diff either still agrees with `choices` or fails one of the validations below loudly.
+
+    Returns APPLIED on success, or LOCKED if another writer holds this project's `.db` at the
+    moment the write would start (nothing is written in that case — retry shortly). LOCKED is a
+    return value rather than a raise for the same reason `rehydrate.RehydrateOutcome.DEFERRED`
+    is: it is transient and expected, not a refusal. Every other failure below stays a
+    `ValueError`. Those seven are genuine boundary-validation failures — a given `choices` either
+    can or cannot be applied at all — and no automatic caller anywhere in `src/` branches on
+    which category fired (unlike `rehydrate`/`dump`, whose hook and hourly-job callers are why
+    those modules return typed outcomes); a human or session reads the message. Keeping them as
+    ValueError is a deliberate scope decision, not an oversight."""
     # A pure input-shape check — no I/O, doesn't need a project/dump to exist — kept first so it
-    # never depends on (or is masked by) anything diff_against_dump below might raise. Runs
-    # correctly even when choices is empty (the loop is simply a no-op).
+    # never depends on (or is masked by) anything below. `choices` is statically closed to
+    # `Choice`, but it crosses a real untrusted boundary (CLI-parsed strings, skill-supplied
+    # values) so the runtime check stays. Runs correctly even when choices is empty (the loop is
+    # simply a no-op).
     for record_id, choice in choices.items():
-        if choice not in _VALID_CHOICES:
-            raise ValueError(
-                f"invalid choice {choice!r} for record_id {record_id}: must be 'local' or 'dump'"
-            )
+        if not is_choice(choice):
+            raise ValueError(_invalid_choice_message(record_id, choice))
 
     project_root = store.project_root(project)
-    diff = diff_against_dump(project)
+    info = _read_valid_dump_info(project, project_root)
+
+    dump_conn = _open_dump(project_root)
+    try:
+        local_conn = repository.connect(project)
+        try:
+            return _apply_resolution(
+                project, project_root, choices, local_conn, dump_conn, info,
+            )
+        finally:
+            local_conn.close()
+    finally:
+        dump_conn.close()
+
+
+def _apply_resolution(
+    project: str,
+    project_root: Path,
+    choices: dict[int, Choice],
+    local_conn: sqlite3.Connection,
+    dump_conn: sqlite3.Connection,
+    info: dump.DumpInfo,
+) -> ApplyOutcome:
+    """`apply_resolution`'s body, with both connections already open and owned by the caller —
+    diff, validate, write, re-dump, all against this one pair. See `apply_resolution`'s docstring
+    for the contract; this split exists only so the two `try/finally` close-blocks above don't
+    have to wrap a hundred lines of logic."""
+    diff = _build_diff(local_conn, dump_conn, info)
 
     # Checked before anything about `choices` — including before the empty-choices check below,
     # since a schema-only fork (no differing records, only record_group_fields drift) would
@@ -184,31 +319,20 @@ def apply_resolution(project: str, choices: dict[int, str]) -> None:
     collisions = sorted(rid for rid, rd in by_id.items() if rd.id_collision)
     if collisions:
         raise ValueError(
-            f"record_id(s) {collisions} are an id collision — two unrelated records were "
-            f"independently assigned the same id (see resolve.py's `_classify` docstring), not "
-            f"a genuine edit conflict on one record. A local/dump choice would silently discard "
-            f"one side's real, unrelated record, so apply_resolution refuses these; they need a "
-            f"manual, out-of-band reconciliation, not a per-record local/dump pick"
+            f"record_id(s) {collisions}: id collision (the same id was independently assigned to "
+            f"two unrelated records) — not resolvable as a local/dump choice, since either pick "
+            f"would discard one side's real record; needs a manual, out-of-band fix (see the "
+            f"pm-pdata-conflict-resolution skill, point 4)"
         )
 
     group_mismatches = sorted(rid for rid, rd in by_id.items() if rd.group_mismatch)
     if group_mismatches:
         raise ValueError(
-            f"record_id(s) {group_mismatches}: same id, matching created_at, but the two sides "
-            f"disagree on record_group. This usually means one side ran `ccst pdata rename-group` "
-            f"and the other hasn't (the same record, two different group names) — but created_at "
-            f"is whole-second precision and is frequently caller-supplied from a file's mtime "
-            f"(see importers.py/session_output.py), so two UNRELATED records independently "
-            f"inserted into different groups in the same second (or imported from files sharing "
-            f"an mtime) can land here too, indistinguishable from a rename by id/created_at alone. "
-            f"Either way, a local/dump pick has no single ext_<group> table to write, so "
-            f"apply_resolution refuses these. Before re-running rename-group to make both sides "
-            f"agree: compare each side's content/file_path first — if they describe the same real "
-            f"thing, it's a rename, re-run it on the machine that hasn't had it, then resolve "
-            f"again; if they describe two different things, it's a same-second id collision (like "
-            f"the id_collision case above) and needs manual, out-of-band reconciliation instead — "
-            f"renaming to match would then let a local/dump pick silently discard one side's real, "
-            f"unrelated record"
+            f"record_id(s) {group_mismatches}: group mismatch (same id and created_at, but the "
+            f"two sides disagree on record_group) — not resolvable as a local/dump choice. "
+            f"Compare each side's content/file_path before assuming a rename is safe (see the "
+            f"pm-pdata-conflict-resolution skill, point 5, for why it may instead be a "
+            f"same-second id collision), then retry"
         )
 
     missing = sorted(set(by_id) - set(choices))
@@ -230,57 +354,59 @@ def apply_resolution(project: str, choices: dict[int, str]) -> None:
             f"records (they exist locally only)"
         )
 
-    dump_conn = _open_dump(project_root)
-    try:
-        local_conn = repository.connect(project)
-        try:
-            with repository._immediate(local_conn):
-                for record_id in sorted(choices):
-                    if choices[record_id] == "dump":
-                        _apply_dump_choice(local_conn, dump_conn, by_id[record_id])
-                    # choice == "local" needs no write: local's row is already what we're keeping.
+    # The last thing checked before any write: is someone else writing to this exact .db right
+    # now? Non-blocking and point-in-time (sync_lock.is_locked's own docstring), the same probe
+    # rehydrate.py runs immediately before its atomic swap. Returning here costs nothing — no
+    # transaction has been opened, so there is no partial work to roll back — and LOCKED is not a
+    # refusal: it says "retry shortly", exactly like RehydrateOutcome.DEFERRED.
+    if sync_lock.is_locked(store.db_path(project)):
+        return ApplyOutcome.LOCKED
 
-                machine_id = machine_identity.resolve().machine_id
-                local_vector = vector_clock_store.read_vector(local_conn)
-                # Spec's "Post-resolve vector-clock update" steps 2 then 1, in that order: merge
-                # first (adopt the dump machine's revision as fully incorporated, elementwise max
-                # for every other machine), then bump local's own counter once for the resolve
-                # itself — one bump regardless of how many records this call touched.
-                #
-                # The spec numbers the bump first, and the two orders give the identical vector
-                # whenever dump_vector[machine_id] <= local_vector[machine_id]: writing n for
-                # local's own entry and d for the dump's value of it, bump-then-merge is
-                # max(n+1, d) and merge-then-bump is max(n, d)+1, and those agree exactly when
-                # d <= n. That inequality holds under normal forward-only propagation, where a
-                # machine's live revision is never behind what a remote dump believes about it.
-                # It is not unconditional, though:
-                # `ccst pdata rehydrate --force` replaces the local DB wholesale, pdata_meta
-                # included, and can roll local's own counter backward — after which a remote dump
-                # can legitimately hold a HIGHER value for local's own machine than local does.
-                # With d > n, bumping first yields max(n+1, d) == d whenever d >= n+1 — a vector
-                # merely EQUAL to the dump's on this entry, which the other machine's compare()
-                # reads as LOCAL_DOMINATES: it never fast-forwards, and this resolve is silently
-                # lost. Merging first and bumping the merged result gives max(n, d)+1, strictly
-                # above both n and d whatever the rollback history, so the published vector
-                # always strictly dominates both forked inputs.
-                merged_vector = vector_clock.merge(local_vector, diff.dump_vector)
-                vector_clock.bump_own(merged_vector, machine_id)
-                vector_clock_store.write_vector(
-                    local_conn, merged_vector, updated_at=int(time.time()),
-                )
-            # Step 3 (spec): re-dump immediately, after commit — a filesystem write. The spec
-            # states the reason directly: "publishing right away means the other machine's next
-            # check sees a dominating fast-forward, not a repeat of the same fork". The spec's
-            # "Triggers" section mandates the same immediate re-dump after a rehydrate; that half
-            # belongs to the hook/CLI orchestration and is not built yet, so this is the only
-            # caller of dump.write_latest anywhere in src/ today.
-            dump.write_latest(
-                local_conn, project_root=project_root, machine_id=machine_id, vector=merged_vector,
-            )
-        finally:
-            local_conn.close()
-    finally:
-        dump_conn.close()
+    with repository._immediate(local_conn):
+        for record_id in sorted(choices):
+            if choices[record_id] == "dump":
+                _apply_dump_choice(local_conn, dump_conn, by_id[record_id])
+            # choice == "local" needs no write: local's row is already what we're keeping.
+
+        machine_id = machine_identity.resolve().machine_id
+        local_vector = vector_clock_store.read_vector(local_conn)
+        # Spec's "Post-resolve vector-clock update" steps 2 then 1, in that order: merge first
+        # (adopt the dump machine's revision as fully incorporated, elementwise max for every
+        # other machine), then bump local's own counter once for the resolve itself — one bump
+        # regardless of how many records this call touched.
+        #
+        # The spec numbers the bump first, and the two orders give the identical vector whenever
+        # dump_vector[machine_id] <= local_vector[machine_id]: writing n for local's own entry and
+        # d for the dump's value of it, bump-then-merge is max(n+1, d) and merge-then-bump is
+        # max(n, d)+1, and those agree exactly when d <= n. That inequality holds under normal
+        # forward-only propagation, where a machine's live revision is never behind what a remote
+        # dump believes about it. It is not unconditional, though:
+        # `ccst pdata rehydrate --force` replaces the local DB wholesale, pdata_meta included, and
+        # can roll local's own counter backward — after which a remote dump can legitimately hold
+        # a HIGHER value for local's own machine than local does. With d > n, bumping first yields
+        # max(n+1, d) == d whenever d >= n+1 — a vector merely EQUAL to the dump's on this entry,
+        # which the other machine's compare() reads as LOCAL_DOMINATES: it never fast-forwards,
+        # and this resolve is silently lost. Merging first and bumping the merged result gives
+        # max(n, d)+1, strictly above both n and d whatever the rollback history, so the published
+        # vector always strictly dominates both forked inputs.
+        #
+        # diff.dump_vector comes from the same read of the same latest.sql that dump_conn (and so
+        # every column type and field description written above) was built from — see
+        # apply_resolution's docstring on why that single-snapshot property is the point.
+        merged_vector = vector_clock.merge(local_vector, diff.dump_vector)
+        vector_clock.bump_own(merged_vector, machine_id)
+        vector_clock_store.write_vector(local_conn, merged_vector, updated_at=int(time.time()))
+
+    # Step 3 (spec): re-dump immediately, after commit — a filesystem write. The spec states the
+    # reason directly: "publishing right away means the other machine's next check sees a
+    # dominating fast-forward, not a repeat of the same fork". The spec's "Triggers" section
+    # mandates the same immediate re-dump after a rehydrate; that half belongs to the hook/CLI
+    # orchestration and is not built yet, so this is the only caller of dump.write_latest anywhere
+    # in src/ today.
+    dump.write_latest(
+        local_conn, project_root=project_root, machine_id=machine_id, vector=merged_vector,
+    )
+    return ApplyOutcome.APPLIED
 
 
 def _open_dump(project_root: Path) -> sqlite3.Connection:
@@ -301,7 +427,7 @@ def _open_dump(project_root: Path) -> sqlite3.Connection:
     return conn
 
 
-def _row_to_base_dict(row: sqlite3.Row) -> dict[str, object]:
+def _row_to_base_dict(row: sqlite3.Row) -> BaseFields:
     return {
         "content": row["content"],
         "file_path": row["file_path"],
@@ -326,15 +452,24 @@ def _snapshot(conn: sqlite3.Connection, record_id: int) -> _Snapshot | None:
         {key: ext_row[key] for key in ext_row.keys() if key != "record_id"}
         if ext_row is not None else None
     )
-    payload: dict[str, object] = {"base": _row_to_base_dict(row), "extension": extension}
+    payload: RecordPayload = {"base": _row_to_base_dict(row), "extension": extension}
     return _Snapshot(record_group=record_group, payload=payload)
+
+
+class ClassifyResult(NamedTuple):
+    """`_classify`'s three mutually-exclusive verdicts, named rather than positional so neither
+    the return sites nor the unpack site can transpose them without the name changing too."""
+
+    id_collision: bool
+    group_mismatch: bool
+    is_delete_vs_update: bool
 
 
 def _classify(
     local_snap: _Snapshot | None, dump_snap: _Snapshot | None,
-) -> tuple[bool, bool, bool]:
-    """Returns `(id_collision, group_mismatch, is_delete_vs_update)` for one record_id's two
-    snapshots. The three are mutually exclusive: a collision is decided first and reported alone.
+) -> ClassifyResult:
+    """Classifies one record_id's two snapshots. The three verdicts are mutually exclusive: a
+    collision is decided first and reported alone.
 
     id_collision: true iff both sides have a row for this id but it is not the same logical
     record. `records.id` has no AUTOINCREMENT (repository.py's `_BASE_DDL`) — it is SQLite's bare
@@ -370,16 +505,15 @@ def _classify(
 
     `apply_resolution` refuses to touch either category — see its own docstring/error text."""
     if local_snap is None or dump_snap is None:
-        return False, False, False
+        return ClassifyResult(False, False, False)
     local_base = local_snap.payload["base"]
     dump_base = dump_snap.payload["base"]
-    assert isinstance(local_base, dict) and isinstance(dump_base, dict)
     if local_base["created_at"] != dump_base["created_at"]:
-        return True, False, False
+        return ClassifyResult(True, False, False)
     if local_snap.record_group != dump_snap.record_group:
-        return False, True, False
+        return ClassifyResult(False, True, False)
     is_delete_vs_update = (local_base["deleted_at"] is None) != (dump_base["deleted_at"] is None)
-    return False, False, is_delete_vs_update
+    return ClassifyResult(False, False, is_delete_vs_update)
 
 
 def _diff_records(
@@ -398,15 +532,17 @@ def _diff_records(
             assert dump_snap is not None  # the union of ids guarantees at least one side has it
             record_group = dump_snap.record_group
 
-        id_collision, group_mismatch, is_delete_vs_update = _classify(local_snap, dump_snap)
+        classified = _classify(local_snap, dump_snap)
         diffs.append(RecordDiff(
             record_id=record_id,
             record_group=record_group,
             local=local_snap.payload if local_snap is not None else None,
             dump=dump_snap.payload if dump_snap is not None else None,
-            is_delete_vs_update=is_delete_vs_update,
-            id_collision=id_collision,
-            group_mismatch=group_mismatch,
+            local_record_group=local_snap.record_group if local_snap is not None else None,
+            dump_record_group=dump_snap.record_group if dump_snap is not None else None,
+            is_delete_vs_update=classified.is_delete_vs_update,
+            id_collision=classified.id_collision,
+            group_mismatch=classified.group_mismatch,
         ))
     return diffs
 
@@ -443,7 +579,6 @@ def _apply_dump_choice(
     dump_payload = record_diff.dump
     assert dump_payload is not None  # validated by apply_resolution's `dumpless` check
     base = dump_payload["base"]
-    assert isinstance(base, dict)
 
     if record_diff.local is None:
         local_conn.execute(
@@ -469,7 +604,6 @@ def _apply_dump_choice(
     extension = dump_payload["extension"]
     if extension is None:
         return
-    assert isinstance(extension, dict)
     _apply_extension_fields(
         local_conn, dump_conn, record_diff.record_group, record_diff.record_id, extension,
     )
@@ -501,8 +635,13 @@ def _apply_extension_fields(
 def _dump_extension_column_types(
     dump_conn: sqlite3.Connection, record_group: str,
 ) -> dict[str, str]:
-    if not repository.extension_table_exists(dump_conn, record_group):
-        return {}
+    """The dump's ext_<group> columns and their declared types. Only ever called for a group whose
+    extension table the dump definitely has: `_apply_dump_choice` returns early when the dump's
+    payload has no `extension` dict, and `_snapshot` builds that dict as `None` precisely when
+    `repository.extension_table_exists()` is False on that side. A group that reached here without
+    the table would produce an empty PRAGMA result and a `KeyError` from
+    `_apply_extension_fields`'s type lookup — a loud failure of a real invariant, which is the
+    point; there is deliberately no guard returning `{}` for a state the call graph rules out."""
     table = naming.extension_table_name(record_group)
     return {
         row["name"]: row["type"]

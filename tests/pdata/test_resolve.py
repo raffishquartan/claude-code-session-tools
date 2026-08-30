@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import sqlite3
+
 import pytest
 
 from cc_session_tools.lib import machine_identity
@@ -754,3 +756,177 @@ def test_diff_against_dump_rejects_a_checksum_invalid_dump(monkeypatch, tmp_path
 
     with pytest.raises(ValueError, match="checksum"):
         resolve.diff_against_dump("proj")
+
+
+def _publish_one_sided_dump_record(project_root):
+    """A dump holding exactly one record that local has never seen - no id reused on the local
+    side at all, no collision, no group mismatch. The plainest real-world diff shape there is
+    (one machine wrote something the other hasn't got yet), and the only one that reaches
+    _apply_dump_choice's INSERT branch."""
+    def build(remote_conn):
+        record_id = repository.insert_base_record(
+            remote_conn, record_group="g", content="dump-only-content", file_path="/notes/new.md",
+            created_at=7, updated_at=7,
+        )
+        repository.add_extension_column(remote_conn, "g", "priority", "INTEGER", default=None)
+        # ensure_extension_table's backfill already created a bare ext row for record_id - update
+        # it, don't insert a second one.
+        repository.update_extension_row(remote_conn, "g", record_id, {"priority": 3})
+
+    _publish_remote_dump(
+        project_root, remote_project="proj-remote", machine_id="mbp",
+        vector={"ltxy": 1, "mbp": 2}, build=build,
+    )
+
+
+def test_apply_resolution_adopts_a_dump_only_record_with_its_extension_row(monkeypatch, tmp_path):
+    _setup_env(monkeypatch, tmp_path)
+    conn = repository.connect("proj")
+    try:
+        with repository._immediate(conn):
+            vector_clock_store.write_vector(conn, {"ltxy": 1, "mbp": 1}, updated_at=1)
+    finally:
+        conn.close()
+    project_root = store.project_root("proj")
+    _publish_one_sided_dump_record(project_root)
+
+    diff = resolve.diff_against_dump("proj")
+
+    assert diff.schema_fields == []
+    assert len(diff.records) == 1
+    record_diff = diff.records[0]
+    assert record_diff.local is None and record_diff.dump is not None
+    assert record_diff.local_record_group is None
+    assert record_diff.dump_record_group == "g"
+    assert record_diff.id_collision is False
+    assert record_diff.group_mismatch is False
+    assert record_diff.is_delete_vs_update is False
+
+    outcome = resolve.apply_resolution("proj", {record_diff.record_id: "dump"})
+
+    assert outcome is resolve.ApplyOutcome.APPLIED
+    conn = repository.connect("proj")
+    try:
+        row = repository.get_base_record(conn, record_diff.record_id)
+        assert row["record_group"] == "g"
+        assert row["content"] == "dump-only-content"
+        assert row["file_path"] == "/notes/new.md"
+        assert row["created_at"] == 7
+        ext_row = repository.get_extension_row(conn, "g", record_diff.record_id)
+        assert ext_row["priority"] == 3
+    finally:
+        conn.close()
+
+
+def test_apply_resolution_leaves_a_dump_only_record_absent_when_local_is_chosen(
+    monkeypatch, tmp_path,
+):
+    """Choosing "local" for a record that exists only in the dump is the genuine no-op case:
+    local's state (the record simply not being there) is what's kept, and the only writes are the
+    post-resolve vector-clock bookkeeping and the re-dump that publishes it."""
+    _setup_env(monkeypatch, tmp_path)
+    conn = repository.connect("proj")
+    try:
+        with repository._immediate(conn):
+            vector_clock_store.write_vector(conn, {"ltxy": 1, "mbp": 1}, updated_at=1)
+    finally:
+        conn.close()
+    project_root = store.project_root("proj")
+    _publish_one_sided_dump_record(project_root)
+    record_id = resolve.diff_against_dump("proj").records[0].record_id
+
+    outcome = resolve.apply_resolution("proj", {record_id: "local"})
+
+    assert outcome is resolve.ApplyOutcome.APPLIED
+    conn = repository.connect("proj")
+    try:
+        assert repository.get_base_record(conn, record_id) is None
+        assert vector_clock_store.read_vector(conn) == {"ltxy": 2, "mbp": 2}
+    finally:
+        conn.close()
+    assert dump.read_latest(project_root).vector == {"ltxy": 2, "mbp": 2}
+
+
+def test_apply_resolution_refuses_choice_dump_for_a_record_the_dump_does_not_have(
+    monkeypatch, tmp_path,
+):
+    """The mirror-image one-sided case: a record only local has. "dump" cannot be honoured -
+    there is no dump row to write - so it is refused rather than silently treated as a delete."""
+    _setup_env(monkeypatch, tmp_path)
+    conn = repository.connect("proj")
+    try:
+        with repository._immediate(conn):
+            record_id = repository.insert_base_record(
+                conn, record_group="g", content="local-only-content", file_path=None,
+                created_at=1, updated_at=1,
+            )
+            vector_clock_store.write_vector(conn, {"ltxy": 2, "mbp": 1}, updated_at=1)
+    finally:
+        conn.close()
+    project_root = store.project_root("proj")
+
+    def build(remote_conn):
+        pass  # the dump has no records at all - only a vector
+
+    _publish_remote_dump(
+        project_root, remote_project="proj-remote", machine_id="mbp",
+        vector={"ltxy": 1, "mbp": 2}, build=build,
+    )
+
+    db_path = store.db_path("proj")
+    before = db_path.read_bytes()
+    with pytest.raises(ValueError, match="the dump has no row for these records"):
+        resolve.apply_resolution("proj", {record_id: "dump"})
+    assert db_path.read_bytes() == before
+
+
+def test_apply_resolution_defers_instead_of_writing_while_another_writer_holds_the_lock(
+    monkeypatch, tmp_path,
+):
+    """Spec "Process safety": the resolve's write must not start while another connection holds
+    this .db's write lock. That is transient contention, not an unresolvable conflict, so it is a
+    LOCKED return value (mirroring rehydrate's DEFERRED) rather than a raise - and nothing is
+    written, since the check runs before the transaction is opened at all."""
+    _setup_env(monkeypatch, tmp_path)
+    conn = repository.connect("proj")
+    try:
+        with repository._immediate(conn):
+            record_id = repository.insert_base_record(
+                conn, record_group="g", content="local-content", file_path=None,
+                created_at=1, updated_at=1,
+            )
+            vector_clock_store.write_vector(conn, {"ltxy": 1, "mbp": 1}, updated_at=1)
+    finally:
+        conn.close()
+    project_root = store.project_root("proj")
+
+    def build(remote_conn):
+        remote_conn.execute(
+            "INSERT INTO records (id, record_group, content, file_path, created_at, updated_at) "
+            "VALUES (?, ?, ?, ?, ?, ?)", (record_id, "g", "dump-content", None, 1, 9),
+        )
+
+    _publish_remote_dump(
+        project_root, remote_project="proj-remote", machine_id="mbp",
+        vector={"ltxy": 1, "mbp": 2}, build=build,
+    )
+
+    holder = sqlite3.connect(store.db_path("proj"), timeout=0)
+    try:
+        holder.execute("BEGIN IMMEDIATE")
+
+        outcome = resolve.apply_resolution("proj", {record_id: "dump"})
+
+        assert outcome is resolve.ApplyOutcome.LOCKED
+    finally:
+        holder.execute("ROLLBACK")
+        holder.close()
+
+    # Nothing was written: not the row, not the vector, not a fresh dump.
+    conn = repository.connect("proj")
+    try:
+        assert repository.get_base_record(conn, record_id)["content"] == "local-content"
+        assert vector_clock_store.read_vector(conn) == {"ltxy": 1, "mbp": 1}
+    finally:
+        conn.close()
+    assert dump.read_latest(project_root).vector == {"ltxy": 1, "mbp": 2}

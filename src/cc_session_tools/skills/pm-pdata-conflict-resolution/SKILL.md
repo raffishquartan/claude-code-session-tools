@@ -142,7 +142,11 @@ NAME`") until it's resolved. `ccst pdata resolve --project NAME` (Task 10) is wh
    whole resolve counts as exactly one local write for the vector clock regardless of how many
    records it touched, and the store re-publishes a fresh dump immediately after committing, so
    the other machine's next check sees a dominating fast-forward rather than a repeat of the same
-   fork.
+   fork. It returns `ApplyOutcome.APPLIED` when that happened, or `ApplyOutcome.LOCKED` when
+   another writer held the project's `.db` at the moment the write would have started - LOCKED
+   writes nothing at all and is not a conflict, just transient contention (the same shape as
+   rehydrate's `DEFERRED`): retry shortly, don't re-diagnose it as a fork. Never treat the call
+   as successful without checking which of the two came back.
 
 7. **A schema-catalog-only fork (no record differs, only `record_group_fields` does) blocks the
    whole resolve too, with no way to clear it via `apply_resolution()` today.** The function only

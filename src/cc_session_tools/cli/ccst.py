@@ -114,6 +114,7 @@ if TYPE_CHECKING:
     # Type-only, so the handler's own lazy `from ... import sync_check` (this file's convention:
     # pdata modules are imported inside the handler that needs them, never at module scope) is
     # still the only runtime import.
+    from cc_session_tools.lib.pdata.resolve import RecordPayload
     from cc_session_tools.lib.pdata.sync_check import SyncCheckResult
 
 
@@ -1572,10 +1573,8 @@ def _parse_resolve_choice(raw: str) -> tuple[int, str]:
     return record_id, choice
 
 
-def _resolve_deleted_at(payload: dict[str, object]) -> object:
-    base = payload["base"]
-    assert isinstance(base, dict)
-    return base["deleted_at"]
+def _resolve_deleted_at(payload: RecordPayload) -> int | None:
+    return payload["base"]["deleted_at"]
 
 
 def _cmd_pdata_resolve(args: argparse.Namespace) -> int:
@@ -1589,15 +1588,27 @@ def _cmd_pdata_resolve(args: argparse.Namespace) -> int:
             )
             return 2
         try:
-            choices = dict(_parse_resolve_choice(raw) for raw in args.choice)
+            raw_choices = dict(_parse_resolve_choice(raw) for raw in args.choice)
         except ValueError as exc:
             print(f"ccst pdata resolve: {exc}", file=sys.stderr)
             return 2
         try:
-            resolve.apply_resolution(args.project, choices)
+            # narrow_choices raises the same "invalid choice" ValueError apply_resolution's own
+            # runtime check does, from the same helper - so an unusable choice value still
+            # reports exactly one way, whichever of the two sees it first.
+            choices = resolve.narrow_choices(raw_choices)
+            outcome = resolve.apply_resolution(args.project, choices)
         except ValueError as exc:
             print(f"ccst pdata resolve: {exc}", file=sys.stderr)
             return 1
+        if outcome is resolve.ApplyOutcome.LOCKED:
+            # Another writer holds sync_lock right now. Expected and transient, exactly like
+            # rehydrate's DEFERRED above - exit 0, nothing written, and never point at `ccst pdata
+            # resolve`, which would misdescribe lock contention as a conflict.
+            print(
+                f"ccst pdata resolve: {args.project}: another writer holds the lock - retry later"
+            )
+            return 0
         print(f"ccst pdata resolve: {args.project}: resolved {len(choices)} record(s)")
         return 0
 
@@ -1650,10 +1661,15 @@ def _cmd_pdata_resolve(args: argparse.Namespace) -> int:
                 )
                 continue
             if rd.group_mismatch:
+                # Both sides' own group names, not rd.record_group: that field carries whichever
+                # side happened to be available, and RecordDiff's docstring says so - printing it
+                # alone in the one line whose whole point is which two names disagree would tell
+                # the reader neither which side they are seeing nor what the other side's is.
                 print(
-                    f"  record {rd.record_id} (group={rd.record_group}): group mismatch - "
-                    f"same id and created_at, but local and dump disagree on record_group; "
-                    f"compare content/file_path on each side before assuming this is a safe "
+                    f"  record {rd.record_id} (local group={rd.local_record_group}, "
+                    f"dump group={rd.dump_record_group}): group mismatch - same id and "
+                    f"created_at, but local and dump disagree on record_group; compare "
+                    f"content/file_path on each side before assuming this is a safe "
                     f"`ccst pdata rename-group` rather than a same-second id collision - "
                     f"`ccst pdata resolve` cannot apply a local/dump choice to this one"
                 )
