@@ -1420,7 +1420,7 @@ def _cmd_pdata_verify(args: argparse.Namespace) -> int:
 def _cmd_pdata_dump(args: argparse.Namespace) -> int:
     from cc_session_tools.lib import machine_identity
     from cc_session_tools.lib.pdata import (
-        dump, repository, store, vector_clock, vector_clock_store, verify,
+        dump, repository, store, sync_notify, vector_clock, vector_clock_store, verify,
     )
 
     projects = verify.discover_projects() if args.all_projects else [args.project]
@@ -1455,20 +1455,22 @@ def _cmd_pdata_dump(args: argparse.Namespace) -> int:
             # DUMP_DOMINATES are both refused without --force: a plain `dump` publish is not
             # itself a local write (see write_latest below - no vector bump), so overwriting
             # either would silently discard revisions the other side may still need.
-            safe = not existing.checksum_valid or (
-                vector_clock.compare(local=local_vector, dump=existing.vector)
-                is vector_clock.Comparison.LOCAL_DOMINATES
+            comparison = (
+                None if not existing.checksum_valid
+                else vector_clock.compare(local=local_vector, dump=existing.vector)
             )
+            safe = comparison is None or comparison is vector_clock.Comparison.LOCAL_DOMINATES
             if not safe and not args.force:
                 refused += 1
+                assert comparison is not None  # safe=False and checksum-valid both hold here
+                detail = (
+                    f"refusing to publish - local diverges from the published dump (run "
+                    f"`ccst pdata resolve --project {project}` to resolve, or pass --force "
+                    f"to publish local as the winner anyway)"
+                )
+                sync_notify.notify_conflict(project, outcome=comparison.value, detail=detail)
                 if not compact:
-                    print(
-                        f"ccst pdata dump: {project}: refusing to publish - local diverges "
-                        f"from the published dump (run `ccst pdata resolve --project "
-                        f"{project}` to resolve, or pass --force to publish local as the "
-                        f"winner anyway)",
-                        file=sys.stderr,
-                    )
+                    print(f"ccst pdata dump: {project}: {detail}", file=sys.stderr)
                 continue
             dump.write_latest(
                 conn, project_root=project_root, machine_id=machine_id, vector=local_vector,
@@ -1496,7 +1498,7 @@ def _cmd_pdata_dump(args: argparse.Namespace) -> int:
 
 
 def _cmd_pdata_rehydrate(args: argparse.Namespace) -> int:
-    from cc_session_tools.lib.pdata import rehydrate, verify
+    from cc_session_tools.lib.pdata import rehydrate, sync_notify, verify
 
     projects = verify.discover_projects() if args.all_projects else [args.project]
     if not projects:
@@ -1527,21 +1529,22 @@ def _cmd_pdata_rehydrate(args: argparse.Namespace) -> int:
                 print(f"ccst pdata rehydrate: {project}: already up to date")
         elif result.outcome is rehydrate.RehydrateOutcome.FORK:
             worst = max(worst, 1)
+            detail = (
+                f"unresolved fork with {result.from_machine} - run `ccst pdata resolve "
+                f"--project {project}`"
+            )
+            sync_notify.notify_conflict(project, outcome=result.outcome.value, detail=detail)
             if not compact:
-                print(
-                    f"ccst pdata rehydrate: {project}: unresolved fork with "
-                    f"{result.from_machine} - run `ccst pdata resolve --project {project}`",
-                    file=sys.stderr,
-                )
+                print(f"ccst pdata rehydrate: {project}: {detail}", file=sys.stderr)
         elif result.outcome is rehydrate.RehydrateOutcome.CHECKSUM_INVALID:
             worst = max(worst, 1)
+            detail = (
+                "published dump fails its checksum check - run `ccst pdata dump --force` "
+                "on the machine with good data to republish"
+            )
+            sync_notify.notify_conflict(project, outcome=result.outcome.value, detail=detail)
             if not compact:
-                print(
-                    f"ccst pdata rehydrate: {project}: published dump fails its checksum "
-                    f"check - run `ccst pdata dump --force` on the machine with good data "
-                    f"to republish",
-                    file=sys.stderr,
-                )
+                print(f"ccst pdata rehydrate: {project}: {detail}", file=sys.stderr)
         else:
             # DEFERRED - another writer holds sync_lock right now. Expected and transient, not
             # an error (rehydrate.py's own RehydrateOutcome docstring: "retry later" rather than

@@ -9,6 +9,7 @@ from pathlib import Path
 import pytest
 
 from cc_session_tools.lib.pdata import dump, repository, store, vector_clock_store
+from cc_session_tools.lib.scheduler import ledger
 
 
 def _run(env: dict, *args: str) -> subprocess.CompletedProcess[str]:
@@ -30,6 +31,18 @@ def base_env(tmp_path, monkeypatch):
     monkeypatch.setenv(store.PROJECT_DB_DIR_ENV, str(tmp_path / "project-db"))
     monkeypatch.setenv(store.PROJECTS_ROOT_ENV, str(tmp_path / "projects"))
     monkeypatch.setenv("CCST_MACHINE_NAME", "ltxy")
+    # dump/rehydrate now call sync_notify.notify_conflict() on FORK/CHECKSUM_INVALID, which
+    # writes a real ledger row and attempts a real Telegram send unless isolated - without this,
+    # every conflict test in this file would write into the developer's actual
+    # ~/.local/share/claude/telemetry.db and could send real Telegram messages from their real
+    # credentials. This is the same incident test_sync_notify.py's own autouse fixture documents
+    # (see its comment); this file needs the identical isolation since it now exercises the same
+    # notify_conflict() call path through the real CLI subprocess.
+    monkeypatch.setenv("CCCS_HOOKS_DIR", str(tmp_path / "hooks"))
+    monkeypatch.setenv("CC_SCHEDULER_DIR", str(tmp_path / "sched"))
+    monkeypatch.delenv("TELEGRAM_BOT_TOKEN", raising=False)
+    monkeypatch.delenv("TELEGRAM_CHAT_ID", raising=False)
+    monkeypatch.setenv("CCCS_CREDS_PATH", str(tmp_path / "no-creds-here"))
     return os.environ.copy()
 
 
@@ -130,6 +143,12 @@ def test_dump_refuses_on_fork_without_force(base_env):
     # nothing was overwritten - the dump on disk is still the remote one.
     info = dump.read_latest(project_root)
     assert info.machine_id == "mbp"
+    # notify_conflict() fired for real through the CLI, not just in sync_notify's own unit
+    # tests - the SessionStart digest channel (ledger.record) is reachable from production code.
+    rows = ledger.read_recent(job_id="pdata-sync:proj")
+    assert len(rows) == 1
+    assert rows[0]["event"] == "run"
+    assert "fork" in str(rows[0]["error"])
 
 
 def test_dump_refuses_when_dump_dominates_without_force(base_env):
