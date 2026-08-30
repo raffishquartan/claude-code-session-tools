@@ -64,6 +64,51 @@ def test_insert_base_record_then_get_by_id(monkeypatch, tmp_path):
         conn.close()
 
 
+def test_has_any_records_is_false_for_an_empty_schema_only_db(monkeypatch, tmp_path):
+    monkeypatch.setenv("CCST_PROJECT_DB_DIR", str(tmp_path))
+    conn = repository.connect("testproj")
+    try:
+        assert repository.has_any_records(conn) is False
+    finally:
+        conn.close()
+
+
+def test_has_any_records_is_true_for_a_live_row(monkeypatch, tmp_path):
+    monkeypatch.setenv("CCST_PROJECT_DB_DIR", str(tmp_path))
+    conn = repository.connect("testproj")
+    try:
+        with repository._immediate(conn):
+            repository.insert_base_record(
+                conn, record_group="g", content="x", file_path=None,
+                created_at=1, updated_at=1,
+            )
+        assert repository.has_any_records(conn) is True
+    finally:
+        conn.close()
+
+
+def test_has_any_records_is_false_when_every_row_is_soft_deleted(monkeypatch, tmp_path):
+    """Regression test for a real incident: init_service._rollback soft-deletes every row a
+    failed `ccst pdata init --write` inserted ("no hard delete, full auditability"), so a rolled-
+    back attempt leaves the table non-empty with nothing but tombstones. has_any_records must not
+    count those as real content, or a failed write would permanently block adopt-from-dump on
+    that exact machine."""
+    monkeypatch.setenv("CCST_PROJECT_DB_DIR", str(tmp_path))
+    conn = repository.connect("testproj")
+    try:
+        with repository._immediate(conn):
+            record_id = repository.insert_base_record(
+                conn, record_group="g", content="x", file_path=None,
+                created_at=1, updated_at=1,
+            )
+            assert repository.soft_delete(
+                conn, record_id=record_id, expected_version=1, deleted_at=2,
+            )
+        assert repository.has_any_records(conn) is False
+    finally:
+        conn.close()
+
+
 def test_get_base_record_returns_none_for_missing_id(monkeypatch, tmp_path):
     monkeypatch.setenv("CCST_PROJECT_DB_DIR", str(tmp_path))
     conn = repository.connect("testproj")

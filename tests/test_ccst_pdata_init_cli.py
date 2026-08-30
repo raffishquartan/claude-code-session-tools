@@ -271,3 +271,69 @@ def test_pdata_init_write_adopts_from_an_existing_dump(base_env, tmp_path, monke
     assert "Adopting existing pdata from sync dump" in r.stdout
     assert "macbook" in r.stdout
     assert "SUCCESS" in r.stdout
+
+
+def test_pdata_init_dry_run_reports_pending_adoption_instead_of_classifying(
+    base_env, tmp_path, monkeypatch,
+):
+    """A dry run for a project with an existing sync dump and no local pdata content yet must
+    say --write will adopt it, not run (and report) an ordinary classification pass."""
+    from cc_session_tools.lib.pdata import dump, repository, vector_clock_store
+
+    project_dir = tmp_path / "projects" / "demo"
+    project_dir.mkdir(parents=True)
+
+    monkeypatch.setenv("CCST_PROJECT_DB_DIR", base_env["CCST_PROJECT_DB_DIR"])
+    con = repository.connect("demo")
+    with repository._immediate(con):
+        vector_clock_store.write_vector(con, {"macbook": 3}, updated_at=100)
+    dump.write_latest(con, project_root=project_dir, machine_id="macbook", vector={"macbook": 3})
+    con.close()
+    (Path(base_env["CCST_PROJECT_DB_DIR"]) / "demo.db").unlink()  # no local .db yet
+
+    r = _run(base_env, "pdata", "init", "--project", "demo")
+
+    assert r.returncode == 0, r.stderr
+    assert "a published sync dump already exists" in r.stdout
+    assert "macbook" in r.stdout
+    assert "--write" in r.stdout
+    assert "Proposal:" not in r.stdout
+    assert "classified" not in r.stdout
+
+
+def test_pdata_init_write_still_adopts_after_an_earlier_dry_run(base_env, tmp_path, monkeypatch):
+    """Regression test for a real incident found during manual cross-laptop verification: a
+    plain `ccst pdata init --project X` (no --write) run BEFORE a dump exists creates an empty,
+    schema-only local .db as a side effect (repository.connect()'s own DDL). A second machine
+    that later runs `--write` after that dump has since arrived must still adopt it - the earlier
+    dry run's incidental empty file must not be mistaken for "already migrated here"."""
+    from cc_session_tools.lib.pdata import dump, repository, vector_clock_store
+
+    project_dir = tmp_path / "projects" / "demo"
+    project_dir.mkdir(parents=True)
+    monkeypatch.setenv("CCST_PROJECT_DB_DIR", base_env["CCST_PROJECT_DB_DIR"])
+
+    # Step 1, in the real incident's order: a plain dry run on this machine, before any dump has
+    # been published for this project - creates the empty local .db, exactly as it would for a
+    # genuinely brand-new project.
+    r_dry_run = _run(base_env, "pdata", "init", "--project", "demo")
+    assert r_dry_run.returncode == 0, r_dry_run.stderr
+    assert (Path(base_env["CCST_PROJECT_DB_DIR"]) / "demo.db").exists()
+
+    # Step 2: another machine publishes a dump for this same project - simulated here exactly as
+    # test_pdata_init_write_adopts_from_an_existing_dump does, reusing the now-empty local
+    # connection rather than deleting and recreating it.
+    con = repository.connect("demo")
+    with repository._immediate(con):
+        vector_clock_store.write_vector(con, {"macbook": 3}, updated_at=100)
+    dump.write_latest(con, project_root=project_dir, machine_id="macbook", vector={"macbook": 3})
+    con.close()
+
+    # Step 3: --write here must still adopt, not fall through to classify/import because of the
+    # empty file step 1 left behind.
+    r_write = _run(base_env, "pdata", "init", "--project", "demo", "--write")
+
+    assert r_write.returncode == 0, r_write.stderr
+    assert "Adopting existing pdata from sync dump" in r_write.stdout
+    assert "macbook" in r_write.stdout
+    assert "SUCCESS" in r_write.stdout

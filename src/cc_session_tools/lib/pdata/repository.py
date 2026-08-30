@@ -108,6 +108,23 @@ def get_base_record(conn: sqlite3.Connection, record_id: int) -> sqlite3.Row | N
     return row
 
 
+def has_any_records(conn: sqlite3.Connection) -> bool:
+    """True iff `records` has at least one row NOT soft-deleted. Existence check, not a count -
+    `LIMIT 1` so this stays cheap regardless of table size. Distinguishes a genuinely-populated
+    .db from an empty schema-only one that `connect()`'s own DDL can create as an incidental side
+    effect of a read-only operation, well before any real content is ever written.
+
+    Excludes soft-deleted rows deliberately, not an oversight: a rolled-back `ccst pdata init
+    --write` (`init_service._rollback`) soft-deletes every row it inserted rather than hard
+    deleting them - "no hard delete, full auditability" - so a failed write attempt leaves the
+    `records` table non-empty with nothing but tombstones. Counting those as "real content" would
+    make a failed, fully-rolled-back --write permanently block adopt-from-dump on this exact
+    machine, which is the opposite of what a rollback is supposed to mean."""
+    return conn.execute(
+        "SELECT 1 FROM records WHERE deleted_at IS NULL LIMIT 1"
+    ).fetchone() is not None
+
+
 def ensure_extension_table(conn: sqlite3.Connection, record_group: str) -> None:
     """CREATE ext_<group> (record_id INTEGER PRIMARY KEY REFERENCES records(id)) if it doesn't
     exist yet — record_group is validated by naming.extension_table_name(). Caller owns the

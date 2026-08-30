@@ -1156,6 +1156,11 @@ def _cmd_pdata_init(args: argparse.Namespace) -> int:
             print(f"ccst pdata: {exc}", file=sys.stderr)
             return 2
         print(result.report)
+        if result.would_adopt_from_dump:
+            # No proposal was written and there's nothing to classify - the reminders below are
+            # about updating project docs after a real classify/import cutover, which doesn't
+            # apply here.
+            return 0
         print(f"\nProposal: {result.proposal_path}")
         _print_migration_prompt_reminders(
             result.proposal_path.parent,

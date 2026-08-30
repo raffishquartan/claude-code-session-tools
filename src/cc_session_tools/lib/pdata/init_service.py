@@ -32,11 +32,43 @@ class DryRunResult:
     manifest: Manifest
     report: str
     proposal_path: Path
+    # True iff --write would adopt from an existing sync dump rather than classify/import this
+    # machine's flat files - see _pending_adoption. When True, `report` already describes the
+    # adoption and no proposal file was written; `proposal_path` is still populated (where one
+    # *would* go) for callers that print it unconditionally, but shouldn't be treated as pointing
+    # at a real file.
+    would_adopt_from_dump: bool = False
 
 
 def dry_run(*, project: str, rehearse: Path | None = None) -> DryRunResult:
     project_root = init_paths.resolve_project_root(project, rehearse=rehearse)
+    proposal_path = project_root / init_paths.PROPOSAL_FILENAME
     with init_paths.project_db_dir_override(rehearse):
+        # Checked before anything below opens/creates this project's .db (repository.connect()'s
+        # own DDL does that as a side effect - see _already_locally_migrated): a dry run must
+        # never create persistent state that could itself go on to poison a later adopt-from-dump
+        # decision, which is exactly what happened before this check existed - see that
+        # function's docstring for the real incident.
+        pending = _pending_adoption(project=project, project_root=project_root)
+        if pending is not None:
+            latest_path = project_root / ".pdata-db-dump" / "latest.sql"
+            published_at = _format_published_at(pending, latest_path)
+            report = (
+                f"ccst pdata init --project {project}: a published sync dump already exists "
+                f"(from {pending.machine_id}, at {published_at}) and this machine has no local "
+                f"pdata content for this project yet.\n\n`--write` will adopt that dump directly "
+                f"(same mechanism as the ongoing sync trigger) instead of classifying/importing "
+                f"this machine's current flat files, which would create a second, disconnected "
+                f"history for this project.\n\nRun `ccst pdata init --project {project} --write` "
+                f"to adopt it."
+            )
+            return DryRunResult(
+                manifest=Manifest(project=project, entries=[]),
+                report=report,
+                proposal_path=proposal_path,
+                would_adopt_from_dump=True,
+            )
+
         # repository.connect() runs the base-schema DDL (CREATE TABLE IF NOT
         # EXISTS) on every call — this is what "safe to run against an empty
         # folder... also how a genuinely new project gets its .db" (spec §5) means.
@@ -50,7 +82,6 @@ def dry_run(*, project: str, rehearse: Path | None = None) -> DryRunResult:
         existing_record_groups = frozenset(
             str(group["record_group"]) for group in service.schema_list(project=project)
         )
-    proposal_path = project_root / init_paths.PROPOSAL_FILENAME
     m = manifest.load_or_create(
         project_root, project, proposal_path,
         existing_record_groups=existing_record_groups,
@@ -209,26 +240,40 @@ def _format_published_at(info: dump.DumpInfo, latest_path: Path) -> str:
     return dump.format_dumped_at(int(latest_path.stat().st_mtime))
 
 
-def _adopt_from_dump(
-    *, project: str, project_root: Path, on_progress: Callable[[str], None] | None,
-) -> WriteResult | None:
-    """Spec "ccst pdata init on a second machine (adopt-from-dump)": a project already migrated
-    to pdata on another machine publishes a dump into <project_root>/.pdata-db-dump/latest.sql —
-    a machine with no local .db for this project yet must adopt that dump directly (same
-    mechanism as the ongoing rehydrate trigger) rather than classifying/importing this machine's
-    current flat files as if this were a first-ever migration, which would produce a DB
-    disconnected from the dump's vector-clock history and likely duplicate content already
-    captured elsewhere.
+def _already_locally_migrated(project: str) -> bool:
+    """True iff this machine already has real pdata content for `project` - not merely an empty
+    schema-only `.db` file. `repository.connect()`'s own DDL (`CREATE TABLE IF NOT EXISTS`)
+    creates that file as a side effect of any read-only operation that opens a connection -
+    `dry_run()`'s own schema lookup, `ccst pdata verify`, and others - well before any real
+    migration ever happens on this machine. A bare `store.db_path(project).exists()` check
+    can't tell that empty file apart from a genuine prior migration, and would misread it as
+    "already migrated here" - silently and permanently skipping adopt-from-dump. Confirmed live,
+    not hypothetical: a second machine's `ccst pdata init` (no `--write`) created exactly this
+    empty file, and the very next `--write` on the same machine then skipped adoption because of
+    it, falling through to an ordinary classify/import that failed for unrelated reasons."""
+    if not store.db_path(project).exists():
+        return False
+    conn = repository.connect(project)
+    try:
+        return repository.has_any_records(conn)
+    finally:
+        conn.close()
 
-    Returns the early WriteResult to hand straight back from write() when adoption ran; None when
-    there is nothing to adopt (no dump has ever been published for this project — the ordinary
-    classify/import flow proceeds exactly as before this feature existed) or when this machine
-    already has its own local .db for the project (already adopted/migrated here previously —
-    ccst pdata rehydrate, not ccst pdata init, is the ongoing sync path for that case).
 
-    Checked via the dump file's own existence, not DumpInfo.checksum_valid alone: read_latest()
-    returns checksum_valid=False both when no dump was ever published and when one exists but is
-    corrupt, and those two cases must not be treated the same — the first is the ordinary
+def _pending_adoption(*, project: str, project_root: Path) -> dump.DumpInfo | None:
+    """Is there a published dump this machine should adopt instead of classifying/importing its
+    own flat files? Returns the validated `DumpInfo` when adoption applies; `None` when there is
+    nothing to adopt (no dump has ever been published for this project - the ordinary
+    classify/import flow proceeds exactly as before this feature existed) or this machine is
+    already genuinely migrated (see `_already_locally_migrated` - ccst pdata rehydrate, not ccst
+    pdata init, is the ongoing sync path for that case).
+
+    Shared by `dry_run()` (reports what `--write` would do) and `_adopt_from_dump()` (does it) -
+    one check, so the two can never disagree about whether adoption applies.
+
+    Checked via the dump file's own existence, not `DumpInfo.checksum_valid` alone: `read_latest`
+    returns `checksum_valid=False` both when no dump was ever published and when one exists but is
+    corrupt, and those two cases must not be treated the same - the first is the ordinary
     first-ever migration, the second is a real problem that must be surfaced, never silently
     papered over by falling through to classification."""
     latest_path = project_root / ".pdata-db-dump" / "latest.sql"
@@ -243,8 +288,26 @@ def _adopt_from_dump(
             "project. Publish a fresh dump from a known-good machine (ccst pdata dump --force) "
             "or reconcile manually (ccst pdata resolve) once those commands exist."
         )
-    if store.db_path(project).exists():
+    if _already_locally_migrated(project):
         return None
+    return info
+
+
+def _adopt_from_dump(
+    *, project: str, project_root: Path, on_progress: Callable[[str], None] | None,
+) -> WriteResult | None:
+    """Spec "ccst pdata init on a second machine (adopt-from-dump)": a project already migrated
+    to pdata on another machine publishes a dump into <project_root>/.pdata-db-dump/latest.sql —
+    a machine with no local pdata content for this project yet must adopt that dump directly
+    (same mechanism as the ongoing rehydrate trigger) rather than classifying/importing this
+    machine's current flat files as if this were a first-ever migration, which would produce a DB
+    disconnected from the dump's vector-clock history and likely duplicate content already
+    captured elsewhere. Returns the early WriteResult to hand straight back from write() when
+    adoption ran; None when `_pending_adoption` finds nothing to adopt."""
+    info = _pending_adoption(project=project, project_root=project_root)
+    if info is None:
+        return None
+    latest_path = project_root / ".pdata-db-dump" / "latest.sql"
     published_at = _format_published_at(info, latest_path)
     message = (
         f"Adopting existing pdata from sync dump (published by {info.machine_id}, "
