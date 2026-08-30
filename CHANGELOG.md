@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.12.1] - 2026-08-30
+
+### Fixed
+
+- `ccst pdata init --project NAME` (no `--write`) now reports a pending adopt-from-dump directly
+  instead of running an ordinary classification pass, when a published sync dump already exists
+  and this machine has no local pdata content for the project yet.
+- Fixed a real bug found live during manual cross-laptop verification: a dry run's own
+  `repository.connect()` call created an empty, persistent local `.db` as a side effect, which
+  `_adopt_from_dump`'s file-existence check then misread as "already migrated here" - silently
+  skipping adoption on a `--write` run and falling through to classify/import instead. A second,
+  compounding bug meant a failed `--write`'s soft-deleted rollback rows were also misread as real
+  content. `repository.has_any_records()` now checks for a live (non-soft-deleted) row, shared by
+  both the dry-run report and `_adopt_from_dump` itself, so neither an incidental empty file nor a
+  rolled-back attempt's tombstones can block a genuine adoption again.
+
 ## [2.12.0] - 2026-08-30
 
 ### Added
