@@ -234,7 +234,9 @@ def apply_resolution(project: str, choices: dict[int, Choice]) -> ApplyOutcome:
     moment the write would start (nothing is written in that case — retry shortly). LOCKED is a
     return value rather than a raise for the same reason `rehydrate.RehydrateOutcome.DEFERRED`
     is: it is transient and expected, not a refusal. Every other failure below stays a
-    `ValueError`. Those seven are genuine boundary-validation failures — a given `choices` either
+    `ValueError`. Those nine (invalid choice, checksum-invalid, schema-only-fork, empty choices,
+    unknown record ids, id collisions, group mismatches, a partial resolve, and a dumpless choice)
+    are genuine boundary-validation failures — a given `choices` either
     can or cannot be applied at all — and no automatic caller anywhere in `src/` branches on
     which category fired (unlike `rehydrate`/`dump`, whose hook and hourly-job callers are why
     those modules return typed outcomes); a human or session reads the message. Keeping them as
