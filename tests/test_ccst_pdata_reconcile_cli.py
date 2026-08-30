@@ -44,9 +44,9 @@ def test_reconcile_rejects_both_project_and_all_projects(base_env, tmp_path):
 
 
 def test_reconcile_single_project_reports_scanned_and_registered(base_env, tmp_path):
-    repo_root = tmp_path / "repos"
-    _touch(repo_root / "myproj" / "cc-sessions" / "20260710-a" / "out" / "r.md", 2000)
-    base_env["CLAUDE_SESSION_TOOLS_REPO_ROOT"] = str(repo_root)
+    proj_root = tmp_path / "cc"
+    _touch(proj_root / "myproj" / "cc-sessions" / "20260710-a" / "out" / "r.md", 2000)
+    base_env["CLAUDE_SESSION_TOOLS_PROJ_ROOT"] = str(proj_root)
 
     r = _run(base_env, "pdata", "reconcile-session-output", "--project", "myproj")
 
@@ -56,9 +56,9 @@ def test_reconcile_single_project_reports_scanned_and_registered(base_env, tmp_p
 
 
 def test_reconcile_unknown_project_errors(base_env, tmp_path):
-    repo_root = tmp_path / "repos"
-    repo_root.mkdir()
-    base_env["CLAUDE_SESSION_TOOLS_REPO_ROOT"] = str(repo_root)
+    proj_root = tmp_path / "cc"
+    proj_root.mkdir()
+    base_env["CLAUDE_SESSION_TOOLS_PROJ_ROOT"] = str(proj_root)
 
     r = _run(base_env, "pdata", "reconcile-session-output", "--project", "nope")
 
@@ -66,11 +66,25 @@ def test_reconcile_unknown_project_errors(base_env, tmp_path):
     assert "nope" in r.stderr
 
 
-def test_reconcile_all_projects(base_env, tmp_path):
+def test_reconcile_ignores_repo_root(base_env, tmp_path):
     repo_root = tmp_path / "repos"
-    _touch(repo_root / "a" / "cc-sessions" / "20260710-x" / "out" / "r.md", 2000)
-    _touch(repo_root / "b" / "cc-sessions" / "20260710-y" / "out" / "r.md", 2000)
+    proj_root = tmp_path / "cc"
+    _touch(repo_root / "repo-only" / "cc-sessions" / "20260710-a" / "out" / "r.md", 2000)
+    proj_root.mkdir()
     base_env["CLAUDE_SESSION_TOOLS_REPO_ROOT"] = str(repo_root)
+    base_env["CLAUDE_SESSION_TOOLS_PROJ_ROOT"] = str(proj_root)
+
+    r = _run(base_env, "pdata", "reconcile-session-output", "--project", "repo-only")
+
+    assert r.returncode == 1
+    assert "repo-only" in r.stderr
+
+
+def test_reconcile_all_projects(base_env, tmp_path):
+    proj_root = tmp_path / "cc"
+    _touch(proj_root / "a" / "cc-sessions" / "20260710-x" / "out" / "r.md", 2000)
+    _touch(proj_root / "b" / "cc-sessions" / "20260710-y" / "out" / "r.md", 2000)
+    base_env["CLAUDE_SESSION_TOOLS_PROJ_ROOT"] = str(proj_root)
 
     r = _run(base_env, "pdata", "reconcile-session-output", "--all-projects")
 
@@ -90,9 +104,9 @@ def test_reconcile_no_roots_configured_errors(base_env):
 
 
 def test_reconcile_dry_run(base_env, tmp_path):
-    repo_root = tmp_path / "repos"
-    _touch(repo_root / "myproj" / "cc-sessions" / "20260710-a" / "out" / "r.md", 2000)
-    base_env["CLAUDE_SESSION_TOOLS_REPO_ROOT"] = str(repo_root)
+    proj_root = tmp_path / "cc"
+    _touch(proj_root / "myproj" / "cc-sessions" / "20260710-a" / "out" / "r.md", 2000)
+    base_env["CLAUDE_SESSION_TOOLS_PROJ_ROOT"] = str(proj_root)
 
     r = _run(
         base_env, "pdata", "reconcile-session-output",
@@ -104,9 +118,9 @@ def test_reconcile_dry_run(base_env, tmp_path):
 
 
 def test_reconcile_schema_only_bootstraps_schema_without_scanning(base_env, tmp_path):
-    repo_root = tmp_path / "repos"
-    _touch(repo_root / "myproj" / "cc-sessions" / "20260710-a" / "out" / "r.md", 2000)
-    base_env["CLAUDE_SESSION_TOOLS_REPO_ROOT"] = str(repo_root)
+    proj_root = tmp_path / "cc"
+    _touch(proj_root / "myproj" / "cc-sessions" / "20260710-a" / "out" / "r.md", 2000)
+    base_env["CLAUDE_SESSION_TOOLS_PROJ_ROOT"] = str(proj_root)
 
     r = _run(
         base_env, "pdata", "reconcile-session-output",

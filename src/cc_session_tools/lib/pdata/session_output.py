@@ -33,21 +33,20 @@ class ReconcileResult:
 
 
 def discover_projects_with_sessions() -> list[tuple[str, Path]]:
-    """(project_name, project_root) for every direct subdirectory of a configured session root
-    that contains a cc-sessions/ directory — the same signal the pm-update-central-files skill
-    itself depends on. Deliberately narrower than "every directory under a session root" (see
-    plan Decision 4): most ~/repos/* entries are ordinary code repos with no session history,
-    and connecting to a nonexistent project would silently create an empty project .db for each
-    one. Raises roots.RootsConfigError if neither session root env var is configured — same
-    contract as roots.load_session_roots().
+    """(project_name, project_root) for every direct subdirectory of the strict project root
+    (CLAUDE_SESSION_TOOLS_PROJ_ROOT only - never CLAUDE_SESSION_TOOLS_REPO_ROOT) that contains a
+    cc-sessions/ directory — the same signal the pm-update-central-files skill itself depends on.
+    Deliberately narrower than "every project-root directory" (see plan Decision 4): a directory
+    with no session history shouldn't silently get an empty project .db. Scoped to the project
+    root only (not the repo root) because the session-output index is a project-data concern
+    (spec §8) — an ordinary ~/repos/* dev repo is not a project, even when Claude Code has been
+    run directly inside it and left its own cc-sessions/ behind. Raises roots.RootsConfigError if
+    CLAUDE_SESSION_TOOLS_PROJ_ROOT is not configured — same contract as roots.require_proj_root().
     """
     found: dict[str, Path] = {}
-    for root in roots.load_session_roots():
-        for entry in sorted(root.iterdir()):
-            if entry.name in found:
-                continue
-            if entry.is_dir() and (entry / "cc-sessions").is_dir():
-                found[entry.name] = entry
+    for entry in sorted(roots.require_proj_root().iterdir()):
+        if entry.is_dir() and (entry / "cc-sessions").is_dir():
+            found[entry.name] = entry
     return sorted(found.items())
 
 
