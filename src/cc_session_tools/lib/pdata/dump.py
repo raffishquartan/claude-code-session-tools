@@ -16,6 +16,14 @@ from pathlib import Path
 
 _ARCHIVE_KEEP = 24
 
+# serialize()'s output always starts with this exact line - the single source of truth for where
+# write_latest()'s header block (machine_id/dumped_at/vector comment lines) ends and the real SQL
+# body begins. Used by both read_latest() below and rehydrate.sql_body() - previously each
+# independently re-derived the same boundary with its own copy of this string, which is exactly
+# the kind of drift this repo's coding standards call out: one source of truth for a shared
+# constant, not a second copy "just for now".
+_BODY_SENTINEL = "BEGIN TRANSACTION;"
+
 
 def _primary_key_columns(conn: sqlite3.Connection, table: str) -> list[str]:
     rows = conn.execute(f'PRAGMA table_info("{table}")').fetchall()
@@ -25,7 +33,7 @@ def _primary_key_columns(conn: sqlite3.Connection, table: str) -> list[str]:
 
 
 def serialize(conn: sqlite3.Connection) -> str:
-    lines = ["BEGIN TRANSACTION;"]
+    lines = [_BODY_SENTINEL]
     schema_rows = conn.execute(
         "SELECT name, type, sql FROM sqlite_master "
         "WHERE sql IS NOT NULL AND type IN ('table', 'index') AND name != 'sqlite_sequence' "
@@ -159,7 +167,7 @@ def read_latest(project_root: Path) -> DumpInfo:
         # with "-- vector:" or "-- machine_id=" (a pasted code snippet or transcript, say) -
         # mistaking that for real header metadata silently corrupts the vector this whole sync
         # design's fork/fast-forward decision depends on.
-        if line == "BEGIN TRANSACTION;":
+        if line == _BODY_SENTINEL:
             break
         if line.startswith("-- machine_id="):
             machine_id = line.removeprefix("-- machine_id=")
@@ -168,3 +176,17 @@ def read_latest(project_root: Path) -> DumpInfo:
             k, _, v = rest.partition("=")
             vector[k] = int(v)
     return DumpInfo(checksum_valid=True, machine_id=machine_id, vector=vector)
+
+
+def sql_body(text: str) -> str:
+    """Strip write_latest()'s header block (machine_id/dumped_at/vector comment lines) from a
+    dump, leaving just the executable SQL - for rehydrate.py's executescript() call. Shares
+    _BODY_SENTINEL with serialize()/read_latest() above rather than re-deriving the header/body
+    boundary a second time (a prior version of this logic lived duplicated in rehydrate.py; a
+    code review flagged the drift risk of two independent copies of the same boundary-finding
+    rule). Taking the *first* occurrence of the sentinel is correct even if some row's content
+    also contains that exact line later in the file: it's always the first line of the body,
+    before any row data exists to collide with it."""
+    lines = text.splitlines()
+    start = lines.index(_BODY_SENTINEL)
+    return "\n".join(lines[start:])

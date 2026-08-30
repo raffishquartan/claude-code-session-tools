@@ -107,6 +107,49 @@ def test_local_dominates_or_equal_is_a_noop(monkeypatch, tmp_path, local_vector)
     assert _local_contents("proj") == ["local-content"]
 
 
+def test_force_true_overrides_fork_and_fast_forwards(monkeypatch, tmp_path):
+    """force=True is the module's most destructive path - it discards local's own unpublished
+    writes in favour of the dump, for exactly the case (a genuine fork) the non-force path
+    refuses to touch. Flagged by code review as the one branch most likely to matter the first
+    time this runs for real and least likely to be caught by accident."""
+    _setup_env(monkeypatch, tmp_path)
+    _build_local("proj", content="local-content", vector={"ltxy": 2, "mbp": 1})
+    project_root = store.project_root("proj")
+    _publish_dump(
+        project_root, remote_project="proj-remote", content="remote-content",
+        vector={"ltxy": 1, "mbp": 2}, machine_id="mbp",
+    )
+
+    result = rehydrate.rehydrate("proj", force=True)
+
+    assert result.outcome is rehydrate.RehydrateOutcome.FAST_FORWARDED
+    assert result.from_machine == "mbp"
+    assert _local_contents("proj") == ["remote-content"]
+    conn = repository.connect("proj")
+    try:
+        assert vector_clock_store.read_vector(conn) == {"ltxy": 1, "mbp": 2}
+    finally:
+        conn.close()
+
+
+def test_force_true_on_local_dominates_still_fast_forwards(monkeypatch, tmp_path):
+    """The other force=True guard (LOCAL_DOMINATES) - included for completeness even though it's
+    a less destructive case than the fork override above, since force bypasses both short-
+    circuits and both deserve their own assertion rather than assuming symmetry."""
+    _setup_env(monkeypatch, tmp_path)
+    _build_local("proj", content="local-content", vector={"ltxy": 2})
+    project_root = store.project_root("proj")
+    _publish_dump(
+        project_root, remote_project="proj-remote", content="remote-content",
+        vector={"ltxy": 1}, machine_id="mbp",
+    )
+
+    result = rehydrate.rehydrate("proj", force=True)
+
+    assert result.outcome is rehydrate.RehydrateOutcome.FAST_FORWARDED
+    assert _local_contents("proj") == ["remote-content"]
+
+
 def test_genuine_fork_is_refused_and_names_the_dumps_machine(monkeypatch, tmp_path):
     _setup_env(monkeypatch, tmp_path)
     # Each side has a revision the other lacks: local is ahead on "ltxy", the dump is ahead on

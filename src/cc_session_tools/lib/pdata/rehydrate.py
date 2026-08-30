@@ -67,8 +67,7 @@ def rehydrate(project: str, *, force: bool = False) -> RehydrateResult:
         return RehydrateResult(outcome=RehydrateOutcome.DEFERRED)
 
     latest = project_root / ".pdata-db-dump" / "latest.sql"
-    sql_body = _sql_body(latest.read_text())
-    tmp_path = _build_replacement(db_path.parent, sql_body)
+    tmp_path = _build_replacement(db_path.parent, dump.sql_body(latest.read_text()))
     try:
         tmp_path.replace(db_path)  # atomic directory-entry swap on the same filesystem
     except BaseException:
@@ -123,23 +122,16 @@ def _drop_stale_wal_sidecars(db_path: Path) -> None:
     last-connection-close checkpoint (which deletes these as a side effect) — but only when ours
     really was the *last* open connection to that file, and nothing here can detect whether some
     other reader (a concurrent `ccst pdata` read, say) is still attached to it. So the cleanup is
-    done explicitly and unconditionally rather than trusted to have already happened."""
+    done explicitly and unconditionally rather than trusted to have already happened.
+
+    Best-effort, deliberately: the swap itself has already succeeded by the time this runs, and
+    this whole design is non-blocking/best-effort throughout (spec: "Process safety") - a sidecar
+    that can't be unlinked (e.g. a permission error, or another process genuinely holding it open)
+    must not turn an otherwise-successful rehydrate into an unhandled exception. `missing_ok=True`
+    only swallows "it's already gone"; any other OSError is caught per-file too, so one failing
+    sidecar doesn't stop the other from being cleaned up."""
     for suffix in ("-wal", "-shm"):
-        Path(f"{db_path}{suffix}").unlink(missing_ok=True)
-
-
-def _sql_body(text: str) -> str:
-    """Strip dump.write_latest()'s header block (machine_id/dumped_at/vector comment lines),
-    leaving just the executable SQL. Finds the header/body boundary by locating the literal
-    "BEGIN TRANSACTION;" line serialize() always emits first, rather than filtering every line
-    that happens to start with "--" — a real bug a code review caught in dump.py's own
-    read_latest() and which this function would otherwise share: a records.content value is
-    free-text project data and can itself contain a line starting with "--" (a pasted code
-    snippet, say), which a blanket "--"-line filter would silently corrupt or truncate. Taking
-    the *first* such line is still correct even if some row's content also contains that exact
-    line later in the file: serialize() emits "BEGIN TRANSACTION;" as the very first line of the
-    body, before any row data exists to collide with it, so nothing earlier in the file can ever
-    produce a false match."""
-    lines = text.splitlines()
-    start = lines.index("BEGIN TRANSACTION;")
-    return "\n".join(lines[start:])
+        try:
+            Path(f"{db_path}{suffix}").unlink(missing_ok=True)
+        except OSError:
+            pass
