@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import itertools
+import time
+
 import pytest
 
 from cc_session_tools.lib.pdata import repository, service, vector_clock_store
@@ -544,6 +547,40 @@ def test_schema_add_field_idempotent_rerun_does_not_bump_twice(monkeypatch, tmp_
     service.schema_add_field(
         project="proj", record_group="g", field_name="f", sql_type="TEXT",
         description=None, default=None,
+    )
+    conn = repository.connect("proj")
+    try:
+        assert vector_clock_store.read_vector(conn) == {"ltxy": 1}
+    finally:
+        conn.close()
+
+
+def test_schema_add_field_unchanged_description_does_not_bump_twice_across_real_time(
+    monkeypatch, tmp_path,
+):
+    """Regression test for the code-review finding on Bug 1's fix: upsert_field_description's
+    "changed" check must compare `description` alone, not `added_at` — `added_at` is
+    regenerated fresh from the clock on every call, so comparing it would make every rerun look
+    "changed" even with an identical description. Advances the clock between calls (rather than
+    a real sleep) to prove the fix doesn't depend on added_at happening to land on the same
+    second."""
+    monkeypatch.setenv("CCST_PROJECT_DB_DIR", str(tmp_path))
+    monkeypatch.setenv("CCST_MACHINE_NAME", "ltxy")
+    # An advancing counter, not a fixed pair — schema_add_field's own `now` and
+    # vector_clock_store.bump_own's internal default timestamp both call time.time()
+    # (the same shared stdlib module object every `import time` resolves to), so a
+    # fixed-length list runs out; an unbounded counter proves the fix regardless of how
+    # many times the clock is actually read.
+    clock = itertools.count(1000, step=1000)
+    monkeypatch.setattr(time, "time", lambda: next(clock))
+
+    service.schema_add_field(
+        project="proj", record_group="g", field_name="f", sql_type="TEXT",
+        description="same description", default=None,
+    )
+    service.schema_add_field(
+        project="proj", record_group="g", field_name="f", sql_type="TEXT",
+        description="same description", default=None,
     )
     conn = repository.connect("proj")
     try:

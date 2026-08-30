@@ -412,21 +412,19 @@ def upsert_field_description(
     description: str | None, added_at: int,
 ) -> bool:
     """Idempotent write to record_group_fields (spec §4.4) — overwrites description/added_at
-    on re-run rather than duplicating the (record_group, field_name) row. Returns True iff the
-    write actually changes the stored description or added_at, False when both already match
-    exactly what's being written — the same "did this change anything" signal
-    add_extension_column reports, and for the same reason: gating a vector-clock bump on a real
-    write, not on every call."""
+    on re-run rather than duplicating the (record_group, field_name) row. Returns True iff
+    `description` actually differs from what's already stored, False when it already matches —
+    the same "did this change anything" signal add_extension_column reports, and for the same
+    reason: gating a vector-clock bump on a real write, not on every call. `added_at` is
+    deliberately excluded from this comparison — the caller regenerates it fresh from wall-clock
+    time on every call, so comparing it would make every rerun look "changed" even when the only
+    thing that moved was the clock, defeating the idempotency this return value exists to report."""
     existing = conn.execute(
-        "SELECT description, added_at FROM record_group_fields "
+        "SELECT description FROM record_group_fields "
         "WHERE record_group=? AND field_name=?",
         (record_group, field_name),
     ).fetchone()
-    changed = (
-        existing is None
-        or existing["description"] != description
-        or existing["added_at"] != added_at
-    )
+    changed = existing is None or existing["description"] != description
     conn.execute(
         "INSERT INTO record_group_fields (record_group, field_name, description, added_at) "
         "VALUES (?, ?, ?, ?) "
