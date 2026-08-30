@@ -131,8 +131,9 @@ def apply_resolution(project: str, choices: dict[int, str]) -> None:
     One call is one transaction covering every chosen record plus the post-resolve vector-clock
     bookkeeping, followed by an immediate re-dump once that transaction commits (the spec's exact
     three-step "Post-resolve vector-clock update", whose step 3 is that immediate re-dump)."""
-    if not choices:
-        raise ValueError("apply_resolution requires at least one record_id in choices")
+    # A pure input-shape check — no I/O, doesn't need a project/dump to exist — kept first so it
+    # never depends on (or is masked by) anything diff_against_dump below might raise. Runs
+    # correctly even when choices is empty (the loop is simply a no-op).
     for record_id, choice in choices.items():
         if choice not in _VALID_CHOICES:
             raise ValueError(
@@ -141,6 +142,36 @@ def apply_resolution(project: str, choices: dict[int, str]) -> None:
 
     project_root = store.project_root(project)
     diff = diff_against_dump(project)
+
+    # Checked before anything about `choices` — including before the empty-choices check below,
+    # since a schema-only fork (no differing records, only record_group_fields drift) would
+    # otherwise report a generic "give me at least one choice" with no way to satisfy it: there
+    # is no record_id to put in choices for a schema-catalog-only difference. Refusing here is
+    # the minimum-honest behaviour, not the full fix (which would need a field-level choice
+    # surface this function doesn't have yet — the resolve.py module docstring covers this
+    # module's per-record scope; extending to per-field choices is a real follow-up, not
+    # something to build silently as a side effect of this fix) — but it closes the two real
+    # failure modes an unfixed version has: an unresolvable dead end (no argument clears the
+    # fork), and a resolve of the record-level diff alone silently publishing a vector that
+    # claims the dump machine is fully incorporated while its schema-catalog additions were
+    # dropped — the exact same "vector lies about full incorporation" shape already fixed for
+    # partial record resolution above, surviving in this other category until now.
+    if diff.schema_fields:
+        offending = sorted({(f.record_group, f.field_name) for f in diff.schema_fields})
+        raise ValueError(
+            f"record_group_fields (the schema catalog) differs from the dump for {offending} — "
+            f"apply_resolution has no way to resolve a schema-catalog difference on its own (it "
+            f"only takes per-record local/dump choices), so it refuses to publish anything while "
+            f"any exists: doing so would either leave this unresolvable (if no record also "
+            f"differs) or silently drop one side's field registration while claiming the dump "
+            f"machine is fully incorporated (if some records do differ and get resolved). "
+            f"Reconcile the schema catalog first via `ccst pdata schema add-field` on whichever "
+            f"machine is missing a field, matching the other's definition, then retry."
+        )
+
+    if not choices:
+        raise ValueError("apply_resolution requires at least one record_id in choices")
+
     by_id = {record_diff.record_id: record_diff for record_diff in diff.records}
 
     unknown = sorted(set(choices) - set(by_id))

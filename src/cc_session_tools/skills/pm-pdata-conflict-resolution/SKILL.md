@@ -139,7 +139,16 @@ NAME`") until it's resolved. `ccst pdata resolve --project NAME` (Task 10) is wh
    the other machine's next check sees a dominating fast-forward rather than a repeat of the same
    fork.
 
-7. **A checksum-invalid dump is a different failure entirely - there's nothing to diff.**
+7. **A schema-catalog-only fork (no record differs, only `record_group_fields` does) blocks the
+   whole resolve too, with no way to clear it via `apply_resolution()` today.** The function only
+   takes per-record `local`/`dump` choices - there is no field-level equivalent yet, so it refuses
+   outright (naming the differing `(record_group, field_name)` pairs) rather than either leaving
+   an unresolvable dead end or silently dropping one side's field registration while publishing a
+   vector that claims the dump machine is fully incorporated. Tell Chris to reconcile the schema
+   catalog manually first (`ccst pdata schema add-field` on whichever machine is missing a field,
+   matching the other's type/description), then retry - there is no automatic path for this yet.
+
+8. **A checksum-invalid dump is a different failure entirely - there's nothing to diff.**
    `diff_against_dump()` raises rather than returning an empty diff in that case; the fix is
    `ccst pdata dump --force` (republish from local, the only trustworthy side), not a per-record
    resolve.

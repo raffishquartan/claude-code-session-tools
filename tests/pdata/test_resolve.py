@@ -375,10 +375,77 @@ def test_apply_resolution_writes_a_fresh_dump_reflecting_the_merged_vector(monke
     assert fresh.vector == {"ltxy": 2, "mbp": 2}
 
 
-def test_apply_resolution_rejects_empty_choices(monkeypatch, tmp_path):
+def test_apply_resolution_rejects_empty_choices_when_the_diff_is_non_empty(monkeypatch, tmp_path):
+    """Empty choices are rejected when there's a real record diff to resolve - distinct from the
+    schema-only-fork case below, which must report a different, on-topic error instead of this
+    generic one (there's no record_id a caller could put in choices for schema-only drift)."""
     _setup_env(monkeypatch, tmp_path)
+    conn = repository.connect("proj")
+    try:
+        with repository._immediate(conn):
+            repository.insert_base_record(
+                conn, record_group="g", content="local-content", file_path=None,
+                created_at=1, updated_at=1,
+            )
+            vector_clock_store.write_vector(conn, {"ltxy": 1}, updated_at=1)
+    finally:
+        conn.close()
+    project_root = store.project_root("proj")
+
+    def build(remote_conn):
+        remote_conn.execute(
+            "INSERT INTO records (id, record_group, content, file_path, created_at, updated_at) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (1, "g", "dump-content", None, 1, 2),
+        )
+
+    _publish_remote_dump(
+        project_root, remote_project="proj-remote", machine_id="mbp",
+        vector={"ltxy": 1, "mbp": 2}, build=build,
+    )
+
     with pytest.raises(ValueError, match="at least one"):
         resolve.apply_resolution("proj", {})
+
+
+def test_apply_resolution_refuses_a_schema_only_fork_instead_of_a_dead_end(monkeypatch, tmp_path):
+    """Regression test for a code-review finding: a fork where only record_group_fields differs
+    (no record actually differs) has no record_id a caller could put in choices, so the old
+    generic "requires at least one record_id" error was an unresolvable dead end - and if a
+    resolve.py caller had ALSO resolved a genuine unrelated record diff in the same project, the
+    schema drift would have been silently dropped while the published vector claimed the dump
+    machine was fully incorporated, the exact "vector lies about full incorporation" shape
+    already fixed for partial record resolution. apply_resolution must now refuse with a message
+    naming the schema drift specifically, and must never publish over it."""
+    _setup_env(monkeypatch, tmp_path)
+    conn = repository.connect("proj")
+    try:
+        with repository._immediate(conn):
+            vector_clock_store.write_vector(conn, {"ltxy": 1}, updated_at=1)
+    finally:
+        conn.close()
+    project_root = store.project_root("proj")
+
+    def build(remote_conn):
+        repository.upsert_field_description(
+            remote_conn, record_group="empty-group", field_name="priority",
+            description=None, added_at=1,
+        )
+
+    _publish_remote_dump(
+        project_root, remote_project="proj-remote", machine_id="mbp",
+        vector={"ltxy": 1, "mbp": 1}, build=build,
+    )
+
+    diff = resolve.diff_against_dump("proj")
+    assert diff.records == []
+    assert len(diff.schema_fields) == 1
+
+    db_path = store.db_path("proj")
+    before = db_path.read_bytes()
+    with pytest.raises(ValueError, match="record_group_fields"):
+        resolve.apply_resolution("proj", {})
+    assert db_path.read_bytes() == before  # nothing written, nothing published over the drift
 
 
 def test_apply_resolution_rejects_an_invalid_choice_value(monkeypatch, tmp_path):
