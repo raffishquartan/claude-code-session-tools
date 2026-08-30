@@ -88,6 +88,7 @@ def test_hooks_install_bundle_all_hooks(tmp_path: Path) -> None:
         "ccst hooks run pending-migration",
         "ccst hooks run context-window-warning",
         "ccst hooks run pending-rename",
+        "ccst hooks run pdata-sync",
     }
     assert expected == all_cmds, f"Missing: {expected - all_cmds}; extra: {all_cmds - expected}"
 
@@ -184,7 +185,9 @@ def test_bundle_json_has_correct_events() -> None:
     assert bundle_path.is_file(), f"Bundle not found: {bundle_path}"
     bundle = json.loads(bundle_path.read_text())
     events = set(bundle["hooks"].keys())
-    assert events == {"SessionStart", "UserPromptSubmit", "PreToolUse", "Stop", "PreCompact"}
+    assert events == {
+        "SessionStart", "SessionEnd", "UserPromptSubmit", "PreToolUse", "Stop", "PreCompact",
+    }
 
 
 def test_bundle_json_bash_security_review_has_bash_matcher() -> None:

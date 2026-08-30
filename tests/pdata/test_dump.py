@@ -4,7 +4,7 @@ import os
 import sqlite3
 from pathlib import Path
 
-from cc_session_tools.lib.pdata import dump, repository, store, vector_clock_store
+from cc_session_tools.lib.pdata import dump, repository, store, vector_clock, vector_clock_store
 
 
 def _build_db(path: Path, *, field_order: list[str], row_order: list[int]) -> sqlite3.Connection:
@@ -212,3 +212,58 @@ def test_archive_retention_keeps_the_newest_ones_not_a_mix(tmp_path):
     # vectors 0..28 (29 archived dumps total, in that creation order) - the 24 most recently
     # created are vectors 5..28.
     assert surviving_vectors == set(range(5, 29))
+
+
+# ---------- decide_publish: the shared "is it safe to publish" rule ----------
+#
+# One rule, two callers (`ccst pdata dump` and the SessionEnd hook, cccs_hooks.pdata_sync),
+# so it is unit-tested directly here rather than only through each caller's own tests.
+
+
+def test_decide_publish_allows_a_first_ever_dump() -> None:
+    """No dump published yet - read_latest() reports checksum_valid=False for a missing one."""
+    assert dump.decide_publish(
+        local_vector={"ltxy": 1},
+        existing=dump.DumpInfo(checksum_valid=False, machine_id=None, vector={}),
+    ) is None
+
+
+def test_decide_publish_allows_publishing_over_a_checksum_invalid_dump() -> None:
+    """A corrupt/truncated published dump has nothing worth preserving - republishing over it
+    is the documented fix, not a conflict."""
+    assert dump.decide_publish(
+        local_vector={"ltxy": 1},
+        existing=dump.DumpInfo(checksum_valid=False, machine_id="mbp", vector={"mbp": 9}),
+    ) is None
+
+
+def test_decide_publish_allows_local_dominating_or_exactly_equal() -> None:
+    existing = dump.DumpInfo(checksum_valid=True, machine_id="mbp", vector={"ltxy": 1})
+    assert dump.decide_publish(local_vector={"ltxy": 2}, existing=existing) is None
+    assert dump.decide_publish(local_vector={"ltxy": 1}, existing=existing) is None
+
+
+def test_decide_publish_refuses_a_fork_and_names_it() -> None:
+    existing = dump.DumpInfo(checksum_valid=True, machine_id="mbp", vector={"ltxy": 1, "mbp": 2})
+    assert dump.decide_publish(
+        local_vector={"ltxy": 2, "mbp": 1}, existing=existing,
+    ) is vector_clock.Comparison.FORK
+
+
+def test_decide_publish_refuses_publishing_over_a_dominating_dump() -> None:
+    """Not only FORK: a plain publish is not itself a local write (write_latest bumps no
+    vector), so overwriting a dump that is strictly ahead would discard revisions local never
+    took."""
+    existing = dump.DumpInfo(checksum_valid=True, machine_id="mbp", vector={"ltxy": 1, "mbp": 2})
+    assert dump.decide_publish(
+        local_vector={"ltxy": 1}, existing=existing,
+    ) is vector_clock.Comparison.DUMP_DOMINATES
+
+
+def test_format_dumped_at_renders_the_shared_human_format() -> None:
+    """The single source of truth for this format string - init_service.py's adoption message
+    and the SessionStart hook's re-hydration message both call it."""
+    from datetime import datetime
+
+    stamp = int(datetime(2026, 8, 29, 14, 5).timestamp())
+    assert dump.format_dumped_at(stamp) == "2026-08-29 14:05"

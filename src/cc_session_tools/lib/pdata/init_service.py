@@ -205,8 +205,8 @@ def _format_published_at(info: dump.DumpInfo, latest_path: Path) -> str:
     of showing this to a human at all. Falls back to mtime only if dumped_at is somehow absent
     (a dump written before this field existed) rather than raising over a cosmetic detail."""
     if info.dumped_at is not None:
-        return datetime.fromtimestamp(info.dumped_at).strftime("%Y-%m-%d %H:%M")
-    return datetime.fromtimestamp(latest_path.stat().st_mtime).strftime("%Y-%m-%d %H:%M")
+        return dump.format_dumped_at(info.dumped_at)
+    return dump.format_dumped_at(int(latest_path.stat().st_mtime))
 
 
 def _adopt_from_dump(

@@ -72,6 +72,11 @@ def test_dump_dominates_fast_forwards_content_and_vector(monkeypatch, tmp_path):
 
     assert result.outcome is rehydrate.RehydrateOutcome.FAST_FORWARDED
     assert result.from_machine == "mbp"
+    # The adopted dump's own embedded dumped_at, not latest.sql's filesystem mtime - what the
+    # SessionStart hook shows the user is "when did the *source* machine publish this", which
+    # mtime (local download/OneDrive-sync-settle time) does not answer.
+    assert result.dumped_at == dump.read_latest(project_root).dumped_at
+    assert result.dumped_at is not None
     assert _local_contents("proj") == ["remote-content"]
     conn = repository.connect("proj")
     try:

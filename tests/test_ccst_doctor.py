@@ -545,7 +545,9 @@ def test_run_all_checks_includes_hook_checks(tmp_path: Path) -> None:
         skip_pypi=True,
     )
     hook_checks = [r for r in results if r.name.startswith("hook:")]
-    assert len(hook_checks) == 13  # all bundled hooks
+    # All bundled hooks, deduplicated by name: pdata-sync is registered under two events
+    # (SessionStart + SessionEnd) but is one hook to check for.
+    assert len(hook_checks) == 14
 
 
 def test_run_all_checks_warns_for_missing_hooks(tmp_path: Path) -> None:

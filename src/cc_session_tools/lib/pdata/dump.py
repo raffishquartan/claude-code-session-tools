@@ -12,7 +12,10 @@ import shutil
 import sqlite3
 import time
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
+
+from cc_session_tools.lib.pdata import vector_clock
 
 _ARCHIVE_KEEP = 24
 
@@ -180,6 +183,50 @@ def read_latest(project_root: Path) -> DumpInfo:
             k, _, v = rest.partition("=")
             vector[k] = int(v)
     return DumpInfo(checksum_valid=True, machine_id=machine_id, vector=vector, dumped_at=dumped_at)
+
+
+def decide_publish(
+    *, local_vector: dict[str, int], existing: DumpInfo,
+) -> vector_clock.Comparison | None:
+    """Is it safe to publish local's state over `existing` right now? `None` means yes; any
+    returned `Comparison` is the reason it isn't.
+
+    A missing/checksum-invalid dump (including the very first dump ever) is always safe to
+    publish over unconditionally. Otherwise it's safe iff local strictly dominates (or equals)
+    the published dump - compare()'s own "missing entries default to 0" rule already makes an
+    empty/no-vector existing dump come out LOCAL_DOMINATES here, so there is no separate "dump
+    has no vector at all" branch. FORK and DUMP_DOMINATES are both refused: a plain dump publish
+    is not itself a local write (write_latest bumps no vector), so overwriting either would
+    silently discard revisions the other side may still need.
+
+    Shared by `ccst pdata dump` and the SessionEnd hook rather than computed inline in each -
+    they implement the same spec rule ("Triggers", dump row) and must not drift into two
+    subtly different publish decisions."""
+    if not existing.checksum_valid:
+        return None
+    comparison = vector_clock.compare(local=local_vector, dump=existing.vector)
+    if comparison is vector_clock.Comparison.LOCAL_DOMINATES:
+        return None
+    return comparison
+
+
+def refusal_detail(project: str) -> str:
+    """The one wording for "local diverges from the published dump, refusing to publish", shared
+    by `ccst pdata dump`'s stderr line and the SessionEnd hook's conflict notification. Kept in
+    one place so the CLI and the hook can never describe the same conflict differently."""
+    return (
+        f"refusing to publish - local diverges from the published dump (run "
+        f"`ccst pdata resolve --project {project}` to resolve, or pass --force "
+        f"to publish local as the winner anyway)"
+    )
+
+
+def format_dumped_at(dumped_at: int) -> str:
+    """One `DumpInfo.dumped_at` rendered for a human. The single source of truth for this
+    format string, called by init_service.py's adoption message and by the SessionStart hook's
+    re-hydration message - a second literal copy of the strftime pattern is exactly the drift
+    this repo's coding standards warn about."""
+    return datetime.fromtimestamp(dumped_at).strftime("%Y-%m-%d %H:%M")
 
 
 def sql_body(text: str) -> str:

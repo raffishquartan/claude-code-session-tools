@@ -1420,7 +1420,7 @@ def _cmd_pdata_verify(args: argparse.Namespace) -> int:
 def _cmd_pdata_dump(args: argparse.Namespace) -> int:
     from cc_session_tools.lib import machine_identity
     from cc_session_tools.lib.pdata import (
-        dump, repository, store, sync_notify, vector_clock, vector_clock_store, verify,
+        dump, repository, store, sync_notify, vector_clock_store, verify,
     )
 
     projects = verify.discover_projects() if args.all_projects else [args.project]
@@ -1447,27 +1447,13 @@ def _cmd_pdata_dump(args: argparse.Namespace) -> int:
         try:
             local_vector = vector_clock_store.read_vector(conn)
             existing = dump.read_latest(project_root)
-            # A missing/checksum-invalid dump (including the very first dump ever) is always
-            # safe to publish unconditionally. Otherwise, safe iff local strictly dominates (or
-            # equals) the published dump - compare()'s own "missing entries default to 0" rule
-            # already makes an empty/no-vector existing dump come out LOCAL_DOMINATES here, so
-            # there's no separate "dump has no vector at all" branch to write. FORK and
-            # DUMP_DOMINATES are both refused without --force: a plain `dump` publish is not
-            # itself a local write (see write_latest below - no vector bump), so overwriting
-            # either would silently discard revisions the other side may still need.
-            comparison = (
-                None if not existing.checksum_valid
-                else vector_clock.compare(local=local_vector, dump=existing.vector)
-            )
-            safe = comparison is None or comparison is vector_clock.Comparison.LOCAL_DOMINATES
-            if not safe and not args.force:
+            # Shared with the SessionEnd hook (cccs_hooks.pdata_sync) - the spec's dump trigger
+            # is one rule, so it lives in one function rather than inline in both callers.
+            # `None` means safe to publish; anything else is the Comparison that refuses it.
+            comparison = dump.decide_publish(local_vector=local_vector, existing=existing)
+            if comparison is not None and not args.force:
                 refused += 1
-                assert comparison is not None  # safe=False and checksum-valid both hold here
-                detail = (
-                    f"refusing to publish - local diverges from the published dump (run "
-                    f"`ccst pdata resolve --project {project}` to resolve, or pass --force "
-                    f"to publish local as the winner anyway)"
-                )
+                detail = dump.refusal_detail(project)
                 sync_notify.notify_conflict(project, outcome=comparison.value, detail=detail)
                 if not compact:
                     print(f"ccst pdata dump: {project}: {detail}", file=sys.stderr)
@@ -1527,21 +1513,13 @@ def _cmd_pdata_rehydrate(args: argparse.Namespace) -> int:
         elif result.outcome is rehydrate.RehydrateOutcome.NO_OP:
             if not compact:
                 print(f"ccst pdata rehydrate: {project}: already up to date")
-        elif result.outcome is rehydrate.RehydrateOutcome.FORK:
+        elif result.outcome in (
+            rehydrate.RehydrateOutcome.FORK, rehydrate.RehydrateOutcome.CHECKSUM_INVALID,
+        ):
             worst = max(worst, 1)
-            detail = (
-                f"unresolved fork with {result.from_machine} - run `ccst pdata resolve "
-                f"--project {project}`"
-            )
-            sync_notify.notify_conflict(project, outcome=result.outcome.value, detail=detail)
-            if not compact:
-                print(f"ccst pdata rehydrate: {project}: {detail}", file=sys.stderr)
-        elif result.outcome is rehydrate.RehydrateOutcome.CHECKSUM_INVALID:
-            worst = max(worst, 1)
-            detail = (
-                "published dump fails its checksum check - run `ccst pdata dump --force` "
-                "on the machine with good data to republish"
-            )
+            # Shared with the SessionStart hook (cccs_hooks.pdata_sync) so the CLI and the hook
+            # can never describe the same conflict two different ways.
+            detail = rehydrate.conflict_detail(result, project=project)
             sync_notify.notify_conflict(project, outcome=result.outcome.value, detail=detail)
             if not compact:
                 print(f"ccst pdata rehydrate: {project}: {detail}", file=sys.stderr)

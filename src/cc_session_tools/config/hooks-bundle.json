@@ -32,6 +32,24 @@
             "command": "ccst hooks run pending-rename",
             "timeout": 10,
             "statusMessage": "Checking for pending session-renames..."
+          },
+          {
+            "type": "command",
+            "command": "ccst hooks run pdata-sync",
+            "timeout": 10,
+            "statusMessage": "Checking for cross-machine pdata updates..."
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "ccst hooks run pdata-sync",
+            "timeout": 10,
+            "statusMessage": "Publishing pdata updates for other machines..."
           }
         ]
       }

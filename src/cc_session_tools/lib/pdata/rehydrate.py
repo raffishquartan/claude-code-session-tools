@@ -30,6 +30,37 @@ class RehydrateOutcome(enum.Enum):
 class RehydrateResult:
     outcome: RehydrateOutcome
     from_machine: str | None = None
+    # The adopted dump's OWN embedded dumped_at (dump.DumpInfo.dumped_at), not latest.sql's
+    # filesystem mtime - mtime reflects when this machine's copy last changed on disk (the
+    # local download/OneDrive-sync-settle time for a synced file), not when the source machine
+    # actually published it, which is the only thing worth showing a human. Set on
+    # FAST_FORWARDED; None on every other outcome, since nothing was adopted.
+    dumped_at: int | None = None
+
+
+def conflict_detail(result: RehydrateResult, *, project: str) -> str:
+    """What to tell the user about a FORK or CHECKSUM_INVALID rehydrate outcome: what happened,
+    and which command fixes it.
+
+    Shared by `ccst pdata rehydrate`'s stderr line, its sync_notify.notify_conflict() detail, and
+    the SessionStart hook's own notification + systemMessage. Both audiences want the same pair
+    (what happened + the remedy command), and the remedy commands are identical, so a second copy
+    of the wording would be pure drift risk.
+
+    Raises on any other outcome rather than inventing a message for it: NO_OP/DEFERRED/
+    FAST_FORWARDED are not conflicts, and a caller asking for a conflict message about one is a
+    bug that must surface here rather than reach a Telegram push."""
+    if result.outcome is RehydrateOutcome.FORK:
+        return (
+            f"unresolved fork with {result.from_machine} - run `ccst pdata resolve "
+            f"--project {project}`"
+        )
+    if result.outcome is RehydrateOutcome.CHECKSUM_INVALID:
+        return (
+            "published dump fails its checksum check - run `ccst pdata dump --force` "
+            "on the machine with good data to republish"
+        )
+    raise ValueError(f"not a conflict outcome: {result.outcome.value}")
 
 
 def rehydrate(project: str, *, force: bool = False) -> RehydrateResult:
@@ -75,7 +106,11 @@ def rehydrate(project: str, *, force: bool = False) -> RehydrateResult:
         raise
     _drop_stale_wal_sidecars(db_path)
 
-    return RehydrateResult(outcome=RehydrateOutcome.FAST_FORWARDED, from_machine=info.machine_id)
+    return RehydrateResult(
+        outcome=RehydrateOutcome.FAST_FORWARDED,
+        from_machine=info.machine_id,
+        dumped_at=info.dumped_at,
+    )
 
 
 def _build_replacement(db_dir: Path, sql_body: str) -> Path:
