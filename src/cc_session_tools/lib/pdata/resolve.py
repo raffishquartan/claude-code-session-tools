@@ -11,6 +11,13 @@ here needs an explicit choice from the caller (ultimately Chris, via the CLI/ski
 existing `pm-pdata-conflict-resolution` skill's single-file-conflict framing exactly. Every
 record: `apply_resolution` is all-or-nothing over the whole diff, for the reasons in its own
 docstring.
+
+Named types, one line each — see each type's own docstring for the full reasoning:
+- `ApplyOutcome` — what `apply_resolution` did (`APPLIED`, or `LOCKED` for a transient lock).
+- `ClassifyResult` — `_classify`'s `(id_collision, group_mismatch, is_delete_vs_update)`, named so
+  the two callers' unpacking can't silently transpose a position.
+- `BaseFields`/`RecordPayload` — the typed shape of one side's view of one record, replacing a
+  bare `dict[str, object]` for the parts of it this module itself guarantees are fixed.
 """
 from __future__ import annotations
 
@@ -85,9 +92,12 @@ class RecordDiff:
     `local`/`dump` are each `None` if the record does not exist on that side, otherwise that
     side's `RecordPayload`.
 
-    `record_group` is whichever side's snapshot was available (local's when both are) — when
-    `group_mismatch` is True the two sides disagree on it, so read `local_record_group`/
-    `dump_record_group` (each `None` exactly when that side has no row) rather than this field.
+    Three group-name-shaped fields, one job each: `local_record_group`/`dump_record_group` are the
+    authoritative per-side truth (each `None` exactly when that side has no row) and always safe
+    to read; `record_group` is a single derived convenience value — whichever side's snapshot was
+    available, local's when both are — for the common case where the two agree and a caller just
+    wants one name. When `group_mismatch` is True, `record_group` is that one side's name standing
+    in for a real disagreement, so read the two per-side fields instead.
     """
 
     record_id: int
