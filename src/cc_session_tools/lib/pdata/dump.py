@@ -124,6 +124,10 @@ def write_latest(
         shutil.copy2(latest, _unique_archive_path(archive_dir))
         _prune_archive(archive_dir)
 
+    # Deliberate order, not an oversight: latest.sql before latest.sha256. A crash or an
+    # interrupted OneDrive sync between these two writes leaves a latest.sql with no matching
+    # (or a stale) checksum file - read_latest() then correctly reports checksum_valid=False
+    # rather than trusting a half-written dump.
     latest.write_text(full_text)
     (dump_dir / "latest.sha256").write_text(checksum)
 
@@ -148,6 +152,15 @@ def read_latest(project_root: Path) -> DumpInfo:
     machine_id = None
     vector: dict[str, int] = {}
     for line in text.splitlines():
+        # Stop at the header/body boundary - serialize()'s output always starts with this exact
+        # line, so everything from here on is dumped row data, not metadata. Scanning the whole
+        # file instead of stopping here is a real bug, not a theoretical one: a records.content
+        # value is free-text project data and can itself contain a line that happens to start
+        # with "-- vector:" or "-- machine_id=" (a pasted code snippet or transcript, say) -
+        # mistaking that for real header metadata silently corrupts the vector this whole sync
+        # design's fork/fast-forward decision depends on.
+        if line == "BEGIN TRANSACTION;":
+            break
         if line.startswith("-- machine_id="):
             machine_id = line.removeprefix("-- machine_id=")
         elif line.startswith("-- vector:"):

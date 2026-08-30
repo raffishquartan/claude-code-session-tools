@@ -65,6 +65,85 @@ def test_dump_has_no_pragma_or_file_level_settings(tmp_path):
     assert "PRAGMA" not in text
 
 
+def test_read_latest_does_not_mistake_record_content_for_header_metadata(tmp_path):
+    """Regression test for a code-review finding: read_latest() used to scan every line in the
+    dump for header-prefixed text, not just the actual header block before the SQL body starts.
+    records.content is free-text project data (notes, pasted transcripts, code snippets) and can
+    itself contain a line starting with "-- vector:" or "-- machine_id=" by ordinary coincidence,
+    not adversarial intent - that must never be read as real vector-clock metadata, since a
+    corrupted vector feeds directly into fork/fast-forward decisions elsewhere in this design."""
+    con = _build_db(tmp_path / "a.db", field_order=["owner"], row_order=[1])
+    evil_content = "line one\n-- vector:macbook=999\n-- machine_id=evil\nline three"
+    with repository._immediate(con):
+        con.execute("UPDATE records SET content = ? WHERE id = 1", (evil_content,))
+    project_root = tmp_path / "proj"
+    dump.write_latest(con, project_root=project_root, machine_id="ltxy", vector={"ltxy": 1})
+    result = dump.read_latest(project_root)
+    assert result.checksum_valid is True
+    assert result.machine_id == "ltxy"
+    assert result.vector == {"ltxy": 1}
+
+
+def test_serialize_output_replays_into_an_identical_fresh_database(tmp_path):
+    """The actual point of this module existing: a dump must be valid, replayable SQL that
+    reconstructs the source database exactly, not just a string with nice properties. This is
+    also the test that would have caught the header-scanning bug above on its own, had it existed
+    first - once record content contains a raw "--" line, a body-unaware strip/scan anywhere in
+    the pipeline turns into a real SQL or data corruption, not just a cosmetic issue."""
+    con = _build_db(tmp_path / "a.db", field_order=["owner", "priority"], row_order=[3, 1, 2])
+    with repository._immediate(con):
+        con.execute(
+            "UPDATE records SET content = ? WHERE id = 1",
+            ("multi-line\n-- looks like a header\ncontent",),
+        )
+    dumped = dump.serialize(con)
+
+    replay_conn = sqlite3.connect(tmp_path / "replay.db")
+    replay_conn.row_factory = sqlite3.Row
+    replay_conn.executescript(dumped)
+
+    assert dump.serialize(replay_conn) == dump.serialize(con)
+
+
+def test_serialize_handles_extension_tables_and_soft_deleted_rows(tmp_path, monkeypatch):
+    """_build_db's fixture only ever populates records/record_group_fields/pdata_meta - this
+    test covers the two real-schema features it doesn't: an ext_<group> extension table (added
+    via schema_add_field, which is record-id-keyed like records itself, so the determinism fix's
+    PK-based ORDER BY needs to apply there too) and a soft-deleted row (deleted_at set, which is
+    still a real row the dump must serialise faithfully, not skip)."""
+    monkeypatch.setenv(store.PROJECT_DB_DIR_ENV, str(tmp_path))
+    from cc_session_tools.lib.pdata import service
+
+    rec = service.add_record(
+        project="ext-proj", record_group="g", content="x", file_path=None, fields={},
+    )
+    service.schema_add_field(
+        project="ext-proj", record_group="g", field_name="owner", sql_type="TEXT",
+        description=None, default=None,
+    )
+    service.update_record(
+        project="ext-proj", record_id=rec.id, expected_version=rec.version,
+        content="x", file_path=None, fields={"owner": "chris"},
+    )
+    deleted = service.add_record(
+        project="ext-proj", record_group="g", content="y", file_path=None, fields={"owner": None},
+    )
+    service.delete_record(project="ext-proj", record_id=deleted.id, expected_version=deleted.version)
+
+    conn = repository.connect("ext-proj")
+    text = dump.serialize(conn)
+    assert '"ext_g"' in text
+    assert "'chris'" in text
+    # The soft-deleted row is still a real row - its content and non-NULL deleted_at must both
+    # survive the dump, not be silently dropped.
+    assert "'y'" in text
+
+    replay_conn = sqlite3.connect(tmp_path / "replay.db")
+    replay_conn.row_factory = sqlite3.Row
+    replay_conn.executescript(text)
+    assert dump.serialize(replay_conn) == text
+
+
 def test_write_and_read_latest_roundtrip(tmp_path):
     con = _build_db(tmp_path / "a.db", field_order=["owner"], row_order=[1])
     project_root = tmp_path / "proj"

@@ -845,7 +845,7 @@ def rehydrate(project: str, *, force: bool = False) -> RehydrateResult:
         tmp_path = Path(tmp.name)
     tmp_conn = sqlite3.connect(tmp_path)
     latest = project_root / ".pdata-db-dump" / "latest.sql"
-    tmp_conn.executescript(_strip_comment_lines(latest.read_text()))
+    tmp_conn.executescript(_sql_body(latest.read_text()))
     tmp_conn.commit()
     tmp_conn.close()
     conn.close()
@@ -854,8 +854,17 @@ def rehydrate(project: str, *, force: bool = False) -> RehydrateResult:
     return RehydrateResult(outcome=RehydrateOutcome.FAST_FORWARDED, from_machine=info.machine_id)
 
 
-def _strip_comment_lines(text: str) -> str:
-    return "\n".join(line for line in text.splitlines() if not line.startswith("--"))
+def _sql_body(text: str) -> str:
+    """Strip dump.write_latest()'s header block (machine_id/dumped_at/vector comment lines),
+    leaving just the executable SQL. Finds the header/body boundary by locating the literal
+    "BEGIN TRANSACTION;" line serialize() always emits first, rather than filtering every line
+    that happens to start with "--" - a real bug a code review caught in dump.py's own
+    read_latest() and which this function would otherwise share: a records.content value is
+    free-text project data and can itself contain a line starting with "--" (a pasted code
+    snippet, say), which a blanket "--"-line filter would silently corrupt or truncate."""
+    lines = text.splitlines()
+    start = lines.index("BEGIN TRANSACTION;")
+    return "\n".join(lines[start:])
 
 
 def sync_lock_is_locked(db_path: Path) -> bool:
