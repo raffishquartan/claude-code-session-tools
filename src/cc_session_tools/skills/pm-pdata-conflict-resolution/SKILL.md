@@ -67,8 +67,13 @@ auto-merge, never silently keep one side and discard the other**, a human decide
 ### When this triggers
 
 `vector_clock.compare()` reports `FORK` - each machine made writes the other hasn't seen since
-they last synced - on any of: SessionStart, SessionEnd, the hourly `ccsched` job, or a manual
-`ccst pdata rehydrate`/`dump` without `--force`. The affected project shows a warning banner on
+they last synced - on any of: SessionStart, SessionEnd, the hourly `ccsched` job
+(`pdata-sync-hourly`, which runs `ccst pdata sync-check --all-projects`), or a manual
+`ccst pdata rehydrate`/`dump` without `--force`. All of them report the same conflict the same
+way, so it makes no difference to the resolution which one caught it - but note that
+`sync-check` has no `--force` at all, deliberately: it is the unattended trigger, and overriding
+a fork is always a decision Chris makes with `ccst pdata dump`/`rehydrate --force` by hand.
+The affected project shows a warning banner on
 every `ccst pdata` invocation ("unresolved sync conflict - see `ccst pdata resolve --project
 NAME`") until it's resolved. `ccst pdata resolve --project NAME` (Task 10) is what runs
 `resolve.diff_against_dump()`/`resolve.apply_resolution()` under the hood.

@@ -179,6 +179,30 @@ def test_read_latest_detects_a_corrupted_dump(tmp_path):
     (project_root / ".pdata-db-dump" / "latest.sql").write_text("TRUNCATED")
     result = dump.read_latest(project_root)
     assert result.checksum_valid is False
+    # ...and says a dump IS there, so a caller can tell corruption from "never dumped".
+    assert result.present is True
+
+
+def test_read_latest_reports_a_never_dumped_project_as_absent_not_corrupt(tmp_path):
+    """`checksum_valid` alone conflates "never published" with "published but untrustworthy".
+    The hourly sync-check job publishes the first dump in the former case and reports a conflict
+    in the latter, so it needs the two told apart."""
+    result = dump.read_latest(tmp_path / "never-dumped")
+    assert result.checksum_valid is False
+    assert result.present is False
+
+
+def test_read_latest_treats_a_missing_checksum_file_as_a_present_untrustworthy_dump(tmp_path):
+    """write_latest() writes latest.sql before latest.sha256 on purpose, so an interrupted
+    publish leaves exactly this state - a dump that exists and cannot be trusted, not a project
+    that has never published one."""
+    con = _build_db(tmp_path / "a.db", field_order=["owner"], row_order=[1])
+    project_root = tmp_path / "proj"
+    dump.write_latest(con, project_root=project_root, machine_id="ltxy", vector={"ltxy": 1})
+    (project_root / ".pdata-db-dump" / "latest.sha256").unlink()
+    result = dump.read_latest(project_root)
+    assert result.checksum_valid is False
+    assert result.present is True
 
 
 def test_archive_keeps_only_24_most_recent(tmp_path):

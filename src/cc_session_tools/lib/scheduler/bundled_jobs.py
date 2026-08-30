@@ -70,6 +70,41 @@ BUNDLED_CCSCHED_JOBS: tuple[BundledJob, ...] = (
         success_exit_codes=(0, 2),
     ),
     BundledJob(
+        job_id="pdata-sync-hourly",
+        cadence="every:1h",
+        coalesce="one",
+        # Short on purpose, and NOT the "how far back may this backfill" knob it looks like.
+        # coalesce="one" already pins the command to exactly one run per sweep (reconcile.py's
+        # `k`, worker.py's `runs`), so no catchup_window can make a laptop that was asleep for a
+        # week replay a week of cycles - one run reconciles all of it. All the window actually
+        # changes is `owed_n`, which drives digest.py's "(N overdue)" annotation: "1d" would
+        # render every post-weekend line as "(24 overdue)" and "7d" as "(168 overdue)", both
+        # alarming and both meaningless. Instants outside the window become a SKIP_EXPIRED
+        # ledger row that surface.py deliberately never renders, so a short window is quiet
+        # rather than noisy. It cannot suppress the run either: an hourly cadence always has
+        # exactly one instant inside the last hour, and 2h leaves an interval of headroom for
+        # clock skew and for the gap between reconcile's `now` and the detached worker's.
+        catchup_window="2h",
+        # Matches pdata-verify-all rather than the 60s jobs: --all-projects can end in a
+        # dump.write_latest(), a full DB serialize, for every project that has new local writes.
+        timeout="300s",
+        # False, unlike every sibling above: `surface` only gates the LAUNCH ("started, running
+        # in background") notice - surface.py always shows a completed run regardless. Sweeps
+        # are session-start driven, so this is by far the most frequent bundled job, and a
+        # launch notice plus a completion line on every single session start is duplication.
+        surface=False,
+        command=("ccst", "pdata", "sync-check", "--all-projects"),
+        # 1 = at least one project ended the cycle with an unresolved conflict. That is this job
+        # doing its job (the ccst-doctor-drift-weekly precedent) - without it, ten consecutive
+        # cycles with an unresolved fork would auto-suspend the very job that keeps reporting it.
+        # 2 = a hard error, which includes the sibling-consistent "no project databases found":
+        # on a machine that hasn't adopted pdata that is the expected state of every single run,
+        # and this job runs hourly, so it would hit pdata-verify-all's documented auto-suspend
+        # trap far faster than pdata-verify-all itself does. A timeout still counts as a crash
+        # (worker.py checks timed_out before success_exit_codes), so the safety net is not gone.
+        success_exit_codes=(0, 1, 2),
+    ),
+    BundledJob(
         job_id="ccst-doctor-drift-weekly",
         cadence="every:7d",
         coalesce="one",

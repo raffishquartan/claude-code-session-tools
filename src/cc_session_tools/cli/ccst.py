@@ -54,6 +54,10 @@ Current subcommands:
                                  fast-forwards even over a diverged local revision.
   pdata resolve                  Diagnose (default, prints the diff) or apply per-record
                                  --choice ID=local|dump resolutions for a cross-machine fork.
+  pdata sync-check               Do whichever of rehydrate/dump each project needs, in that
+                                 order, for --project NAME or --all-projects. The unattended
+                                 trigger behind the hourly pdata-sync-hourly ccsched job:
+                                 skips an unchanged republish and never overrides a fork.
   machine-identity show          Print this laptop's resolved machine id and whether it's
                                  confirmed.
   machine-identity confirm       Store this laptop's confirmed machine id (--name NAME), used
@@ -94,7 +98,7 @@ import os
 import sys
 from enum import Enum
 from pathlib import Path
-from typing import Any, TextIO, cast
+from typing import TYPE_CHECKING, Any, TextIO, cast
 
 from cc_session_tools import __version__
 from cc_session_tools.hooks_install import (
@@ -105,6 +109,12 @@ from cc_session_tools.hooks_install import (
 )
 from cc_session_tools.lib import machine_identity
 from cc_session_tools.lib.hook_registry import HOOK_DESCRIPTIONS, HOOK_VERBS
+
+if TYPE_CHECKING:
+    # Type-only, so the handler's own lazy `from ... import sync_check` (this file's convention:
+    # pdata modules are imported inside the handler that needs them, never at module scope) is
+    # still the only runtime import.
+    from cc_session_tools.lib.pdata.sync_check import SyncCheckResult
 
 
 # ---------- path discovery ----------
@@ -1683,6 +1693,87 @@ def _cmd_pdata_resolve(args: argparse.Namespace) -> int:
     return 1 if outstanding else 0
 
 
+def _cmd_pdata_sync_check(args: argparse.Namespace) -> int:
+    """The spec's "Hourly `ccsched` job" trigger: per project, rehydrate-check and - only if no
+    rehydrate happened - dump-check. The whole decision lives in `pdata.sync_check` (shared with
+    nothing else today, but kept out of this handler for the same reason `dump.decide_publish`
+    and `rehydrate.rehydrate` are: this file holds argparse plumbing and printing, not sync
+    rules). This handler is the loop, the printing, and the exit-code mapping."""
+    import sqlite3
+
+    from cc_session_tools.lib.pdata import sync_check, verify
+
+    projects = verify.discover_projects() if args.all_projects else [args.project]
+    if not projects:
+        print("ccst pdata sync-check: no project databases found", file=sys.stderr)
+        return 2
+
+    compact = args.all_projects
+    counts = {outcome.value: 0 for outcome in sync_check.SyncOutcome}
+    errors = 0
+    worst = 0
+
+    for project in projects:
+        try:
+            result = sync_check.check_project(project)
+        except (OSError, ValueError, sqlite3.Error) as exc:
+            # Record and continue, matching _cmd_pdata_dump/_cmd_pdata_rehydrate: one bad or
+            # unreadable project must not abort the whole batch. The caught set is wider than
+            # those two siblings' bare ValueError, and matches `cccs_hooks.pdata_sync`'s instead,
+            # for the reason that module documents: this command's real caller is an unattended
+            # ccsched job, where an uncaught sqlite3.Error on project 3 of 12 both loses the
+            # other nine projects' cycle and counts as a crash toward auto-suspend. A genuinely
+            # corrupt <project>.db is the concrete case - discover_projects() finds it by
+            # filename, and opening it raises sqlite3.DatabaseError, not ValueError.
+            print(f"ccst pdata sync-check: {project}: {exc}", file=sys.stderr)
+            errors += 1
+            worst = max(worst, 2)
+            continue
+        counts[result.outcome.value] += 1
+
+        if result.outcome is sync_check.SyncOutcome.CONFLICT:
+            # sync_check.check_project has already pushed this through notify_conflict - the only
+            # channel that reaches anyone when this runs unattended. Printing it too is for the
+            # human who ran the command by hand.
+            worst = max(worst, 1)
+            if not compact:
+                print(f"ccst pdata sync-check: {project}: {result.detail}", file=sys.stderr)
+        elif not compact:
+            print(f"ccst pdata sync-check: {project}: {_sync_check_line(result)}")
+
+    if compact:
+        print(
+            "ccst pdata sync-check --all-projects: "
+            f"fast-forwarded {counts[sync_check.SyncOutcome.FAST_FORWARDED.value]}, "
+            f"published {counts[sync_check.SyncOutcome.PUBLISHED.value]}, "
+            f"unchanged {counts[sync_check.SyncOutcome.UNCHANGED.value]}, "
+            f"conflict {counts[sync_check.SyncOutcome.CONFLICT.value]}, "
+            f"deferred {counts[sync_check.SyncOutcome.DEFERRED.value]}, "
+            f"occupied {counts[sync_check.SyncOutcome.OCCUPIED.value]}, "
+            f"errors {errors} of {len(projects)} project(s)"
+        )
+
+    # Same convention as _cmd_pdata_rehydrate's `worst`: 2 for a hard error, 1 for an unresolved
+    # conflict, 0 otherwise. DEFERRED and OCCUPIED are transient, self-resolving states, not
+    # findings, and contribute 0 - exactly as DEFERRED does there.
+    return worst
+
+
+def _sync_check_line(result: SyncCheckResult) -> str:
+    """The one-line, --project-mode wording for each non-conflict sync-check outcome."""
+    from cc_session_tools.lib.pdata import sync_check
+
+    if result.outcome is sync_check.SyncOutcome.FAST_FORWARDED:
+        return f"fast-forwarded from {result.from_machine}"
+    if result.outcome is sync_check.SyncOutcome.PUBLISHED:
+        return f"published (machine_id={result.machine_id})"
+    if result.outcome is sync_check.SyncOutcome.UNCHANGED:
+        return "unchanged - nothing new to publish"
+    if result.outcome is sync_check.SyncOutcome.DEFERRED:
+        return "another writer holds the lock - retry later"
+    return "a live session is working in this project - skipped"
+
+
 # ---------- machine-identity show / confirm ----------
 
 
@@ -2870,6 +2961,21 @@ def _build_parser() -> argparse.ArgumentParser:
              "--choice, resolve runs in diagnostic (dry-run) mode and prints the diff.",
     )
 
+    pdata_sync_check_parser = pdata_sub.add_parser(
+        "sync-check",
+        help="Rehydrate-check then (only if no rehydrate happened) dump-check - the unattended "
+             "trigger behind the hourly pdata-sync-hourly ccsched job",
+    )
+    sync_check_target = pdata_sync_check_parser.add_mutually_exclusive_group(required=True)
+    sync_check_target.add_argument("--project", metavar="NAME")
+    sync_check_target.add_argument(
+        "--all-projects", action="store_true",
+        help="Sync-check every project with a .db under project-db/",
+    )
+    # Deliberately no --force. This is the automatic, repeating trigger: overriding a fork or a
+    # checksum failure is a decision a human makes with `ccst pdata dump/rehydrate --force`,
+    # never one an hourly cron job makes on their behalf.
+
     # ---- machine-identity ----
     machine_identity_parser = sub.add_parser(
         "machine-identity", help="This laptop's identity for pdata's cross-machine vector clock"
@@ -3179,6 +3285,8 @@ def main() -> None:
             sys.exit(_cmd_pdata_rehydrate(args))
         if args.verb == "resolve":
             sys.exit(_cmd_pdata_resolve(args))
+        if args.verb == "sync-check":
+            sys.exit(_cmd_pdata_sync_check(args))
 
     if args.noun == "machine-identity":
         if args.verb == "show":

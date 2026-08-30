@@ -76,6 +76,15 @@ class DumpInfo:
     machine_id: str | None
     vector: dict[str, int]
     dumped_at: int | None = None
+    # Is there a latest.sql on disk at all? `checksum_valid` alone conflates two states that a
+    # human-driven command can reasonably treat alike but an unattended, repeating one cannot:
+    # "this project has never been dumped" (the normal state of every project between `ccst pdata
+    # init` and its first publish) and "a dump exists but fails its checksum" (real corruption,
+    # or a publish interrupted between latest.sql and latest.sha256). The hourly sync-check job
+    # publishes the first dump in the former case and reports a conflict in the latter; without
+    # this field it would push a "published dump fails its checksum check" notification every
+    # hour, forever, for every not-yet-dumped project.
+    present: bool = False
 
 
 def _dump_dir(project_root: Path) -> Path:
@@ -155,12 +164,17 @@ def read_latest(project_root: Path) -> DumpInfo:
     latest = dump_dir / "latest.sql"
     checksum_file = dump_dir / "latest.sha256"
     if not latest.exists() or not checksum_file.exists():
-        return DumpInfo(checksum_valid=False, machine_id=None, vector={})
+        # `present` keys off latest.sql alone, not the pair: a latest.sql with a missing
+        # latest.sha256 is exactly write_latest()'s documented interrupted-publish case - a dump
+        # that exists and cannot be trusted, not a project that has never published one.
+        return DumpInfo(
+            checksum_valid=False, machine_id=None, vector={}, present=latest.exists(),
+        )
     text = latest.read_text()
     actual = hashlib.sha256(text.encode()).hexdigest()
     expected = checksum_file.read_text().strip()
     if actual != expected:
-        return DumpInfo(checksum_valid=False, machine_id=None, vector={})
+        return DumpInfo(checksum_valid=False, machine_id=None, vector={}, present=True)
     machine_id = None
     dumped_at = None
     vector: dict[str, int] = {}
@@ -182,7 +196,10 @@ def read_latest(project_root: Path) -> DumpInfo:
             rest = line.removeprefix("-- vector:")
             k, _, v = rest.partition("=")
             vector[k] = int(v)
-    return DumpInfo(checksum_valid=True, machine_id=machine_id, vector=vector, dumped_at=dumped_at)
+    return DumpInfo(
+        checksum_valid=True, machine_id=machine_id, vector=vector, dumped_at=dumped_at,
+        present=True,
+    )
 
 
 def decide_publish(

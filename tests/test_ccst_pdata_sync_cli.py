@@ -43,7 +43,26 @@ def base_env(tmp_path, monkeypatch):
     monkeypatch.delenv("TELEGRAM_BOT_TOKEN", raising=False)
     monkeypatch.delenv("TELEGRAM_CHAT_ID", raising=False)
     monkeypatch.setenv("CCCS_CREDS_PATH", str(tmp_path / "no-creds-here"))
+    # `ccst pdata sync-check` runs the spec's occupancy gate, which shells out to
+    # `pgrep -x claude` and fails safe to True when it can't enumerate processes. This suite is
+    # routinely run from inside a live `claude` session, and a subprocess cannot be
+    # monkeypatched, so PATH is pointed at a stub `pgrep` that reports no matches - the same
+    # determinism tests/pdata/test_pdata_sync_hook.py gets from its `unoccupied` fixture.
+    # _stub_pgrep(..., pids=...) overrides it for the one test that wants an occupied project.
+    _stub_pgrep(tmp_path, monkeypatch)
     return os.environ.copy()
+
+
+def _stub_pgrep(tmp_path: Path, monkeypatch, *, pids: tuple[int, ...] = ()) -> None:
+    """Put a fake `pgrep` first on PATH. With no pids it exits 1 with no output, exactly as real
+    pgrep does when nothing matches, so `occupancy.is_occupied` returns False."""
+    bin_dir = tmp_path / "stub-bin"
+    bin_dir.mkdir(exist_ok=True)
+    script = bin_dir / "pgrep"
+    body = "".join(f"echo {pid}\n" for pid in pids) or ""
+    script.write_text(f"#!/bin/sh\n{body}exit {0 if pids else 1}\n")
+    script.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ['PATH']}")
 
 
 def _build_local(project: str, *, content: str = "local", vector: dict[str, int] | None = None) -> None:
@@ -517,6 +536,244 @@ def test_resolve_choice_apply_prints_apply_resolution_error_verbatim(base_env):
     assert r.returncode == 1
     assert "999999" in r.stderr
     assert "are not part of the current diff" in r.stderr
+
+
+# ---------------------------------------------------------------- pdata sync-check ----
+
+
+def test_sync_check_requires_project_or_all_projects(base_env):
+    r = _run(base_env, "pdata", "sync-check")
+    assert r.returncode == 2
+
+
+def test_sync_check_rejects_both_project_and_all_projects(base_env):
+    r = _run(base_env, "pdata", "sync-check", "--project", "x", "--all-projects")
+    assert r.returncode == 2
+
+
+def test_sync_check_has_no_force_flag(base_env):
+    """Deliberate: this is the automatic, repeating trigger. Overriding a fork or a checksum
+    failure is a human decision made with `ccst pdata dump/rehydrate --force`."""
+    r = _run(base_env, "pdata", "sync-check", "--project", "x", "--force")
+    assert r.returncode == 2
+    assert "unrecognized arguments" in r.stderr
+
+
+def test_sync_check_no_projects_found(base_env):
+    r = _run(base_env, "pdata", "sync-check", "--all-projects")
+    assert r.returncode == 2
+    assert "no project databases found" in r.stderr
+
+
+def test_sync_check_fast_forwards_when_the_dump_is_ahead(base_env):
+    _build_local("proj")
+    project_root = store.project_root("proj")
+    _publish_remote_dump(
+        project_root, remote_project="proj-remote", content="from-remote",
+        vector={"mbp": 1}, machine_id="mbp",
+    )
+    before = (project_root / ".pdata-db-dump" / "latest.sql").read_text()
+
+    r = _run(base_env, "pdata", "sync-check", "--project", "proj")
+
+    assert r.returncode == 0, r.stderr
+    assert "fast-forwarded from mbp" in r.stdout
+    conn = repository.connect("proj")
+    try:
+        rows = repository.list_base_records(
+            conn, record_group="g", since=None, until=None, limit=None, include_deleted=False,
+        )
+        assert [row["content"] for row in rows] == ["from-remote"]
+    finally:
+        conn.close()
+    # A fast-forward is terminal - no dump-check, so latest.sql is untouched.
+    assert (project_root / ".pdata-db-dump" / "latest.sql").read_text() == before
+
+
+def test_sync_check_publishes_when_local_is_ahead(base_env):
+    _build_local("proj", vector={"ltxy": 2})
+    project_root = store.project_root("proj")
+    _publish_remote_dump(
+        project_root, remote_project="proj-remote", content="stale",
+        vector={"ltxy": 1}, machine_id="mbp",
+    )
+
+    r = _run(base_env, "pdata", "sync-check", "--project", "proj")
+
+    assert r.returncode == 0, r.stderr
+    assert "published (machine_id=ltxy)" in r.stdout
+    info = dump.read_latest(project_root)
+    assert info.machine_id == "ltxy"
+    assert info.vector == {"ltxy": 2}
+
+
+def test_sync_check_skips_an_unchanged_republish(base_env):
+    """The reason this subcommand exists rather than reusing `ccst pdata dump --all-projects`:
+    an hourly job must not rewrite latest.sql for every idle project, every hour, forever."""
+    _build_local("proj", vector={"ltxy": 1})
+    first = _run(base_env, "pdata", "sync-check", "--project", "proj")
+    assert first.returncode == 0, first.stderr
+    assert "published" in first.stdout
+    latest = store.project_root("proj") / ".pdata-db-dump" / "latest.sql"
+    before_text = latest.read_text()
+    before_mtime = latest.stat().st_mtime_ns
+    time.sleep(0.01)
+
+    r = _run(base_env, "pdata", "sync-check", "--project", "proj")
+
+    assert r.returncode == 0, r.stderr
+    assert "unchanged - nothing new to publish" in r.stdout
+    assert latest.read_text() == before_text
+    assert latest.stat().st_mtime_ns == before_mtime
+
+
+def test_sync_check_reports_a_fork_as_a_conflict(base_env):
+    _build_local("proj", vector={"ltxy": 1})
+    project_root = store.project_root("proj")
+    _publish_remote_dump(
+        project_root, remote_project="proj-remote", content="remote",
+        vector={"mbp": 1}, machine_id="mbp",
+    )
+
+    r = _run(base_env, "pdata", "sync-check", "--project", "proj")
+
+    assert r.returncode == 1
+    assert "ccst pdata resolve --project proj" in r.stderr
+    # nothing was overwritten - the dump on disk is still the remote one.
+    assert dump.read_latest(project_root).machine_id == "mbp"
+    rows = ledger.read_recent(job_id="pdata-sync:proj")
+    assert len(rows) == 1
+    assert "fork" in str(rows[0]["error"])
+
+
+def test_sync_check_reports_a_corrupt_dump_as_a_conflict(base_env):
+    _build_local("proj", vector={"ltxy": 1})
+    project_root = store.project_root("proj")
+    _publish_remote_dump(
+        project_root, remote_project="proj-remote", content="remote",
+        vector={"mbp": 1}, machine_id="mbp",
+    )
+    latest = project_root / ".pdata-db-dump" / "latest.sql"
+    latest.write_text(latest.read_text() + "\n-- tampered\n")
+
+    r = _run(base_env, "pdata", "sync-check", "--project", "proj")
+
+    assert r.returncode == 1
+    assert "ccst pdata dump --force" in r.stderr
+
+
+def test_sync_check_publishes_a_first_dump_instead_of_calling_it_corrupt(base_env):
+    """A project that has never been dumped is the normal state right after `ccst pdata init`.
+    It must publish, not report a checksum conflict every hour forever."""
+    _build_local("proj", vector={"ltxy": 1})
+    assert not (store.project_root("proj") / ".pdata-db-dump" / "latest.sql").exists()
+
+    r = _run(base_env, "pdata", "sync-check", "--project", "proj")
+
+    assert r.returncode == 0, r.stderr
+    assert "published" in r.stdout
+    assert ledger.read_recent(job_id="pdata-sync:proj") == []
+
+
+def test_sync_check_defers_without_calling_it_a_conflict(base_env):
+    """DEFERRED proves the dump dominates local, so falling through to the dump-check would
+    re-derive DUMP_DOMINATES and push a false "conflict" for transient lock contention."""
+    _build_local("proj")
+    project_root = store.project_root("proj")
+    _publish_remote_dump(
+        project_root, remote_project="proj-remote", content="remote",
+        vector={"mbp": 1}, machine_id="mbp",
+    )
+    import sqlite3
+
+    holder = sqlite3.connect(store.db_path("proj"), timeout=0)
+    try:
+        holder.execute("BEGIN IMMEDIATE")
+
+        r = _run(base_env, "pdata", "sync-check", "--project", "proj")
+
+        assert r.returncode == 0, r.stderr
+        assert "retry later" in r.stdout
+        assert "ccst pdata resolve" not in r.stdout + r.stderr
+        assert ledger.read_recent(job_id="pdata-sync:proj") == []
+    finally:
+        holder.execute("ROLLBACK")
+        holder.close()
+
+
+def test_sync_check_skips_a_project_a_live_session_is_working_in(base_env, tmp_path, monkeypatch):
+    """Spec "Process safety": the hourly job never swaps a project's .db out from under a live
+    session. Driven with a real child process whose cwd is the project root, plus the stub pgrep
+    reporting it - so the whole occupancy path runs for real, deterministically."""
+    _build_local("proj")
+    project_root = store.project_root("proj")
+    project_root.mkdir(parents=True, exist_ok=True)
+    _publish_remote_dump(
+        project_root, remote_project="proj-remote", content="from-remote",
+        vector={"mbp": 1}, machine_id="mbp",
+    )
+    occupant = subprocess.Popen(["sleep", "30"], cwd=str(project_root))
+    try:
+        _stub_pgrep(tmp_path, monkeypatch, pids=(occupant.pid,))
+        env = os.environ.copy()
+
+        r = _run(env, "pdata", "sync-check", "--project", "proj")
+
+        assert r.returncode == 0, r.stderr
+        assert "a live session is working in this project - skipped" in r.stdout
+        # local was NOT swapped, and nothing was published over the remote dump either.
+        conn = repository.connect("proj")
+        try:
+            rows = repository.list_base_records(
+                conn, record_group="g", since=None, until=None, limit=None,
+                include_deleted=False,
+            )
+            assert [row["content"] for row in rows] == ["local"]
+        finally:
+            conn.close()
+        assert dump.read_latest(project_root).machine_id == "mbp"
+    finally:
+        occupant.terminate()
+        occupant.wait(timeout=10)
+
+
+def test_sync_check_all_projects_compact_summary(base_env):
+    _build_local("ff-proj")
+    _publish_remote_dump(
+        store.project_root("ff-proj"), remote_project="ff-proj-remote", content="remote",
+        vector={"mbp": 1}, machine_id="mbp",
+    )
+    _build_local("fork-proj", vector={"ltxy": 1})
+    _publish_remote_dump(
+        store.project_root("fork-proj"), remote_project="fork-proj-remote", content="remote",
+        vector={"mbp": 1}, machine_id="mbp",
+    )
+    _build_local("new-proj", vector={"ltxy": 1})
+
+    r = _run(base_env, "pdata", "sync-check", "--all-projects")
+
+    assert r.returncode == 1
+    assert "fast-forwarded 1" in r.stdout
+    assert "published 1" in r.stdout
+    assert "conflict 1" in r.stdout
+    assert "of 3 project(s)" in r.stdout
+    # compact mode prints no per-project detail lines
+    assert "ff-proj:" not in r.stdout
+
+
+def test_sync_check_all_projects_records_an_error_and_continues(base_env, tmp_path):
+    """One unreadable project must not abort the whole unattended batch - the
+    _cmd_pdata_dump/_cmd_pdata_rehydrate established shape."""
+    _build_local("good-proj", vector={"ltxy": 1})
+    # A .db that is not a SQLite database at all: discover_projects() finds it, opening it fails.
+    (tmp_path / "project-db" / "broken-proj.db").write_text("not a database")
+
+    r = _run(base_env, "pdata", "sync-check", "--all-projects")
+
+    assert r.returncode == 2
+    assert "published 1" in r.stdout
+    assert "errors 1" in r.stdout
+    assert "of 2 project(s)" in r.stdout
 
 
 def test_resolve_choice_apply_rejects_invalid_choice_value(base_env):
