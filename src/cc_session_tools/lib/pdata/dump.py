@@ -18,10 +18,10 @@ _ARCHIVE_KEEP = 24
 
 # serialize()'s output always starts with this exact line - the single source of truth for where
 # write_latest()'s header block (machine_id/dumped_at/vector comment lines) ends and the real SQL
-# body begins. Used by both read_latest() below and rehydrate.sql_body() - previously each
-# independently re-derived the same boundary with its own copy of this string, which is exactly
-# the kind of drift this repo's coding standards call out: one source of truth for a shared
-# constant, not a second copy "just for now".
+# body begins. Used by both read_latest() below and sql_body() (called from rehydrate.py) -
+# previously each independently re-derived the same boundary with its own copy of this string,
+# which is exactly the kind of drift this repo's coding standards call out: one source of truth
+# for a shared constant, not a second copy "just for now".
 _BODY_SENTINEL = "BEGIN TRANSACTION;"
 
 
