@@ -426,10 +426,14 @@ def restore_record(*, project: str, record_id: int, restored_at: int | None = No
         if existing is None or existing["deleted_at"] is None:
             raise RecordNotFoundError(record_id)
         with repository._immediate(conn):
-            repository.restore(conn, record_id=record_id, restored_at=ts)
-            # Binding invariant #1 — every local write bumps this machine's own vector-clock
-            # revision in the same transaction as the data change.
-            vector_clock_store.bump_own(conn, machine_identity.resolve().machine_id)
+            ok = repository.restore(conn, record_id=record_id, restored_at=ts)
+            if ok:
+                # Binding invariant #1 — only a write that actually landed bumps the vector
+                # clock. ok is False only via the same pre-check/lock-acquisition race
+                # documented on update_record/delete_record (the record was un-deleted between
+                # this function's existence check and this block's lock), in which case no data
+                # change was made to report.
+                vector_clock_store.bump_own(conn, machine_identity.resolve().machine_id)
     finally:
         conn.close()
 
@@ -449,17 +453,21 @@ def schema_add_field(
     conn = repository.connect(project)
     try:
         with repository._immediate(conn):
-            repository.add_extension_column(
+            column_added = repository.add_extension_column(
                 conn, record_group, field_name, sql_type, default=default,
             )
+            description_changed = False
             if description is not None:
-                repository.upsert_field_description(
+                description_changed = repository.upsert_field_description(
                     conn, record_group=record_group, field_name=field_name,
                     description=description, added_at=now,
                 )
-            # Binding invariant #1 — every local write bumps this machine's own vector-clock
-            # revision in the same transaction as the data change.
-            vector_clock_store.bump_own(conn, machine_identity.resolve().machine_id)
+            if column_added or description_changed:
+                # Binding invariant #1 — only bump when one of the two sub-operations actually
+                # changed something. add_extension_column is documented as idempotent (spec
+                # §5's "no-op if it already exists"), so a rerun with an unchanged description
+                # must not bump a second time for zero actual data change.
+                vector_clock_store.bump_own(conn, machine_identity.resolve().machine_id)
     finally:
         conn.close()
 

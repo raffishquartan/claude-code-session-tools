@@ -159,17 +159,20 @@ def add_extension_column(
     sql_type: str,
     *,
     default: object | None,
-) -> None:
+) -> bool:
     """Idempotent: creates ext_<group> if missing (backfilling existing rows — see
     ensure_extension_table), then ADD COLUMN if field_name isn't already a column (no-op if it
-    already exists — spec §5's schema add-field idempotency). Caller owns the transaction."""
+    already exists — spec §5's schema add-field idempotency). Returns True iff a column was
+    actually added, False on the no-op path — a caller gating a side effect (e.g. a
+    vector-clock bump) on whether this call changed anything needs that distinction, not just
+    "did it run without erroring". Caller owns the transaction."""
     naming.validate_field_name(field_name)
     normalized_type = _normalize_column_type(sql_type)
     ensure_extension_table(conn, record_group)
     table = naming.extension_table_name(record_group)
     existing = set(list_extension_columns(conn, record_group))
     if field_name in existing:
-        return
+        return False
     if default is None:
         conn.execute(f'ALTER TABLE "{table}" ADD COLUMN "{field_name}" {normalized_type}')
     else:
@@ -178,6 +181,7 @@ def add_extension_column(
             f'ALTER TABLE "{table}" ADD COLUMN "{field_name}" {normalized_type} '
             f'DEFAULT {literal}'
         )
+    return True
 
 
 def _render_default_literal(value: object, normalized_type: str) -> str:
@@ -406,9 +410,23 @@ def get_extension_row(
 def upsert_field_description(
     conn: sqlite3.Connection, *, record_group: str, field_name: str,
     description: str | None, added_at: int,
-) -> None:
+) -> bool:
     """Idempotent write to record_group_fields (spec §4.4) — overwrites description/added_at
-    on re-run rather than duplicating the (record_group, field_name) row."""
+    on re-run rather than duplicating the (record_group, field_name) row. Returns True iff the
+    write actually changes the stored description or added_at, False when both already match
+    exactly what's being written — the same "did this change anything" signal
+    add_extension_column reports, and for the same reason: gating a vector-clock bump on a real
+    write, not on every call."""
+    existing = conn.execute(
+        "SELECT description, added_at FROM record_group_fields "
+        "WHERE record_group=? AND field_name=?",
+        (record_group, field_name),
+    ).fetchone()
+    changed = (
+        existing is None
+        or existing["description"] != description
+        or existing["added_at"] != added_at
+    )
     conn.execute(
         "INSERT INTO record_group_fields (record_group, field_name, description, added_at) "
         "VALUES (?, ?, ?, ?) "
@@ -416,6 +434,7 @@ def upsert_field_description(
         "DO UPDATE SET description=excluded.description, added_at=excluded.added_at",
         (record_group, field_name, description, added_at),
     )
+    return changed
 
 
 def list_record_groups(conn: sqlite3.Connection) -> list[dict[str, object]]:

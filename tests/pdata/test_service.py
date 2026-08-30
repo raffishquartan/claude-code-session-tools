@@ -528,3 +528,53 @@ def test_update_delete_restore_and_schema_add_field_each_bump_once(monkeypatch, 
         assert vector_clock_store.read_vector(conn) == {"ltxy": 5}
     finally:
         conn.close()
+
+
+def test_schema_add_field_idempotent_rerun_does_not_bump_twice(monkeypatch, tmp_path):
+    """Regression test for Bug 1: repository.add_extension_column is documented and implemented
+    as idempotent (no-op if the column already exists), so a second schema_add_field call for
+    the same field with the same (empty) description changes zero rows and must not bump the
+    revision a second time."""
+    monkeypatch.setenv("CCST_PROJECT_DB_DIR", str(tmp_path))
+    monkeypatch.setenv("CCST_MACHINE_NAME", "ltxy")
+    service.schema_add_field(
+        project="proj", record_group="g", field_name="f", sql_type="TEXT",
+        description=None, default=None,
+    )
+    service.schema_add_field(
+        project="proj", record_group="g", field_name="f", sql_type="TEXT",
+        description=None, default=None,
+    )
+    conn = repository.connect("proj")
+    try:
+        assert vector_clock_store.read_vector(conn) == {"ltxy": 1}
+    finally:
+        conn.close()
+
+
+def test_restore_record_does_not_bump_when_restore_returns_false(monkeypatch, tmp_path):
+    """Regression test for Bug 2: restore_record must gate its vector-clock bump on
+    repository.restore()'s actual return value, not bump unconditionally. Simulates the
+    pre-check/lock-acquisition race documented on update_record/delete_record by monkeypatching
+    get_base_record to report the record as soft-deleted for restore_record's own pre-check,
+    while the real on-disk row is never actually deleted — so repository.restore()'s
+    `WHERE deleted_at IS NOT NULL` clause matches zero rows and returns False."""
+    monkeypatch.setenv("CCST_PROJECT_DB_DIR", str(tmp_path))
+    monkeypatch.setenv("CCST_MACHINE_NAME", "ltxy")
+    rec = service.add_record(
+        project="proj", record_group="g", content="x", file_path=None,
+        fields={}, created_at=1000,
+    )
+
+    def fake_get_base_record(conn: object, record_id: int) -> dict[str, object]:
+        return {"id": record_id, "deleted_at": 9999}
+
+    monkeypatch.setattr(repository, "get_base_record", fake_get_base_record)
+
+    service.restore_record(project="proj", record_id=rec.id, restored_at=1003)
+
+    conn = repository.connect("proj")
+    try:
+        assert vector_clock_store.read_vector(conn) == {"ltxy": 1}
+    finally:
+        conn.close()
