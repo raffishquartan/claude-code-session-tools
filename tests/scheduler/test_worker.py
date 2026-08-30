@@ -473,6 +473,41 @@ def test_classify_outcome_crash_captures_tail_of_plain_cli_error_line() -> None:
     assert result.detail.endswith("ERROR: could not connect to upstream after 3 attempts")
 
 
+def test_classify_outcome_crash_with_empty_stderr_falls_back_to_stdout_tail() -> None:
+    """§ 1.5.2 fix: a controlled `sys.exit(1)` after a clean, expected-shape
+    failure (e.g. `ccst pdata verify`'s "ISSUES in N of M" summary) prints its
+    diagnostic to stdout, not stderr - previously that was discarded entirely
+    on the crash path, leaving the ledger's `error` column empty despite a
+    genuine, explained failure."""
+    spec = validate_job_fields(
+        job_id="verify", cadence="daily@09:00", coalesce="one", command=["ccst"],
+        surface=True, enabled=True, catchup_window="7d", timeout="5s",
+        success_exit_codes=(0,),
+    )
+    outcome = RunOutcome(
+        exit_code=1,
+        stdout="ccst pdata verify --all-projects: ISSUES in 1 of 9 project(s)",
+        stderr="", duration_ms=69, timed_out=False,
+    )
+    result = wk.classify_outcome(spec, outcome, notify_push=lambda *a, **k: True)
+    assert result.crashed is True
+    assert result.detail == "ccst pdata verify --all-projects: ISSUES in 1 of 9 project(s)"
+
+
+def test_classify_outcome_crash_prefers_stderr_over_stdout_when_both_present() -> None:
+    spec = validate_job_fields(
+        job_id="cal", cadence="daily@09:00", coalesce="one", command=["false"],
+        surface=True, enabled=True, catchup_window="7d", timeout="5s",
+        success_exit_codes=(0,),
+    )
+    outcome = RunOutcome(
+        exit_code=1, stdout="some progress output", stderr="boom",
+        duration_ms=1, timed_out=False,
+    )
+    result = wk.classify_outcome(spec, outcome, notify_push=lambda *a, **k: True)
+    assert result.detail == "boom"
+
+
 def test_classify_outcome_timeout_with_no_stderr_falls_back_to_timed_out_text() -> None:
     spec = validate_job_fields(
         job_id="slow", cadence="daily@09:00", coalesce="one", command=["sleep", "10"],
