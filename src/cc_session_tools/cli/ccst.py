@@ -1412,6 +1412,35 @@ def _cmd_pdata_verify(args: argparse.Namespace) -> int:
             print(f"ccst pdata verify: {project}: {exc}", file=sys.stderr)
             worst = max(worst, 2)
             continue
+        except Exception as exc:
+            # run_verify crashed before persisting anything for this project - a
+            # per-project issue (its own except ValueError above) is the only
+            # *expected* failure shape; anything else is a bug or a transient
+            # race (e.g. a concurrent writer) worth surfacing in full rather than
+            # letting it silently take the whole --all-projects sweep down with
+            # no diagnostic trail. Rerun once, in --full mode, as a one-shot
+            # diagnostic: exactly one retry, never chained further even if the
+            # retry crashes too, so a persistently broken project reports once
+            # and moves on instead of turning into a retry loop.
+            print(f"ccst pdata verify: {project}: crashed: {exc}", file=sys.stderr)
+            worst = max(worst, 1)
+            flagged.append(project)
+            try:
+                diag = verify.run_verify(project=project, full=True)
+            except Exception as diag_exc:
+                print(
+                    f"ccst pdata verify: {project}: diagnostic rerun also crashed: {diag_exc}",
+                    file=sys.stderr,
+                )
+            else:
+                print(
+                    f"ccst pdata verify: {project}: diagnostic rerun: {diag.status} "
+                    f"({len(diag.issues)} issue(s))",
+                    file=sys.stderr,
+                )
+                for issue in diag.issues:
+                    print(f"  [{issue.severity}] {issue.check}: {issue.message}", file=sys.stderr)
+            continue
         if summary.status != "OK":
             worst = max(worst, 1)
             flagged.append(project)
