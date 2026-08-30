@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import subprocess
+
 import cc_session_tools.lib.occupancy as occupancy
 
 
@@ -60,3 +62,68 @@ def test_two_different_projects_do_not_cross_contaminate(monkeypatch, tmp_path):
     monkeypatch.setattr(occupancy, "_claude_pids", lambda: [111])
     assert occupancy.is_occupied(project_a) is True
     assert occupancy.is_occupied(project_b) is False
+
+
+def test_fails_safe_occupied_when_pgrep_itself_fails(monkeypatch, tmp_path):
+    """Regression test for a code-review finding: a pgrep-level failure (not installed, a
+    permission error, the timeout firing) must not be swallowed into an empty PID list - that
+    would be indistinguishable from "genuinely no claude process running" to every caller, the
+    opposite of every other failure path in this module, which all fail toward occupied."""
+    project_root = tmp_path / "proj"
+
+    def raise_err() -> list[int]:
+        raise OSError("pgrep: command not found")
+
+    monkeypatch.setattr(occupancy, "_claude_pids", raise_err)
+    assert occupancy.is_occupied(project_root) is True
+
+
+def test_fails_safe_occupied_when_cwd_resolution_raises_a_subprocess_error(monkeypatch, tmp_path):
+    """Regression test for a code-review finding: is_occupied() originally only caught OSError
+    around _cwd_of_pid(), but the macOS lsof branch's failure modes (a nonzero exit from the
+    ordinary process-already-exited race, or the timeout firing) raise
+    subprocess.CalledProcessError/TimeoutExpired - SubprocessError subclasses, not OSError
+    subclasses - which escaped uncaught and crashed the caller instead of failing safe."""
+    project_root = tmp_path / "proj"
+    monkeypatch.setattr(occupancy, "_claude_pids", lambda: [111])
+
+    def raise_err(pid: int) -> None:
+        raise subprocess.CalledProcessError(1, ["lsof"])
+
+    monkeypatch.setattr(occupancy, "_cwd_of_pid", raise_err)
+    assert occupancy.is_occupied(project_root) is True
+
+
+def test_claude_pids_itself_raises_rather_than_swallowing_a_real_pgrep_failure(monkeypatch):
+    """Pins _claude_pids()'s actual subprocess-calling behaviour directly (mocking
+    subprocess.run, not the _claude_pids/_cwd_of_pid wrappers the other tests use) - the module
+    docstring promises this function raises on a genuine failure rather than returning [], and
+    this is the one test that can't be satisfied by mocking the wrapper itself."""
+    def raise_timeout(*args: object, **kwargs: object) -> None:
+        raise subprocess.TimeoutExpired(cmd=["pgrep"], timeout=5)
+
+    monkeypatch.setattr(subprocess, "run", raise_timeout)
+    try:
+        occupancy._claude_pids()
+    except subprocess.TimeoutExpired:
+        pass
+    else:
+        raise AssertionError("expected subprocess.TimeoutExpired to propagate, not be swallowed")
+
+
+def test_cwd_of_pid_on_darwin_raises_on_a_nonzero_lsof_exit(monkeypatch):
+    """Pins _cwd_of_pid()'s actual macOS subprocess-calling behaviour directly (mocking
+    subprocess.run and sys.platform, not the wrapper itself) - a nonzero lsof exit (the ordinary
+    race where the target process has already exited) must raise, not return a bogus path."""
+    monkeypatch.setattr(occupancy.sys, "platform", "darwin")
+
+    def raise_called_process_error(*args: object, **kwargs: object) -> None:
+        raise subprocess.CalledProcessError(1, ["lsof"])
+
+    monkeypatch.setattr(subprocess, "run", raise_called_process_error)
+    try:
+        occupancy._cwd_of_pid(111)
+    except subprocess.CalledProcessError:
+        pass
+    else:
+        raise AssertionError("expected subprocess.CalledProcessError to propagate")
