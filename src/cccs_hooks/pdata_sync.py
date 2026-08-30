@@ -14,9 +14,10 @@ telemetry warning plus empty output and exit 0, matching `catchup.py`'s own top-
 The caught set is `(OSError, ValueError, sqlite3.Error)`, confirmed against this module's actual
 call surface rather than copied on faith: `occupancy.is_occupied` already swallows its own
 `subprocess.SubprocessError`/`OSError` into a fail-safe `True` (so nothing subprocess-shaped
-escapes it), `machine_identity.resolve()` can raise `json.JSONDecodeError` on a corrupt
-machine-identity store (a `ValueError` subclass), and `store.db_path`/`rehydrate`/`dump` raise
-`ValueError`, `OSError` and `sqlite3.Error` between them. Nothing here raises anything else.
+escapes it), `machine_identity.resolve()` never raises - a corrupt or wrongly-shaped
+machine-identity store degrades to the same unconfirmed-hostname fallback a missing store
+already gets - and `store.db_path`/`rehydrate`/`dump` raise `ValueError`, `OSError` and
+`sqlite3.Error` between them. Nothing here raises anything else.
 
 `SessionEnd` hooks share a 1.5-second budget across all matching hooks unless an explicit
 `timeout` is set, so `hooks-bundle.json` gives this one 10s - `on_session_end` does real I/O

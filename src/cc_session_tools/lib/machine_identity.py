@@ -31,14 +31,27 @@ def _store_path() -> Path:
 def resolve() -> MachineIdentity:
     """CCST_MACHINE_NAME wins over the on-disk store, which wins over the raw hostname — the
     env var is for tests and one-off overrides; the store is what `confirm()` persists for every
-    later process on this machine that doesn't set the env var."""
+    later process on this machine that doesn't set the env var.
+
+    A store file that exists but doesn't parse as a JSON object with a non-empty string
+    `machine_id` (corrupt write, manual edit, a future format change) is treated exactly like a
+    missing store — falls back to the unconfirmed hostname — rather than raising. This module's
+    own docstring promises resolve() "always returns *something* usable"; SessionStart/SessionEnd/
+    cron callers have no interactive tty to recover from an exception here, so a malformed store
+    must degrade the same way a missing one already does, not become a new failure mode for every
+    caller of resolve() to independently guard against."""
     env = os.environ.get(MACHINE_NAME_ENV)
     if env:
         return MachineIdentity(machine_id=env, confirmed=True)
     store = _store_path()
     if store.exists():
-        data = json.loads(store.read_text())
-        return MachineIdentity(machine_id=data["machine_id"], confirmed=True)
+        try:
+            data = json.loads(store.read_text())
+            machine_id = data["machine_id"]
+        except (json.JSONDecodeError, KeyError, TypeError):
+            machine_id = None
+        if isinstance(machine_id, str) and machine_id:
+            return MachineIdentity(machine_id=machine_id, confirmed=True)
     return MachineIdentity(machine_id=socket.gethostname(), confirmed=False)
 
 
