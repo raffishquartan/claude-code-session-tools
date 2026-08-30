@@ -26,3 +26,26 @@ def test_db_path_accepts_normal_project_names():
     # Must not raise for the real project names this system deals with.
     for name in ("pbt", "maxella", "deauppet", "oneshot", "claude", "home"):
         store.db_path(name)
+
+
+def test_project_root_default_location(monkeypatch, tmp_path, mocker):
+    monkeypatch.delenv(store.PROJECTS_ROOT_ENV, raising=False)
+    mocker.patch("pathlib.Path.home", return_value=tmp_path)
+    assert store.project_root("pbt") == tmp_path / "cc" / "pbt"
+
+
+def test_project_root_env_override(monkeypatch, tmp_path):
+    monkeypatch.setenv(store.PROJECTS_ROOT_ENV, str(tmp_path / "custom"))
+    assert store.project_root("pbt") == tmp_path / "custom" / "pbt"
+
+
+def test_project_root_rejects_unsafe_project_names():
+    with pytest.raises(ValueError, match="project"):
+        store.project_root("../escape")
+
+
+def test_project_root_never_creates_the_directory(monkeypatch, tmp_path):
+    monkeypatch.setenv(store.PROJECTS_ROOT_ENV, str(tmp_path))
+    root = store.project_root("pbt")
+    assert root == tmp_path / "pbt"
+    assert not root.exists()
