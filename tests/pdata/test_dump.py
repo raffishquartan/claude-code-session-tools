@@ -152,6 +152,24 @@ def test_write_and_read_latest_roundtrip(tmp_path):
     assert result.checksum_valid is True
     assert result.vector == {"ltxy": 1}
     assert result.machine_id == "ltxy"
+    assert isinstance(result.dumped_at, int)
+
+
+def test_read_latest_exposes_the_embedded_dumped_at_timestamp(tmp_path, monkeypatch):
+    """dumped_at was write-only header metadata until a code review flagged that consumers
+    (init_service.py's adopt-from-dump message) had no source for "when was this published" other
+    than the local filesystem's mtime for the synced file - unreliable for exactly the OneDrive
+    transport this design is built around, since mtime reflects local download/sync-settle time,
+    not when the source machine actually published it. Pin the exact value read back, not just
+    "is an int"."""
+    import time
+
+    con = _build_db(tmp_path / "a.db", field_order=["owner"], row_order=[1])
+    project_root = tmp_path / "proj"
+    monkeypatch.setattr(time, "time", lambda: 1700000000)
+    dump.write_latest(con, project_root=project_root, machine_id="ltxy", vector={"ltxy": 1})
+    result = dump.read_latest(project_root)
+    assert result.dumped_at == 1700000000
 
 
 def test_read_latest_detects_a_corrupted_dump(tmp_path):

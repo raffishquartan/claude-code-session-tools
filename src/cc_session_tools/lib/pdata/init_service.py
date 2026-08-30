@@ -198,7 +198,14 @@ def _check_db_not_locked(project: str) -> None:
         conn.close()
 
 
-def _format_published_at(latest_path: Path) -> str:
+def _format_published_at(info: dump.DumpInfo, latest_path: Path) -> str:
+    """The dump's own embedded dumped_at, not latest_path's filesystem mtime - mtime reflects
+    when this machine's copy last changed on disk (local download/OneDrive-sync-settle time for
+    a synced file), not when the *source* machine actually published it, which is the whole point
+    of showing this to a human at all. Falls back to mtime only if dumped_at is somehow absent
+    (a dump written before this field existed) rather than raising over a cosmetic detail."""
+    if info.dumped_at is not None:
+        return datetime.fromtimestamp(info.dumped_at).strftime("%Y-%m-%d %H:%M")
     return datetime.fromtimestamp(latest_path.stat().st_mtime).strftime("%Y-%m-%d %H:%M")
 
 
@@ -238,7 +245,7 @@ def _adopt_from_dump(
         )
     if store.db_path(project).exists():
         return None
-    published_at = _format_published_at(latest_path)
+    published_at = _format_published_at(info, latest_path)
     message = (
         f"Adopting existing pdata from sync dump (published by {info.machine_id}, "
         f"at {published_at}) - skipping file classification/import"

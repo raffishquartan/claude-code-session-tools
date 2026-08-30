@@ -72,6 +72,7 @@ class DumpInfo:
     checksum_valid: bool
     machine_id: str | None
     vector: dict[str, int]
+    dumped_at: int | None = None
 
 
 def _dump_dir(project_root: Path) -> Path:
@@ -158,6 +159,7 @@ def read_latest(project_root: Path) -> DumpInfo:
     if actual != expected:
         return DumpInfo(checksum_valid=False, machine_id=None, vector={})
     machine_id = None
+    dumped_at = None
     vector: dict[str, int] = {}
     for line in text.splitlines():
         # Stop at the header/body boundary - serialize()'s output always starts with this exact
@@ -171,11 +173,13 @@ def read_latest(project_root: Path) -> DumpInfo:
             break
         if line.startswith("-- machine_id="):
             machine_id = line.removeprefix("-- machine_id=")
+        elif line.startswith("-- dumped_at="):
+            dumped_at = int(line.removeprefix("-- dumped_at="))
         elif line.startswith("-- vector:"):
             rest = line.removeprefix("-- vector:")
             k, _, v = rest.partition("=")
             vector[k] = int(v)
-    return DumpInfo(checksum_valid=True, machine_id=machine_id, vector=vector)
+    return DumpInfo(checksum_valid=True, machine_id=machine_id, vector=vector, dumped_at=dumped_at)
 
 
 def sql_body(text: str) -> str:

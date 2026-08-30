@@ -1166,6 +1166,16 @@ def _cmd_pdata_init(args: argparse.Namespace) -> int:
             print(f"ERROR: verification failed ({len(write_result.failure.reasons)} reason(s))")
             return 1
 
+        if write_result.adopted_from_dump:
+            # A second machine's first-ever init for an already-migrated project - nothing was
+            # classified or cut over here, so the ordinary "Wrote N records"/"Backup: ..."/
+            # doc-update-reminders below would be actively misleading (they read as if nothing
+            # happened, or that something went wrong, rather than "adoption succeeded").
+            print(write_result.report)
+            print(f"\nVerify: ccst pdata verify --project {args.project} --full")
+            print("SUCCESS")
+            return 0
+
         print(
             f"Wrote {len(write_result.created_record_ids)} record(s) across "
             f"{len(write_result.entries_written)} file(s)."
