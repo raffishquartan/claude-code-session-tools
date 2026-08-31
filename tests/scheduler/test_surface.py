@@ -455,6 +455,72 @@ def test_lookback_surfaces_a_fail_entry_that_predates_seeded_cursor(
     assert len(fail_reports) == 1
 
 
+# --- Clean-output coalescing -------------------------------------------------
+
+
+def test_single_clean_output_run_is_unaffected(monkeypatch: pytest.MonkeyPatch) -> None:
+    """One clean-output run for a job renders exactly as before this change -
+    no count, no window."""
+    _add("verify", surface=True)
+    ld.record(ld.LedgerEntry(job_id="verify", event=ld.LedgerEvent.RUN, owed=1,
+                             ran=1, exit_code=0, duration_ms=1, error="proj-a: OK"))
+    result = sf.surface(session_uuid="s1", now=_NOW)
+    rep = next(r for r in result.reports if r.job_id == "verify")
+    assert rep.count == 0
+    assert rep.window is None
+    assert rep.output == "proj-a: OK"
+
+
+def test_repeated_clean_output_runs_coalesce_keeping_only_latest_output(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A job that produces captured stdout more than once within one digest
+    (e.g. an hourly sync-check across two ticks) must render as one line
+    carrying a count and the span covered, with only the most recent run's
+    output - not two separate output blocks for the same job."""
+    _add("pdata-sync-hourly", surface=True)
+    older_ts = (_NOW - timedelta(hours=11)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    newer_ts = (_NOW - timedelta(minutes=15)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    _insert_catchup_row(
+        tmp_path, ts=older_ts, job_id="pdata-sync-hourly", event="run",
+        ran=1, exit_code=0, error="published 1, unchanged 8",
+    )
+    _insert_catchup_row(
+        tmp_path, ts=newer_ts, job_id="pdata-sync-hourly", event="run",
+        ran=1, exit_code=0, error="published 0, unchanged 10",
+    )
+    result = sf.surface(session_uuid="s1", now=_NOW)
+    matches = [r for r in result.reports if r.job_id == "pdata-sync-hourly"]
+    assert len(matches) == 1
+    rep = matches[0]
+    assert rep.count == 2
+    assert rep.output == "published 0, unchanged 10"  # most recent only
+    assert rep.age == "15m ago"
+    assert rep.window == "11h"
+
+
+def test_findings_never_coalesce_even_when_repeated(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Findings-bearing (nonzero-exit) runs stay individual even when the
+    same job produces findings more than once - they are signal, exempt from
+    the clean-output coalescing fold."""
+    _add("drift", surface=True)
+    t1 = (_NOW - timedelta(hours=2)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    t2 = (_NOW - timedelta(minutes=10)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    _insert_catchup_row(
+        tmp_path, ts=t1, job_id="drift", event="run", ran=1, exit_code=1,
+        error="WARN: drifted once",
+    )
+    _insert_catchup_row(
+        tmp_path, ts=t2, job_id="drift", event="run", ran=1, exit_code=1,
+        error="WARN: drifted again",
+    )
+    result = sf.surface(session_uuid="s1", now=_NOW)
+    findings_reports = [r for r in result.reports if r.job_id == "drift" and r.findings]
+    assert len(findings_reports) == 2
+
+
 def test_lookback_does_not_duplicate_entries_within_one_call(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

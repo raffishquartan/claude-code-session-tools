@@ -199,6 +199,32 @@ def test_uncoalesced_run_has_no_count_suffix() -> None:
     assert "×" not in out
 
 
+def test_coalesced_clean_output_shows_count_window_and_latest_output_only() -> None:
+    """Same job producing captured stdout more than once within one digest
+    must render as one line-group carrying a count and the span it covers,
+    with only the most recent run's output shown - not N separate blocks."""
+    r = JobReport(job_id="pdata-sync-hourly", outcome=Outcome.RAN, surface=True,
+                  overdue="", ran=1, deferred=0, expired=0, consecutive_failures=0,
+                  output="fast-forwarded 0, published 0, unchanged 10, ... errors 0 of 10 project(s)",
+                  age="15m ago", count=2, window="11h")
+    out = format_digest([r])
+    assert out.count("ran pdata-sync-hourly") == 1
+    assert "15m ago" in out
+    assert "(2 times in last 11h)" in out
+    assert "unchanged 10" in out
+
+
+def test_uncoalesced_clean_output_has_no_count_or_window_suffix() -> None:
+    """A single clean-output run (the pre-existing shape, count defaults to 0)
+    must render byte-identical to before this field existed."""
+    r = JobReport(job_id="pdata-verify-all", outcome=Outcome.RAN, surface=True,
+                  overdue="", ran=1, deferred=0, expired=0, consecutive_failures=0,
+                  output="proj-a: OK", age="3h ago")
+    out = format_digest([r])
+    assert "times in last" not in out
+    assert out.count("ran pdata-verify-all") == 1
+
+
 def test_suspended_job_always_surfaces_even_when_silent() -> None:
     r = JobReport(job_id="broken-job", outcome=Outcome.SUSPENDED, surface=False,
                   overdue="", ran=0, deferred=0, expired=0, consecutive_failures=10)
