@@ -256,16 +256,20 @@ def check_ccsched_job_registered(
     for spec in specs:
         if spec.job_id == job_id:
             if expected is not None:
-                from cc_session_tools.lib.scheduler.bundled_jobs import diff_from_bundled
+                from cc_session_tools.lib.scheduler.bundled_jobs import (
+                    diff_from_bundled_detail, render_field_diffs,
+                )
 
-                changed = diff_from_bundled(spec, expected)
-                if changed:
+                changed_detail = diff_from_bundled_detail(spec, expected)
+                if changed_detail:
+                    field_word = "field differs" if len(changed_detail) == 1 else "fields differ"
                     return CheckResult(
                         name=name, status=Status.WARN,
                         reason=(
-                            f"registered but {', '.join(changed)} differ from the bundled "
-                            f"definition — run 'ccst ccsched-jobs install --apply' to see the "
-                            f"diff, or 'ccsched edit {job_id}' if this was intentional"
+                            f"registered but {len(changed_detail)} {field_word} from "
+                            f"the bundled definition:\n{render_field_diffs(changed_detail)}\n"
+                            f"run 'ccsched edit {job_id}' to realign, or leave as your "
+                            f"intentional customization"
                         ),
                     )
             if spec.enabled:

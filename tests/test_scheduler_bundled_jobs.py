@@ -3,7 +3,9 @@ from __future__ import annotations
 from pathlib import Path
 
 from cc_session_tools.lib.scheduler import bundled_jobs
-from cc_session_tools.lib.scheduler.bundled_jobs import diff_from_bundled
+from cc_session_tools.lib.scheduler.bundled_jobs import (
+    diff_from_bundled, diff_from_bundled_detail, render_field_diffs,
+)
 from cc_session_tools.lib.scheduler.jobspec import validate_job_fields
 
 
@@ -209,3 +211,60 @@ def test_diff_from_bundled_detects_a_changed_command():
     job = _job("pdata-verify-all")
     spec = _spec_for(job, command=["ccst", "pdata", "verify", "--project", "x"])
     assert diff_from_bundled(spec, job) == ("command",)
+
+
+def test_diff_from_bundled_detail_is_empty_when_nothing_differs():
+    job = _job("pdata-verify-all")
+    assert diff_from_bundled_detail(_spec_for(job), job) == ()
+
+
+def test_diff_from_bundled_detail_carries_before_and_after_for_one_field():
+    job = _job("pdata-verify-all")
+    spec = _spec_for(job, timeout="30s")
+    diffs = diff_from_bundled_detail(spec, job)
+    assert len(diffs) == 1
+    assert diffs[0].field == "timeout"
+    assert diffs[0].bundled == job.timeout
+    assert diffs[0].current == "30s"
+
+
+def test_diff_from_bundled_detail_carries_every_differing_field_in_order():
+    job = _job("pdata-verify-all")
+    spec = _spec_for(job, cadence="every:3d", timeout="30s")
+    diffs = diff_from_bundled_detail(spec, job)
+    assert [d.field for d in diffs] == ["cadence", "timeout"]
+    assert diffs[0].bundled == job.cadence
+    assert diffs[0].current == "every:3d"
+
+
+def test_diff_from_bundled_detail_renders_command_as_a_shell_line_not_a_tuple_repr():
+    job = _job("pdata-verify-all")
+    spec = _spec_for(job, command=["ccst", "pdata", "verify", "--project", "x y"])
+    diffs = diff_from_bundled_detail(spec, job)
+    assert len(diffs) == 1
+    assert diffs[0].field == "command"
+    assert diffs[0].bundled == "ccst pdata verify --all-projects"
+    # shlex.join quotes the argument containing a space, unlike a bare join(" ")
+    assert diffs[0].current == "ccst pdata verify --project 'x y'"
+
+
+def test_diff_from_bundled_detail_is_the_single_source_diff_from_bundled_wraps():
+    """diff_from_bundled must return exactly the field names diff_from_bundled_detail
+    reports, in the same order — the two can never disagree since one wraps the other."""
+    job = _job("pdata-verify-all")
+    spec = _spec_for(job, cadence="every:3d", timeout="30s")
+    assert diff_from_bundled(spec, job) == tuple(
+        d.field for d in diff_from_bundled_detail(spec, job)
+    )
+
+
+def test_render_field_diffs_shows_dash_bundled_plus_current_per_field():
+    job = _job("pdata-verify-all")
+    spec = _spec_for(job, cadence="every:3d", timeout="30s")
+    out = render_field_diffs(diff_from_bundled_detail(spec, job))
+    assert "cadence:" in out
+    assert "- bundled: daily@03:00" in out
+    assert "+ current: every:3d" in out
+    assert "timeout:" in out
+    assert "- bundled: 300s" in out
+    assert "+ current: 30s" in out

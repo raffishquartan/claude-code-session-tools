@@ -1207,6 +1207,34 @@ def test_check_ccsched_job_registered_warns_on_drift_from_bundled_definition(
     assert "timeout" in result.reason
 
 
+def test_check_ccsched_job_registered_shows_before_and_after_values_not_just_field_name(
+    monkeypatch, tmp_path
+) -> None:
+    """§ diff-detail fix: the reason must carry the actual bundled/current values, not just
+    name the field that differs — no more 'run install --apply to see the diff' indirection."""
+    monkeypatch.setenv("CCST_DATA_HOME", str(tmp_path))
+    from cc_session_tools.lib.scheduler import bundled_jobs, registry
+    from cc_session_tools.lib.scheduler.jobspec import validate_job_fields
+
+    job = next(
+        j for j in bundled_jobs.BUNDLED_CCSCHED_JOBS if j.job_id == "telemetry-trim-weekly"
+    )
+    spec = validate_job_fields(
+        job_id=job.job_id, cadence=job.cadence, coalesce=job.coalesce,
+        command=list(job.command), surface=job.surface, enabled=True,
+        catchup_window=job.catchup_window, timeout="9s",
+        success_exit_codes=job.success_exit_codes,
+    )
+    registry.add_job(spec)
+
+    result = check_ccsched_job_registered(job.job_id, expected=job)
+    assert "1 field differ" in result.reason
+    assert "- bundled: 60s" in result.reason
+    assert "+ current: 9s" in result.reason
+    assert "run 'ccsched edit telemetry-trim-weekly' to realign" in result.reason
+    assert "install --apply' to see the diff" not in result.reason
+
+
 def test_check_ccsched_job_registered_ok_when_matching_bundled_definition(
     monkeypatch, tmp_path
 ) -> None:

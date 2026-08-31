@@ -2132,12 +2132,17 @@ def _cmd_ccsched_jobs_install(args: argparse.Namespace) -> int:
     for job in bundled_jobs.BUNDLED_CCSCHED_JOBS:
         spec = existing.get(job.job_id)
         if spec is not None:
-            changed = bundled_jobs.diff_from_bundled(spec, job)
-            if changed:
+            changed_detail = bundled_jobs.diff_from_bundled_detail(spec, job)
+            if changed_detail:
+                field_word = "field differs" if len(changed_detail) == 1 else "fields differ"
                 print(
-                    f"  changed (not touched): {job.job_id} - {', '.join(changed)} "
-                    f"differ from the bundled definition; run 'ccsched edit' to realign, or "
-                    f"leave as your intentional customization"
+                    f"  changed (not touched): {job.job_id} - {len(changed_detail)} "
+                    f"{field_word} from the bundled definition:"
+                )
+                print(bundled_jobs.render_field_diffs(changed_detail))
+                print(
+                    f"  run 'ccsched edit {job.job_id}' to realign, or leave as your "
+                    f"intentional customization"
                 )
             elif not spec.enabled:
                 print(f"  disabled (not touched): {job.job_id} - run 'ccsched enable {job.job_id}' to re-enable")

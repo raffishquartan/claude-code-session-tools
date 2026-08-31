@@ -10,6 +10,7 @@ deliberately excludes `enabled`: that is per-machine operational state a human t
 `_cmd_ccsched_jobs_install` and `doctor.check_ccsched_job_registered`, the two callers."""
 from __future__ import annotations
 
+import shlex
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -183,23 +184,65 @@ BUNDLED_CCSCHED_JOBS: tuple[BundledJob, ...] = (
 )
 
 
+@dataclass(frozen=True, slots=True)
+class FieldDiff:
+    """One field where a registered JobSpec no longer matches its bundled definition,
+    carrying both the bundled and the current (live) value, rendered as display-ready
+    strings so a caller never has to know a field's underlying type - see
+    `diff_from_bundled_detail`."""
+    field: str
+    bundled: str
+    current: str
+
+
+def diff_from_bundled_detail(spec: "JobSpec", job: BundledJob) -> tuple[FieldDiff, ...]:
+    """Same comparison as `diff_from_bundled`, but carries the before/after values for
+    display, in declaration order; empty if the spec matches its bundled definition
+    exactly. Deliberately ignores `enabled` — see module docstring. This is the one place
+    that decides both *whether* a field changed and *how* its value is rendered, so
+    `_cmd_ccsched_jobs_install` and `check_ccsched_job_registered` — the two callers —
+    can never disagree on either question."""
+    diffs: list[FieldDiff] = []
+    if spec.cadence != job.cadence:
+        diffs.append(FieldDiff("cadence", job.cadence, spec.cadence))
+    if spec.coalesce.value != job.coalesce:
+        diffs.append(FieldDiff("coalesce", job.coalesce, spec.coalesce.value))
+    if spec.catchup_window != job.catchup_window:
+        diffs.append(FieldDiff("catchup_window", job.catchup_window, spec.catchup_window))
+    if spec.timeout != job.timeout:
+        diffs.append(FieldDiff("timeout", job.timeout, spec.timeout))
+    if spec.surface != job.surface:
+        diffs.append(FieldDiff("surface", str(job.surface), str(spec.surface)))
+    if spec.command != job.command:
+        # shlex.join renders as an actual shell line, not a Python tuple repr - readable
+        # for a multi-arg command.
+        diffs.append(FieldDiff("command", shlex.join(job.command), shlex.join(spec.command)))
+    if spec.success_exit_codes != job.success_exit_codes:
+        diffs.append(FieldDiff(
+            "success_exit_codes",
+            ", ".join(str(c) for c in job.success_exit_codes),
+            ", ".join(str(c) for c in spec.success_exit_codes),
+        ))
+    return tuple(diffs)
+
+
 def diff_from_bundled(spec: "JobSpec", job: BundledJob) -> tuple[str, ...]:
     """Names of the fields where a registered JobSpec no longer matches its bundled
-    definition, in declaration order; empty if it matches exactly. Deliberately ignores
-    `enabled` — see module docstring."""
-    differing: list[str] = []
-    if spec.cadence != job.cadence:
-        differing.append("cadence")
-    if spec.coalesce.value != job.coalesce:
-        differing.append("coalesce")
-    if spec.catchup_window != job.catchup_window:
-        differing.append("catchup_window")
-    if spec.timeout != job.timeout:
-        differing.append("timeout")
-    if spec.surface != job.surface:
-        differing.append("surface")
-    if spec.command != job.command:
-        differing.append("command")
-    if spec.success_exit_codes != job.success_exit_codes:
-        differing.append("success_exit_codes")
-    return tuple(differing)
+    definition, in declaration order; empty if it matches exactly. A thin wrapper over
+    `diff_from_bundled_detail` so both callers stay guaranteed-identical in what counts
+    as "changed" — see module docstring."""
+    return tuple(fd.field for fd in diff_from_bundled_detail(spec, job))
+
+
+def render_field_diffs(diffs: tuple[FieldDiff, ...], *, indent: str = "    ") -> str:
+    """Shared before/after rendering for a non-empty `diff_from_bundled_detail` result -
+    one `field:` sub-block per entry, in the same order, `-`/`+` prefixed so it reads as a
+    diff without pulling in `difflib`. Both `_cmd_ccsched_jobs_install` and
+    `check_ccsched_job_registered` call this so they render byte-identical bodies and only
+    differ in the header/hint text wrapped around it."""
+    lines: list[str] = []
+    for d in diffs:
+        lines.append(f"{indent}{d.field}:")
+        lines.append(f"{indent}  - bundled: {d.bundled}")
+        lines.append(f"{indent}  + current: {d.current}")
+    return "\n".join(lines)
