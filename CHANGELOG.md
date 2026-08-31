@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `ccsched rename <old-id> <new-id>` renames a job's id in place. Its run state
+  (`last_success`, `consecutive_failures`, `suspended`, ...) and its ledger history
+  (`ccsched status`) carry over to the new id - older runs stay retrievable under the new name
+  rather than being orphaned under the old one. Refuses while the job is currently running, so a
+  rename can never race an in-flight run's lock file or state row.
+
 ## [2.12.2] - 2026-08-30
 
 ### Fixed

@@ -23,7 +23,7 @@ bundled scheduled jobs:
 | **`claude-code-usage`** | Multi-dimensional usage analytics CLI: query/group/filter by project, session, model, MCP server, plugin, tool, day/week/month/year. Reconciles dollar totals against `ccusage`. |
 | **`ccst <noun> <verb>`** | Umbrella CLI for hook and skill management: install, uninstall, health-check, shell helpers, telemetry trim, global CLAUDE.md messaging block. |
 | **`ccmsg <command>`** | Inter-session messaging CLI: send, deliver, read, list, claim, and archive durable messages between Claude Code sessions. |
-| **`ccsched <command>`** | Scheduled-task CLI: register, list, edit, enable/disable, and remove recurring jobs; inspect status; one-shot sweep. |
+| **`ccsched <command>`** | Scheduled-task CLI: register, list, edit, rename, enable/disable, and remove recurring jobs; inspect status; one-shot sweep. |
 | **`ccl` (shell fn)** | Shell function wrapping `ccs` for list-mode usage. Installed by `ccst shell install`. |
 
 **Bundled skills** (installed via `ccst skills install`)
@@ -573,6 +573,7 @@ loser exits).
 | `edit` | Edit a job field (cadence, command, coalesce, etc.) in-place. |
 | `enable` / `disable` | Toggle a job on or off without removing it. |
 | `remove` | Delete a job from the registry. |
+| `rename` | Rename a job's id; its run state and ledger history carry over to the new id. Refuses while the job is running. |
 | `run` | Run a job immediately (foreground; bypasses cadence). |
 | `status` | Show recent ledger history for a job (or all jobs). |
 | `sweep` | One-shot reconcile + launch from the shell. |
