@@ -78,6 +78,23 @@ def record(entry: LedgerEntry) -> None:
         print(f"[telemetry-warn] ledger write failed: {e}", file=sys.stderr)
 
 
+def rename_job(old_id: str, new_id: str) -> None:
+    """Repoint every catchup_events row from old_id to new_id, so `ccsched
+    status` and the surfacing pass keep showing continuous history under a
+    job's new name. Unlike record(), this raises on failure rather than
+    swallowing it - it's a foreground CLI operation (ccsched rename), not
+    best-effort logging, so a caller that already renamed the job in
+    ccsched.db needs to know if history did not follow."""
+    conn = telemetry_store.connect()
+    try:
+        conn.execute(
+            "UPDATE catchup_events SET job_id=? WHERE job_id=?", (new_id, old_id)
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
 def read_recent(job_id: str | None = None, *, limit: int = 50) -> list[dict[str, object]]:
     """Return up to ``limit`` recent catch-up rows, oldest-first within that
     slice, optionally filtered by job_id."""

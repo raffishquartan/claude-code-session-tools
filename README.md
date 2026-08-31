@@ -23,7 +23,7 @@ bundled scheduled jobs:
 | **`claude-code-usage`** | Multi-dimensional usage analytics CLI: query/group/filter by project, session, model, MCP server, plugin, tool, day/week/month/year. Reconciles dollar totals against `ccusage`. |
 | **`ccst <noun> <verb>`** | Umbrella CLI for hook and skill management: install, uninstall, health-check, shell helpers, telemetry trim, global CLAUDE.md messaging block. |
 | **`ccmsg <command>`** | Inter-session messaging CLI: send, deliver, read, list, claim, and archive durable messages between Claude Code sessions. |
-| **`ccsched <command>`** | Scheduled-task CLI: register, list, edit, enable/disable, and remove recurring jobs; inspect status; one-shot sweep. |
+| **`ccsched <command>`** | Scheduled-task CLI: register, list, edit, rename, enable/disable, and remove recurring jobs; inspect status; one-shot sweep. |
 | **`ccl` (shell fn)** | Shell function wrapping `ccs` for list-mode usage. Installed by `ccst shell install`. |
 
 **Bundled skills** (installed via `ccst skills install`)
@@ -573,6 +573,7 @@ loser exits).
 | `edit` | Edit a job field (cadence, command, coalesce, etc.) in-place. |
 | `enable` / `disable` | Toggle a job on or off without removing it. |
 | `remove` | Delete a job from the registry. |
+| `rename` | Rename a job's id; its run state and ledger history carry over to the new id. Refuses while the job is running. |
 | `run` | Run a job immediately (foreground; bypasses cadence). |
 | `status` | Show recent ledger history for a job (or all jobs). |
 | `sweep` | One-shot reconcile + launch from the shell. |
@@ -1015,6 +1016,12 @@ Claude Code lets multiple sessions share a single task list if they all set the 
 - If your cwd is anywhere else (or both env vars are unset and you used `--force`), no task list ID is set and the session gets a private task list.
 
 This means you can pick up a task created in yesterday's session from today's session in the same project, without any extra setup.
+
+Both `ccd` and `ccr` also unconditionally set `CLAUDE_CODE_ENABLE_TODO_TOOLS=1` in the launched
+session's environment. Claude Code >=2.1.233 hides the TodoWrite/TaskCreate/TaskGet/TaskUpdate/
+TaskList tools by default on Opus 4.8, Sonnet 5, Fable 5, Mythos 5 and later unless this is set -
+without it, the task list machinery above would be wired up but the tools that use it would be
+invisible to the model.
 
 ## Typo protection (strict root only)
 

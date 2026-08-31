@@ -112,6 +112,31 @@ def set_enabled(job_id: str, enabled: bool) -> None:
         conn.close()
 
 
+def rename_job(old_id: str, new_id: str) -> None:
+    """Repoint a job's id everywhere it's a row key in ccsched.db - the `jobs`
+    spec row, its `job_state` row (so registered_at/last_success/etc. carry
+    over), and its `bundled_job_installs` row if it has one - in a single
+    transaction. Callers that also want run history to follow (telemetry.db's
+    catchup_events) call ledger.rename_job separately; the two stores are
+    never truly atomic together, matching how the rest of this package treats
+    them as independent."""
+    conn = store.connect()
+    try:
+        cur = conn.execute("UPDATE jobs SET job_id=? WHERE job_id=?", (new_id, old_id))
+        if cur.rowcount == 0:
+            conn.commit()
+            raise RegistryError(f"unknown job id: {old_id!r}")
+        conn.execute("UPDATE job_state SET job_id=? WHERE job_id=?", (new_id, old_id))
+        conn.execute(
+            "UPDATE bundled_job_installs SET job_id=? WHERE job_id=?", (new_id, old_id)
+        )
+        conn.commit()
+    except sqlite3.IntegrityError as exc:
+        raise RegistryError(f"job id already exists: {new_id!r}") from exc
+    finally:
+        conn.close()
+
+
 def mark_bundled_installed(job_id: str, installed_at: str) -> None:
     """Record that a CCST-bundled job (lib/scheduler/bundled_jobs.py) has been installed on this
     machine, so a later `ccsched remove` can be told apart from "never installed" by

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import os
 import subprocess
+import sys
 
 import pytest
 
@@ -121,3 +123,80 @@ def test_cwd_of_pid_on_darwin_raises_on_a_nonzero_lsof_exit(monkeypatch):
     monkeypatch.setattr(subprocess, "run", raise_called_process_error)
     with pytest.raises(subprocess.CalledProcessError):
         occupancy._cwd_of_pid(111)
+
+
+# ---------- launching_claude_pid ----------
+#
+# Regression coverage for a real bug: a hook's `command` runs via `/bin/sh -c "<command>"`, and on
+# any system where `/bin/sh` is dash rather than bash (Debian/Ubuntu/WSL2's default) that leaves a
+# real `sh` process between `claude` and the hook - confirmed empirically by installing a
+# diagnostic SessionStart hook in a scratch project and walking `/proc/<pid>` for the real chain:
+# `ccst` (the hook) -> `sh -c ...` -> `claude` -> the shell that launched it. `os.getppid()` alone
+# (the hook's previous `session_pid`) resolves to the `sh` wrapper, which never appears in
+# `_claude_pids()`'s `pgrep -x claude` results - so the occupancy exclusion silently matched
+# nothing, and every SessionStart hook found its own just-launched session "occupying" its own
+# project.
+
+
+def test_launching_claude_pid_returns_the_start_pid_when_it_is_already_claude(monkeypatch):
+    monkeypatch.setattr(occupancy, "_comm_of", lambda pid: "claude")
+
+    def explode(pid: int) -> int | None:
+        raise AssertionError("must not climb past a pid that is already claude")
+
+    monkeypatch.setattr(occupancy, "_ppid_of", explode)
+    assert occupancy.launching_claude_pid(111) == 111
+
+
+def test_launching_claude_pid_climbs_past_an_sh_wrapper(monkeypatch):
+    """The confirmed real shape: hook (not claude) -> sh -c wrapper (not claude) -> claude."""
+    comms = {21732: "sh", 22984: "claude"}
+    ppids = {21732: 22984}
+    monkeypatch.setattr(occupancy, "_comm_of", lambda pid: comms.get(pid))
+    monkeypatch.setattr(occupancy, "_ppid_of", lambda pid: ppids.get(pid))
+
+    assert occupancy.launching_claude_pid(21732) == 22984
+
+
+def test_launching_claude_pid_gives_up_after_max_hops(monkeypatch):
+    """An unrecognised process-tree shape (never reaches a `claude` comm) must degrade to None
+    rather than loop forever."""
+    monkeypatch.setattr(occupancy, "_comm_of", lambda pid: "sh")
+    monkeypatch.setattr(occupancy, "_ppid_of", lambda pid: pid + 1)
+
+    assert occupancy.launching_claude_pid(1, max_hops=3) is None
+
+
+def test_launching_claude_pid_returns_none_when_the_chain_cannot_be_resolved(monkeypatch):
+    """A dead/unreadable ancestor (permission error, already exited) - same "can't tell, don't
+    exclude anything" fallback every other unresolvable case in this module already takes."""
+    monkeypatch.setattr(occupancy, "_comm_of", lambda pid: "sh")
+    monkeypatch.setattr(occupancy, "_ppid_of", lambda pid: None)
+
+    assert occupancy.launching_claude_pid(111) is None
+
+
+def test_launching_claude_pid_stops_on_a_self_referential_ppid(monkeypatch):
+    """pid 1 (init/systemd) reports itself as its own parent on Linux - climbing must not spin
+    forever on that edge case."""
+    monkeypatch.setattr(occupancy, "_comm_of", lambda pid: "init")
+    monkeypatch.setattr(occupancy, "_ppid_of", lambda pid: pid)
+
+    assert occupancy.launching_claude_pid(1) is None
+
+
+@pytest.mark.skipif(not sys.platform.startswith("linux"), reason="reads the real /proc")
+def test_ppid_of_reads_the_real_proc_status_file_on_linux():
+    """Pins _ppid_of()'s actual Linux parsing against this real test process's own /proc entry,
+    rather than a mock - the PPid line's exact format is what this depends on."""
+    assert occupancy._ppid_of(os.getpid()) == os.getppid()
+
+
+@pytest.mark.skipif(not sys.platform.startswith("linux"), reason="reads the real /proc")
+def test_comm_of_reads_the_real_proc_comm_file_on_linux():
+    """/proc/<pid>/comm for this test process is whatever interpreter is running it (pytest's own
+    entry point, truncated to 15 chars per the kernel's comm limit) - just confirms a real read
+    round-trips, not any specific value."""
+    comm = occupancy._comm_of(os.getpid())
+    assert comm
+    assert "/" not in comm

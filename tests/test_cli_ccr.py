@@ -79,6 +79,9 @@ def test_ccr_sets_session_start_hook_env_for_resume(fake_repos, captured_launch)
     assert env["CLD_SESSION_MODE"] == "resume"
     assert env["CLD_SESSION_DIR"].endswith("cc-sessions/20260504-foo-bar")
     assert env["CLAUDE_CODE_TASK_LIST_ID"] == "myproj"
+    # Required on Claude Code >=2.1.233 for TodoWrite/Task* tools to be visible
+    # on newer models (Opus 4.8, Sonnet 5, Fable 5, Mythos 5+).
+    assert env["CLAUDE_CODE_ENABLE_TODO_TOOLS"] == "1"
 
 
 def test_ccr_no_match_returns_1(fake_repos, capsys, captured_launch):

@@ -25,9 +25,11 @@ from cc_session_tools.lib.scheduler.duration import parse_duration
 from cc_session_tools.lib.scheduler.jobspec import (
     JobSpec,
     JobValidationError,
+    check_job_id,
     parse_success_exit_codes,
     validate_job_fields,
 )
+from cc_session_tools.lib.scheduler.lock import InFlightLockHeld, in_flight_lock
 from cc_session_tools.lib.scheduler.runner import run_command
 
 
@@ -136,6 +138,18 @@ def _build_parser() -> argparse.ArgumentParser:
     for verb in ("enable", "disable", "remove"):
         sp = sub.add_parser(verb, help=f"{verb.capitalize()} a job.")
         sp.add_argument("id")
+
+    rename_p = sub.add_parser(
+        "rename",
+        help="Rename a job, keeping its run history under the new id.",
+    )
+    rename_p.add_argument("old_id", metavar="old-id", help="The job's current id.")
+    rename_p.add_argument(
+        "new_id", metavar="new-id",
+        help="The new id, lowercase kebab-case [a-z0-9-]. Run state (last_success, "
+             "consecutive_failures, suspended, ...) and ledger history (`ccsched status`) "
+             "carry over. Refuses while the job is currently running.",
+    )
 
     run_p = sub.add_parser("run", help="Run one job now.")
     run_p.add_argument("id")
@@ -303,6 +317,25 @@ def _cmd_remove(job_id: str) -> int:
     return 0
 
 
+def _cmd_rename(args: argparse.Namespace) -> int:
+    if args.new_id == args.old_id:
+        return _err("new id is the same as the current id")
+    try:
+        check_job_id(args.new_id)
+    except JobValidationError as exc:
+        return _err(str(exc))
+    try:
+        with in_flight_lock(args.old_id):
+            registry.rename_job(args.old_id, args.new_id)
+            ledger.rename_job(args.old_id, args.new_id)
+    except InFlightLockHeld:
+        return _err(f"job {args.old_id!r} is currently running; try again once it finishes")
+    except registry.RegistryError as exc:
+        return _err(str(exc))
+    print(f"renamed {args.old_id} -> {args.new_id}")
+    return 0
+
+
 def _cmd_run(
     args: argparse.Namespace, *, notify_push: worker.NotifyPush = notify.push_outcome,
 ) -> int:
@@ -340,6 +373,9 @@ def _cmd_status(args: argparse.Namespace) -> int:
     for r in rows:
         print(f"{r.get('ts','')} {r.get('job_id',''):<24} {r.get('event',''):<12} "
               f"ran={r.get('ran')} exit={r.get('exit_code')}")
+        error = r.get("error")
+        if error:
+            print(f"    {error}")
     return 0
 
 
@@ -380,6 +416,8 @@ def main(argv: list[str] | None = None) -> int:
         return _cmd_set_enabled(args.id, False)
     if args.command == "remove":
         return _cmd_remove(args.id)
+    if args.command == "rename":
+        return _cmd_rename(args)
     if args.command == "run":
         return _cmd_run(args)
     if args.command == "status":

@@ -5,8 +5,10 @@ same shape `catchup.py` uses for its own SessionStart/UserPromptSubmit pair.
 
 - **SessionStart** rehydrates this project from `.pdata-db-dump/latest.sql` if the dump dominates
   local, after the spec's occupancy gate ("Process safety"): if another live `claude` session is
-  already working in this project - excluding this hook's own launching process, resolvable via
-  `os.getppid()` - it skips entirely rather than change that session's data mid-task.
+  already working in this project - excluding this hook's own launching process, resolved via
+  `occupancy.launching_claude_pid` (not bare `os.getppid()`, which is an `sh -c` wrapper rather
+  than the `claude` process itself whenever `/bin/sh` is dash) - it skips entirely rather than
+  change that session's data mid-task.
 - **SessionEnd** publishes a fresh dump if local has writes the published dump lacks.
 
 Neither direction ever blocks or crashes a session. Any unexpected failure degrades to a logged
@@ -50,13 +52,21 @@ logger = logging.getLogger(__name__)
 
 def _emit(message: str | None, event: str) -> None:
     """Always emit *something*, matching catchup.py's `_emit`. `additionalContext` alone only
-    ever reaches the model; `systemMessage` is what Claude Code prints to the user's terminal,
-    so it is added only when there is genuinely something to say - unlike catchup's SessionStart
-    digest, a clean pdata sync is the overwhelmingly common case and an "all quiet" line on every
-    single session start would be pure noise."""
-    payload: dict[str, object] = {
-        "hookSpecificOutput": {"hookEventName": event, "additionalContext": message or ""}
-    }
+    ever reaches the model; `systemMessage` is what Claude Code prints to the user's terminal, so
+    it is added whenever there is a message - which `on_session_start` now always supplies for a
+    pdata-migrated project, on Chris's explicit request to always see that the hook ran and what
+    it decided, rather than trust silence to mean "nothing happened".
+
+    `hookSpecificOutput` is omitted for `SessionEnd`: unlike SessionStart (which has an
+    `additionalContext`-bearing shape in Claude Code's output schema), SessionEnd has no
+    `hookSpecificOutput` variant at all - the discriminated union simply doesn't define one,
+    since the session is already ending and there is no conversation left for
+    `additionalContext` to reach. Emitting one there - regardless of its contents - fails the
+    host's JSON validation and surfaces as a hook-failure error to the user. `on_session_end`
+    never has a message to show anyway (see its own docstring), so this costs nothing."""
+    payload: dict[str, object] = {}
+    if event != "SessionEnd":
+        payload["hookSpecificOutput"] = {"hookEventName": event, "additionalContext": message or ""}
     if message:
         payload["systemMessage"] = message
     json.dump(payload, sys.stdout)
@@ -98,9 +108,19 @@ def _resolve_project(cwd: str) -> tuple[str, Path] | None:
     return project, store.project_root(project)
 
 
-def on_session_start(cwd: str, *, session_pid: int) -> str | None:
+def on_session_start(cwd: str, *, session_pid: int | None) -> str | None:
     """Rehydrate this project if the published dump dominates local. Returns the message to show
-    the starting session, or None when there is nothing worth saying."""
+    the starting session, or None when this session's cwd isn't a pdata-migrated project at all
+    (the "not even worth mentioning" case, since this hook fires on every session start
+    regardless of project).
+
+    For an actual pdata project, always returns a message, however unremarkable the outcome -
+    Chris asked to always be able to see that the hook ran and what it did (rather than trusting
+    silence to mean "nothing to report"), so even the common NO_OP case gets one line.
+
+    `session_pid` is None when `occupancy.launching_claude_pid` couldn't identify the launching
+    `claude` process (see its own docstring) - `is_occupied()` then excludes nothing, which is
+    the same conservative direction every other unresolvable case in this module already takes."""
     resolved = _resolve_project(cwd)
     if resolved is None:
         return None
@@ -108,10 +128,9 @@ def on_session_start(cwd: str, *, session_pid: int) -> str | None:
 
     if occupancy.is_occupied(project_root, exclude_pid=session_pid):
         # Another live session in this project - even on this same laptop, e.g. a second terminal
-        # tab - is mid-task. Skip silently; the next trigger (SessionEnd, the hourly job, or the
-        # next session start) retries. Deliberately no message: this session did nothing wrong
-        # and has nothing to act on.
-        return None
+        # tab - is mid-task. Skip; the next trigger (SessionEnd, the hourly job, or the next
+        # session start) retries.
+        return f"[pdata-sync] {project}: skipped - already open in another Claude Code session"
 
     result = rehydrate.rehydrate(project)
     if result.outcome is rehydrate.RehydrateOutcome.FAST_FORWARDED:
@@ -143,10 +162,14 @@ def on_session_start(cwd: str, *, session_pid: int) -> str | None:
         # sync_notify.py's module docstring, which names this hook for exactly that reason).
         sync_notify.notify_conflict(project, outcome=result.outcome.value, detail=detail)
         return f"[pdata-sync] {project}: {detail}"
-    # NO_OP (local is already at or ahead of the dump - the common case on nearly every session
-    # start) and DEFERRED (another writer holds the lock; transient, the next trigger retries)
-    # are both silent. Neither is actionable, and neither is worth interrupting a session start.
-    return None
+    if result.outcome is rehydrate.RehydrateOutcome.DEFERRED:
+        # Another writer holds the local db's lock right now - transient, the next trigger
+        # retries. Not actionable, but still worth a line so a stuck-looking rehydrate is visible
+        # rather than indistinguishable from "ran fine, nothing to do".
+        return f"[pdata-sync] {project}: skipped for now (local database busy) - will retry automatically"
+    # NO_OP: local is already at or ahead of the dump - the common case on nearly every session
+    # start. Not actionable, but still reported so the hook having run is never in question.
+    return f"[pdata-sync] {project}: up to date, nothing to sync"
 
 
 def on_session_end(cwd: str) -> None:
@@ -197,9 +220,14 @@ def main(argv: list[str] | None = None) -> int:
     message: str | None = None
     try:
         if event == "SessionStart":
-            # os.getppid() is the launching `claude` process from this hook subprocess's own
-            # perspective - the spec's "SessionStart excludes its own just-launched process".
-            message = on_session_start(cwd, session_pid=os.getppid())
+            # os.getppid() is this hook subprocess's immediate parent - but that's an `sh -c`
+            # wrapper, not the `claude` process itself, whenever `/bin/sh` is dash rather than
+            # bash (confirmed empirically, see launching_claude_pid's docstring). Climbing from
+            # there to the nearest actual `claude` ancestor is what makes the spec's "SessionStart
+            # excludes its own just-launched process" exclusion actually match anything.
+            message = on_session_start(
+                cwd, session_pid=occupancy.launching_claude_pid(os.getppid()),
+            )
         elif event == "SessionEnd":
             on_session_end(cwd)
         # Any other event: no-op. Only the two above are ever registered; this arm exists for the
