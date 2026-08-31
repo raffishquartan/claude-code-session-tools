@@ -1611,6 +1611,42 @@ def _resolve_deleted_at(payload: RecordPayload) -> int | None:
     return payload["base"]["deleted_at"]
 
 
+def _close_empty_fork_if_any(project: str) -> bool:
+    """`resolve.diff_against_dump` found zero record/schema differences for `project` - but that
+    alone doesn't mean there's nothing to do: the vector clock can still be a genuine fork (each
+    machine made a local write the other hasn't seen) whose *content* happens to match on both
+    sides, e.g. two machines independently re-deriving the same auto-reconciled index from
+    already-synced files. In that case `dump`/`rehydrate` refuse forever with nothing for a human
+    to pick between - `resolve.apply_resolution(project, {})` is now able to close it (see that
+    function's own comment), so do so.
+
+    Deliberately narrow: only touches anything when the comparison is an actual FORK. A plain
+    "already up to date" project (DUMP_DOMINATES, or nothing published yet) is left completely
+    alone - the diagnose path stays side-effect-free for the overwhelmingly common case, matching
+    `diff_against_dump`'s own "Display/diagnostic use only" contract. Returns True iff a fork was
+    found and closed; False for every other outcome (no fork, checksum-invalid dump, lock
+    contention) - callers fall back to the ordinary "clean" message in all of those, since no
+    caller here treats "not closed" as an error worth surfacing on its own (a checksum-invalid
+    dump or lock contention will already have been reported by the caller that hit it first, or
+    will be on the very next run)."""
+    from cc_session_tools.lib.pdata import (
+        dump, repository, resolve, store, vector_clock, vector_clock_store,
+    )
+
+    project_root = store.project_root(project)
+    existing = dump.read_latest(project_root)
+    if not existing.checksum_valid:
+        return False
+    conn = repository.connect(project)
+    try:
+        local_vector = vector_clock_store.read_vector(conn)
+    finally:
+        conn.close()
+    if vector_clock.compare(local=local_vector, dump=existing.vector) is not vector_clock.Comparison.FORK:
+        return False
+    return resolve.apply_resolution(project, {}) is resolve.ApplyOutcome.APPLIED
+
+
 def _cmd_pdata_resolve(args: argparse.Namespace) -> int:
     from cc_session_tools.lib.pdata import resolve, verify
 
@@ -1666,18 +1702,24 @@ def _cmd_pdata_resolve(args: argparse.Namespace) -> int:
         if has_diff:
             outstanding += 1
 
-        if compact:
-            if has_diff:
+        if not has_diff:
+            closed = _close_empty_fork_if_any(project)
+            if compact:
+                print(f"{project}: clean (fork auto-closed)" if closed else f"{project}: clean")
+            elif closed:
                 print(
-                    f"{project}: {len(diff.records)} record(s) + "
-                    f"{len(diff.schema_fields)} schema field(s) outstanding"
+                    f"{project}: clean - content already matched the dump; closed the "
+                    f"vector-clock fork automatically (nothing to choose between)"
                 )
             else:
-                print(f"{project}: clean")
+                print(f"{project}: clean - nothing to resolve")
             continue
 
-        if not has_diff:
-            print(f"{project}: clean - nothing to resolve")
+        if compact:
+            print(
+                f"{project}: {len(diff.records)} record(s) + "
+                f"{len(diff.schema_fields)} schema field(s) outstanding"
+            )
             continue
 
         print(

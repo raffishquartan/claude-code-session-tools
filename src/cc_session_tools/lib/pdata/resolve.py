@@ -316,7 +316,15 @@ def _apply_resolution(
             f"machine is missing a field, matching the other's definition, then retry."
         )
 
-    if not choices:
+    # Scoped to `diff.records` non-empty, not unconditional: a genuine vector-clock fork whose
+    # records happen to be byte-identical on both sides (diff.records == []) has nothing for a
+    # human to pick between, and `choices={}` correctly names "every record_id in the diff" for
+    # that case (there are zero). Rejecting it unconditionally left that case with no way through
+    # `apply_resolution` at all — `dump`/`rehydrate` would refuse forever with only `--force` (a
+    # blunt overwrite that risks discarding a real edit neither side actually has to lose here)
+    # to unblock it. Found 2026-08-31 working the `home` project's fork-testing walkthrough; see
+    # CHANGELOG.
+    if not choices and diff.records:
         raise ValueError("apply_resolution requires at least one record_id in choices")
 
     by_id = {record_diff.record_id: record_diff for record_diff in diff.records}
