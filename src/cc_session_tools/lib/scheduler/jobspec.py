@@ -38,7 +38,10 @@ class JobSpec:
     success_exit_codes: tuple[int, ...] = (0,)
 
 
-def _check_id(job_id: str) -> None:
+def check_job_id(job_id: str) -> None:
+    """Boundary validator for a bare job id, used both by validate_job_fields
+    (a full spec) and by callers that only need to validate an id on its own
+    - e.g. ccsched's `rename` command, which never builds a JobSpec."""
     if not _KEBAB_RE.match(job_id):
         raise JobValidationError(
             f"invalid job id {job_id!r}: must be lowercase kebab-case [a-z0-9-], "
@@ -107,7 +110,7 @@ def validate_job_fields(
     timeout: str,
     success_exit_codes: tuple[int, ...] = (0,),
 ) -> JobSpec:
-    _check_id(job_id)
+    check_job_id(job_id)
     try:
         parse_cadence(cadence)
     except CadenceError as exc:

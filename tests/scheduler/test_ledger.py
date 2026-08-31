@@ -236,3 +236,35 @@ def test_offset_before_ts_excludes_a_row_exactly_at_the_cutoff(
     monkeypatch.setenv("CCCS_HOOKS_DIR", str(tmp_path))
     _insert_row_with_ts(tmp_path, ts="2026-06-20T00:00:00Z", job_id="at-cutoff")
     assert ledger.offset_before_ts("2026-06-20T00:00:00Z") == 0
+
+
+# ---------- rename_job ----------
+
+
+def test_rename_job_repoints_existing_rows(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("CCCS_HOOKS_DIR", str(tmp_path))
+    ledger.record(ledger.LedgerEntry(
+        job_id="old-name", event=ledger.LedgerEvent.RUN, owed=1, ran=1,
+        exit_code=0, duration_ms=1, error=None,
+    ))
+    ledger.rename_job("old-name", "new-name")
+    assert ledger.read_recent(job_id="old-name") == []
+    rows = ledger.read_recent(job_id="new-name")
+    assert len(rows) == 1
+    assert rows[0]["event"] == "run"
+
+
+def test_rename_job_leaves_other_jobs_untouched(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("CCCS_HOOKS_DIR", str(tmp_path))
+    ledger.record(ledger.LedgerEntry(
+        job_id="old-name", event=ledger.LedgerEvent.RUN, owed=1, ran=1,
+        exit_code=0, duration_ms=1, error=None,
+    ))
+    ledger.record(ledger.LedgerEntry(
+        job_id="other-job", event=ledger.LedgerEvent.RUN, owed=1, ran=1,
+        exit_code=0, duration_ms=1, error=None,
+    ))
+    ledger.rename_job("old-name", "new-name")
+    assert len(ledger.read_recent(job_id="other-job")) == 1

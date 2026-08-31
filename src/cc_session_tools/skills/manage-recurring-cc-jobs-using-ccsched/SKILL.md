@@ -79,3 +79,6 @@ the old hook is removed. Migrate in this order: (1) add the registry entry,
 - `ccsched status [<id>]` - recent ledger outcomes from telemetry.db.
 - `ccsched run <id> --force` - run now (for testing the command).
 - `ccsched sweep` - run the reconcile sweep manually.
+- `ccsched rename <old-id> <new-id>` - rename a job's id; its run state and `ccsched status`
+  history carry over to the new id, so older runs stay visible under it. Refuses while the job
+  is currently running.

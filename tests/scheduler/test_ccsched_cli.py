@@ -184,6 +184,79 @@ def test_remove(tmp_path: Path) -> None:
     assert "tesco" not in _run(["list"], sched, hooks).stdout
 
 
+def test_rename_happy_path(tmp_path: Path) -> None:
+    _add_ok(tmp_path)
+    sched, hooks = _dirs(tmp_path)
+    res = _run(["rename", "tesco", "tesco-shop"], sched, hooks)
+    assert res.returncode == 0, res.stderr
+    assert "tesco -> tesco-shop" in res.stdout
+    listed = _run(["list"], sched, hooks).stdout
+    assert "tesco-shop" in listed
+    assert "tesco " not in listed  # trailing space: not a prefix match on tesco-shop
+
+
+def test_rename_preserves_state_and_ledger_history(tmp_path: Path) -> None:
+    _add_ok(tmp_path)
+    sched, hooks = _dirs(tmp_path)
+    run_res = _run(["run", "tesco"], sched, hooks)
+    assert run_res.returncode == 0, run_res.stderr
+    assert _run(["rename", "tesco", "tesco-shop"], sched, hooks).returncode == 0
+
+    show = _run(["show", "tesco-shop"], sched, hooks)
+    last_success_line = next(ln for ln in show.stdout.splitlines() if ln.startswith("last_success:"))
+    assert last_success_line.split(":", 1)[1].strip() != "-"  # state carried over, not reset
+
+    status = _run(["status", "tesco-shop"], sched, hooks)
+    assert "tesco-shop" in status.stdout
+    assert status.stdout.count("ran=") >= 1
+
+
+def test_rename_rejects_unknown_id(tmp_path: Path) -> None:
+    sched, hooks = _dirs(tmp_path)
+    res = _run(["rename", "ghost", "new-name"], sched, hooks)
+    assert res.returncode == 2
+    assert "unknown job id" in (res.stderr + res.stdout).lower()
+
+
+def test_rename_rejects_bad_new_id(tmp_path: Path) -> None:
+    _add_ok(tmp_path)
+    sched, hooks = _dirs(tmp_path)
+    res = _run(["rename", "tesco", "Not Kebab"], sched, hooks)
+    assert res.returncode == 2
+    assert "invalid job id" in (res.stderr + res.stdout).lower()
+    # Original job untouched.
+    assert "tesco" in _run(["list"], sched, hooks).stdout
+
+
+def test_rename_rejects_duplicate_new_id(tmp_path: Path) -> None:
+    _add_ok(tmp_path, "tesco")
+    _add_ok(tmp_path, "calendar")
+    sched, hooks = _dirs(tmp_path)
+    res = _run(["rename", "tesco", "calendar"], sched, hooks)
+    assert res.returncode == 2
+    assert "already exists" in (res.stderr + res.stdout).lower()
+
+
+def test_rename_rejects_same_id(tmp_path: Path) -> None:
+    _add_ok(tmp_path)
+    sched, hooks = _dirs(tmp_path)
+    res = _run(["rename", "tesco", "tesco"], sched, hooks)
+    assert res.returncode == 2
+
+
+def test_rename_blocked_while_in_flight(tmp_path: Path) -> None:
+    import json
+
+    _add_ok(tmp_path)
+    sched, hooks = _dirs(tmp_path)
+    sched.mkdir(parents=True, exist_ok=True)
+    (sched / ".run.tesco.lock").write_text(json.dumps({"pid": os.getpid(), "started": "x"}))
+    res = _run(["rename", "tesco", "tesco-shop"], sched, hooks)
+    assert res.returncode == 2
+    assert "running" in (res.stderr + res.stdout).lower()
+    assert "tesco" in _run(["list"], sched, hooks).stdout
+
+
 def test_run_records_ledger(tmp_path: Path) -> None:
     _add_ok(tmp_path)
     sched, hooks = _dirs(tmp_path)

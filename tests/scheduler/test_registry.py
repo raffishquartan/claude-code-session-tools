@@ -171,3 +171,59 @@ def test_mark_bundled_installed_twice_does_not_duplicate(
     reg.mark_bundled_installed("pdata-verify-all", "2026-08-27T00:00:00Z")
     reg.mark_bundled_installed("pdata-verify-all", "2026-08-28T00:00:00Z")
     assert reg.bundled_install_ids() == {"pdata-verify-all"}
+
+
+# ---------- rename_job ----------
+
+
+def test_rename_updates_job_id_preserving_other_fields(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("CC_SCHEDULER_DIR", str(tmp_path))
+    reg.add_job(_spec("old-name"))
+    reg.rename_job("old-name", "new-name")
+    loaded = {s.job_id: s for s in reg.load_registry()}
+    assert set(loaded) == {"new-name"}
+    assert loaded["new-name"].cadence == "daily@09:00"
+    assert loaded["new-name"].command == ("ccst", "hooks", "run", "check-tesco-due")
+
+
+def test_rename_unknown_id_raises(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("CC_SCHEDULER_DIR", str(tmp_path))
+    with pytest.raises(reg.RegistryError):
+        reg.rename_job("ghost", "new-name")
+
+
+def test_rename_to_existing_id_raises(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("CC_SCHEDULER_DIR", str(tmp_path))
+    reg.add_job(_spec("old-name"))
+    reg.add_job(_spec("taken"))
+    with pytest.raises(reg.RegistryError):
+        reg.rename_job("old-name", "taken")
+    # Neither job was touched by the failed rename.
+    assert {s.job_id for s in reg.load_registry()} == {"old-name", "taken"}
+
+
+def test_rename_also_renames_job_state(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from cc_session_tools.lib.scheduler import state as st
+
+    monkeypatch.setenv("CC_SCHEDULER_DIR", str(tmp_path))
+    reg.add_job(_spec("old-name"))
+    from datetime import datetime, timezone
+
+    st.ensure_registered_db("old-name", datetime(2026, 6, 20, tzinfo=timezone.utc))
+    st.record_success("old-name", new_success="2026-06-20T10:00:00Z", attempt_ts="2026-06-20T10:00:00Z")
+    reg.rename_job("old-name", "new-name")
+    states = st.load_all_state()
+    assert "old-name" not in states
+    assert states["new-name"].last_success == "2026-06-20T10:00:00Z"
+
+
+def test_rename_also_renames_bundled_install_row(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("CC_SCHEDULER_DIR", str(tmp_path))
+    reg.add_job(_spec("pdata-verify-all"))
+    reg.mark_bundled_installed("pdata-verify-all", "2026-08-27T00:00:00Z")
+    reg.rename_job("pdata-verify-all", "pdata-verify-all-v2")
+    assert reg.bundled_install_ids() == {"pdata-verify-all-v2"}
