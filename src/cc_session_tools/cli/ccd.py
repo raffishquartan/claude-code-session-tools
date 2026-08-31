@@ -200,6 +200,10 @@ def main(argv: list[str] | None = None) -> int:
     env["CLD_SESSION_TAG"] = tag
     env["CLD_SESSION_DIR"] = str(session_dir)
     env["CLD_SESSION_MODE"] = "new"
+    # Claude Code >=2.1.233 hides TodoWrite/TaskCreate/TaskGet/TaskUpdate/TaskList
+    # on Opus 4.8, Sonnet 5, Fable 5, Mythos 5+ unless this is set, regardless of
+    # whether a task list ID resolves below.
+    env["CLAUDE_CODE_ENABLE_TODO_TOOLS"] = "1"
     task_list_id = id_for_project(real_pwd)
     if task_list_id is not None:
         env["CLAUDE_CODE_TASK_LIST_ID"] = task_list_id
