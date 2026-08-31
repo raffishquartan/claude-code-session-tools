@@ -112,6 +112,9 @@ def test_ccd_sets_env_vars_for_session_start_hook(
     assert env["CLD_SESSION_DIR"].endswith("-mytag")
     # Project is direct child of repos root => task list id = project name.
     assert env["CLAUDE_CODE_TASK_LIST_ID"] == "myproj"
+    # Required on Claude Code >=2.1.233 for TodoWrite/Task* tools to be visible
+    # on newer models (Opus 4.8, Sonnet 5, Fable 5, Mythos 5+).
+    assert env["CLAUDE_CODE_ENABLE_TODO_TOOLS"] == "1"
 
 
 def test_ccd_does_not_set_task_list_id_when_outside_roots(
@@ -127,6 +130,9 @@ def test_ccd_does_not_set_task_list_id_when_outside_roots(
     rc = ccd.main(["--force", "mytag"])
     assert rc == 0
     assert "CLAUDE_CODE_TASK_LIST_ID" not in captured_launch["env"]
+    # CLAUDE_CODE_ENABLE_TODO_TOOLS is unconditional - task tools should be
+    # available even without a resolved task list id.
+    assert captured_launch["env"]["CLAUDE_CODE_ENABLE_TODO_TOOLS"] == "1"
 
 
 def test_ccd_chdirs_to_resolved_real_path_before_launch(

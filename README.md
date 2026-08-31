@@ -1017,6 +1017,12 @@ Claude Code lets multiple sessions share a single task list if they all set the 
 
 This means you can pick up a task created in yesterday's session from today's session in the same project, without any extra setup.
 
+Both `ccd` and `ccr` also unconditionally set `CLAUDE_CODE_ENABLE_TODO_TOOLS=1` in the launched
+session's environment. Claude Code >=2.1.233 hides the TodoWrite/TaskCreate/TaskGet/TaskUpdate/
+TaskList tools by default on Opus 4.8, Sonnet 5, Fable 5, Mythos 5 and later unless this is set -
+without it, the task list machinery above would be wired up but the tools that use it would be
+invisible to the model.
+
 ## Typo protection (strict root only)
 
 When you start a session under the **strict** (`PROJ_ROOT`) root, `ccd` checks whether your tag's first dash-separated term looks like a typo of the project directory name (Levenshtein distance ≤ 2):
