@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.12.3] - 2026-08-31
+
+### Fixed
+
+- `ccd` and `ccr` now set `CLAUDE_CODE_ENABLE_TODO_TOOLS=1` alongside `CLAUDE_CODE_TASK_LIST_ID`
+  in the launched session's environment. Claude Code >=2.1.233 hides the TodoWrite/TaskCreate/
+  TaskGet/TaskUpdate/TaskList tools by default on Opus 4.8, Sonnet 5, Fable 5, Mythos 5 and later
+  unless this is set, so every `ccd`/`ccr`-launched session on those models was running without a
+  task list even though the per-project `CLAUDE_CODE_TASK_LIST_ID` machinery was already wired up.
+
 ## [2.12.2] - 2026-08-30
 
 ### Fixed
