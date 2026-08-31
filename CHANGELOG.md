@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.12.3] - 2026-08-31
+
+### Added
+
+- `ccst ccsched-jobs install`'s "changed (not touched)" line and `ccst doctor`'s per-job
+  `ccsched-job:<id>` check now show the actual per-field before/after values for a bundled job
+  that has drifted from its shipped definition, not just the names of the fields that differ -
+  e.g. `command:` / `- bundled: ...` / `+ current: ...`, one block per differing field. `command`
+  renders as an actual shell line (`shlex.join`), not a Python tuple repr. `ccst doctor` also loses
+  its "run install --apply to see the diff" indirection since the diff is now inline.
+
+### Changed
+
+- The SessionStart/UserPromptSubmit scheduled-task catch-up digest now coalesces a job's repeated
+  clean-output runs (e.g. `pdata-sync-hourly` ticking more than once before the next session)
+  into one line carrying a count and the span covered, showing only the most recent run's output -
+  instead of one full output block per run. Findings (a nonzero-exit run reporting something) are
+  unaffected - still always shown individually, same as before.
+
 ## [2.12.2] - 2026-08-31
 
 ### Added

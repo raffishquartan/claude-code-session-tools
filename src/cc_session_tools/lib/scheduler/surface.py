@@ -17,6 +17,13 @@ unconditionally rather than the per-job flag, since digest.py never consults
 `surface` for Outcome.RAN — the per-job flag is only meaningful for LAUNCH,
 where it is still looked up via `_surface_flag`.
 
+A clean (0-exit) run's captured stdout coalesces per job_id the same way bare
+routine runs do: several such runs for the same job within one digest render
+as one line carrying a count, the span they cover, and only the MOST RECENT
+run's output (§ output-coalesce fix) — see `_output_reports`. Findings
+(nonzero-exit captured stdout) are exempt, same as FAILED/SUSPENDED: they are
+signal, never folded, always replayed individually with their own age suffix.
+
 `surface(..., lookback=...)` optionally widens the read below the session's
 own cursor to also pick up ledger activity within `lookback` of `now`, for the
 SessionStart 24h rolling lookback (§ widen fix) — see catchup.py, the only
@@ -79,6 +86,19 @@ def _format_age(sent: datetime | None, now: datetime) -> str:
     if hours < 24:
         return f"{hours}h ago"
     return f"{hours // 24}d ago"
+
+
+def _format_span(oldest: datetime, now: datetime) -> str:
+    """Same buckets as `_format_age`, but as a window ("11h") rather than a
+    point in time ("11h ago") - for the "N times in last {span}" wording on
+    coalesced clean-output runs."""
+    minutes = max(1, int((now - oldest).total_seconds() // 60))
+    if minutes < 60:
+        return f"{minutes}m"
+    hours = minutes // 60
+    if hours < 24:
+        return f"{hours}h"
+    return f"{hours // 24}d"
 
 
 # Sort key for an entry whose ts is missing/unparseable - sorts first, same
@@ -161,6 +181,51 @@ def _routine_reports(
     return out
 
 
+def _output_reports(
+    entries: list[dict[str, object]], *, now: datetime,
+) -> list[tuple[datetime, JobReport]]:
+    """Clean-output (0-exit, captured stdout) RUN/BACKFILL entries, grouped by
+    job_id. A job_id with only one entry renders exactly as before (no count
+    suffix). A job_id with several entries within one digest coalesces to one
+    line carrying a count, the span the group covers, and only the MOST
+    RECENT entry's output - not N near-identical output blocks for the same
+    job (§ output-coalesce fix). Findings-bearing (nonzero-exit) entries never
+    reach this function - they are signal, not routine noise, and always
+    replay individually (see the caller)."""
+    groups: dict[str, list[dict[str, object]]] = {}
+    for e in entries:
+        groups.setdefault(str(e.get("job_id", "")), []).append(e)
+
+    out: list[tuple[datetime, JobReport]] = []
+    for job_id, group in groups.items():
+        timestamps = [_parse_ts(g.get("ts")) for g in group]
+        latest = max((t for t in timestamps if t is not None), default=None)
+        oldest = min((t for t in timestamps if t is not None), default=None)
+        sort_ts = latest if latest is not None else _UNKNOWN_TS
+        if len(group) == 1:
+            e = group[0]
+            out.append((sort_ts, JobReport(
+                job_id=job_id, outcome=Outcome.RAN, surface=True, overdue="",
+                ran=int(cast(int, e.get("ran", 0)) or 0), deferred=0, expired=0,
+                consecutive_failures=0, age=_format_age(latest, now),
+                output=str(e.get("error")),
+            )))
+            continue
+        # Most recent entry by ts (fall back to list order for unparseable ts).
+        latest_entry = max(
+            group, key=lambda g: (_parse_ts(g.get("ts")) or _UNKNOWN_TS),
+        )
+        window = _format_span(oldest, now) if oldest is not None else "unknown time"
+        out.append((sort_ts, JobReport(
+            job_id=job_id, outcome=Outcome.RAN, surface=True, overdue="",
+            ran=sum(int(cast(int, g.get("ran", 0)) or 0) for g in group),
+            deferred=0, expired=0, consecutive_failures=0,
+            age=_format_age(latest, now), count=len(group),
+            output=str(latest_entry.get("error")), window=window,
+        )))
+    return out
+
+
 def surface(
     *, session_uuid: str, now: datetime, lookback: timedelta | None = None,
 ) -> SurfaceResult:
@@ -185,6 +250,7 @@ def surface(
     # them.
     pairs: list[tuple[datetime, JobReport]] = []
     routine: list[dict[str, object]] = []
+    clean_output: list[dict[str, object]] = []
     for e in entries:
         event = str(e.get("event", ""))
         job_id = str(e.get("job_id", ""))
@@ -218,20 +284,23 @@ def surface(
             captured = e.get("error")
             if captured:
                 is_warning = raw_exit not in (0, None)
-                # surface=True unconditionally: a completed run is always
-                # visible, so the per-job flag is not load-bearing here (see
-                # module docstring) - matches the pre-existing findings
-                # convention rather than the FAILED/SUSPENDED "write the real
-                # flag, bypass it in digest.py" one, since digest.py does not
-                # even look at `surface` for Outcome.RAN.
-                pairs.append((sort_ts, JobReport(
-                    job_id=job_id, outcome=Outcome.RAN, surface=True, overdue="",
-                    ran=int(cast(int, e.get("ran", 0)) or 0), deferred=0, expired=0,
-                    consecutive_failures=0,
-                    findings=str(captured) if is_warning else None,
-                    output=str(captured) if not is_warning else None,
-                    age=_format_age(sent, now),
-                )))
+                if is_warning:
+                    # Findings are signal, not routine noise - never coalesced,
+                    # always replayed individually (see module docstring).
+                    # surface=True unconditionally: a completed run is always
+                    # visible, so the per-job flag is not load-bearing here.
+                    pairs.append((sort_ts, JobReport(
+                        job_id=job_id, outcome=Outcome.RAN, surface=True, overdue="",
+                        ran=int(cast(int, e.get("ran", 0)) or 0), deferred=0, expired=0,
+                        consecutive_failures=0, findings=str(captured),
+                        age=_format_age(sent, now),
+                    )))
+                else:
+                    # A clean (0-exit) run's captured stdout - eligible for
+                    # per-job_id coalescing (§ output-coalesce fix), same
+                    # spirit as the bare-run routine fold below but keeping
+                    # the most recent output rather than dropping it.
+                    clean_output.append(e)
             else:
                 # A bare clean run with no captured stdout - still eligible
                 # for the routine backlog fold (spam control, not the
@@ -249,6 +318,7 @@ def surface(
         # skip_expired and defer events are not surfaced as standalone lines.
 
     pairs.extend(_routine_reports(routine, now=now))
+    pairs.extend(_output_reports(clean_output, now=now))
     pairs.sort(key=lambda p: p[0])
 
     cursor.write_cursor(session_uuid, new_offset)

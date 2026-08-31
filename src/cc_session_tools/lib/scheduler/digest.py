@@ -40,6 +40,11 @@ class JobReport:
     # exclusive with `findings`: a given run is either a clean 0-exit or a
     # findings-bearing nonzero exit, never both.
     output: str | None = None
+    # RAN with output and count > 1 only: the span from the oldest coalesced
+    # run to now (e.g. "11h", "2d"), formatted without an "ago" suffix so it
+    # reads as a window ("... in last {window}:") rather than a point in time
+    # - see surface.py's per-job clean-output coalescing.
+    window: str | None = None
 
 
 def _ordinal(n: int) -> str:
@@ -90,7 +95,17 @@ def _line(report: JobReport) -> str | None:
             # distinct from the findings/warning case above so a passing check
             # is never mistaken for one that found something. One line-group:
             # never falls through to the bare "✓ ran" case below.
-            header = f"✓ ran {report.job_id}{overdue}{age_suffix}:"
+            if report.count > 1:
+                # Several clean-output runs of the same job coalesced within
+                # one sweep (§ output-coalesce fix, mirrors the bare-run
+                # coalesce below) - one line carrying a count and the window
+                # they span, body is the most recent run's output only.
+                header = (
+                    f"✓ ran {report.job_id}{age_suffix} "
+                    f"({report.count} times in last {report.window}):"
+                )
+            else:
+                header = f"✓ ran {report.job_id}{overdue}{age_suffix}:"
             body = "\n".join(f"  {line}" for line in report.output.splitlines())
             return f"{header}\n{body}"
         if report.count > 1:

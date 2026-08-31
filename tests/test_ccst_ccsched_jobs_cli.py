@@ -93,7 +93,14 @@ def test_changed_job_is_reported_not_touched_and_not_overwritten(base_env):
 
     r = _run(base_env, "ccsched-jobs", "install", "--apply")
     assert r.returncode == 0, r.stderr
-    assert "changed (not touched): telemetry-trim-weekly - timeout" in r.stdout
+    assert (
+        "changed (not touched): telemetry-trim-weekly - 1 field differs "
+        "from the bundled definition:" in r.stdout
+    )
+    assert "timeout:" in r.stdout
+    assert "- bundled: 60s" in r.stdout
+    assert "+ current: 9s" in r.stdout
+    assert "run 'ccsched edit telemetry-trim-weekly' to realign" in r.stdout
     assert "already registered: telemetry-trim-weekly" not in r.stdout
 
     show = subprocess.run(
