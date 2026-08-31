@@ -166,12 +166,18 @@ def test_session_end_no_ops_for_a_project_that_was_never_pdata_migrated(
 def test_session_start_skips_rehydrate_entirely_when_the_project_is_occupied(
     monkeypatch: pytest.MonkeyPatch, notified: list[tuple[str, str, str]],
 ) -> None:
-    """Another live session in this project takes priority - don't change its data mid-task."""
+    """Another live session in this project takes priority - don't change its data mid-task. The
+    skip is still reported: silence here used to be indistinguishable from "the occupancy check
+    itself is broken", which is exactly the failure mode Chris hit."""
     _build_local("proj", content="local-content", vector={MACHINE: 1})
     _publish_dump("proj", content="remote-content", vector={MACHINE: 1, "mbp": 5}, machine_id="mbp")
     monkeypatch.setattr(pdata_sync.occupancy, "is_occupied", lambda root, *, exclude_pid=None: True)
 
-    assert pdata_sync.on_session_start(_cwd_for("proj"), session_pid=1234) is None
+    message = pdata_sync.on_session_start(_cwd_for("proj"), session_pid=1234)
+
+    assert message is not None
+    assert "proj" in message
+    assert "already open in another Claude Code session" in message
     assert _local_contents("proj") == ["local-content"]  # not rehydrated
     assert notified == []
 
@@ -247,22 +253,27 @@ def test_session_start_fast_forward_falls_back_to_mtime_when_dumped_at_is_absent
     assert notified == []
 
 
-def test_session_start_no_op_outcome_is_silent(
+def test_session_start_no_op_outcome_still_reports_that_the_hook_ran(
     unoccupied: None, notified: list[tuple[str, str, str]],
 ) -> None:
-    """The common case, on every single session start - it must not print anything."""
+    """The common case, on every single session start - still gets a visible line, so the hook
+    having run is never in question (see the occupied-gate test's comment)."""
     _build_local("proj", content="local-content", vector={MACHINE: 2})
     _publish_dump("proj", content="remote-content", vector={MACHINE: 1}, machine_id="mbp")
 
-    assert pdata_sync.on_session_start(_cwd_for("proj"), session_pid=1234) is None
+    message = pdata_sync.on_session_start(_cwd_for("proj"), session_pid=1234)
+
+    assert message is not None
+    assert "proj" in message
     assert notified == []
 
 
-def test_session_start_deferred_outcome_is_silent(
+def test_session_start_deferred_outcome_still_reports_that_the_hook_ran(
     monkeypatch: pytest.MonkeyPatch, unoccupied: None, notified: list[tuple[str, str, str]],
 ) -> None:
     """DEFERRED is transient (another writer holds the lock right now), not a conflict - the
-    next trigger retries. Nothing to tell the user, and definitely nothing to notify about."""
+    next trigger retries, and nothing goes to sync_notify - but it's still visible to this
+    session, not silently indistinguishable from NO_OP."""
     _build_local("proj", content="local-content", vector={MACHINE: 1})
     monkeypatch.setattr(
         pdata_sync.rehydrate, "rehydrate",
@@ -271,7 +282,10 @@ def test_session_start_deferred_outcome_is_silent(
         ),
     )
 
-    assert pdata_sync.on_session_start(_cwd_for("proj"), session_pid=1234) is None
+    message = pdata_sync.on_session_start(_cwd_for("proj"), session_pid=1234)
+
+    assert message is not None
+    assert "proj" in message
     assert notified == []
 
 
@@ -438,6 +452,37 @@ def test_main_routes_session_start_and_emits_the_message(
     assert _local_contents("proj") == ["remote-content"]
 
 
+def test_main_resolves_the_launching_claude_pid_rather_than_using_raw_getppid(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Regression test: `main()` used to pass bare `os.getppid()` as the occupancy exclusion,
+    which is an `sh -c` wrapper's PID rather than the real `claude` process's whenever `/bin/sh`
+    is dash - see `occupancy.launching_claude_pid`'s docstring. `main()` must resolve through it
+    instead, and pass whatever it returns straight through to `is_occupied`."""
+    _build_local("proj", content="local-content", vector={MACHINE: 1})
+    seen_start_pid: list[int] = []
+    seen_exclude: list[int | None] = []
+
+    def fake_launching_claude_pid(start_pid: int, **kwargs: object) -> int | None:
+        seen_start_pid.append(start_pid)
+        return 9999
+
+    def fake_is_occupied(root: Path, *, exclude_pid: int | None = None) -> bool:
+        seen_exclude.append(exclude_pid)
+        return False
+
+    monkeypatch.setattr(pdata_sync.occupancy, "launching_claude_pid", fake_launching_claude_pid)
+    monkeypatch.setattr(pdata_sync.occupancy, "is_occupied", fake_is_occupied)
+    monkeypatch.setattr(pdata_sync.os, "getppid", lambda: 4242)
+
+    _run_main(monkeypatch, {
+        "hook_event_name": "SessionStart", "cwd": _cwd_for("proj"), "session_id": "s1",
+    })
+
+    assert seen_start_pid == [4242]
+    assert seen_exclude == [9999]
+
+
 def test_main_routes_session_end_and_stays_silent(
     monkeypatch: pytest.MonkeyPatch, notified: list[tuple[str, str, str]],
 ) -> None:
@@ -450,7 +495,30 @@ def test_main_routes_session_end_and_stays_silent(
 
     assert rc == 0
     assert "systemMessage" not in emitted
+    # SessionEnd has no `hookSpecificOutput` shape in Claude Code's output schema at all - any
+    # such payload, whatever its hookEventName, fails validation and surfaces as a hook-failure
+    # error (this was a real bug: the hook used to emit one unconditionally for every event).
+    assert "hookSpecificOutput" not in emitted
     assert dump.read_latest(store.project_root("proj")).checksum_valid
+
+
+def test_main_session_end_emits_no_hook_specific_output_even_when_the_real_work_raises(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _build_local("proj", content="local-content", vector={MACHINE: 1})
+
+    def boom(cwd: str) -> None:
+        raise OSError("disk went away")
+
+    monkeypatch.setattr(pdata_sync, "on_session_end", boom)
+
+    rc, emitted = _run_main(monkeypatch, {
+        "hook_event_name": "SessionEnd", "cwd": _cwd_for("proj"), "session_id": "s1",
+    })
+
+    assert rc == 0
+    assert "hookSpecificOutput" not in emitted
+    assert "systemMessage" not in emitted
 
 
 def test_main_never_blocks_a_session_on_unparseable_stdin(

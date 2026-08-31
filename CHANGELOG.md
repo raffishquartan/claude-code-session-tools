@@ -7,8 +7,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [2.12.3] - 2026-08-31
-
 ### Added
 
 - `ccsched rename <old-id> <new-id>` renames a job's id in place. Its run state
@@ -24,11 +22,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   TaskGet/TaskUpdate/TaskList tools by default on Opus 4.8, Sonnet 5, Fable 5, Mythos 5 and later
   unless this is set, so every `ccd`/`ccr`-launched session on those models was running without a
   task list even though the per-project `CLAUDE_CODE_TASK_LIST_ID` machinery was already wired up.
-
-## [2.12.2] - 2026-08-30
-
-### Fixed
-
+- The `pdata-sync` `SessionEnd` hook no longer fails every session exit with a Claude Code hook
+  JSON validation error. It emitted a `hookSpecificOutput` block on every event, but Claude Code's
+  hook output schema has no `hookSpecificOutput` shape for `SessionEnd` at all - the discriminated
+  union simply doesn't define one, confirmed by inspecting the installed Claude Code binary's own
+  schema (`SessionStart`, `Stop`, and a dozen other events each have one; `SessionEnd` has none).
+  `on_session_end` never had a message to show anyway, so the field is now omitted entirely for
+  that event. Found live: reported on both a WSL2 laptop and a MacBook.
+- `ccst hooks run pdata-sync`'s `SessionStart` occupancy gate no longer treats every session's own
+  just-started project as "occupied by another session". It excluded `os.getppid()` from the
+  occupancy check, but a hook's `command` runs via `/bin/sh -c "<command>"`, and on any system
+  where `/bin/sh` is dash rather than bash - the Debian/Ubuntu/WSL2 default - dash does not replace
+  itself with the command it's running the way bash does for a single simple `-c` script. That
+  leaves a real `sh` process between `claude` and the hook, confirmed empirically (not assumed) by
+  installing a diagnostic `SessionStart` hook in a scratch project and walking `/proc/<pid>` for
+  the whole ancestor chain. `os.getppid()` therefore resolved to the `sh` wrapper - a PID that
+  never appears in the occupancy check's `pgrep -x claude` results - so the exclusion silently
+  matched nothing, and the automatic cross-machine rehydrate at session start effectively never
+  fired. A new `occupancy.launching_claude_pid` walks up the process tree to the nearest ancestor
+  actually named `claude` before excluding it. Found live: a manual `ccst pdata rehydrate` picked
+  up a change the automatic `SessionStart` hook had silently skipped every time.
+- `ccst hooks run pdata-sync`'s `SessionStart` outcome is now always visible as a `systemMessage` -
+  including the common "nothing to sync" and "another session has this project open" cases, which
+  were previously silent by design. The silence made it impossible to tell, from inside a session,
+  whether the hook had run at all.
 - `ccsched status <job>` now prints the ledger's captured diagnostic text under each row when
   present, instead of silently dropping it. The `error` column was already being written on every
   run/fail event - diagnosing a scheduled-job failure previously meant going around the CLI to
