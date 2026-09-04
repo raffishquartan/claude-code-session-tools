@@ -5,9 +5,20 @@ from pathlib import Path
 
 import pytest
 
-from cc_session_tools.lib.scheduler import throttle
+from cc_session_tools.lib.scheduler import store, throttle
 
 UTC = timezone.utc
+
+
+def _created_at(uuid: str) -> object:
+    conn = store.connect()
+    try:
+        row = conn.execute(
+            "SELECT created_at FROM reconcile_throttle WHERE session_uuid=?", (uuid,)
+        ).fetchone()
+    finally:
+        conn.close()
+    return row["created_at"]
 
 
 def test_read_missing_is_none(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -38,3 +49,15 @@ def test_per_session(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     throttle.stamp_reconciled("b", b)
     assert throttle.read_last_reconciled("a") == a
     assert throttle.read_last_reconciled("b") == b
+
+
+def test_stamp_sets_created_at_and_preserves_it_across_upserts(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("CC_SCHEDULER_DIR", str(tmp_path))
+    throttle.stamp_reconciled("u", datetime(2026, 6, 20, 10, 0, tzinfo=UTC))
+    first_created_at = _created_at("u")
+    assert first_created_at is not None
+
+    throttle.stamp_reconciled("u", datetime(2026, 6, 20, 10, 5, tzinfo=UTC))  # re-stamp
+    assert _created_at("u") == first_created_at  # first-seen, not last-reconciled

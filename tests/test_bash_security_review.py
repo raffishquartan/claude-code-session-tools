@@ -9,8 +9,8 @@ from typing import Any
 import pytest
 from pytest_mock import MockerFixture
 
-from cccs_hooks import bash_security_review as bsr
-from cccs_hooks.cache import CacheEntry
+from hooks import bash_security_review as bsr
+from hooks.cache import CacheEntry
 
 
 # ---------- helpers ----------
@@ -157,8 +157,8 @@ def test_norm_cache_hit_skips_claude(tmp_path: Path, monkeypatch: pytest.MonkeyP
     monkeypatch.setenv("CCCS_HOOKS_DIR", str(tmp_path / "hooks"))
     monkeypatch.delenv("CCCS_CACHE_PATH", raising=False)
     monkeypatch.delenv("CCCS_CLAUDE_BIN", raising=False)
-    from cccs_hooks import cache as cache_mod
-    from cccs_hooks import normalise as norm_mod
+    from hooks import cache as cache_mod
+    from hooks import normalise as norm_mod
     # Use compound commands (nontrivial) so they reach the cache layer.
     # Both normalise to "git fetch <ARGS>" so they share a norm_sha.
     cmd_a = "git fetch --all && git checkout feature/a"
@@ -169,7 +169,7 @@ def test_norm_cache_hit_skips_claude(tmp_path: Path, monkeypatch: pytest.MonkeyP
     norm_sha = cache_mod.sha256_command(norm_form) if norm_form else None
     cache_mod.cache_record(exact_sha, "safe", "none", cmd_a, norm_sha=norm_sha)
     # Run with cmd_b — should hit via norm_sha, not call Claude
-    spy = mocker.patch("cccs_hooks.bash_security_review.call_claude")
+    spy = mocker.patch("hooks.bash_security_review.call_claude")
     inp = json.dumps({
         "tool_name": "Bash",
         "tool_input": {"command": cmd_b},
@@ -194,8 +194,8 @@ def test_uv_sync_norm_cache_hit_skips_claude(
     monkeypatch.setenv("CCCS_HOOKS_DIR", str(tmp_path / "hooks"))
     monkeypatch.delenv("CCCS_CACHE_PATH", raising=False)
     monkeypatch.delenv("CCCS_CLAUDE_BIN", raising=False)
-    from cccs_hooks import cache as cache_mod
-    from cccs_hooks import normalise as norm_mod
+    from hooks import cache as cache_mod
+    from hooks import normalise as norm_mod
 
     cmd_a = "uv sync --extra dev"
     cmd_b = "uv sync --extra test"  # different flag, same norm_sha
@@ -207,7 +207,7 @@ def test_uv_sync_norm_cache_hit_skips_claude(
     norm_sha = cache_mod.sha256_command(norm_form)
     cache_mod.cache_record(exact_sha, "safe", "none", cmd_a, norm_sha=norm_sha)
 
-    spy = mocker.patch("cccs_hooks.bash_security_review.call_claude")
+    spy = mocker.patch("hooks.bash_security_review.call_claude")
     result = bsr.run(_input(cmd_b))
 
     assert result == 0
@@ -601,15 +601,15 @@ def test_invocation_row_written_on_cache_hit(tmp_path, monkeypatch, mocker):
     monkeypatch.setenv("CCCS_USE_COMMAND_CACHE", "1")
     monkeypatch.setenv("CCCS_CACHE_DB", str(tmp_path / "cache.db"))
     monkeypatch.delenv("CCCS_CACHE_PATH", raising=False)
-    from cccs_hooks import cache as cache_mod
-    from cccs_hooks import normalise as norm_mod
+    from hooks import cache as cache_mod
+    from hooks import normalise as norm_mod
     # Prime cache
     sha = cache_mod.sha256_command("git stash && git checkout feature/x")
     norm_form = norm_mod.normalise("git stash && git checkout feature/x")
     norm_sha = cache_mod.sha256_command(norm_form) if norm_form else None
     cache_mod.cache_record(sha, "safe", "none", "git stash && git checkout feature/x", norm_sha=norm_sha)
     # Run — should hit cache, write invocation row
-    mocker.patch("cccs_hooks.bash_security_review.call_claude")
+    mocker.patch("hooks.bash_security_review.call_claude")
     inp = json.dumps({
         "tool_name": "Bash",
         "tool_input": {"command": "git stash && git checkout feature/x"},
@@ -637,7 +637,7 @@ def test_invocation_row_written_on_claude_call(tmp_path, monkeypatch, mocker):
     monkeypatch.delenv("CCCS_CACHE_PATH", raising=False)
     mocker.patch.object(bsr, "_resolve_claude_bin", return_value="/fake/claude")
     mocker.patch(
-        "cccs_hooks.bash_security_review.call_claude",
+        "hooks.bash_security_review.call_claude",
         return_value=(
             "SUMMARY: test\nRISKS: none\nVERDICT: safe",
             None,
@@ -671,7 +671,7 @@ def test_invocation_row_written_on_claude_error(tmp_path, monkeypatch, mocker):
     monkeypatch.delenv("CCCS_CACHE_PATH", raising=False)
     mocker.patch.object(bsr, "_resolve_claude_bin", return_value="/fake/claude")
     mocker.patch(
-        "cccs_hooks.bash_security_review.call_claude",
+        "hooks.bash_security_review.call_claude",
         return_value=(None, "timeout after 30s"),
     )
     inp = json.dumps({
@@ -710,7 +710,7 @@ def test_call_claude_uses_distinct_session_tag(monkeypatch, mocker):
             stdout = "SUMMARY: test\nRISKS: none\nVERDICT: safe"
         return R()
 
-    mocker.patch("cccs_hooks.bash_security_review.subprocess.run", side_effect=fake_run)
+    mocker.patch("hooks.bash_security_review.subprocess.run", side_effect=fake_run)
 
     bsr.call_claude("some prompt", claude_bin="claude", timeout=30, model="sonnet")
 
@@ -734,7 +734,7 @@ def test_call_claude_preserves_parent_session_dir(monkeypatch, mocker):
             stdout = "SUMMARY: test\nRISKS: none\nVERDICT: safe"
         return R()
 
-    mocker.patch("cccs_hooks.bash_security_review.subprocess.run", side_effect=fake_run)
+    mocker.patch("hooks.bash_security_review.subprocess.run", side_effect=fake_run)
 
     bsr.call_claude("some prompt", claude_bin="claude", timeout=30, model="sonnet")
 
@@ -753,7 +753,7 @@ def test_call_claude_passes_model_flag(mocker):
             stdout = "SUMMARY: test\nRISKS: none\nVERDICT: safe"
         return R()
 
-    mocker.patch("cccs_hooks.bash_security_review.subprocess.run", side_effect=fake_run)
+    mocker.patch("hooks.bash_security_review.subprocess.run", side_effect=fake_run)
 
     bsr.call_claude("some prompt", claude_bin="claude", timeout=30, model="sonnet")
 

@@ -10,7 +10,7 @@ from pathlib import Path
 import pytest
 
 from cc_session_tools.lib import telemetry_store
-from cccs_hooks import catchup
+from hooks import catchup
 from cc_session_tools.lib.scheduler import ledger, reconcile, registry, state
 from cc_session_tools.lib.scheduler.jobspec import validate_job_fields
 

@@ -1,6 +1,6 @@
 """Shared schema, CCCS_HOOKS_DIR resolution, and connection helper for
-telemetry.db. Single source of truth so cccs_hooks.telemetry (writer),
-cccs_hooks.telemetry_trim, cccs_hooks.telemetry_query, and
+telemetry.db. Single source of truth so hooks.telemetry (writer),
+hooks.telemetry_trim, hooks.telemetry_query, and
 lib.scheduler.ledger (catch-up reader/writer) can never point at different
 directories or apply different schemas — the exact per-module drift risk
 data-stores-design-spec.md Section 7.3 calls out.
@@ -23,7 +23,7 @@ needs "never reused", which still holds.
 
 The migrations table records one-shot imports so they are never re-run and
 never mistaken for un-run. Do not infer migration state from row counts —
-this store's writer (cccs_hooks.telemetry) fills it from the moment CCST is
+this store's writer (hooks.telemetry) fills it from the moment CCST is
 installed, long before any import happens.
 """
 from __future__ import annotations

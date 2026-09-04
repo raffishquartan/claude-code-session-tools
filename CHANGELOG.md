@@ -7,6 +7,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.13.0] - 2026-09-04
+
+### Added
+
+- `created_at`/`updated_at` audit columns across every table in the five common stores
+  (`ccmsg.db`, `ccsched.db`, `sessions.db`, `telemetry.db`, `command-cache.db`) that lacked them,
+  backfilled automatically on connect for already-initialised installs. Where a table's existing
+  column (`installed_at`, `last_reconciled_at`, `muted_at`) turned out to be last-write rather
+  than first-write, it keeps its existing meaning and gains a real `created_at` alongside it;
+  where an existing column (`registered_at`, `discovered_at`) was already immutable, no
+  redundant column was added.
+- A shared compare-and-swap primitive (`lib/db.py:cas_update`, extracted from `lib/pdata`'s
+  proven pattern) and its first real use: `ccsched edit` no longer silently loses a concurrent
+  edit to the same job — two `ccsched edit` invocations racing against the same job now have the
+  second, stale-versioned write rejected (`JobVersionConflictError`) instead of silently
+  overwriting the first.
+- `ccmsg`, `ccsched`, and `sessions` each record an explicit, durable migration-completion marker
+  (matching `telemetry.db`'s existing marker), recorded only after each migration's own
+  verification step passes.
+- The bundled CLAUDE.md fragment's `TaskCreate`/`TaskList`/`TaskGet`/`TaskUpdate` documentation
+  and `ccd` auto-trust behavior (already shipped in 2.12.5) gained regression coverage for a
+  simulated fresh-install (non-editable) package layout, formally closing out a previously
+  reported packaging bug that code inspection showed was already fixed.
+
+### Changed
+
+- The `cccs_hooks` package (inherited from before these hooks moved into this repo from
+  `claude-code-config-sync`) is renamed to `hooks`, matching how `lib/hook_registry.py` already
+  refers to them. Pure rename — hook names, invocation syntax (`ccst hooks run <name>`), and all
+  observable behavior are unchanged.
+
+### Fixed
+
+- `ccst doctor`'s pending-migration check no longer infers "already migrated" from row counts for
+  `ccmsg`/`ccsched`/`sessions` — each of these stores' writers begin inserting rows the moment
+  CCST is installed, well before any migration runs, so a machine that opened one session before
+  migrating was silently downgraded from FAIL to WARN and the operator was never told the import
+  was still outstanding. All four stores (including `telemetry`, unchanged in behavior) now read
+  an explicit completion marker instead.
+
 ## [2.12.5] - 2026-09-04
 
 ### Added

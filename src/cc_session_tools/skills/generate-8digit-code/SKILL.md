@@ -18,7 +18,7 @@ LLMs are not random number generators. A model-generated "random" number is pred
 ## When NOT to use
 
 - The `delete-sessions` script — it generates its own code via `secrets.randbelow` internally; you do not need to supply one.
-- Verification of a code the user already typed — that is handled by `cccs_hooks.confirm_8digit` (the hook reads the transcript automatically).
+- Verification of a code the user already typed — that is handled by `hooks.confirm_8digit` (the hook reads the transcript automatically).
 
 ## How to generate the code
 

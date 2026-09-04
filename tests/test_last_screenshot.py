@@ -1,4 +1,4 @@
-"""Tests for cccs_hooks.last_screenshot."""
+"""Tests for hooks.last_screenshot."""
 from __future__ import annotations
 
 import json
@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pytest
 
-from cccs_hooks.last_screenshot import (
+from hooks.last_screenshot import (
     build_context,
     find_token,
     newest_screenshot,
@@ -153,7 +153,7 @@ def test_context_dir_but_no_image() -> None:
 def _run(prompt: str, env: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
     full_env = {**os.environ, **(env or {})}
     return subprocess.run(
-        [sys.executable, "-m", "cccs_hooks.last_screenshot"],
+        [sys.executable, "-m", "hooks.last_screenshot"],
         input=json.dumps({"prompt": prompt, "session_id": "t", "cwd": "/tmp"}),
         capture_output=True, text=True, env=full_env,
     )
@@ -176,7 +176,7 @@ def test_cli_emits_context_with_token(tmp_path: Path) -> None:
 
 def test_cli_exits_0_on_bad_json() -> None:
     r = subprocess.run(
-        [sys.executable, "-m", "cccs_hooks.last_screenshot"],
+        [sys.executable, "-m", "hooks.last_screenshot"],
         input="not json", capture_output=True, text=True,
     )
     assert r.returncode == 0
@@ -185,7 +185,7 @@ def test_cli_exits_0_on_bad_json() -> None:
 def test_cli_unset_dir_is_visible_to_user() -> None:
     env = {k: v for k, v in os.environ.items() if k != "CCST_SCREENSHOT_DIR"}
     r = subprocess.run(
-        [sys.executable, "-m", "cccs_hooks.last_screenshot"],
+        [sys.executable, "-m", "hooks.last_screenshot"],
         input=json.dumps({"prompt": "look at >lss"}),
         capture_output=True, text=True, env=env,
     )

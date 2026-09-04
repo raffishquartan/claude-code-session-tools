@@ -73,3 +73,18 @@ def test_success_exit_codes_column_backfilled_on_pre_existing_db(
         assert row["success_exit_codes"] == "[0]"
     finally:
         conn2.close()
+
+
+def test_connect_creates_migrations_table(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("CC_SCHEDULER_DIR", str(tmp_path))
+    conn = store.connect()
+    try:
+        names = {
+            r["name"]
+            for r in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'"
+            ).fetchall()
+        }
+    finally:
+        conn.close()
+    assert "migrations" in names

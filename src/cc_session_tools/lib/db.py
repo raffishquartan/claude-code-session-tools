@@ -116,6 +116,58 @@ def record_migration(conn: sqlite3.Connection, name: str, *, applied_at: str) ->
     )
 
 
+def add_missing_columns(conn: sqlite3.Connection, table: str, columns: dict[str, str]) -> None:
+    """Idempotent ALTER TABLE ADD COLUMN for columns that might not exist yet on an
+    already-shipped table.
+
+    CREATE TABLE IF NOT EXISTS in a store's DDL is a no-op against an existing table, so a
+    column added after a table already shipped needs this explicit add-if-missing step (the
+    established idiom this generalizes: scheduler/store.py's original per-store
+    _migrate_jobs_table). ``columns`` maps column name -> its full column-definition SQL (e.g.
+    {"updated_at": "TEXT"} or {"version": "INTEGER NOT NULL DEFAULT 1"}). Commits only if a
+    column was actually added; a no-op call leaves any open transaction alone.
+    """
+    existing = {row["name"] for row in conn.execute(f"PRAGMA table_info({table})")}
+    changed = False
+    for name, coldef in columns.items():
+        if name not in existing:
+            conn.execute(f"ALTER TABLE {table} ADD COLUMN {name} {coldef}")
+            changed = True
+    if changed:
+        conn.commit()
+
+
+def cas_update(
+    conn: sqlite3.Connection,
+    *,
+    table: str,
+    id_column: str,
+    id_value: object,
+    version_column: str,
+    expected_version: int,
+    set_clause: str,
+    params: tuple[object, ...],
+) -> bool:
+    """Conditionally UPDATE one row, guarded by the version it was last read at.
+
+    Returns True iff exactly one row changed - the caller supplied the version it most
+    recently read, and no other writer has touched the row since. Returns False (zero rows
+    changed) both when the row does not exist and when another writer already advanced its
+    version - the caller must re-fetch to tell the two apart, this function does not.
+
+    set_clause is caller-supplied SQL text (not a column->value dict) so each call site
+    controls its own version-column increment (typically "<version_column> = <version_column>
+    + 1") and any partial-update semantics (e.g. COALESCE(?, existing_column)) - this stays a
+    thin, generic primitive extracted from lib/pdata/repository.py's proven pattern, not an ORM.
+    Caller commits.
+    """
+    cur = conn.execute(
+        f"UPDATE {table} SET {set_clause} WHERE {id_column}=? AND {version_column}=?",
+        (*params, id_value, expected_version),
+    )
+    return cur.rowcount == 1
+
+
 def checkpoint(conn: sqlite3.Connection) -> None:
     """Force a WAL checkpoint. Call before any filesystem-level copy of a live .db file."""
     conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")

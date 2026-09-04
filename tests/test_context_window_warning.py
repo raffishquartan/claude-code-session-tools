@@ -3,7 +3,7 @@ from pathlib import Path
 
 import pytest
 
-from cccs_hooks import context_window_warning as cww
+from hooks import context_window_warning as cww
 
 
 def _write_transcript(path: Path, lines: list[dict]) -> None:

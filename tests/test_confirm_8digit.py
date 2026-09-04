@@ -7,9 +7,9 @@ from pathlib import Path
 
 import pytest
 
-from cccs_hooks.confirm_8digit import GATED_TOOLS_DEFAULT, verify
-from cccs_hooks.confirm_8digit import markers_dir as confirm_8digit_markers_dir
-from cccs_hooks.marker_allow import markers_dir as marker_allow_markers_dir
+from hooks.confirm_8digit import GATED_TOOLS_DEFAULT, verify
+from hooks.confirm_8digit import markers_dir as confirm_8digit_markers_dir
+from hooks.marker_allow import markers_dir as marker_allow_markers_dir
 
 
 # ---------- transcript builder ----------
@@ -419,7 +419,7 @@ def test_confirm_8digit_and_marker_allow_share_markers_dir(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """confirm_8digit and marker_allow both import markers_dir from
-    cccs_hooks.markers - it is the identical function, so a marker refreshed
+    hooks.markers - it is the identical function, so a marker refreshed
     via marker-allow's auto-approved touch is always seen as fresh by
     confirm_8digit's exemption check."""
     assert confirm_8digit_markers_dir is marker_allow_markers_dir

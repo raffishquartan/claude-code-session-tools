@@ -13,7 +13,7 @@ from pathlib import Path
 
 import pytest
 
-from cccs_hooks.marker_allow import main, match_marker_touch
+from hooks.marker_allow import main, match_marker_touch
 
 
 # ---------- match_marker_touch (pure) ----------

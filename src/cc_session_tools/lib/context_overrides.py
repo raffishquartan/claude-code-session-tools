@@ -36,10 +36,12 @@ def get_override(session_id: str, *, path: Path | None = None) -> bool:
 def set_override(session_id: str, state: str, *, path: Path | None = None) -> None:
     conn = sessions_db.connect(path=path)
     try:
+        now_iso = sessions_db._now_iso()
         conn.execute(
-            "INSERT INTO context_overrides (session_id, state, updated_at) VALUES (?, ?, ?) "
-            "ON CONFLICT(session_id) DO UPDATE SET state=excluded.state, updated_at=excluded.updated_at",
-            (session_id, state, sessions_db._now_iso()),
+            "INSERT INTO context_overrides (session_id, state, updated_at, created_at) "
+            "VALUES (?, ?, ?, ?) ON CONFLICT(session_id) DO UPDATE SET "
+            "state=excluded.state, updated_at=excluded.updated_at",
+            (session_id, state, now_iso, now_iso),
         )
         conn.commit()
     finally:

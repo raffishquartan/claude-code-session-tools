@@ -14,7 +14,7 @@ Both flags are optional and can be combined. Without any flags, no pruning is
 done and the tool prints the current file size and row counts.
 
 Designed to be invoked via ``ccst telemetry trim``; can also run directly as
-``python -m cccs_hooks.telemetry_trim``.
+``python -m hooks.telemetry_trim``.
 """
 from __future__ import annotations
 

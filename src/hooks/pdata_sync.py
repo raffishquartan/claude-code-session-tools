@@ -45,7 +45,7 @@ from cc_session_tools.lib.pdata import (
     vector_clock_store,
 )
 from cc_session_tools.lib.scheduler import ledger
-from cccs_hooks.telemetry import TelemetryEntry, log_event
+from hooks.telemetry import TelemetryEntry, log_event
 
 logger = logging.getLogger(__name__)
 

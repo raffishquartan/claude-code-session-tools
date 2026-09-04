@@ -38,7 +38,7 @@ Once the separate repo exists, update CCST to:
   `ccst skills install --from-git <url>` (or symlink) command they need.
 - [ ] **`ccst doctor`** — detect whether `notify-user` is installed and
   configured; surface a hint if it is missing.
-- [ ] **`cccs_hooks.confirm_8digit`** — when the 8-digit gate fires AND
+- [ ] **`hooks.confirm_8digit`** — when the 8-digit gate fires AND
   `notify-user` is installed, send a push notification ("Claude Code wants
   to <action> in <session> — code is <NNNNNNNN>"). The user can then
   confirm from their phone instead of needing to be at the terminal.
@@ -89,35 +89,6 @@ explicit one-shot user action, not something auto-prune should do silently:
       (`find -L ~/cc -name .pending-rename -delete`, printed by the hook
       itself) or to work through the sessions and `/rename` them properly.
 
-## Migration markers for ccmsg, ccsched and sessions
-
-`ccst migrate telemetry` records an explicit marker (`migrations` table, via
-`lib.db.MIGRATIONS_DDL`) when its one-shot import completes, and both the
-script and `ccst doctor` read that marker to decide whether the import has
-happened. The other three migrations still infer it from "does the new store
-have any rows".
-
-That inference is wrong for the same reason it was wrong for telemetry: the
-new code writes to these stores from the moment CCST is installed, well
-before anyone runs a migration. `sessions.db` gets `session_tags` rows from
-the session-tag hook on the first session; `ccsched.db` gets job rows on the
-first scheduler use; `ccmsg.db` gets rows on the first message. So a
-`ccst doctor` run on a machine with unmigrated legacy data can report
-`migration already ran` when it has not, and the SessionStart
-`pending-migration` hook — which only surfaces FAILs — then stays silent
-about it.
-
-- [ ] Add `db.MIGRATIONS_DDL` to the ccmsg, ccsched and sessions store
-  schemas.
-- [ ] Record a marker at the end of each of the three migrations, inside the
-  same transaction as the writes (see `migrate_telemetry.py` for why the
-  marker must not be a separate commit).
-- [ ] Switch `doctor.check_pending_data_store_migration` to the marker for
-  all four stores and delete the `_count_new_store_rows` branch.
-- [ ] Backfill: a store whose legacy sources are already gone has migrated by
-  definition — decide whether to write the marker on first connect in that
-  case, or leave it absent and rely on "no legacy data found -> OK".
-
 ## Harden `enforce-git-branch-policy.sh` against text-matching bypasses
 
 Not a CCST file — the hook lives in `claude-code-config-sync`
@@ -142,21 +113,6 @@ text, not files it goes on to execute.
   regardless of how the git command was run) — the write-up recommends the latter as strictly more
   robust.
 - [ ] This is a `claude-code-config-sync` change, not a CCST one — implement there, not here.
-
-## Tidy up `catchup.py` and siblings' module path
-
-`catchup.py`, `session_tag.py`, `after_response.py`, and `messaging_deliver.py` all live under
-`src/cc_session_tools/cccs_hooks/` — a package name inherited from when these hooks were CCCS
-(`claude-code-config-sync`) code, before they moved into this repo. The `cccs_hooks` name no
-longer describes anything: these are CCST hooks now, dispatched via `HOOK_VERBS` in
-`lib/hook_registry.py` and invoked as `ccst hooks run <name>`.
-
-- [ ] Rename the `cccs_hooks` package to something that reflects current ownership (e.g.
-  `hooks`, matching how `lib/hook_registry.py` already refers to them).
-- [ ] Update every import site and the `HOOK_VERBS` dispatch table in `lib/hook_registry.py`
-  accordingly.
-- [ ] Check for any other stale `cccs_hooks`-shaped naming elsewhere in this repo picked up by
-  the same historical move (e.g. docstrings, test paths).
 
 ## `ccst pdata reorganize` - reuse one connection across matched-record updates
 

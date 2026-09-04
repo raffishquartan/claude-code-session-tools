@@ -80,3 +80,25 @@ def test_mutes_share_file_with_session_tags(mutes_path):
     sessions_db.write_tag("uuid-1", "my-tag", path=mutes_path)
     assert doctor_mutes.load_mutes(mutes_path) == {"a": "2026-07-01"}
     assert sessions_db.lookup_tags(["uuid-1"], path=mutes_path) == {"uuid-1": "my-tag"}
+
+
+def _created_at(mutes_path: Path, name: str) -> object:
+    from cc_session_tools.lib import sessions_db
+    conn = sessions_db.connect(path=mutes_path)
+    try:
+        row = conn.execute(
+            "SELECT created_at FROM doctor_mutes WHERE name=?", (name,)
+        ).fetchone()
+    finally:
+        conn.close()
+    return row["created_at"]
+
+
+def test_add_mute_sets_created_at_and_preserves_it_on_re_mute(mutes_path):
+    doctor_mutes.add_mute(mutes_path, "a", today="2026-07-01")
+    first_created_at = _created_at(mutes_path, "a")
+    assert first_created_at is not None
+
+    doctor_mutes.add_mute(mutes_path, "a", today="2026-07-05")  # re-mute
+    assert _created_at(mutes_path, "a") == first_created_at  # first-muted, not last-muted
+    assert doctor_mutes.load_mutes(mutes_path)["a"] == "2026-07-05"  # muted_at still updates

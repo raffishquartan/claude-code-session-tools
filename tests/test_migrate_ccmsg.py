@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 from cc_session_tools.cli.migrate_ccmsg import migrate
+from cc_session_tools.lib import db as db_lib
 from cc_session_tools.lib.messaging import message, repository, store
 
 
@@ -81,3 +82,34 @@ def test_migrate_rerun_after_success_does_not_false_abort(
     rc = migrate(old_root=old_root, backup_dir=backups, dry_run=False)
     assert rc == 0
     assert repository.get_by_id("20260620T000000Z-0001").subject == "One"  # still there
+
+
+def test_migration_records_completion_marker(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    old_root = tmp_path / "old"
+    monkeypatch.setenv("CCST_MESSAGES_ROOT", str(tmp_path / "new"))
+    _old_message_file(old_root, "projects/alpha", "20260620T000000Z-0001", "One")
+    migrate(old_root=old_root, backup_dir=tmp_path / "backups", dry_run=False)
+    conn = repository.connect()
+    try:
+        assert db_lib.migration_applied(conn, repository.LEGACY_FLAT_FILE_MIGRATION)
+    finally:
+        conn.close()
+
+
+def test_refuses_to_reimport_when_marker_already_recorded(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    old_root = tmp_path / "old"
+    monkeypatch.setenv("CCST_MESSAGES_ROOT", str(tmp_path / "new"))
+    _old_message_file(old_root, "projects/alpha", "20260620T000000Z-0001", "One")
+    backups = tmp_path / "backups"
+    migrate(old_root=old_root, backup_dir=backups, dry_run=False)
+
+    # Legacy files reappear (e.g. a manually-restored old_root) after this store is
+    # already marked migrated - must refuse, not double-import.
+    _old_message_file(old_root, "projects/alpha", "20260620T000000Z-0002", "Two")
+    rc = migrate(old_root=old_root, backup_dir=backups, dry_run=False)
+    assert rc == 1
+    assert repository.get_by_id("20260620T000000Z-0002") is None  # not imported

@@ -185,6 +185,99 @@ def test_cursor_load_save_round_trip(root: Path) -> None:
     assert repo.load_cursor("uuid-1")["projects/alpha"] == "20260620T130000Z-0003"
 
 
+def _row_audit(message_id: str) -> tuple[object, object]:
+    """(updated_at, version) for one messages row, read via a raw connection - Message itself
+    doesn't expose these audit-only columns."""
+    conn = repo.connect()
+    try:
+        row = conn.execute(
+            "SELECT updated_at, version FROM messages WHERE id=?", (message_id,)
+        ).fetchone()
+    finally:
+        conn.close()
+    return row["updated_at"], row["version"]
+
+
+def _cursor_audit(session_uuid: str, partition: str) -> tuple[object, object]:
+    conn = repo.connect()
+    try:
+        row = conn.execute(
+            "SELECT created_at, updated_at FROM cursors WHERE session_uuid=? AND partition=?",
+            (session_uuid, partition),
+        ).fetchone()
+    finally:
+        conn.close()
+    return row["created_at"], row["updated_at"]
+
+
+def test_insert_leaves_updated_at_null_and_version_at_default(root: Path) -> None:
+    repo.insert(_msg("20260620T000000Z-0001"))
+    updated_at, version = _row_audit("20260620T000000Z-0001")
+    assert updated_at is None  # not yet updated, only inserted
+    assert version == 1
+
+
+def test_mark_read_bumps_updated_at_and_version(root: Path) -> None:
+    repo.insert(_msg("20260620T000000Z-0001"))
+    repo.mark_read("20260620T000000Z-0001", "uuid-A", "2026-06-20T02:00:00Z", "projA")
+    updated_at, version = _row_audit("20260620T000000Z-0001")
+    assert updated_at == "2026-06-20T02:00:00Z"
+    assert version == 2
+
+
+def test_claim_bumps_updated_at_and_version(root: Path) -> None:
+    repo.insert(_msg("20260620T000000Z-0001", to_kind="description", to_value="X",
+                     to_location="_global"))
+    repo.claim("20260620T000000Z-0001", "me-uuid", "beta", "2026-06-20T05:00:00Z")
+    updated_at, version = _row_audit("20260620T000000Z-0001")
+    assert updated_at == "2026-06-20T05:00:00Z"
+    assert version == 2
+
+
+def test_archive_one_bumps_updated_at_and_version(root: Path) -> None:
+    repo.insert(_msg("20260620T000000Z-0001", status="read",
+                     read_at="2026-06-20T00:00:00Z"))
+    repo.archive_one("20260620T000000Z-0001")
+    _, version = _row_audit("20260620T000000Z-0001")
+    assert version == 2
+
+
+def test_archive_aged_bumps_updated_at_and_version(root: Path) -> None:
+    repo.insert(_msg("20260101T000000Z-0001", status="read",
+                     read_at="2026-06-05T00:00:00Z"))
+    repo.archive_aged("projects/alpha", "2026-06-06T00:00:00Z")
+    _, version = _row_audit("20260101T000000Z-0001")
+    assert version == 2
+
+
+def test_mark_receipts_shown_bumps_updated_at_and_version(root: Path) -> None:
+    repo.insert(_msg("20260620T000000Z-0001", from_uuid="me", status="read",
+                     read_at="2026-06-20T00:00:00Z"))
+    repo.mark_receipts_shown(["20260620T000000Z-0001"])
+    _, version = _row_audit("20260620T000000Z-0001")
+    assert version == 2
+
+
+def test_refresh_display_tags_bumps_updated_at_and_version(root: Path) -> None:
+    repo.insert(_msg("20260620T000000Z-0001", from_uuid="u", from_session="old"))
+    repo.refresh_display_tags("u", "new-tag")
+    _, version = _row_audit("20260620T000000Z-0001")
+    assert version == 2
+
+
+def test_save_cursor_sets_created_at_and_updated_at(root: Path) -> None:
+    repo.save_cursor("uuid-1", {"projects/alpha": "20260620T120000Z-0002"})
+    created_at, updated_at = _cursor_audit("uuid-1", "projects/alpha")
+    assert created_at is not None
+    assert updated_at is not None
+
+    first_created_at = created_at
+    repo.save_cursor("uuid-1", {"projects/alpha": "20260620T130000Z-0003"})
+    created_at2, updated_at2 = _cursor_audit("uuid-1", "projects/alpha")
+    assert created_at2 == first_created_at  # created_at untouched by a re-upsert
+    assert updated_at2 is not None
+
+
 def test_refresh_display_tags_updates_sender_and_reader(root: Path) -> None:
     repo.insert(_msg("20260620T000000Z-0001", from_uuid="u", from_session="old"))
     repo.insert(_msg("20260620T000000Z-0002", from_uuid="z", read_by_uuid="u",
@@ -197,3 +290,17 @@ def test_refresh_display_tags_updates_sender_and_reader(root: Path) -> None:
     assert repo.get_by_id("20260620T000000Z-0001").from_session == "new-tag"
     assert repo.get_by_id("20260620T000000Z-0002").read_by_session == "new-tag"
     assert repo.get_by_id("20260620T000000Z-0003").from_session == "old"
+
+
+def test_connect_creates_migrations_table(root: Path) -> None:
+    conn = repo.connect()
+    try:
+        names = {
+            r["name"]
+            for r in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'"
+            ).fetchall()
+        }
+    finally:
+        conn.close()
+    assert "migrations" in names

@@ -288,10 +288,17 @@ def _cmd_edit(args: argparse.Namespace) -> int:
             catchup_window=args.catchup_window or cur.catchup_window,
             timeout=args.timeout or cur.timeout,
             success_exit_codes=success_exit_codes,
+            version=cur.version,
         )
     except JobValidationError as exc:
         return _err(str(exc))
-    registry.replace_job(spec)
+    try:
+        registry.replace_job(spec)
+    except registry.JobVersionConflictError:
+        return _err(
+            f"{spec.job_id!r} was edited by someone else since it was last read - "
+            "re-run 'ccsched show' and try the edit again"
+        )
     print(f"updated {spec.job_id}")
     _print_job(spec)
     return 0

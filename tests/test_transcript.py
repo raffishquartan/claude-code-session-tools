@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 
 from cc_session_tools.lib.rules import encode_cwd
-from cccs_hooks.transcript import (
+from hooks.transcript import (
     TranscriptNotFound,
     Turn,
     find_intervening_gated_call,

@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from cccs_hooks import pending_migration
+from hooks import pending_migration
 from cc_session_tools.lib import doctor_mutes
 from cc_session_tools.lib.doctor import LegacyMigrationPaths
 
@@ -76,9 +76,10 @@ def test_respects_mute(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def test_warn_only_findings_do_not_surface(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    # Migration already ran (new store has rows) but old files linger: WARN,
-    # not FAIL — no data at risk, so this hook should stay quiet.
+    # Migration already ran (marker recorded) but old files linger: WARN, not
+    # FAIL — no data at risk, so this hook should stay quiet.
     from cc_session_tools.lib import db as _db
+    from cc_session_tools.lib.messaging.repository import LEGACY_FLAT_FILE_MIGRATION
 
     _wire_tmp_paths(monkeypatch, tmp_path)
     old_root = tmp_path / "cc-messages" / "projects" / "alpha" / "inbox"
@@ -88,9 +89,10 @@ def test_warn_only_findings_do_not_surface(tmp_path: Path, monkeypatch: pytest.M
     data_home.mkdir(parents=True)
     conn = _db.connect(
         data_home / "ccmsg.db",
-        ddl="CREATE TABLE IF NOT EXISTS messages (id INTEGER PRIMARY KEY);",
+        ddl="CREATE TABLE IF NOT EXISTS messages (id INTEGER PRIMARY KEY);\n" + _db.MIGRATIONS_DDL,
     )
     conn.execute("INSERT INTO messages (id) VALUES (1)")
+    _db.record_migration(conn, LEGACY_FLAT_FILE_MIGRATION, applied_at="2026-08-05T00:00:00Z")
     conn.commit()
     conn.close()
 

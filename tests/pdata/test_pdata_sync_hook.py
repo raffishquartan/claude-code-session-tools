@@ -1,4 +1,4 @@
-"""Tests for the SessionStart/SessionEnd pdata-sync hook (`cccs_hooks.pdata_sync`).
+"""Tests for the SessionStart/SessionEnd pdata-sync hook (`hooks.pdata_sync`).
 
 Isolation, non-negotiable in this file: every test runs through the autouse `_isolate` fixture
 below because *every* conflict path here reaches `sync_notify.notify_conflict()`, which writes a
@@ -25,7 +25,7 @@ from cc_session_tools.lib.pdata import (
     sync_notify,
     vector_clock_store,
 )
-from cccs_hooks import pdata_sync
+from hooks import pdata_sync
 
 MACHINE = "ltxy"
 

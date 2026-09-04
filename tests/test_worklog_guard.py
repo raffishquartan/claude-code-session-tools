@@ -1,10 +1,10 @@
-"""Tests for cccs_hooks.worklog_guard."""
+"""Tests for hooks.worklog_guard."""
 from __future__ import annotations
 
 import io
 from pathlib import Path
 
-from cccs_hooks import worklog_guard
+from hooks import worklog_guard
 
 
 # ---------- check_worklog_stale ----------

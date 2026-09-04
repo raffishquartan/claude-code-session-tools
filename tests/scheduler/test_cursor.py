@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from cc_session_tools.lib.scheduler import cursor
+from cc_session_tools.lib.scheduler import cursor, store
 
 
 def test_missing_cursor_defaults_to_zero(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -75,3 +75,46 @@ def test_advance_all_cursors_is_a_no_op_without_a_scheduler_db(
     monkeypatch.setenv("CC_SCHEDULER_DIR", str(tmp_path / "nonexistent"))
     assert cursor.advance_all_cursors_to(20) == 0
     assert not (tmp_path / "nonexistent" / "ccsched.db").exists()
+
+
+# ---------- created_at / updated_at ----------
+
+
+def _audit(uuid: str) -> dict:
+    conn = store.connect()
+    try:
+        row = conn.execute(
+            "SELECT created_at, updated_at FROM cursors WHERE session_uuid=?", (uuid,)
+        ).fetchone()
+    finally:
+        conn.close()
+    return dict(row)
+
+
+def test_write_cursor_sets_created_at_and_updated_at(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("CC_SCHEDULER_DIR", str(tmp_path))
+    cursor.write_cursor("s", 3)
+    row = _audit("s")
+    assert row["created_at"] is not None
+    assert row["updated_at"] is not None
+
+
+def test_write_cursor_preserves_created_at_on_upsert(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("CC_SCHEDULER_DIR", str(tmp_path))
+    cursor.write_cursor("s", 3)
+    first_created_at = _audit("s")["created_at"]
+    cursor.write_cursor("s", 9)
+    assert _audit("s")["created_at"] == first_created_at
+
+
+def test_advance_all_cursors_bumps_updated_at(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("CC_SCHEDULER_DIR", str(tmp_path))
+    cursor.write_cursor("a", 3)
+    cursor.advance_all_cursors_to(20)
+    assert _audit("a")["updated_at"] is not None

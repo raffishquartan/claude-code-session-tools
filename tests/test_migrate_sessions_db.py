@@ -10,6 +10,7 @@ from pathlib import Path
 import pytest
 
 from cc_session_tools.cli.migrate_sessions_db import run_migration
+from cc_session_tools.lib import db as db_lib
 from cc_session_tools.lib import doctor_mutes, sessions_db
 
 
@@ -152,3 +153,25 @@ def test_run_twice_is_idempotent(layout):
     assert rc == 0
     rows = sessions_db.list_sessions(path=layout["db_path"])
     assert len(rows) == 1  # not duplicated
+
+
+def test_migration_records_completion_marker(layout):
+    (layout["tags_dir"] / "uuid-1.tag").write_text("my-feature\n")
+    run_migration(
+        dry_run=False, db_path=layout["db_path"], tags_dir=layout["tags_dir"],
+        mutes_file=layout["mutes_file"], roots=[layout["root"]], backup_dir=layout["backup_dir"],
+    )
+    conn = sessions_db.connect(path=layout["db_path"])
+    try:
+        assert db_lib.migration_applied(conn, sessions_db.LEGACY_FLAT_FILE_MIGRATION)
+    finally:
+        conn.close()
+
+
+def test_dry_run_does_not_record_marker(layout):
+    (layout["tags_dir"] / "uuid-1.tag").write_text("my-feature\n")
+    run_migration(
+        dry_run=True, db_path=layout["db_path"], tags_dir=layout["tags_dir"],
+        mutes_file=layout["mutes_file"], roots=[layout["root"]], backup_dir=layout["backup_dir"],
+    )
+    assert not layout["db_path"].exists()

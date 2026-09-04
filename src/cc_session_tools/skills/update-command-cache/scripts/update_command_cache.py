@@ -21,12 +21,12 @@ import sys
 from collections import Counter
 from pathlib import Path
 
-# Make cccs_hooks / cc_session_tools importable when running from the skill dir.
+# Make hooks / cc_session_tools importable when running from the skill dir.
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 if str(_REPO_ROOT / "src") not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT / "src"))
 
-from cccs_hooks.cache import (  # noqa: E402
+from hooks.cache import (  # noqa: E402
     _connect,
     cache_lookup,
     cache_record,

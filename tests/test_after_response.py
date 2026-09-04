@@ -1,11 +1,11 @@
-"""Tests for cccs_hooks.after_response — Stop hook that records last_active
+"""Tests for hooks.after_response — Stop hook that records last_active
 into sessions.db."""
 from __future__ import annotations
 
 import json
 from pathlib import Path
 
-from cccs_hooks import after_response
+from hooks import after_response
 from cc_session_tools.lib import sessions_db
 
 

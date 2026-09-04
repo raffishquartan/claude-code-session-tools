@@ -26,10 +26,10 @@ def stamp_reconciled(uuid: str, now: datetime) -> None:
     conn = store.connect()
     try:
         conn.execute(
-            "INSERT INTO reconcile_throttle (session_uuid, last_reconciled_at) "
-            "VALUES (?, ?) ON CONFLICT(session_uuid) DO UPDATE SET "
+            "INSERT INTO reconcile_throttle (session_uuid, last_reconciled_at, created_at) "
+            "VALUES (?, ?, ?) ON CONFLICT(session_uuid) DO UPDATE SET "
             "last_reconciled_at=excluded.last_reconciled_at",
-            (uuid, state.format_ts(now)),
+            (uuid, state.format_ts(now), state.format_ts(now)),
         )
         conn.commit()
     finally:

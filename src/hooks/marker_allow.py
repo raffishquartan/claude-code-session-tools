@@ -1,7 +1,7 @@
 """PreToolUse hook: auto-approve the ``touch`` that refreshes a skill marker.
 
 Marker-gated skills (e.g. do-tesco-shop) keep a short-lived marker fresh under
-``~/.cache/claude/markers/`` (see :mod:`cccs_hooks.markers`) by ``touch``-ing
+``~/.cache/claude/markers/`` (see :mod:`hooks.markers`) by ``touch``-ing
 it. That path is outside any project working directory, so without this hook
 every refresh prompts for Bash permission. This hook returns a PreToolUse
 ``allow`` decision for *exactly* a bare ``touch <markers-dir>/<name>`` command
@@ -28,7 +28,7 @@ import re
 import sys
 from pathlib import Path
 
-from cccs_hooks.markers import markers_dir
+from hooks.markers import markers_dir
 
 # Characters that introduce shell composition, expansion, redirection, quoting,
 # or globbing. Their presence anywhere in the command disqualifies it - we only
@@ -45,7 +45,7 @@ def match_marker_touch(command: str, markers: Path) -> str | None:
     child of ``markers``; otherwise ``None``.
 
     ``markers`` is passed explicitly (rather than read from
-    :func:`cccs_hooks.markers.markers_dir`) so tests can point it at a temp dir.
+    :func:`hooks.markers.markers_dir`) so tests can point it at a temp dir.
     """
     stripped = command.strip()
     if not stripped:

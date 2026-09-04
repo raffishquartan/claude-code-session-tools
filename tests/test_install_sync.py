@@ -31,6 +31,26 @@ def test_record_synced_upserts_on_second_call(db_path: Path) -> None:
     assert install_sync.get_synced_version(path=db_path) == "2.5.0"
 
 
+def _created_at(db_path: Path, key: str) -> object:
+    conn = sessions_db.connect(path=db_path)
+    try:
+        row = conn.execute(
+            "SELECT created_at FROM install_sync WHERE key=?", (key,)
+        ).fetchone()
+    finally:
+        conn.close()
+    return row["created_at"]
+
+
+def test_record_synced_sets_created_at_and_preserves_it_on_upsert(db_path: Path) -> None:
+    install_sync.record_synced("2.4.0", path=db_path)
+    first_created_at = _created_at(db_path, install_sync._SYNCED_VERSION_KEY)
+    assert first_created_at is not None
+
+    install_sync.record_synced("2.5.0", path=db_path)
+    assert _created_at(db_path, install_sync._SYNCED_VERSION_KEY) == first_created_at
+
+
 def test_get_synced_version_on_nonexistent_db_returns_none(db_path: Path) -> None:
     """db_path is never created by this test - get_synced_version must not
     raise or create the file just to read from it (matches the established

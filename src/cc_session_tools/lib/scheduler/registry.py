@@ -7,13 +7,26 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from datetime import datetime, timezone
 
+from cc_session_tools.lib import db
 from cc_session_tools.lib.scheduler import store
 from cc_session_tools.lib.scheduler.jobspec import CoalesceKind, JobSpec
 
 
 class RegistryError(ValueError):
     """Raised for duplicate ids, unknown-id mutations, or an unreadable DB."""
+
+
+class JobVersionConflictError(RegistryError):
+    """Raised by replace_job() when the row's version has moved since the caller read it -
+    another edit landed in between. Distinct from the unknown-id case (RegistryError itself),
+    so a caller (e.g. the `ccsched edit` CLI command) can tell "no such job" apart from "someone
+    else edited this job first" and report each differently."""
+
+
+def _now_iso() -> str:
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 def _spec_from_row(row: sqlite3.Row) -> JobSpec:
@@ -27,6 +40,7 @@ def _spec_from_row(row: sqlite3.Row) -> JobSpec:
         catchup_window=row["catchup_window"],
         timeout=row["timeout"],
         success_exit_codes=tuple(json.loads(row["success_exit_codes"])),
+        version=int(row["version"]),
     )
 
 
@@ -36,7 +50,8 @@ def load_registry() -> list[JobSpec]:
         try:
             rows = conn.execute(
                 "SELECT job_id, cadence, coalesce_kind, command, surface, enabled, "
-                "catchup_window, timeout, success_exit_codes FROM jobs ORDER BY rowid"
+                "catchup_window, timeout, success_exit_codes, version "
+                "FROM jobs ORDER BY rowid"
             ).fetchall()
         finally:
             conn.close()
@@ -54,12 +69,13 @@ def add_job(spec: JobSpec) -> None:
     try:
         conn.execute(
             "INSERT INTO jobs (job_id, cadence, coalesce_kind, command, surface, "
-            "enabled, catchup_window, timeout, success_exit_codes) VALUES (?,?,?,?,?,?,?,?,?)",
+            "enabled, catchup_window, timeout, success_exit_codes, created_at) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?)",
             (
                 spec.job_id, spec.cadence, spec.coalesce.value,
                 json.dumps(list(spec.command)), int(spec.surface), int(spec.enabled),
                 spec.catchup_window, spec.timeout,
-                json.dumps(list(spec.success_exit_codes)),
+                json.dumps(list(spec.success_exit_codes)), _now_iso(),
             ),
         )
         conn.commit()
@@ -70,20 +86,41 @@ def add_job(spec: JobSpec) -> None:
 
 
 def replace_job(spec: JobSpec) -> None:
+    """Compare-and-swap update, guarded by spec.version (the version this spec was read at -
+    see JobSpec.version). Rejects the write, rather than silently overwriting, if another edit
+    landed on this job since spec was read - the read-then-edit-then-write gap `ccsched edit`
+    has between its load_registry() read and this call."""
     conn = store.connect()
     try:
-        cur = conn.execute(
-            "UPDATE jobs SET cadence=?, coalesce_kind=?, command=?, surface=?, "
-            "enabled=?, catchup_window=?, timeout=?, success_exit_codes=? WHERE job_id=?",
-            (
+        ok = db.cas_update(
+            conn,
+            table="jobs",
+            id_column="job_id",
+            id_value=spec.job_id,
+            version_column="version",
+            expected_version=spec.version,
+            set_clause=(
+                "cadence=?, coalesce_kind=?, command=?, surface=?, enabled=?, "
+                "catchup_window=?, timeout=?, success_exit_codes=?, updated_at=?, "
+                "version=version+1"
+            ),
+            params=(
                 spec.cadence, spec.coalesce.value, json.dumps(list(spec.command)),
                 int(spec.surface), int(spec.enabled), spec.catchup_window,
-                spec.timeout, json.dumps(list(spec.success_exit_codes)), spec.job_id,
+                spec.timeout, json.dumps(list(spec.success_exit_codes)), _now_iso(),
             ),
         )
         conn.commit()
-        if cur.rowcount == 0:
-            raise RegistryError(f"unknown job id: {spec.job_id!r}")
+        if not ok:
+            exists = conn.execute(
+                "SELECT 1 FROM jobs WHERE job_id=?", (spec.job_id,)
+            ).fetchone()
+            if exists is None:
+                raise RegistryError(f"unknown job id: {spec.job_id!r}")
+            raise JobVersionConflictError(
+                f"job {spec.job_id!r} was modified since it was read "
+                f"(expected version {spec.version})"
+            )
     finally:
         conn.close()
 
@@ -103,7 +140,8 @@ def set_enabled(job_id: str, enabled: bool) -> None:
     conn = store.connect()
     try:
         cur = conn.execute(
-            "UPDATE jobs SET enabled=? WHERE job_id=?", (int(enabled), job_id)
+            "UPDATE jobs SET enabled=?, updated_at=? WHERE job_id=?",
+            (int(enabled), _now_iso(), job_id),
         )
         conn.commit()
         if cur.rowcount == 0:
@@ -122,11 +160,18 @@ def rename_job(old_id: str, new_id: str) -> None:
     them as independent."""
     conn = store.connect()
     try:
-        cur = conn.execute("UPDATE jobs SET job_id=? WHERE job_id=?", (new_id, old_id))
+        now_iso = _now_iso()
+        cur = conn.execute(
+            "UPDATE jobs SET job_id=?, updated_at=? WHERE job_id=?",
+            (new_id, now_iso, old_id),
+        )
         if cur.rowcount == 0:
             conn.commit()
             raise RegistryError(f"unknown job id: {old_id!r}")
-        conn.execute("UPDATE job_state SET job_id=? WHERE job_id=?", (new_id, old_id))
+        conn.execute(
+            "UPDATE job_state SET job_id=?, updated_at=? WHERE job_id=?",
+            (new_id, now_iso, old_id),
+        )
         conn.execute(
             "UPDATE bundled_job_installs SET job_id=? WHERE job_id=?", (new_id, old_id)
         )
@@ -140,14 +185,17 @@ def rename_job(old_id: str, new_id: str) -> None:
 def mark_bundled_installed(job_id: str, installed_at: str) -> None:
     """Record that a CCST-bundled job (lib/scheduler/bundled_jobs.py) has been installed on this
     machine, so a later `ccsched remove` can be told apart from "never installed" by
-    bundled_install_ids(). INSERT OR REPLACE: called on every successful
-    `ccst ccsched-jobs install --apply`, including a job already registered from before this
-    table existed, so it self-backfills rather than needing a one-shot migration."""
+    bundled_install_ids(). INSERT ... ON CONFLICT DO UPDATE (not OR REPLACE - REPLACE would
+    reset created_at on a reinstall): called on every successful `ccst ccsched-jobs install
+    --apply`, including a job already registered from before this table existed, so it
+    self-backfills rather than needing a one-shot migration."""
     conn = store.connect()
     try:
         conn.execute(
-            "INSERT OR REPLACE INTO bundled_job_installs (job_id, installed_at) VALUES (?, ?)",
-            (job_id, installed_at),
+            "INSERT INTO bundled_job_installs (job_id, installed_at, created_at) "
+            "VALUES (?, ?, ?) ON CONFLICT(job_id) DO UPDATE SET "
+            "installed_at=excluded.installed_at",
+            (job_id, installed_at, _now_iso()),
         )
         conn.commit()
     finally:

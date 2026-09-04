@@ -34,7 +34,7 @@ def _log_failure(reason: str) -> None:
     # telemetry.log_event swallows its own I/O errors internally and never
     # raises, so no wrapper here (a swallow-only try/except is banned by the
     # repo's coding standards).
-    from cccs_hooks.telemetry import TelemetryEntry, log_event
+    from hooks.telemetry import TelemetryEntry, log_event
     log_event(TelemetryEntry(
         hook="messaging-deliver", event="", tool="", session_id="",
         cwd_short="", decision="annotate", cache="none",

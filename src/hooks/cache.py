@@ -30,6 +30,7 @@ import os
 import sqlite3
 from pathlib import Path
 
+from cc_session_tools.lib.db import add_missing_columns as _add_missing_columns
 from cc_session_tools.lib.db import connect as _sqlite_connect
 from cc_session_tools.lib.paths import data_home
 
@@ -45,7 +46,8 @@ CREATE TABLE IF NOT EXISTS command_cache (
     fire_count    INTEGER NOT NULL DEFAULT 1,
     last_seen     TEXT    NOT NULL,
     validated_at  TEXT    NOT NULL,
-    cache_source  TEXT    NOT NULL DEFAULT 'auto'
+    cache_source  TEXT    NOT NULL DEFAULT 'auto',
+    created_at    TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_norm ON command_cache(norm_hash)
     WHERE norm_hash IS NOT NULL;
@@ -100,7 +102,9 @@ def _db_path() -> Path:
 
 
 def _connect() -> sqlite3.Connection:
-    return _sqlite_connect(_db_path(), ddl=_DDL)
+    conn = _sqlite_connect(_db_path(), ddl=_DDL)
+    _add_missing_columns(conn, "command_cache", {"created_at": "TEXT"})
+    return conn
 
 
 def sha256_command(command: str) -> str:
@@ -170,15 +174,15 @@ def cache_record(
             conn.execute(
                 """INSERT INTO command_cache
                    (exact_hash,norm_hash,verdict,risks_summary,preview,
-                    fire_count,last_seen,validated_at,cache_source)
-                   VALUES (?,?,?,?,?,1,?,?,'auto')
+                    fire_count,last_seen,validated_at,cache_source,created_at)
+                   VALUES (?,?,?,?,?,1,?,?,'auto',?)
                    ON CONFLICT(exact_hash) DO UPDATE SET
                        fire_count=fire_count+1,
                        last_seen=excluded.last_seen,
                        validated_at=excluded.validated_at,
                        norm_hash=coalesce(excluded.norm_hash, norm_hash)
                 """,
-                (exact_sha, norm_sha, verdict, risks_summary, command_preview, now, now),
+                (exact_sha, norm_sha, verdict, risks_summary, command_preview, now, now, now),
             )
             _prune_stale(conn)
             conn.commit()

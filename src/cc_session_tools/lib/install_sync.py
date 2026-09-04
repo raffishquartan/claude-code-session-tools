@@ -89,12 +89,12 @@ def record_failed_attempt(version: str, *, rc: int, path: Path | None = None) ->
     conn = sessions_db.connect(path=path)
     try:
         conn.executemany(
-            "INSERT INTO install_sync (key, value, updated_at) VALUES (?, ?, ?) "
+            "INSERT INTO install_sync (key, value, updated_at, created_at) VALUES (?, ?, ?, ?) "
             "ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at",
             [
-                (_LAST_ATTEMPT_VERSION_KEY, version, now),
-                (_LAST_ATTEMPT_AT_KEY, now, now),
-                (_LAST_ATTEMPT_RC_KEY, str(rc), now),
+                (_LAST_ATTEMPT_VERSION_KEY, version, now, now),
+                (_LAST_ATTEMPT_AT_KEY, now, now, now),
+                (_LAST_ATTEMPT_RC_KEY, str(rc), now, now),
             ],
         )
         conn.commit()
@@ -223,10 +223,11 @@ def record_synced(version: str, *, path: Path | None = None) -> None:
     """
     conn = sessions_db.connect(path=path)
     try:
+        now = sessions_db._now_iso()
         conn.execute(
-            "INSERT INTO install_sync (key, value, updated_at) VALUES (?, ?, ?) "
+            "INSERT INTO install_sync (key, value, updated_at, created_at) VALUES (?, ?, ?, ?) "
             "ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at",
-            (_SYNCED_VERSION_KEY, version, sessions_db._now_iso()),
+            (_SYNCED_VERSION_KEY, version, now, now),
         )
         conn.execute(
             "DELETE FROM install_sync WHERE key IN (?, ?, ?)", _FAILURE_KEYS

@@ -707,7 +707,7 @@ def _cmd_doctor(args: argparse.Namespace) -> int:
     from cc_session_tools.lib.messaging.store import store_root         # Phase 2
     from cc_session_tools.lib.sessions_db import default_db_path as sessions_db_path  # Phase 4 (full .db path)
     from cc_session_tools.lib import telemetry_store                    # Phase 5 (db_path() -> full .db path)
-    from cccs_hooks.cache import _db_path as command_cache_db_path      # Phase 6 (replaces deleted _DEFAULT_DB)
+    from hooks.cache import _db_path as command_cache_db_path      # Phase 6 (replaces deleted _DEFAULT_DB)
     from cc_session_tools.lib.claude_flags import _cache_file as claude_flags_file  # Phase 6 (full .json path)
 
     store_paths = {
@@ -864,7 +864,7 @@ def _cmd_claude_md_uninstall(args: argparse.Namespace) -> int:
 
 
 def _cmd_telemetry_trim(args: argparse.Namespace) -> int:
-    from cccs_hooks.telemetry_trim import main as trim_main
+    from hooks.telemetry_trim import main as trim_main
 
     # Pass arguments through to the trim CLI
     argv: list[str] = []
@@ -881,7 +881,7 @@ def _cmd_telemetry_trim(args: argparse.Namespace) -> int:
 
 
 def _cmd_telemetry_query(args: argparse.Namespace) -> int:
-    from cccs_hooks.telemetry_query import main as query_main
+    from hooks.telemetry_query import main as query_main
 
     argv: list[str] = []
     if args.hook is not None:
@@ -1492,7 +1492,7 @@ def _cmd_pdata_dump(args: argparse.Namespace) -> int:
         try:
             local_vector = vector_clock_store.read_vector(conn)
             existing = dump.read_latest(project_root)
-            # Shared with the SessionEnd hook (cccs_hooks.pdata_sync) - the spec's dump trigger
+            # Shared with the SessionEnd hook (hooks.pdata_sync) - the spec's dump trigger
             # is one rule, so it lives in one function rather than inline in both callers.
             # `None` means safe to publish; anything else is the Comparison that refuses it.
             comparison = dump.decide_publish(local_vector=local_vector, existing=existing)
@@ -1562,7 +1562,7 @@ def _cmd_pdata_rehydrate(args: argparse.Namespace) -> int:
             rehydrate.RehydrateOutcome.FORK, rehydrate.RehydrateOutcome.CHECKSUM_INVALID,
         ):
             worst = max(worst, 1)
-            # Shared with the SessionStart hook (cccs_hooks.pdata_sync) so the CLI and the hook
+            # Shared with the SessionStart hook (hooks.pdata_sync) so the CLI and the hook
             # can never describe the same conflict two different ways.
             detail = rehydrate.conflict_detail(result, project=project)
             sync_notify.notify_conflict(project, outcome=result.outcome.value, detail=detail)
@@ -1811,7 +1811,7 @@ def _cmd_pdata_sync_check(args: argparse.Namespace) -> int:
         except (OSError, ValueError, sqlite3.Error) as exc:
             # Record and continue, matching _cmd_pdata_dump/_cmd_pdata_rehydrate: one bad or
             # unreadable project must not abort the whole batch. The caught set is wider than
-            # those two siblings' bare ValueError, and matches `cccs_hooks.pdata_sync`'s instead,
+            # those two siblings' bare ValueError, and matches `hooks.pdata_sync`'s instead,
             # for the reason that module documents: this command's real caller is an unattended
             # ccsched job, where an uncaught sqlite3.Error on project 3 of 12 both loses the
             # other nine projects' cycle and counts as a crash toward auto-suspend. A genuinely

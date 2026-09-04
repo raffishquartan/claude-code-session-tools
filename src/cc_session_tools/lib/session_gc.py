@@ -21,7 +21,7 @@ be resumed weeks after its last activity, so only transcript existence counts.
 ``build_report``/``format_report`` (``ccst gc report``) are read-only: they
 enumerate and count orphans but never delete or modify anything. ``prune``/
 ``format_prune_report`` (``ccst gc prune``) is the execute half (mirrors the
-report/execute split in ``cccs_hooks/telemetry_trim.py``) — same orphan
+report/execute split in ``hooks/telemetry_trim.py``) — same orphan
 definition, reused unchanged, gated by an explicit ``--execute`` flag and a
 per-uuid minimum-age floor (see the note above ``_uuid_age_hours``).
 """

@@ -21,6 +21,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from cc_session_tools.lib.db import connect as _db_connect
+from cc_session_tools.lib.db import migration_applied as _migration_applied
 from cc_session_tools.lib.hook_registry import HOOK_VERBS, hook_name_from_command
 from cc_session_tools.lib.pdata.init_paths import (
     MIGRATED_ARCHIVE_DIRNAME,
@@ -535,54 +536,31 @@ def _count_legacy_telemetry(log_dir: Path) -> int:
     )
 
 
-def _count_new_store_rows(db_path: Path, tables: tuple[str, ...]) -> int:
-    """Total row count across ``tables`` in ``db_path``.
+def _migration_recorded(db_path: Path, marker_name: str) -> bool:
+    """True if ``db_path`` records ``marker_name`` as an applied migration.
 
-    Returns 0 (rather than raising) if the DB doesn't exist or can't be
-    opened — from this check's point of view that's indistinguishable from
-    "migration hasn't written anything yet".
+    Single implementation shared by all four common stores. Row counts are not a usable
+    signal here: each store's writer starts inserting the moment CCST is installed, well
+    before any migration runs, so a non-empty table means "somebody wrote something", not
+    "the legacy data was imported" - only an explicit marker can tell the two apart.
+
+    Never creates the store: a fresh install (nothing to check) must leave the filesystem
+    exactly as it found it.
     """
     if not db_path.exists():
-        return 0
-    try:
-        conn = _db_connect(db_path, readonly=True)
-    except (sqlite3.DatabaseError, sqlite3.OperationalError, OSError):
-        return 0
-    try:
-        total = 0
-        for table in tables:
-            try:
-                total += int(conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0])
-            except sqlite3.DatabaseError:
-                # sqlite3.OperationalError ("no such table") is the common
-                # case; a corrupt file also reaches here, not the connect()
-                # guard above, because sqlite3.connect() opens lazily and
-                # only fails once a statement actually touches the file —
-                # both count as "can't be opened" per this function's
-                # contract, so both return 0 rather than raising.
-                continue
-        return total
-    finally:
-        conn.close()
-
-
-def _telemetry_import_recorded(db_path: Path) -> bool:
-    """True if telemetry.db records the fires.jsonl import as done."""
-    from cc_session_tools.lib.telemetry_store import LEGACY_JSONL_MIGRATION
-
-    if not db_path.exists():
         return False
     try:
         conn = _db_connect(db_path, readonly=True)
     except (sqlite3.DatabaseError, sqlite3.OperationalError, OSError):
         return False
     try:
-        row = conn.execute(
-            "SELECT 1 FROM migrations WHERE name = ?", (LEGACY_JSONL_MIGRATION,)
-        ).fetchone()
-        return row is not None
-    except sqlite3.OperationalError:
-        return False  # pre-marker schema: no migrations table
+        return _migration_applied(conn, marker_name)
+    except sqlite3.DatabaseError:
+        # sqlite3.OperationalError ("no such table: migrations") is the common case for a
+        # pre-marker schema; a corrupt file also reaches here, not the connect() guard
+        # above, because sqlite3.connect() opens lazily and only fails once a statement
+        # actually touches the file - both count as "can't tell, so not recorded".
+        return False
     finally:
         conn.close()
 
@@ -602,44 +580,53 @@ def check_pending_data_store_migration(paths: LegacyMigrationPaths) -> list[Chec
       deleted (or deletion failed partway); no data is at risk, just
       uncommitted cleanup.
 
-    "Has the migration run?" is answered by an explicit marker for telemetry
-    and by a row count for the other three. The row-count answer is a
-    heuristic, and a poor one wherever the new code writes to the store
-    before any migration happens: telemetry.db fills from the first hook fire
-    after install, so counting rows reported "already migrated" for anyone
-    who opened a session before migrating, and the FAIL that should have
-    prompted them never fired. The other three stores need the same marker
-    treatment; see TODO.md.
+    "Has the migration run?" is answered by an explicit marker for all four stores
+    (`_migration_recorded`), never inferred from row counts - a heuristic that was wrong
+    wherever the new code writes to the store before any migration happens: each store
+    fills from the first hook fire after install, so counting rows reported "already
+    migrated" for anyone who opened a session before migrating, and the FAIL that should
+    have prompted them never fired.
     """
-    sources: dict[str, tuple[tuple[Path, ...], int, Path, tuple[str, ...]]] = {
+    from cc_session_tools.lib.messaging.repository import (
+        LEGACY_FLAT_FILE_MIGRATION as _CCMSG_MIGRATION,
+    )
+    from cc_session_tools.lib.scheduler.store import (
+        LEGACY_FLAT_FILE_MIGRATION as _CCSCHED_MIGRATION,
+    )
+    from cc_session_tools.lib.sessions_db import (
+        LEGACY_FLAT_FILE_MIGRATION as _SESSIONS_MIGRATION,
+    )
+    from cc_session_tools.lib.telemetry_store import LEGACY_JSONL_MIGRATION as _TELEMETRY_MIGRATION
+
+    sources: dict[str, tuple[tuple[Path, ...], int, Path, str]] = {
         "ccmsg": (
             (paths.ccmsg_old_root,),
             _count_legacy_ccmsg(paths.ccmsg_old_root),
             paths.data_home / "ccmsg.db",
-            ("messages",),
+            _CCMSG_MIGRATION,
         ),
         "ccsched": (
             (paths.ccsched_old_dir,),
             _count_legacy_ccsched(paths.ccsched_old_dir),
             paths.data_home / "ccsched.db",
-            ("jobs", "job_state", "cursors", "reconcile_throttle"),
+            _CCSCHED_MIGRATION,
         ),
         "sessions": (
             (paths.tags_dir, paths.mutes_file),
             _count_legacy_sessions(paths.tags_dir, paths.mutes_file),
             paths.data_home / "sessions.db",
-            ("session_tags", "doctor_mutes"),
+            _SESSIONS_MIGRATION,
         ),
         "telemetry": (
             (paths.telemetry_old_dir,),
             _count_legacy_telemetry(paths.telemetry_old_dir),
             paths.data_home / "telemetry.db",
-            ("telemetry_events", "catchup_events"),
+            _TELEMETRY_MIGRATION,
         ),
     }
 
     results: list[CheckResult] = []
-    for store_name, (old_paths, legacy_count, new_db_path, tables) in sources.items():
+    for store_name, (old_paths, legacy_count, new_db_path, marker_name) in sources.items():
         name = f"migration-to-1.0.0:{store_name}"
         if legacy_count == 0:
             results.append(
@@ -648,13 +635,8 @@ def check_pending_data_store_migration(paths: LegacyMigrationPaths) -> list[Chec
             continue
 
         existing = ", ".join(str(p) for p in old_paths if p.exists())
-        if store_name == "telemetry":
-            already_migrated = _telemetry_import_recorded(new_db_path)
-            evidence = "the import is recorded in telemetry.db"
-        else:
-            new_count = _count_new_store_rows(new_db_path, tables)
-            already_migrated = new_count > 0
-            evidence = f"{new_count} row(s) in {new_db_path.name}"
+        already_migrated = _migration_recorded(new_db_path, marker_name)
+        evidence = f"the import is recorded in {new_db_path.name}"
         if not already_migrated:
             results.append(
                 CheckResult(
