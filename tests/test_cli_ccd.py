@@ -303,6 +303,48 @@ def test_cld_session_dir_is_absolute(fake_home, tmp_path, monkeypatch, captured_
     assert Path(env["CLD_SESSION_DIR"]).is_absolute()
 
 
+def test_ccd_adds_dir_flags_for_sibling_projects_under_repo_root(
+    fake_home, tmp_path, monkeypatch, captured_launch
+):
+    """Every immediate subdirectory of the configured repo root - not just the
+    one ccd was launched from - should be passed as --add-dir, so Claude Code
+    trusts sibling projects without listing each one in settings.json."""
+    repos = tmp_path / "repos"
+    proj = repos / "myproj"
+    sibling = repos / "siblingproj"
+    proj.mkdir(parents=True)
+    sibling.mkdir(parents=True)
+    _set_repo_root(monkeypatch, repos)
+    monkeypatch.chdir(proj)
+
+    rc = ccd.main(["mytag"])
+    assert rc == 0
+
+    cmd = captured_launch["cmd"]
+    add_dirs = [cmd[i + 1] for i, a in enumerate(cmd) if a == "--add-dir"]
+    assert str(proj.resolve()) in add_dirs
+    assert str(sibling.resolve()) in add_dirs
+
+
+def test_ccd_omits_add_dir_flags_when_roots_not_configured(
+    fake_home, tmp_path, monkeypatch, captured_launch
+):
+    """No CLAUDE_SESSION_TOOLS_*_ROOT configured must not crash ccd - it just
+    means auto-trust has nothing to offer, same as before this feature existed."""
+    monkeypatch.delenv("CLAUDE_SESSION_TOOLS_REPO_ROOT", raising=False)
+    monkeypatch.delenv("CLAUDE_SESSION_TOOLS_PROJ_ROOT", raising=False)
+    proj = tmp_path / "myproj"
+    proj.mkdir()
+    monkeypatch.chdir(proj)
+
+    rc = ccd.main(["--force", "mytag"])
+    assert rc == 0
+    assert "--add-dir" not in captured_launch["cmd"]
+    # Unconfigured roots also means id_for_project() can't resolve a task list id -
+    # RootsConfigError there must be swallowed the same way, not left to crash ccd.
+    assert "CLAUDE_CODE_TASK_LIST_ID" not in captured_launch["env"]
+
+
 def test_ccd_inserts_sessions_db_row(fake_home, tmp_path, monkeypatch, captured_launch):
     repos = tmp_path / "repos"
     proj = repos / "myproj"

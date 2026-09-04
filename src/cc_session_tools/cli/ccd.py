@@ -14,6 +14,7 @@ from cc_session_tools.lib.roots import (
     is_strict_root,
     load_session_roots,
     matched_session_root,
+    trusted_subdirectories,
 )
 from cc_session_tools.lib.sessions import is_empty_session
 from cc_session_tools.lib.tasklist import id_for_project
@@ -125,10 +126,16 @@ def main(argv: list[str] | None = None) -> int:
     session_name = f"{date_str}-{tag}"
     session_dir = real_pwd / "cc-sessions" / session_name
 
+    try:
+        add_dirs = trusted_subdirectories(load_session_roots())
+    except RootsConfigError:
+        add_dirs = []
+
     cmd = [
         "claude",
         "-n", session_name,
         "--remote-control", session_name,
+        *[arg for d in add_dirs for arg in ("--add-dir", str(d))],
         *(args.extra or []),
     ]
 
@@ -204,7 +211,10 @@ def main(argv: list[str] | None = None) -> int:
     # on Opus 4.8, Sonnet 5, Fable 5, Mythos 5+ unless this is set, regardless of
     # whether a task list ID resolves below.
     env["CLAUDE_CODE_ENABLE_TODO_TOOLS"] = "1"
-    task_list_id = id_for_project(real_pwd)
+    try:
+        task_list_id = id_for_project(real_pwd)
+    except RootsConfigError:
+        task_list_id = None
     if task_list_id is not None:
         env["CLAUDE_CODE_TASK_LIST_ID"] = task_list_id
 
