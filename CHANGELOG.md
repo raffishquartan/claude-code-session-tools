@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.14.0] - 2026-09-05
+
+### Added
+
+- `ccst pdata init` now scaffolds `correspondence/`, `meetings-and-calls/`, and `workstreams/`
+  starting folders the first time it runs for a project whose root directory doesn't exist yet -
+  optional starting structure, not mandatory (delete what you don't need); never touches an
+  existing project's layout.
+- `ccst pdata verify` now checks `.pdata-migrated/` archive evidence independently of the
+  migration manifest, so a project that was migrated via `ccst pdata init` and later lost its
+  manifest is flagged (FAIL, with recovery pointers to `ccst pdata schema show`/`schema list`)
+  instead of being silently indistinguishable from a project that was never migrated.
+- Two more `pm-*` skills - `pm-pdata-audit` and `pm-pdata-migrate` - are now bundled and
+  installed by `ccst skills install`/`install-everything`, alongside the rest of the family.
+
+### Changed
+
+- The pdata migration-manifest file is renamed from `.ccst-pdata-proposal.json` to
+  `.pdata-migration-manifest.json`, reflecting that it is permanent tool state, not a draft. A
+  project migrated before this rename keeps working unchanged - every reader/writer now resolves
+  the manifest through a single function that falls back to the legacy filename when present.
+
 ## [2.13.0] - 2026-09-04
 
 ### Added
