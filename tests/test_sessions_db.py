@@ -316,3 +316,17 @@ def test_delete_tag_removes_tag(db_path):
 def test_delete_tag_returns_false_when_absent(db_path):
     sessions_db.write_tag("uuid-1", "feature", path=db_path)
     assert sessions_db.delete_tag("uuid-missing", path=db_path) is False
+
+
+def test_connect_creates_migrations_table(db_path):
+    conn = sessions_db.connect(path=db_path)
+    try:
+        names = {
+            r["name"]
+            for r in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'"
+            ).fetchall()
+        }
+    finally:
+        conn.close()
+    assert "migrations" in names

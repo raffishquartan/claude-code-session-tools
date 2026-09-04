@@ -56,7 +56,12 @@ CREATE TABLE IF NOT EXISTS cursors (
     updated_at            TEXT,
     PRIMARY KEY (session_uuid, partition)
 );
-"""
+""" + db.MIGRATIONS_DDL
+
+# Marker name recorded in the migrations table by cli.migrate_ccmsg once the legacy flat-file
+# message tree has been imported. Read by that script (to refuse a second run) and by lib.doctor
+# (to tell "not yet imported" from "imported, old files not cleaned up").
+LEGACY_FLAT_FILE_MIGRATION = "flat-files-to-ccmsg-db"
 
 # Columns added after messages/cursors already shipped - CREATE TABLE IF NOT EXISTS above is a
 # no-op against an existing table, so an already-initialised ccmsg.db needs these backfilled.

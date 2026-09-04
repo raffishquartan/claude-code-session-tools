@@ -290,3 +290,17 @@ def test_refresh_display_tags_updates_sender_and_reader(root: Path) -> None:
     assert repo.get_by_id("20260620T000000Z-0001").from_session == "new-tag"
     assert repo.get_by_id("20260620T000000Z-0002").read_by_session == "new-tag"
     assert repo.get_by_id("20260620T000000Z-0003").from_session == "old"
+
+
+def test_connect_creates_migrations_table(root: Path) -> None:
+    conn = repo.connect()
+    try:
+        names = {
+            r["name"]
+            for r in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'"
+            ).fetchall()
+        }
+    finally:
+        conn.close()
+    assert "migrations" in names

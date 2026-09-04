@@ -74,7 +74,13 @@ CREATE TABLE IF NOT EXISTS context_overrides (
     updated_at TEXT NOT NULL,
     created_at TEXT
 );
-"""
+""" + db.MIGRATIONS_DDL
+
+# Marker name recorded in the migrations table by cli.migrate_sessions_db once the legacy flat
+# tag cache + activity sentinels + doctor-mutes JSON have been imported. Read by that script (to
+# refuse a second run) and by lib.doctor (to tell "not yet imported" from "imported, old files
+# not cleaned up").
+LEGACY_FLAT_FILE_MIGRATION = "flat-files-to-sessions-db"
 
 # Columns added after these tables already shipped - CREATE TABLE IF NOT EXISTS above is a
 # no-op against an existing table, so an already-initialised sessions.db needs these backfilled.

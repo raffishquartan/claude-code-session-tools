@@ -58,7 +58,13 @@ CREATE TABLE IF NOT EXISTS bundled_job_installs (
     installed_at TEXT NOT NULL,
     created_at   TEXT
 );
-"""
+""" + db.MIGRATIONS_DDL
+
+# Marker name recorded in the migrations table by cli.migrate_ccsched once the legacy flat-file
+# scheduler store (jobs.toml/state.json/.cursors/.reconcile.*.ts) has been imported. Read by that
+# script (to refuse a second run) and by lib.doctor (to tell "not yet imported" from "imported,
+# old files not cleaned up").
+LEGACY_FLAT_FILE_MIGRATION = "flat-files-to-ccsched-db"
 
 # Columns added after these tables already shipped - CREATE TABLE IF NOT EXISTS above is a
 # no-op against an existing table, so an already-initialised ccsched.db needs these backfilled.

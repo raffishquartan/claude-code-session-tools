@@ -118,7 +118,7 @@ read-then-decide-then-write workflow. Every other table below still gets `create
 
 ## 5. Migration markers (ccmsg, ccsched, sessions) + doctor rewiring
 
-- [ ] 5.1 Append `db.MIGRATIONS_DDL` to each of the three stores' `_DDL`/`DDL` constants; define
+- [x] 5.1 Append `db.MIGRATIONS_DDL` to each of the three stores' `_DDL`/`DDL` constants; define
   a marker-name constant per store (matching `telemetry_store.LEGACY_JSONL_MIGRATION`'s naming
   style). Verify: a fresh DB for each store has a `migrations` table.
 - [ ] 5.2 Locate each store's one-shot legacy-data migration entry point (mirroring
