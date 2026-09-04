@@ -46,6 +46,27 @@ def test_record_twice_increments_fire_count(db: Path) -> None:
     assert entry.fire_count == 2
 
 
+def _created_at(db: Path, exact_hash: str) -> object:
+    conn = _sqlite3.connect(str(db))
+    try:
+        row = conn.execute(
+            "SELECT created_at FROM command_cache WHERE exact_hash=?", (exact_hash,)
+        ).fetchone()
+    finally:
+        conn.close()
+    return row[0]
+
+
+def test_record_sets_created_at_and_preserves_it_on_refire(db: Path) -> None:
+    sha = sha256_command("git status")
+    cache_record(sha, "safe", "none", "git status")
+    first_created_at = _created_at(db, sha)
+    assert first_created_at is not None
+
+    cache_record(sha, "safe", "none", "git status")  # refire
+    assert _created_at(db, sha) == first_created_at
+
+
 def test_lookup_by_norm_hash_returns_entry(db: Path) -> None:
     exact = sha256_command("git checkout feature/a")
     norm = sha256_command("git checkout <ARGS>")
@@ -89,8 +110,8 @@ def test_stale_entry_not_returned(db: Path) -> None:
     stale_key = "deadbeef" + "0" * 56  # 64-char hex string like a real sha256 digest
     conn = _sqlite3.connect(str(db))
     conn.execute(
-        "INSERT INTO command_cache VALUES (?,NULL,'safe','none','cmd',1,?,?,'auto')",
-        (stale_key, old_ts, old_ts),
+        "INSERT INTO command_cache VALUES (?,NULL,'safe','none','cmd',1,?,?,'auto',?)",
+        (stale_key, old_ts, old_ts, old_ts),
     )
     conn.commit()
     conn.close()
@@ -105,8 +126,8 @@ def test_prune_removes_old_entries_on_write(db: Path) -> None:
     old_key = "cafebabe" + "0" * 56  # 64-char hex string like a real sha256 digest
     conn = _sqlite3.connect(str(db))
     conn.execute(
-        "INSERT INTO command_cache VALUES (?,NULL,'safe','none','old',1,?,?,'auto')",
-        (old_key, old_ts, old_ts),
+        "INSERT INTO command_cache VALUES (?,NULL,'safe','none','old',1,?,?,'auto',?)",
+        (old_key, old_ts, old_ts, old_ts),
     )
     conn.commit()
     conn.close()

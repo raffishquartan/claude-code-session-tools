@@ -106,15 +106,15 @@ read-then-decide-then-write workflow. Every other table below still gets `create
   have `updated_at` but no immutable first-write column - a genuine gap, not redundant). Migrate
   `touch_last_opened`/`touch_last_active` to bump `updated_at`. Verify: write-path tests per the
   research doc's Section 3 table; a test that `doctor_mutes.created_at` survives a re-mute.
-- [ ] 4.4 `telemetry.db`: confirmed no changes needed (design.md Non-Goals - pure append-only
+- [x] 4.4 `telemetry.db`: confirmed no changes needed (design.md Non-Goals - pure append-only
   event tables, existing `ts` column already serves as `created_at`). Verify: no code change;
   note this explicitly in the PR description rather than silently skipping.
-- [ ] 4.5 `command-cache.db`: add `created_at` to `command_cache` (`validated_at` already
+- [x] 4.5 `command-cache.db`: add `created_at` to `command_cache` (`validated_at` already
   functions as `updated_at`, kept as-is; no `version`/CAS - `cache_record`'s
   `ON CONFLICT DO UPDATE SET fire_count=fire_count+1` is already one atomic statement with no
   read-then-write gap, per design.md Decision 3). Verify: a test asserting `created_at` is set on
   first insert and unchanged by a subsequent `cache_record` re-fire for the same hash.
-- [ ] 4.6 Full test suite green after all 5 stores' changes. Verify: `uv run pytest -q`.
+- [x] 4.6 Full test suite green after all 5 stores' changes. Verify: `uv run pytest -q`.
 
 ## 5. Migration markers (ccmsg, ccsched, sessions) + doctor rewiring
 
