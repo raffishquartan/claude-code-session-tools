@@ -76,22 +76,32 @@ Non-functional literal duplicates (`cli/ccst.py:2975`'s argparse help text,
 aren't fallback-relevant (a user reads help text and docs before any file exists to fall back
 from), so they simply describe current behavior.
 
-### 3. Verify hardening: check `.pdata-migrated/` and row-group presence independently of the manifest
+### 3. Verify hardening: check `.pdata-migrated/` presence independently of the manifest
 
-Before `check_row_count_parity()`'s current `if not proposal_path.exists(): return []` early
-return, add two independent checks that run whenever the manifest is absent:
-- Does `project_root / init_paths.MIGRATED_ARCHIVE_DIRNAME` exist and contain any entries?
-- Does `repository.list_record_groups(conn)` return any group with a non-empty `records` table?
+**Revised during implementation:** the original plan (below) treated "any populated record_group"
+as independent evidence of a migration, alongside `.pdata-migrated/` presence. Running the
+existing test suite immediately falsified this: several tests set up projects using
+`ccst pdata add`/`service.add_record` directly, with real rows, that have never run
+`ccst pdata init` and were never expected to have a manifest - the row-count signal flagged every
+one of them as "migrated, manifest missing", a false positive on the majority of this project's
+own test fixtures. `.pdata-migrated/` is confirmed (by grep) to be written by exactly one code
+path, `cutover.py`'s classify-and-migrate step - it is unambiguous evidence of that specific flow.
+Row counts are not: they can't distinguish "classified via init, manifest later lost" from
+"never classified, just used `pdata add` directly" without the manifest itself to cross-reference
+against, which is precisely the file that's missing.
 
-If either is true, the project shows migration evidence with no manifest to explain it - append a
-new `VerifyIssue` (`FAIL` - this is exactly as broken as "migration not yet run" was for the
+Final design: before `check_row_count_parity()`'s current `if not proposal_path.exists(): return
+[]` early return, add one independent check that runs whenever the manifest is absent - does
+`project_root / init_paths.MIGRATED_ARCHIVE_DIRNAME` exist and contain any entries? If so, the
+project shows unambiguous migration evidence with no manifest to explain it - append a new
+`VerifyIssue` (`FAIL` - this is exactly as broken as "migration not yet run" was for the
 common-store migration markers earlier this release, an operator has no way to know their project
 needs attention) whose message names the two recovery commands the research confirmed already
 exist (`ccst pdata schema show --project <project> --group <record_group>`, `ccst pdata schema
 list --project <project>`) and describes manual reconciliation (compare `.pdata-migrated/<group>/`
 file listings against `schema show`'s field list and `schema list`'s row counts) rather than
-pointing at a fix command that doesn't exist. If neither is true, keep returning `[]` unchanged -
-genuinely nothing to compare, not a defect, exactly as today.
+pointing at a fix command that doesn't exist. If the archive is absent too, keep returning `[]`
+unchanged - genuinely nothing to compare, not a defect, exactly as today.
 
 **Alternative considered:** treat manifest-absent-with-evidence as `WARN` instead of `FAIL`,
 matching the common-store migration check's "already ran, files just weren't cleaned up" WARN

@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from cc_session_tools.lib.pdata import backup, reorganize, service
+from cc_session_tools.lib.pdata import backup, init_paths, reorganize, service
 
 
 def test_dry_run_computes_by_year_moves_from_filename_dates(monkeypatch, tmp_path):
@@ -127,16 +127,16 @@ def test_dry_run_by_year_month_falls_back_to_mtime_when_no_leading_date(monkeypa
 
 
 def test_dry_run_excludes_ccst_bookkeeping_files_from_external_references(monkeypatch, tmp_path):
-    """A project that has already run `ccst pdata init` has a .ccst-pdata-proposal.json (and
-    possibly a ccst-pdata-init-write.log) at its root, both of which literally contain the
-    file_path of every classified entry - including files under whatever folder is being
-    reorganized. These must not be reported as external references needing manual review."""
+    """A project that has already run `ccst pdata init` has a manifest file (and possibly a
+    ccst-pdata-init-write.log) at its root, both of which literally contain the file_path of
+    every classified entry - including files under whatever folder is being reorganized. These
+    must not be reported as external references needing manual review."""
     monkeypatch.setenv("CCST_PROJECT_DB_DIR", str(tmp_path / "dbs"))
     project_root = tmp_path / "projects" / "demo"
     corr = project_root / "correspondence"
     corr.mkdir(parents=True)
     (corr / "2025.03.14-note.md").write_text("x")
-    (project_root / ".ccst-pdata-proposal.json").write_text(
+    (project_root / init_paths.PROPOSAL_FILENAME).write_text(
         '{"entries": [{"path": "correspondence/2025.03.14-note.md"}]}\n'
     )
     (project_root / "ccst-pdata-init-write.log").write_text(

@@ -4,7 +4,7 @@ import json
 
 import pytest
 
-from cc_session_tools.lib.pdata import manifest, rename_group, repository, service
+from cc_session_tools.lib.pdata import init_paths, manifest, rename_group, repository, service
 
 
 def _env(monkeypatch, tmp_path):
@@ -67,7 +67,7 @@ def test_dry_run_finds_matching_manifest_entries(monkeypatch, tmp_path):
         ),
         manifest.ManifestEntry(path="README.md", classification="folder-owned"),
     ])
-    manifest.save(m, project_root / ".ccst-pdata-proposal.json")
+    manifest.save(m, project_root / init_paths.PROPOSAL_FILENAME)
 
     plan = rename_group.dry_run(project="demo", project_root=project_root, old="old-name", new="new-name")
 
@@ -121,7 +121,7 @@ def test_write_updates_matching_manifest_entries_only(monkeypatch, tmp_path):
     project_root = tmp_path / "projects" / "demo"
     project_root.mkdir(parents=True)
     service.add_record(project="demo", record_group="old-name", content="x", file_path=None, fields={})
-    proposal_path = project_root / ".ccst-pdata-proposal.json"
+    proposal_path = project_root / init_paths.PROPOSAL_FILENAME
     m = manifest.Manifest(project="demo", entries=[
         manifest.ManifestEntry(
             path="receipts.csv", classification="db-owned", record_group="old-name",
@@ -152,4 +152,4 @@ def test_write_is_a_noop_on_disk_when_project_was_never_migrated(monkeypatch, tm
     result = rename_group.write(project="demo", project_root=project_root, old="old-name", new="new-name")
 
     assert result.failure is None
-    assert not (project_root / ".ccst-pdata-proposal.json").exists()
+    assert not (project_root / init_paths.PROPOSAL_FILENAME).exists()

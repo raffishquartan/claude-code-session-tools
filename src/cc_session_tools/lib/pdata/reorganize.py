@@ -16,7 +16,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from cc_session_tools.lib.pdata import backup, init_paths, service
-from cc_session_tools.lib.pdata.init_paths import PROPOSAL_FILENAME
+from cc_session_tools.lib.pdata.init_paths import LEGACY_PROPOSAL_FILENAME, PROPOSAL_FILENAME
 from cc_session_tools.lib.pdata.service import Record
 from cc_session_tools.lib.pdata.write_log import LOG_FILENAME as WRITE_LOG_FILENAME
 
@@ -38,7 +38,7 @@ REORGANIZE_WRITE_LOG_FILENAME = "ccst-pdata-reorganize-write.log"
 # would get a spurious "external reference" hit inside its own bookkeeping every time
 # dry_run() runs.
 _EXCLUDED_FILENAMES = frozenset({
-    PROPOSAL_FILENAME, WRITE_LOG_FILENAME, REORGANIZE_WRITE_LOG_FILENAME,
+    PROPOSAL_FILENAME, LEGACY_PROPOSAL_FILENAME, WRITE_LOG_FILENAME, REORGANIZE_WRITE_LOG_FILENAME,
 })
 
 

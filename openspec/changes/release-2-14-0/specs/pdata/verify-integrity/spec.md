@@ -6,23 +6,26 @@ as healthy.
 
 ## ADDED Requirements
 
-### Requirement: Verify cross-checks migration evidence independently of the manifest
+### Requirement: Verify cross-checks migration-archive evidence independently of the manifest
 When a project's migration manifest is absent, `ccst pdata verify` SHALL check for migration
 evidence independently of the manifest: whether the project's `.pdata-migrated/` archive
-directory exists and has content, and whether the project's database has any populated record
-group. If either check finds evidence, verify SHALL report a distinct issue rather than silently
-treating the project as never migrated.
+directory exists and has content - the one signal that unambiguously indicates the
+classify-and-migrate flow ran, since it is written by that flow alone. If it finds evidence,
+verify SHALL report a distinct issue rather than silently treating the project as never migrated.
+A project's database having populated record groups is NOT used as an independent signal here:
+a project can legitimately accumulate rows entirely through direct record-add operations without
+ever running the classify-and-migrate flow or ever having a manifest, so row counts alone cannot
+distinguish that from a genuine lost-manifest case.
 
 #### Scenario: Truly never-migrated project reports no manifest-related issue
-- **WHEN** `ccst pdata verify` runs against a project with no manifest, no `.pdata-migrated/`
-  archive, and no populated record group
+- **WHEN** `ccst pdata verify` runs against a project with no manifest and no `.pdata-migrated/`
+  archive content
 - **THEN** verify reports no issue related to the missing manifest - this is a legitimate
-  never-migrated project, not a defect
+  never-migrated project (whether or not its database holds records added directly), not a defect
 
 #### Scenario: Migrated project with a missing manifest is flagged, not silently OK
 - **WHEN** `ccst pdata verify` runs against a project with no manifest file, but whose
-  `.pdata-migrated/` archive directory has content or whose database has at least one populated
-  record group
+  `.pdata-migrated/` archive directory has content
 - **THEN** verify reports a FAIL-level issue distinct from a normal parity mismatch, whose message
   identifies this as "migrated, manifest now missing" rather than "never migrated"
 

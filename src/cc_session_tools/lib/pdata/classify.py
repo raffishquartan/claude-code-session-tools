@@ -20,7 +20,11 @@ from pathlib import Path
 from typing import Any
 
 from cc_session_tools.lib.pdata import naming
-from cc_session_tools.lib.pdata.init_paths import EXCLUDED_DIR_NAMES, PROPOSAL_FILENAME
+from cc_session_tools.lib.pdata.init_paths import (
+    EXCLUDED_DIR_NAMES,
+    LEGACY_PROPOSAL_FILENAME,
+    PROPOSAL_FILENAME,
+)
 from cc_session_tools.lib.pdata.manifest import FieldSpec, ManifestEntry
 from cc_session_tools.lib.pdata.write_log import LOG_FILENAME as WRITE_LOG_FILENAME
 
@@ -204,7 +208,7 @@ def walk_and_classify(
         rel = abs_path.relative_to(project_root)
         if any(part in EXCLUDED_DIR_NAMES for part in rel.parts[:-1]):
             continue
-        if abs_path.name in (PROPOSAL_FILENAME, WRITE_LOG_FILENAME):
+        if abs_path.name in (PROPOSAL_FILENAME, LEGACY_PROPOSAL_FILENAME, WRITE_LOG_FILENAME):
             continue
         entries.append(classify_path(str(rel), abs_path))
     _disambiguate_record_groups(entries, existing_record_groups=existing_record_groups)

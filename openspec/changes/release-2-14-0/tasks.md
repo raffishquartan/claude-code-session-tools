@@ -1,24 +1,32 @@
 ## 1. Manifest rename + backward-compatible resolver
 
-- [ ] 1.1 In `init_paths.py`: rename `PROPOSAL_FILENAME` to `.pdata-migration-manifest.json`; add
+- [x] 1.1 In `init_paths.py`: rename `PROPOSAL_FILENAME` to `.pdata-migration-manifest.json`; add
   `LEGACY_PROPOSAL_FILENAME = ".ccst-pdata-proposal.json"`; add
   `resolve_proposal_path(project_root: Path) -> Path` (new-name path if it exists, else
   legacy-name path if that exists, else the new-name path). Verify: a test per branch (new
-  exists, legacy exists, neither exists, both exist -> new wins).
-- [ ] 1.2 Switch every `.exists()`-based call site identified in the research
-  (`init_service.py:373`, `manifest.py:123`, `rename_group.py:77,111`, `verify.py:116`) to call
-  `resolve_proposal_path()` instead of building `project_root / PROPOSAL_FILENAME` directly.
-  Verify: existing pdata test suite passes unchanged; add a regression test proving a project
-  with only the legacy-named manifest still round-trips through `init`, `verify`, and
-  `rename-group`.
-- [ ] 1.3 Fix the one non-constant literal duplicate: `cli/ccst.py:2975`'s argparse help text for
-  `rename-group --write`. Update docstring/comment mentions in `verify.py`, `rename_group.py`,
-  `init_paths.py`, `classify.py` for consistency (non-functional, no test needed).
-- [ ] 1.4 Update `skills/pm-project-init/SKILL.md`'s prose references (lines 39, 65) to the new
-  filename, and add a sentence establishing this file as permanent tool state (not a draft) in
-  both the skill and the `--write` success message flow. Verify:
-  `grep -rn "\.ccst-pdata-proposal\.json" src/` returns only the `LEGACY_PROPOSAL_FILENAME`
-  constant definition and the backward-compat fallback logic - no other live reference.
+  exists, legacy exists, neither exists, both exist -> new wins) in `test_init_paths.py`.
+- [x] 1.2 Switch every `.exists()`-based call site identified in the research
+  (`init_service.py` dry_run + write, `rename_group.py` `_plan` + `_rename_in_manifest`,
+  `verify.py`'s `check_row_count_parity`) to call `resolve_proposal_path()` instead of building
+  `project_root / PROPOSAL_FILENAME` directly (`manifest.py:load_or_create` needed no change -
+  it already takes `proposal_path` as a parameter). Also fixed `classify.py`/`reorganize.py`'s
+  own-bookkeeping exclusion sets, which only excluded the new name and would have
+  misclassified/flagged a legacy-named project's manifest as project content. Verify: existing
+  pdata test suite green; a regression test per module proving a project with only the
+  legacy-named manifest still round-trips through `init`, `verify`, and `rename-group`
+  (`test_row_count_parity_resolves_legacy_manifest_name` etc.).
+- [x] 1.3 Fixed the one non-constant literal duplicate: `cli/ccst.py`'s `rename-group --write`
+  argparse help text now interpolates `init_paths.PROPOSAL_FILENAME`. Updated docstring/comment
+  mentions in `rename_group.py`'s module docstring for consistency (non-functional, no test
+  needed).
+- [x] 1.4 Updated `skills/pm-project-init/SKILL.md`'s prose references to the new filename, with
+  a sentence establishing this file as permanent tool state (not a draft) and naming the legacy
+  fallback. Verify: `grep -rn "\.ccst-pdata-proposal\.json" src/` returns only the
+  `LEGACY_PROPOSAL_FILENAME` constant definition and the two intentional SKILL.md
+  legacy-fallback mentions - no other live reference. Also swept every hardcoded
+  `.ccst-pdata-proposal.json` test-fixture literal across the whole test suite (found beyond the
+  4 call sites the research scoped) to use `init_paths.PROPOSAL_FILENAME` instead, since several
+  broke outright once the constant's value changed.
 
 ## 2. New-project folder scaffolding
 
@@ -35,20 +43,22 @@
 
 ## 3. Verify hardening: independent migration-evidence checks
 
-- [ ] 3.1 Write failing tests for `check_row_count_parity()`: manifest absent + no
-  `.pdata-migrated/` content + no populated record group -> `[]` (unchanged); manifest absent +
-  `.pdata-migrated/<group>/` has content -> one FAIL issue naming "manifest now missing"; manifest
-  absent + a record group has rows but no `.pdata-migrated/` content -> same FAIL issue (either
-  signal alone is sufficient evidence); manifest present -> existing parity-check behavior
-  unchanged. Verify: tests fail against current code.
-- [ ] 3.2 Implement: before the current `if not proposal_path.exists(): return []` early return
-  (now keyed off `resolve_proposal_path()` per task 1.2), add the two independent checks
-  (`.pdata-migrated/` directory has any entries; `repository.list_record_groups(conn)` has any
-  group with a non-empty `records` table) and raise the new FAIL issue when either is true, with
-  a message naming `ccst pdata schema show`/`ccst pdata schema list` as recovery-inspection
-  commands. Verify: 3.1's tests pass.
-- [ ] 3.3 Full pdata verify test suite green. Verify: `uv run pytest -q -k pdata_verify` (or the
-  equivalent test module).
+- [x] 3.1-3.2 Implemented and revised during TDD: manifest absent + no `.pdata-migrated/`
+  content -> `[]` (unchanged); manifest absent + `.pdata-migrated/<group>/` has content -> one
+  FAIL issue naming "manifest now missing"; manifest present -> existing parity-check behavior
+  unchanged. **Row counts dropped as an independent trigger** (see design.md Decision 3's
+  revision) - running the existing test suite immediately showed false positives against every
+  project fixture that uses `pdata add` directly without ever running `ccst pdata init`, since
+  populated record groups alone can't distinguish that from a genuine lost-manifest case.
+  `.pdata-migrated/` presence (confirmed written by exactly one code path, `cutover.py`) is the
+  only reliable independent signal. Implemented in
+  `_check_manifest_missing_with_evidence()`, called from `check_row_count_parity()`'s early
+  return (now keyed off `resolve_proposal_path()` per task 1.2), with a message naming
+  `ccst pdata schema show`/`ccst pdata schema list` as recovery-inspection commands.
+- [x] 3.3 Full pdata verify test suite green. Verify: `uv run pytest -q tests/pdata/test_verify.py
+  tests/test_ccst_pdata_verify_cli.py` (30 + 38 passing, including 4 new tests covering the
+  `pdata add`-only false-positive fix, the archive-evidence FAIL case, and legacy-manifest
+  resolution).
 
 ## 4. Bundle `pm-pdata-audit` and `pm-pdata-migrate`
 

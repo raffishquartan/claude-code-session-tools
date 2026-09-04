@@ -20,6 +20,7 @@ import json
 import sqlite3
 import time
 from dataclasses import dataclass, field
+from pathlib import Path
 
 from cc_session_tools.lib.pdata import importers, init_paths, manifest, repository, store
 
@@ -93,6 +94,48 @@ def _count_base_records(
     return count
 
 
+def _check_manifest_missing_with_evidence(
+    conn: sqlite3.Connection, project_root: Path
+) -> list[VerifyIssue]:
+    """Called only when no manifest (new or legacy name) exists for this project. Distinguishes
+    "genuinely never migrated" (nothing to flag - the manifest's absence is expected) from
+    "migrated via `ccst pdata init`, then the manifest was lost" by checking the one signal that
+    is unambiguous evidence of that specific flow: `.pdata-migrated/<record_group>/` archive
+    content, written exclusively by cutover.py's classify-and-migrate step (confirmed - no other
+    code path creates this directory).
+
+    Deliberately does NOT treat "any populated record_group" as evidence on its own: a project
+    can accumulate rows entirely through `ccst pdata add`/`service.add_record` without ever
+    running `ccst pdata init`'s classify/cutover flow, and never has - or needs - a manifest.
+    Row counts can't tell that apart from a real classify-then-lost-manifest case without the
+    manifest itself to cross-reference against, so using them as an independent trigger here
+    produced false positives against every project that only ever used `pdata add` directly."""
+    archive_root = project_root / init_paths.MIGRATED_ARCHIVE_DIRNAME
+    if not (archive_root.is_dir() and any(archive_root.iterdir())):
+        return []  # genuinely never migrated via the classify/cutover flow - not a defect
+
+    return [
+        VerifyIssue(
+            check="manifest-missing",
+            severity="FAIL",
+            record_group=None,
+            record_id=None,
+            message=(
+                f"migrated, manifest now missing: {project_root} has archived files under "
+                f"{init_paths.MIGRATED_ARCHIVE_DIRNAME}/ (written only by a completed "
+                f"`ccst pdata init --write` cutover) but no {init_paths.PROPOSAL_FILENAME} "
+                f"(or legacy {init_paths.LEGACY_PROPOSAL_FILENAME}) manifest file. Recovery: "
+                "run `ccst pdata schema list --project <project>` for an overview of every "
+                "record group the database currently has, and `ccst pdata schema show "
+                "--project <project> --group <record_group>` to inspect a group's current "
+                "field list - cross-reference both against the remaining "
+                f"{init_paths.MIGRATED_ARCHIVE_DIRNAME}/<record_group>/ file listing to manually "
+                "reconstruct what the manifest would have recorded."
+            ),
+        )
+    ]
+
+
 def check_row_count_parity(conn: sqlite3.Connection, project: str) -> list[VerifyIssue]:
     """For every db-owned entry in the project's classification proposal (spec §7.1) whose
     original file is still archived under .pdata-migrated/, recompute the row count the importer
@@ -109,12 +152,16 @@ def check_row_count_parity(conn: sqlite3.Connection, project: str) -> list[Verif
     summed expectation against the actual count once closes that gap. The actual count includes
     soft-deleted rows: a legitimate `ccst pdata delete` must never permanently trip this check —
     only a row that is actually gone from the table (never merely marked deleted_at) is evidence
-    of loss. Skipped entirely if the project was never migrated (no .ccst-pdata-proposal.json) —
-    nothing to compare against, which is not itself a defect."""
+    of loss. Skipped entirely if the project was genuinely never migrated (no manifest, no
+    migration-evidence anywhere) — nothing to compare against, which is not itself a defect. But
+    a manifest that is merely *missing* — while `.pdata-migrated/` content or populated record
+    groups prove a migration did happen — is a distinct problem this function now raises as its
+    own issue (see `_check_manifest_missing_with_evidence`), rather than being silently
+    indistinguishable from the legitimate never-migrated case."""
     project_root = init_paths.default_projects_root() / project
-    proposal_path = project_root / init_paths.PROPOSAL_FILENAME
+    proposal_path = init_paths.resolve_proposal_path(project_root)
     if not proposal_path.exists():
-        return []
+        return _check_manifest_missing_with_evidence(conn, project_root)
 
     m = manifest.load(proposal_path)
     archive_root = project_root / init_paths.MIGRATED_ARCHIVE_DIRNAME

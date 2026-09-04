@@ -89,6 +89,34 @@ def test_backup_dir_override_clears_when_previously_unset(monkeypatch, tmp_path)
     assert backup.BACKUP_DIR_ENV not in os.environ
 
 
+def test_proposal_filename_is_the_new_permanent_name():
+    assert init_paths.PROPOSAL_FILENAME == ".pdata-migration-manifest.json"
+    assert init_paths.LEGACY_PROPOSAL_FILENAME == ".ccst-pdata-proposal.json"
+
+
+def test_resolve_proposal_path_prefers_new_name_when_only_new_exists(tmp_path):
+    (tmp_path / init_paths.PROPOSAL_FILENAME).write_text("{}")
+    assert init_paths.resolve_proposal_path(tmp_path) == tmp_path / init_paths.PROPOSAL_FILENAME
+
+
+def test_resolve_proposal_path_falls_back_to_legacy_name(tmp_path):
+    (tmp_path / init_paths.LEGACY_PROPOSAL_FILENAME).write_text("{}")
+    assert (
+        init_paths.resolve_proposal_path(tmp_path)
+        == tmp_path / init_paths.LEGACY_PROPOSAL_FILENAME
+    )
+
+
+def test_resolve_proposal_path_prefers_new_name_when_both_exist(tmp_path):
+    (tmp_path / init_paths.PROPOSAL_FILENAME).write_text("{}")
+    (tmp_path / init_paths.LEGACY_PROPOSAL_FILENAME).write_text("{}")
+    assert init_paths.resolve_proposal_path(tmp_path) == tmp_path / init_paths.PROPOSAL_FILENAME
+
+
+def test_resolve_proposal_path_defaults_to_new_name_when_neither_exists(tmp_path):
+    assert init_paths.resolve_proposal_path(tmp_path) == tmp_path / init_paths.PROPOSAL_FILENAME
+
+
 def test_excluded_dir_names_includes_rehearsal_backup_dirname():
     """The classifier walks project_root via EXCLUDED_DIR_NAMES alone — without
     this, a rehearsal's own backup tarball directory would be walked into and its

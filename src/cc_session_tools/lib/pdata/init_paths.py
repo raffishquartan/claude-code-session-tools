@@ -13,7 +13,12 @@ from pathlib import Path
 from cc_session_tools.lib.pdata import backup, store
 
 PROJECTS_ROOT_ENV = "CCST_PROJECTS_ROOT"
-PROPOSAL_FILENAME = ".ccst-pdata-proposal.json"
+# Permanent tool state, not a draft - a project's pdata classification/migration record. Named
+# with a .pdata- prefix so it reads that way; LEGACY_PROPOSAL_FILENAME is the pre-rename name,
+# still resolved via resolve_proposal_path() so an already-migrated project needs no manual
+# rename.
+PROPOSAL_FILENAME = ".pdata-migration-manifest.json"
+LEGACY_PROPOSAL_FILENAME = ".ccst-pdata-proposal.json"
 MIGRATED_ARCHIVE_DIRNAME = ".pdata-migrated"
 MIGRATED_MANIFEST_FILENAME = "MANIFEST.md"
 REHEARSAL_DB_DIRNAME = ".ccst-pdata-rehearsal-db"
@@ -32,6 +37,21 @@ EXCLUDED_DIR_NAMES = frozenset({
 def default_projects_root() -> Path:
     override = os.environ.get(PROJECTS_ROOT_ENV)
     return Path(override).expanduser() if override else Path.home() / "cc"
+
+
+def resolve_proposal_path(project_root: Path) -> Path:
+    """The manifest path to read/write for project_root: the new name if it already exists,
+    else the legacy pre-rename name if that's what this project actually has on disk, else the
+    new name (for a project writing its manifest for the first time). Every reader/writer of the
+    manifest calls this instead of hardcoding project_root / PROPOSAL_FILENAME, so the rename is
+    transparent to any project migrated before it."""
+    new_path = project_root / PROPOSAL_FILENAME
+    if new_path.exists():
+        return new_path
+    legacy_path = project_root / LEGACY_PROPOSAL_FILENAME
+    if legacy_path.exists():
+        return legacy_path
+    return new_path
 
 
 def resolve_project_root(project: str, *, rehearse: Path | None) -> Path:
