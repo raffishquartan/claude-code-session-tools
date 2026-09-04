@@ -54,6 +54,11 @@
 - [x] 3.3 Confirm `lib/pdata/repository.py` is left untouched (design.md Non-Goals - not
   refactored to call the new helper in this change). Verify: `git diff` shows no changes under
   `lib/pdata/`. Confirmed: `git diff --stat -- src/cc_session_tools/lib/pdata/` is empty.
+- [x] 3.4 Add `lib/db.py:add_missing_columns()`, generalizing `scheduler/store.py`'s
+  per-store `_migrate_jobs_table` idiom (PRAGMA table_info + ALTER TABLE ADD COLUMN for each
+  absent column) so section 4's ~15 new columns across 3 stores don't each hand-roll the same
+  check. Verify: `test_add_missing_columns_adds_only_absent_columns`,
+  `test_add_missing_columns_is_idempotent_and_preserves_data` in `tests/test_db.py`.
 
 ## 4. `created_at`/`updated_at` + CAS wiring per store
 

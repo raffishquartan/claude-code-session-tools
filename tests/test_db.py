@@ -234,6 +234,37 @@ def test_cold_start_concurrent_connect_no_lost_wal_switch(tmp_path):
     assert count == 20
 
 
+def test_add_missing_columns_adds_only_absent_columns(tmp_path):
+    conn = db.connect(tmp_path / "store.db", ddl=_DDL)
+    conn.execute("INSERT INTO widgets (id, name) VALUES (1, 'a')")
+    conn.commit()
+
+    db.add_missing_columns(
+        conn, "widgets", {"name": "TEXT NOT NULL", "created_at": "TEXT"}
+    )
+
+    cols = {row["name"] for row in conn.execute("PRAGMA table_info(widgets)")}
+    conn.close()
+    assert cols == {"id", "name", "created_at"}
+
+
+def test_add_missing_columns_is_idempotent_and_preserves_data(tmp_path):
+    target = tmp_path / "store.db"
+    conn = db.connect(target, ddl=_DDL)
+    conn.execute("INSERT INTO widgets (id, name) VALUES (1, 'a')")
+    conn.commit()
+
+    db.add_missing_columns(conn, "widgets", {"created_at": "TEXT"})
+    conn.close()
+
+    # Re-running against the same file (new connection, same idempotent call) must not error.
+    conn2 = db.connect(target)
+    db.add_missing_columns(conn2, "widgets", {"created_at": "TEXT"})
+    row = conn2.execute("SELECT name FROM widgets WHERE id=1").fetchone()
+    conn2.close()
+    assert row["name"] == "a"
+
+
 def test_cas_update_applies_and_advances_version_when_current(tmp_path):
     conn = db.connect(tmp_path / "store.db", ddl=_VERSIONED_DDL)
     conn.execute("INSERT INTO versioned_widgets (id, name) VALUES (1, 'a')")

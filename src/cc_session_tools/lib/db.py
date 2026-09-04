@@ -116,6 +116,27 @@ def record_migration(conn: sqlite3.Connection, name: str, *, applied_at: str) ->
     )
 
 
+def add_missing_columns(conn: sqlite3.Connection, table: str, columns: dict[str, str]) -> None:
+    """Idempotent ALTER TABLE ADD COLUMN for columns that might not exist yet on an
+    already-shipped table.
+
+    CREATE TABLE IF NOT EXISTS in a store's DDL is a no-op against an existing table, so a
+    column added after a table already shipped needs this explicit add-if-missing step (the
+    established idiom this generalizes: scheduler/store.py's original per-store
+    _migrate_jobs_table). ``columns`` maps column name -> its full column-definition SQL (e.g.
+    {"updated_at": "TEXT"} or {"version": "INTEGER NOT NULL DEFAULT 1"}). Commits only if a
+    column was actually added; a no-op call leaves any open transaction alone.
+    """
+    existing = {row["name"] for row in conn.execute(f"PRAGMA table_info({table})")}
+    changed = False
+    for name, coldef in columns.items():
+        if name not in existing:
+            conn.execute(f"ALTER TABLE {table} ADD COLUMN {name} {coldef}")
+            changed = True
+    if changed:
+        conn.commit()
+
+
 def cas_update(
     conn: sqlite3.Connection,
     *,
