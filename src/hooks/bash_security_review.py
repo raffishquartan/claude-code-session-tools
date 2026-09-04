@@ -30,9 +30,9 @@ import sys
 import time
 from pathlib import Path
 
-from cccs_hooks import cache as cache_mod
-from cccs_hooks import normalise as norm_mod
-from cccs_hooks.telemetry import TelemetryEntry, log_event, _shorten_cwd
+from hooks import cache as cache_mod
+from hooks import normalise as norm_mod
+from hooks.telemetry import TelemetryEntry, log_event, _shorten_cwd
 
 
 _TRIVIAL_RE = re.compile(

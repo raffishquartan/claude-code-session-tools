@@ -1,4 +1,4 @@
-from cccs_hooks import model_info
+from hooks import model_info
 
 CASES = [
     ("claude-fable-5", 1_000_000, 10.00, "Fable 5"),

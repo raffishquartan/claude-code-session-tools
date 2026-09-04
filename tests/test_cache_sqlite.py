@@ -9,7 +9,7 @@ import pytest
 
 import json as _json
 
-from cccs_hooks.cache import CacheEntry, cache_lookup, cache_record, invocations_record, sha256_command
+from hooks.cache import CacheEntry, cache_lookup, cache_record, invocations_record, sha256_command
 
 
 @pytest.fixture
@@ -213,7 +213,7 @@ def test_stats_main_no_crash(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, ca
     monkeypatch.delenv("CCCS_CACHE_PATH", raising=False)
     # Seed one row so the view returns data
     invocations_record(2, "safe", cache_source="exact", ms_elapsed=None)
-    from cccs_hooks import stats as stats_mod
+    from hooks import stats as stats_mod
     stats_mod.main([])
     out = capsys.readouterr().out
     assert "Hook invocations" in out
@@ -223,7 +223,7 @@ def test_stats_main_no_crash(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, ca
 def test_default_db_path_uses_data_home(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.delenv("CCCS_CACHE_DB", raising=False)
     monkeypatch.setenv("CCST_DATA_HOME", str(tmp_path))
-    from cccs_hooks.cache import _db_path
+    from hooks.cache import _db_path
     assert _db_path() == tmp_path / "command-cache.db"
 
 
@@ -231,7 +231,7 @@ def test_stats_main_no_db_found(tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
     """cccs-stats prints a friendly message (not a traceback) when the DB file doesn't exist."""
     monkeypatch.setenv("CCCS_CACHE_DB", str(tmp_path / "does-not-exist.db"))
     monkeypatch.delenv("CCCS_CACHE_PATH", raising=False)
-    from cccs_hooks import stats as stats_mod
+    from hooks import stats as stats_mod
     stats_mod.main([])
     out = capsys.readouterr().out
     assert "No hook DB found" in out

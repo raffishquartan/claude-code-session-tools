@@ -30,7 +30,7 @@ import sys
 from decimal import ROUND_DOWN, Decimal
 from pathlib import Path
 
-from cccs_hooks import model_info
+from hooks import model_info
 
 THRESHOLD_ORANGE = 150_000
 THRESHOLD_RED = 200_000
@@ -123,7 +123,7 @@ def _is_overridden(session_id: str) -> bool:
     Function-local import: this is only reached past the 150k-token branch
     (the uncommon case for most Stop events), so keeping the sessions.db
     import off the common/silent path matches the lazy-import rationale
-    used elsewhere in cccs_hooks for rarely-taken branches (e.g.
+    used elsewhere in hooks for rarely-taken branches (e.g.
     pending_migration.py's _log_failure/_default_legacy_paths)."""
     from cc_session_tools.lib import context_overrides
 

@@ -20,20 +20,20 @@ worth writing down before they diverge.
 from __future__ import annotations
 
 HOOK_VERBS: dict[str, str] = {
-    "bash-hard-deny": "cccs_hooks.bash_hard_deny",
-    "bash-security-review": "cccs_hooks.bash_security_review",
-    "marker-allow": "cccs_hooks.marker_allow",
-    "confirm-8digit": "cccs_hooks.confirm_8digit",
-    "after-response": "cccs_hooks.after_response",
-    "worklog-guard": "cccs_hooks.worklog_guard",
-    "session-tag": "cccs_hooks.session_tag",
-    "last-screenshot": "cccs_hooks.last_screenshot",
-    "messaging-deliver": "cccs_hooks.messaging_deliver",
-    "catchup": "cccs_hooks.catchup",
-    "pending-migration": "cccs_hooks.pending_migration",
-    "context-window-warning": "cccs_hooks.context_window_warning",
-    "pending-rename": "cccs_hooks.pending_rename",
-    "pdata-sync": "cccs_hooks.pdata_sync",
+    "bash-hard-deny": "hooks.bash_hard_deny",
+    "bash-security-review": "hooks.bash_security_review",
+    "marker-allow": "hooks.marker_allow",
+    "confirm-8digit": "hooks.confirm_8digit",
+    "after-response": "hooks.after_response",
+    "worklog-guard": "hooks.worklog_guard",
+    "session-tag": "hooks.session_tag",
+    "last-screenshot": "hooks.last_screenshot",
+    "messaging-deliver": "hooks.messaging_deliver",
+    "catchup": "hooks.catchup",
+    "pending-migration": "hooks.pending_migration",
+    "context-window-warning": "hooks.context_window_warning",
+    "pending-rename": "hooks.pending_rename",
+    "pdata-sync": "hooks.pdata_sync",
 }
 
 

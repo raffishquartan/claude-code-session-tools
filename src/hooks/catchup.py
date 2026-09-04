@@ -24,7 +24,7 @@ from datetime import datetime, timedelta, timezone
 
 from cc_session_tools.lib.scheduler import cursor, ledger, reconcile, surface, throttle
 from cc_session_tools.lib.scheduler.digest import format_digest
-from cccs_hooks.telemetry import TelemetryEntry, log_event
+from hooks.telemetry import TelemetryEntry, log_event
 
 logger = logging.getLogger(__name__)
 

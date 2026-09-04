@@ -7,7 +7,7 @@ PreToolUse/bash-security-review hook-fire family) — catch-up/job-run events
 already have a dedicated, typed reader in ``ccsched status``.
 
 Designed to be invoked via ``ccst telemetry query``; can also run directly as
-``python -m cccs_hooks.telemetry_query``.
+``python -m hooks.telemetry_query``.
 """
 from __future__ import annotations
 

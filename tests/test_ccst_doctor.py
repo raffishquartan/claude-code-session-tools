@@ -33,7 +33,7 @@ from cc_session_tools.lib.doctor import (
 )
 from cc_session_tools.lib import db as _db
 from cc_session_tools.lib import telemetry_store
-from cccs_hooks.telemetry import TelemetryEntry, log_event
+from hooks.telemetry import TelemetryEntry, log_event
 
 
 def _run(*args: str) -> subprocess.CompletedProcess[str]:

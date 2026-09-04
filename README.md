@@ -8,7 +8,7 @@ Three concerns, one repo, for life on the [Claude Code](https://docs.anthropic.c
 
 1. **Session management** — start, resume, find, relocate, and delete Claude Code sessions from the shell, with tagged dated session directories that don't pollute your repo root.
 2. **Usage analytics** — parse `~/.claude/projects/**/*.jsonl` into tokens-and-dollars breakdowns by project, session, model, MCP server, plugin, and tool.
-3. **Hook library** — Python package (`cccs_hooks`) providing Claude Code SessionStart / PreToolUse / PostToolUse / UserPromptSubmit / Stop hook implementations, invokable via `ccst hooks run <name>`.
+3. **Hook library** — Python package (`hooks`) providing Claude Code SessionStart / PreToolUse / PostToolUse / UserPromptSubmit / Stop hook implementations, invokable via `ccst hooks run <name>`.
 
 The repo ships seven CLIs, one shell helper, ten bundled skills, ten bundled hooks, and eight
 bundled scheduled jobs:
@@ -488,7 +488,7 @@ Wraps `ccs --emptiness only`. Triggers on prompts like "list empty sessions", "f
 
 Permanently deletes one or more sessions. Triggers on "delete session", "remove empty sessions", "clean up sessions". Inputs must be explicit session basenames — the user or the `list-empty-sessions` skill must supply them. Pre-flight checks confirm each session exists and is not the currently running session. Dry-run by default; requires `--execute` plus an 8-digit confirmation code for actual deletion. Deletes the `cc-sessions/<basename>/` directory, the JSONL transcript, the `.tag` file, and optionally the `~/.claude/tasks/<encoded>/` task directory.
 
-Note: the 8-digit confirmation in `delete-sessions` is an inline prompt (not a reuse of the `cccs_hooks.confirm_8digit` PreToolUse hook). The hook guards tool calls; the script guards its own execution.
+Note: the 8-digit confirmation in `delete-sessions` is an inline prompt (not a reuse of the `hooks.confirm_8digit` PreToolUse hook). The hook guards tool calls; the script guards its own execution.
 
 ### `reduce-persistent-context`
 
@@ -645,9 +645,9 @@ SQLite client (no longer hand-editable TOML). Every job declares a
 (whether to include in the digest), and optional `catchup_window` (how far back
 to back-fill; default 7 days).
 
-## Hook library (`cccs_hooks`)
+## Hook library (`hooks`)
 
-The `cccs_hooks` Python package provides Claude Code hook implementations.
+The `hooks` Python package provides Claude Code hook implementations.
 Install via `uv tool install cc-session-tools` or `pipx install cc-session-tools`
 to make the hook library available. Hooks are invoked through `ccst hooks run <name>`.
 
@@ -655,26 +655,26 @@ to make the hook library available. Hooks are invoked through `ccst hooks run <n
 
 | Module | Hook event | What it does |
 |---|---|---|
-| `cccs_hooks.telemetry` | — | Writes rows to `telemetry.db` (SQLite, WAL mode, under `~/.local/share/claude/`); used by other modules. Query via `ccst telemetry query`. |
-| `cccs_hooks.transcript` | — | Walks parent session transcript JSONL; shared by `confirm_8digit`. |
-| `cccs_hooks.confirm_8digit` | PreToolUse | 8-digit confirmation guard for gated tools. |
-| `cccs_hooks.cache` | — | SHA-256 command cache (SQLite, `command-cache.db` under `~/.local/share/claude/`); used by `bash_security_review`. |
-| `cccs_hooks.bash_security_review` | PreToolUse | Tiered Bash security review with cache. |
-| `cccs_hooks.marker_allow` | PreToolUse | Auto-approves a bare `touch` of a skill marker under `~/.cache/claude/markers/`; silent otherwise. |
-| `cccs_hooks.markers` | — | Single source of truth for the skill-marker directory; shared by `confirm_8digit` and `marker_allow`. |
-| `cccs_hooks.after_response` | Stop | `.last-active` sentinel for `ccs --order-by active`. |
-| `cccs_hooks.worklog_guard` | PreCompact (manual) | Blocks `/compact` if the session's WORKLOG.md is stale (see [Worklog guard hook](#worklog-guard-hook)). |
-| `cccs_hooks.session_tag` | **SessionStart** | Writes a `session_tags` row in `sessions.db` so `claude-code-usage` can map session UUIDs to `ccd` name tags (see [Session tag hook](#session-tag-hook)). |
-| `cccs_hooks.last_screenshot` | UserPromptSubmit | Resolves the newest screenshot for the `>lss` token and injects its path (see [Last screenshot hook](#last-screenshot-hook)). |
-| `cccs_hooks.messaging_deliver` | SessionStart + UserPromptSubmit | Sweeps `ccmsg.db` for messages addressed to this session and injects a compact digest as additional context (see [Inter-session messaging](#inter-session-messaging)). |
-| `cccs_hooks.catchup` | SessionStart + UserPromptSubmit | Reconciles + launches scheduled jobs detached, then surfaces completed runs as a digest (see [Scheduled-task catch-up](#scheduled-task-catch-up)). |
-| `cccs_hooks.context_window_warning` | Stop | Nudges toward /compact when the context window passes 150k/200k tokens; silenced by /context-override. |
-| `cccs_hooks.model_info` | — | Model id → context window / price / display name lookup; used by `context_window_warning`. |
+| `hooks.telemetry` | — | Writes rows to `telemetry.db` (SQLite, WAL mode, under `~/.local/share/claude/`); used by other modules. Query via `ccst telemetry query`. |
+| `hooks.transcript` | — | Walks parent session transcript JSONL; shared by `confirm_8digit`. |
+| `hooks.confirm_8digit` | PreToolUse | 8-digit confirmation guard for gated tools. |
+| `hooks.cache` | — | SHA-256 command cache (SQLite, `command-cache.db` under `~/.local/share/claude/`); used by `bash_security_review`. |
+| `hooks.bash_security_review` | PreToolUse | Tiered Bash security review with cache. |
+| `hooks.marker_allow` | PreToolUse | Auto-approves a bare `touch` of a skill marker under `~/.cache/claude/markers/`; silent otherwise. |
+| `hooks.markers` | — | Single source of truth for the skill-marker directory; shared by `confirm_8digit` and `marker_allow`. |
+| `hooks.after_response` | Stop | `.last-active` sentinel for `ccs --order-by active`. |
+| `hooks.worklog_guard` | PreCompact (manual) | Blocks `/compact` if the session's WORKLOG.md is stale (see [Worklog guard hook](#worklog-guard-hook)). |
+| `hooks.session_tag` | **SessionStart** | Writes a `session_tags` row in `sessions.db` so `claude-code-usage` can map session UUIDs to `ccd` name tags (see [Session tag hook](#session-tag-hook)). |
+| `hooks.last_screenshot` | UserPromptSubmit | Resolves the newest screenshot for the `>lss` token and injects its path (see [Last screenshot hook](#last-screenshot-hook)). |
+| `hooks.messaging_deliver` | SessionStart + UserPromptSubmit | Sweeps `ccmsg.db` for messages addressed to this session and injects a compact digest as additional context (see [Inter-session messaging](#inter-session-messaging)). |
+| `hooks.catchup` | SessionStart + UserPromptSubmit | Reconciles + launches scheduled jobs detached, then surfaces completed runs as a digest (see [Scheduled-task catch-up](#scheduled-task-catch-up)). |
+| `hooks.context_window_warning` | Stop | Nudges toward /compact when the context window passes 150k/200k tokens; silenced by /context-override. |
+| `hooks.model_info` | — | Model id → context window / price / display name lookup; used by `context_window_warning`. |
 
 ### Running hooks via `ccst hooks run <name>`
 
 Hook scripts invoke the dispatcher via `ccst` rather than calling
-`python3 -m cccs_hooks.*` directly. This means CCST only needs to be installed
+`python3 -m hooks.*` directly. This means CCST only needs to be installed
 via `uv tool install` or `pipx install` - the hook modules do not need to be
 importable by the system Python. The shim contract is:
 
@@ -686,25 +686,25 @@ Where `<name>` is one of:
 
 | Verb | Module |
 |---|---|
-| `bash-security-review` | `cccs_hooks.bash_security_review` |
-| `marker-allow` | `cccs_hooks.marker_allow` |
-| `confirm-8digit` | `cccs_hooks.confirm_8digit` |
-| `after-response` | `cccs_hooks.after_response` |
-| `worklog-guard` | `cccs_hooks.worklog_guard` |
-| `session-tag` | `cccs_hooks.session_tag` |
-| `last-screenshot` | `cccs_hooks.last_screenshot` |
-| `messaging-deliver` | `cccs_hooks.messaging_deliver` |
-| `catchup` | `cccs_hooks.catchup` |
-| `context-window-warning` | `cccs_hooks.context_window_warning` |
-| `pending-migration` | `cccs_hooks.pending_migration` |
-| `pending-rename` | `cccs_hooks.pending_rename` |
+| `bash-security-review` | `hooks.bash_security_review` |
+| `marker-allow` | `hooks.marker_allow` |
+| `confirm-8digit` | `hooks.confirm_8digit` |
+| `after-response` | `hooks.after_response` |
+| `worklog-guard` | `hooks.worklog_guard` |
+| `session-tag` | `hooks.session_tag` |
+| `last-screenshot` | `hooks.last_screenshot` |
+| `messaging-deliver` | `hooks.messaging_deliver` |
+| `catchup` | `hooks.catchup` |
+| `context-window-warning` | `hooks.context_window_warning` |
+| `pending-migration` | `hooks.pending_migration` |
+| `pending-rename` | `hooks.pending_rename` |
 
 The dispatcher reads the event payload from stdin, calls the matching module's
 `main()`, and propagates its exit code.
 
 ### Session tag hook
 
-`cccs_hooks.session_tag` is a **SessionStart** hook that records a session's tag when it is created via `ccd <tag>`:
+`hooks.session_tag` is a **SessionStart** hook that records a session's tag when it is created via `ccd <tag>`:
 
 - Row written: a `session_tags` entry keyed by session UUID in `sessions.db` (SQLite, under `~/.local/share/claude/`, overridable via `CCST_SESSIONS_DIR`)
 - Row content: the `ccd` name tag (e.g. `oneshot-add-uuid-for-better-usage-mapping`)
@@ -716,7 +716,7 @@ To migrate a legacy `.tag`/`.last-opened`/`.last-active`/doctor-mutes layout int
 
 ### Last screenshot hook
 
-`cccs_hooks.last_screenshot` is a **UserPromptSubmit** hook that lets you refer to
+`hooks.last_screenshot` is a **UserPromptSubmit** hook that lets you refer to
 your most recent screenshot with the token `>lss` ("last screenshot") instead of
 finding and typing its path.
 
@@ -764,7 +764,7 @@ set it. The hook never blocks and always exits 0.
 
 ### Worklog guard hook
 
-`cccs_hooks.worklog_guard` is a **PreCompact** hook, registered with
+`hooks.worklog_guard` is a **PreCompact** hook, registered with
 matcher `manual` only, that blocks `/compact` if the current session's
 `cc-sessions/<date>-<tag>/working/WORKLOG.md` hasn't been touched in the last
 hour. Compaction is the one moment where losing un-persisted progress is a
@@ -785,12 +785,12 @@ real risk, which is why this hook blocks rather than just warning like
 ### Running modules directly (debugging only)
 
 Each module is also runnable as a Python CLI if you want to bypass the dispatcher
-and have `cccs_hooks` importable on `sys.path` (e.g. inside an activated venv,
+and have `hooks` importable on `sys.path` (e.g. inside an activated venv,
 or when installed via `uv tool install cc-session-tools`):
 
 ```sh
-python3 -m cccs_hooks.telemetry log --help
-python3 -m cccs_hooks.bash_security_review  # reads JSON from stdin
+python3 -m hooks.telemetry log --help
+python3 -m hooks.bash_security_review  # reads JSON from stdin
 ```
 
 ## Hook management CLI (`ccst`)

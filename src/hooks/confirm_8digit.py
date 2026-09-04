@@ -31,8 +31,8 @@ import sys
 import time
 from typing import Literal
 
-from cccs_hooks.markers import markers_dir
-from cccs_hooks.transcript import (
+from hooks.markers import markers_dir
+from hooks.transcript import (
     TranscriptNotFound,
     Turn,
     find_intervening_gated_call,

@@ -1,4 +1,4 @@
-"""Tests for ccst telemetry trim and cccs_hooks.telemetry_trim module."""
+"""Tests for ccst telemetry trim and hooks.telemetry_trim module."""
 from __future__ import annotations
 
 import datetime
@@ -9,7 +9,7 @@ from pathlib import Path
 import pytest
 
 from cc_session_tools.lib import telemetry_store
-from cccs_hooks.telemetry_trim import enforce_max_size, trim, trim_by_age
+from hooks.telemetry_trim import enforce_max_size, trim, trim_by_age
 
 
 def _run(*args: str) -> subprocess.CompletedProcess[str]:

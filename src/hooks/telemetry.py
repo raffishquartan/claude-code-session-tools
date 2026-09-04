@@ -2,7 +2,7 @@
 (telemetry_events table).
 
 All bash hooks call this module via:
-    echo "$INPUT" | python3 -m cccs_hooks.telemetry log --hook NAME ...
+    echo "$INPUT" | python3 -m hooks.telemetry log --hook NAME ...
 
 Never raises — write failures are logged to stderr and silently suppressed so
 a telemetry error never blocks a hook.
@@ -67,7 +67,7 @@ def _shorten_cwd(cwd: str) -> str:
 
 
 def main(argv: list[str] | None = None) -> int:
-    p = argparse.ArgumentParser(prog="cccs_hooks.telemetry")
+    p = argparse.ArgumentParser(prog="hooks.telemetry")
     sub = p.add_subparsers(dest="cmd")
     log_p = sub.add_parser("log")
     log_p.add_argument("--hook", required=True)

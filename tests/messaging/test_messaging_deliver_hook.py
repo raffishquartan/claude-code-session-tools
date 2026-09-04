@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from cccs_hooks import messaging_deliver
+from hooks import messaging_deliver
 from cc_session_tools.lib.messaging import service
 
 
@@ -126,7 +126,7 @@ def test_hook_degrades_when_deliver_raises(
 
 def test_hook_fails_open_on_sqlite_operational_error(monkeypatch, capsys):
     import sqlite3
-    from cccs_hooks import messaging_deliver
+    from hooks import messaging_deliver
 
     def _raise_locked(*a, **kw):
         raise sqlite3.OperationalError("database is locked")

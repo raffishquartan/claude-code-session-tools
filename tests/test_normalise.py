@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from cccs_hooks.normalise import _classify_token, normalise
+from hooks.normalise import _classify_token, normalise
 
 # _classify_token tests
 

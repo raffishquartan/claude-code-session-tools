@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from cccs_hooks import pending_migration
+from hooks import pending_migration
 from cc_session_tools.lib import doctor_mutes
 from cc_session_tools.lib.doctor import LegacyMigrationPaths
 

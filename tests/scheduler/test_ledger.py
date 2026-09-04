@@ -47,7 +47,7 @@ def test_read_recent_only_sees_catchup_events_table(
     # A generic telemetry_events row (e.g. bash-security-review) must never
     # leak into catch-up reads — proven structurally, not by a filter, since
     # the two are now separate tables.
-    from cccs_hooks.telemetry import TelemetryEntry, log_event
+    from hooks.telemetry import TelemetryEntry, log_event
     log_event(TelemetryEntry(
         hook="bash-security-review", event="PreToolUse", tool="Bash",
         session_id="s", cwd_short="x", decision="allow", cache="none",
@@ -87,7 +87,7 @@ def test_read_since_advances_offset_and_ignores_generic_events(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setenv("CCCS_HOOKS_DIR", str(tmp_path))
-    from cccs_hooks.telemetry import TelemetryEntry, log_event
+    from hooks.telemetry import TelemetryEntry, log_event
     log_event(TelemetryEntry(
         hook="bash-security-review", event="PreToolUse", tool="Bash",
         session_id="s", cwd_short="x", decision="allow", cache="none",

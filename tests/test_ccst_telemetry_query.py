@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 
 from cc_session_tools.lib import telemetry_store
-from cccs_hooks.telemetry_query import query_events
+from hooks.telemetry_query import query_events
 
 
 def _insert(

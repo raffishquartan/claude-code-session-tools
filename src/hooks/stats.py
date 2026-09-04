@@ -10,7 +10,7 @@ from __future__ import annotations
 import argparse
 import sqlite3
 
-from cccs_hooks.cache import _db_path
+from hooks.cache import _db_path
 from cc_session_tools.lib.db import connect as _sqlite_connect
 
 

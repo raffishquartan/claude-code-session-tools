@@ -18,7 +18,7 @@ from pathlib import Path
 
 import pytest
 
-from cccs_hooks.bash_hard_deny import main
+from hooks.bash_hard_deny import main
 
 
 def _run(
@@ -449,7 +449,7 @@ def test_blocks_heredoc_os_remove_of_literal_path(
 def test_allows_bash_n_on_hook_own_source(monkeypatch: pytest.MonkeyPatch) -> None:
     # The hook's own source contains detection patterns as regex literals; those
     # must not trip the detector when a tool invokes `bash -n` on it.
-    import cccs_hooks.bash_hard_deny as mod
+    import hooks.bash_hard_deny as mod
 
     src = Path(mod.__file__)
     _assert_allowed(monkeypatch, f"bash -n {src}")

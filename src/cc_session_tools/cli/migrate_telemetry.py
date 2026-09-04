@@ -9,7 +9,7 @@ generic telemetry_events row or a catchup_events row (hook == "catchup"),
 and inserts them into telemetry.db under the new data-home root.
 
 The import APPENDS. telemetry.db is virtually never empty when this runs: the
-hook writer (cccs_hooks.telemetry) starts inserting the moment CCST is
+hook writer (hooks.telemetry) starts inserting the moment CCST is
 installed, so any operator who opens a single Claude Code session before
 migrating already has rows. Refusing to import into a non-empty database
 therefore blocked the normal upgrade path rather than a rare edge case, and

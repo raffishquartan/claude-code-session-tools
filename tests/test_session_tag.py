@@ -1,4 +1,4 @@
-"""Tests for cccs_hooks.session_tag — SessionStart hook that records tags and
+"""Tests for hooks.session_tag — SessionStart hook that records tags and
 .last-opened activity into sessions.db."""
 from __future__ import annotations
 
@@ -6,7 +6,7 @@ import json
 
 import pytest
 
-from cccs_hooks import session_tag
+from hooks import session_tag
 from cc_session_tools.lib import sessions_db
 
 

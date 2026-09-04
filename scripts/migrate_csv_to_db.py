@@ -6,7 +6,7 @@ updates rows into the SQLite cache at ~/.cache/claude/logs/command-cache.db,
 preserving fire_count, last_seen and validated_at. norm_hash is set to NULL
 (the CSV has no normalised-hash column).
 
-This deliberately does NOT use cccs_hooks.cache.cache_record(): that helper
+This deliberately does NOT use hooks.cache.cache_record(): that helper
 resets fire_count to 1 and runs a 90-day prune on every write. The migration
 opens the DB directly and uses INSERT ... ON CONFLICT(exact_hash) DO UPDATE so
 the historical counters survive and re-running is idempotent.
@@ -30,7 +30,7 @@ from pathlib import Path
 _DEFAULT_CSV = Path.home() / ".claude" / "hooks" / "command-cache.csv"
 _DEFAULT_DB = Path.home() / ".cache" / "claude" / "logs" / "command-cache.db"
 
-# Exact schema mirrored from cccs_hooks.cache._DDL (command_cache table only).
+# Exact schema mirrored from hooks.cache._DDL (command_cache table only).
 _DDL = """
 CREATE TABLE IF NOT EXISTS command_cache (
     exact_hash    TEXT PRIMARY KEY,

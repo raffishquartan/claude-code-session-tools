@@ -2,7 +2,7 @@
 
 Skill markers live under ``~/.cache/claude/markers/`` (override with the
 ``CCCS_MARKERS_DIR`` env var, or ``$XDG_CACHE_HOME/claude/markers``) and carry
-a short TTL (see :mod:`cccs_hooks.confirm_8digit`). Two hooks need to agree on
+a short TTL (see :mod:`hooks.confirm_8digit`). Two hooks need to agree on
 where that directory is: the 8-digit gate, which honours a fresh marker as an
 exemption, and the marker-allow hook, which auto-approves the ``touch`` that
 refreshes one. The path lives here so neither hook hard-codes it independently.

@@ -240,7 +240,7 @@ def test_archive_retention_keeps_the_newest_ones_not_a_mix(tmp_path):
 
 # ---------- decide_publish: the shared "is it safe to publish" rule ----------
 #
-# One rule, two callers (`ccst pdata dump` and the SessionEnd hook, cccs_hooks.pdata_sync),
+# One rule, two callers (`ccst pdata dump` and the SessionEnd hook, hooks.pdata_sync),
 # so it is unit-tested directly here rather than only through each caller's own tests.
 
 

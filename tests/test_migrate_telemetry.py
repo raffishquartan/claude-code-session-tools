@@ -10,7 +10,7 @@ import pytest
 
 from cc_session_tools.cli import migrate_telemetry as mig
 from cc_session_tools.lib import telemetry_store
-from cccs_hooks.telemetry import TelemetryEntry, log_event
+from hooks.telemetry import TelemetryEntry, log_event
 
 
 def _generic_line(ts: str, hook: str = "bash-security-review") -> str:

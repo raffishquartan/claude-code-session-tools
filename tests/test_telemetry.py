@@ -10,7 +10,7 @@ from pathlib import Path
 import pytest
 
 from cc_session_tools.lib import telemetry_store
-from cccs_hooks.telemetry import TelemetryEntry, log_event
+from hooks.telemetry import TelemetryEntry, log_event
 
 
 # ---------- helpers ----------
@@ -128,7 +128,7 @@ def test_telemetry_cli_log_subcommand(tmp_hooks_dir: Path) -> None:
     env = {**os.environ, "CCCS_HOOKS_DIR": str(tmp_hooks_dir)}
     result = subprocess.run(
         [
-            sys.executable, "-m", "cccs_hooks.telemetry", "log",
+            sys.executable, "-m", "hooks.telemetry", "log",
             "--hook", "bash-security-review",
             "--event", "PreToolUse",
             "--decision", "allow",

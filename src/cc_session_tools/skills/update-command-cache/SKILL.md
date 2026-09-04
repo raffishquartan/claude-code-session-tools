@@ -1,6 +1,6 @@
 ---
 name: update-command-cache
-description: Curate the SHA-256 command cache used by the bash-security-review hook. Reads recent safe-verdict fires from telemetry.db, identifies commands not yet cached, presents them for approval, and records approved ones via cccs_hooks.cache.cache_record(). Also supports manual --remove and --flip operations on existing cache entries. Use when the user says "update the command cache", "curate cached commands", "review cache fires", "promote fires to cache", "remove a cache entry", or notices the cache is stale or polluted.
+description: Curate the SHA-256 command cache used by the bash-security-review hook. Reads recent safe-verdict fires from telemetry.db, identifies commands not yet cached, presents them for approval, and records approved ones via hooks.cache.cache_record(). Also supports manual --remove and --flip operations on existing cache entries. Use when the user says "update the command cache", "curate cached commands", "review cache fires", "promote fires to cache", "remove a cache entry", or notices the cache is stale or polluted.
 ---
 
 # Update command cache
@@ -22,7 +22,7 @@ The bash-security-review hook records every fire to `telemetry.db`. The cache (`
 
 ### Relationship to bash-hard-deny
 
-This skill and the `bash-hard-deny` hook (`src/cccs_hooks/bash_hard_deny.py`) share one convention: `CCCS_FIRES_ACCESS=1`. `bash-hard-deny`'s telemetry.db-block section documents this env var as the bypass that lets a legitimate reader touch the telemetry log; this skill's own gate (in `scripts/update_command_cache.py`, `cmd_list`) refuses to read `telemetry.db` unless the same variable is set.
+This skill and the `bash-hard-deny` hook (`src/hooks/bash_hard_deny.py`) share one convention: `CCCS_FIRES_ACCESS=1`. `bash-hard-deny`'s telemetry.db-block section documents this env var as the bypass that lets a legitimate reader touch the telemetry log; this skill's own gate (in `scripts/update_command_cache.py`, `cmd_list`) refuses to read `telemetry.db` unless the same variable is set.
 
 The two are NOT structurally coupled — the hook cannot literally intercept this skill's Python-internal file read, so setting the variable is what actually unlocks the read on both sides. They stay consistent only by discipline: if `bash-hard-deny`'s bypass env var name or semantics ever change, this skill's gate must be updated by hand to match. It is a shared convention that must be kept in sync, not an enforced runtime dependency.
 
@@ -32,7 +32,7 @@ This skill:
 2. Filters to entries with `verdict == "safe"` and `cache != "hit"` (i.e. ones that escalated to claude).
 3. Cross-references each input hash with the current cache; drops anything already cached.
 4. Presents the candidate list to the user with command preview, fire count, and last-seen.
-5. After explicit approval, calls `cccs_hooks.cache.cache_record()` for each approved entry.
+5. After explicit approval, calls `hooks.cache.cache_record()` for each approved entry.
 
 Manual modes:
 - `--remove <sha>` removes a single entry (after confirmation).

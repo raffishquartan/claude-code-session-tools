@@ -38,7 +38,7 @@ def _emit(context: str, event: str) -> None:
 
 
 def _log_failure(reason: str) -> None:
-    from cccs_hooks.telemetry import TelemetryEntry, log_event
+    from hooks.telemetry import TelemetryEntry, log_event
     log_event(TelemetryEntry(
         hook="pending-migration", event="", tool="", session_id="",
         cwd_short="", decision="annotate", cache="none",

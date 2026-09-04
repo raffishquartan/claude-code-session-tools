@@ -13,7 +13,7 @@ Replaces three flat-file stores:
 Every read/write opens a connection via connect(), which delegates to the
 Phase 1 shared helper cc_session_tools.lib.db.connect() (WAL mode, busy
 timeout, dict-style rows). Connections are opened and closed per call,
-matching the existing per-call pattern in cccs_hooks/cache.py — WAL mode is
+matching the existing per-call pattern in hooks/cache.py — WAL mode is
 specifically designed for many short-lived writers from different processes
 (hooks fire once per SessionStart/Stop event), so this needs no pooling.
 """
