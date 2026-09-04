@@ -68,15 +68,15 @@
 
 ## 4. Bundle `pm-pdata-audit` and `pm-pdata-migrate`
 
-- [ ] 4.1 Copy `~/.claude/skills/pm-pdata-audit/` and `~/.claude/skills/pm-pdata-migrate/` into
-  `src/cc_session_tools/skills/` in this repo, verbatim (research confirmed both are already
-  portable - no personal/project-specific content to scrub). Verify:
-  `ls src/cc_session_tools/skills/pm-pdata-audit/SKILL.md src/cc_session_tools/skills/pm-pdata-migrate/SKILL.md`.
-- [ ] 4.2 Confirm `_discover_skills()` picks both up with no code change (directory-scan
-  mechanism, no registry to update) and that `ccst skills install`/`install-everything --apply`
-  successfully symlinks both in a test/dry-run install. Verify: an existing or new
-  `test_ccst_skills`-style test asserting both names appear in the discovered/installed skill
-  list.
+- [x] 4.1 Copy `~/.claude/skills/pm-pdata-audit/` and `~/.claude/skills/pm-pdata-migrate/` into
+  `src/cc_session_tools/skills/` in this repo, verbatim (research confirmed, and a full read
+  before committing re-confirmed, both are already portable - no personal/project-specific
+  content to scrub).
+- [x] 4.2 Confirmed `_discover_skills()` picks both up with no code change (directory-scan
+  mechanism, no registry to update) and that `ccst skills install --apply` successfully symlinks
+  both into a real target directory. Verify:
+  `test_pm_pdata_audit_and_migrate_are_bundled_skills` in `test_ccst_bundle_discovery.py`; manual
+  `ccst skills install --target <tmp> --apply` confirmed both linked correctly.
 - [ ] 4.3 Once this task's changes are committed on this branch, send a `ccmsg` message to
   `project=claude-code-config-sync` (per task #7's description) noting that CCST now bundles
   `pm-pdata-audit`/`pm-pdata-migrate`, so that repo's own sync/drift handling accounts for them.
