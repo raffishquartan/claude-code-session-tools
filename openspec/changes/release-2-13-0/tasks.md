@@ -45,15 +45,15 @@
 
 ## 3. Shared CAS primitive
 
-- [ ] 3.1 Write a failing test for `lib/db.py`'s new `cas_update()` (or equivalent name):
+- [x] 3.1 Write a failing test for `lib/db.py`'s new `cas_update()` (or equivalent name):
   succeeds and advances version when called with the current version; returns `False` (zero rows
   changed) when called with a stale version; test with a plain temp SQLite table, not any real
   store's schema. Verify: test fails (function doesn't exist yet).
-- [ ] 3.2 Implement `cas_update()` in `lib/db.py` per design.md Decision 1 (caller-supplied SET
+- [x] 3.2 Implement `cas_update()` in `lib/db.py` per design.md Decision 1 (caller-supplied SET
   clause + params, `WHERE id=? AND version=?`, `rowcount==1` return). Verify: 3.1's test passes.
-- [ ] 3.3 Confirm `lib/pdata/repository.py` is left untouched (design.md Non-Goals - not
+- [x] 3.3 Confirm `lib/pdata/repository.py` is left untouched (design.md Non-Goals - not
   refactored to call the new helper in this change). Verify: `git diff` shows no changes under
-  `lib/pdata/`.
+  `lib/pdata/`. Confirmed: `git diff --stat -- src/cc_session_tools/lib/pdata/` is empty.
 
 ## 4. `created_at`/`updated_at` + CAS wiring per store
 

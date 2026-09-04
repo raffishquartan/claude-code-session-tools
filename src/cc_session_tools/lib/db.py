@@ -116,6 +116,37 @@ def record_migration(conn: sqlite3.Connection, name: str, *, applied_at: str) ->
     )
 
 
+def cas_update(
+    conn: sqlite3.Connection,
+    *,
+    table: str,
+    id_column: str,
+    id_value: object,
+    version_column: str,
+    expected_version: int,
+    set_clause: str,
+    params: tuple[object, ...],
+) -> bool:
+    """Conditionally UPDATE one row, guarded by the version it was last read at.
+
+    Returns True iff exactly one row changed - the caller supplied the version it most
+    recently read, and no other writer has touched the row since. Returns False (zero rows
+    changed) both when the row does not exist and when another writer already advanced its
+    version - the caller must re-fetch to tell the two apart, this function does not.
+
+    set_clause is caller-supplied SQL text (not a column->value dict) so each call site
+    controls its own version-column increment (typically "<version_column> = <version_column>
+    + 1") and any partial-update semantics (e.g. COALESCE(?, existing_column)) - this stays a
+    thin, generic primitive extracted from lib/pdata/repository.py's proven pattern, not an ORM.
+    Caller commits.
+    """
+    cur = conn.execute(
+        f"UPDATE {table} SET {set_clause} WHERE {id_column}=? AND {version_column}=?",
+        (*params, id_value, expected_version),
+    )
+    return cur.rowcount == 1
+
+
 def checkpoint(conn: sqlite3.Connection) -> None:
     """Force a WAL checkpoint. Call before any filesystem-level copy of a live .db file."""
     conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")

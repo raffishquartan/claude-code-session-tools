@@ -12,6 +12,14 @@ CREATE TABLE IF NOT EXISTS widgets (
 );
 """
 
+_VERSIONED_DDL = """
+CREATE TABLE IF NOT EXISTS versioned_widgets (
+    id      INTEGER PRIMARY KEY,
+    name    TEXT NOT NULL,
+    version INTEGER NOT NULL DEFAULT 1
+);
+"""
+
 
 def test_connect_creates_parent_dir_and_applies_pragmas(tmp_path):
     target = tmp_path / "nested" / "store.db"
@@ -224,3 +232,73 @@ def test_cold_start_concurrent_connect_no_lost_wal_switch(tmp_path):
     finally:
         conn.close()
     assert count == 20
+
+
+def test_cas_update_applies_and_advances_version_when_current(tmp_path):
+    conn = db.connect(tmp_path / "store.db", ddl=_VERSIONED_DDL)
+    conn.execute("INSERT INTO versioned_widgets (id, name) VALUES (1, 'a')")
+    conn.commit()
+
+    ok = db.cas_update(
+        conn,
+        table="versioned_widgets",
+        id_column="id",
+        id_value=1,
+        version_column="version",
+        expected_version=1,
+        set_clause="name=?, version=version+1",
+        params=("b",),
+    )
+    conn.commit()
+
+    assert ok is True
+    row = conn.execute("SELECT name, version FROM versioned_widgets WHERE id=1").fetchone()
+    conn.close()
+    assert row["name"] == "b"
+    assert row["version"] == 2
+
+
+def test_cas_update_rejects_stale_version_and_leaves_row_unchanged(tmp_path):
+    conn = db.connect(tmp_path / "store.db", ddl=_VERSIONED_DDL)
+    conn.execute("INSERT INTO versioned_widgets (id, name) VALUES (1, 'a')")
+    conn.commit()
+
+    # A second writer already advanced the row to version 2.
+    conn.execute("UPDATE versioned_widgets SET name='concurrent', version=2 WHERE id=1")
+    conn.commit()
+
+    ok = db.cas_update(
+        conn,
+        table="versioned_widgets",
+        id_column="id",
+        id_value=1,
+        version_column="version",
+        expected_version=1,  # stale - the row is now at version 2
+        set_clause="name=?, version=version+1",
+        params=("b",),
+    )
+    conn.commit()
+
+    assert ok is False
+    row = conn.execute("SELECT name, version FROM versioned_widgets WHERE id=1").fetchone()
+    conn.close()
+    assert row["name"] == "concurrent"  # the CAS write did not apply
+    assert row["version"] == 2
+
+
+def test_cas_update_returns_false_for_missing_row(tmp_path):
+    conn = db.connect(tmp_path / "store.db", ddl=_VERSIONED_DDL)
+
+    ok = db.cas_update(
+        conn,
+        table="versioned_widgets",
+        id_column="id",
+        id_value=999,
+        version_column="version",
+        expected_version=1,
+        set_clause="name=?, version=version+1",
+        params=("b",),
+    )
+    conn.close()
+
+    assert ok is False
