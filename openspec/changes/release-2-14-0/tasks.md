@@ -77,9 +77,9 @@
   both into a real target directory. Verify:
   `test_pm_pdata_audit_and_migrate_are_bundled_skills` in `test_ccst_bundle_discovery.py`; manual
   `ccst skills install --target <tmp> --apply` confirmed both linked correctly.
-- [ ] 4.3 Once this task's changes are committed on this branch, send a `ccmsg` message to
-  `project=claude-code-config-sync` (per task #7's description) noting that CCST now bundles
-  `pm-pdata-audit`/`pm-pdata-migrate`, so that repo's own sync/drift handling accounts for them.
+- [x] 4.3 Sent `ccmsg` message `20260904T235515Z-7778` to `project=claude-code-config-sync`
+  noting that CCST now bundles `pm-pdata-audit`/`pm-pdata-migrate`, so that repo's own
+  sync/drift handling accounts for them.
 
 ## 5. Release
 
