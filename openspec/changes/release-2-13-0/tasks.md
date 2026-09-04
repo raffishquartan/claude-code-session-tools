@@ -138,21 +138,32 @@ read-then-decide-then-write workflow. Every other table below still gets `create
   marker, for `ccst doctor` to read. Verify: one test
   per store - running the migration twice only writes data once (or refuses outright); the marker
   is present after a successful run; a test that a verification failure leaves the marker unset.
-- [ ] 5.3 Backfill: on first non-readonly `connect()` to a store whose legacy sources are already
-  absent on this machine, record the marker (design.md Decision 4). Verify: a test connecting to
-  a fresh store with no legacy sources present asserts the marker ends up recorded, not left
-  permanently absent.
-- [ ] 5.4 Rewrite `doctor.py`'s `_telemetry_import_recorded` to call `telemetry_store.connect()` +
-  `db.migration_applied()` instead of its own `_db_connect` + duplicated query. Verify: existing
-  telemetry-migration doctor tests still pass.
-- [ ] 5.5 Switch `check_pending_data_store_migration`'s ccmsg/ccsched/sessions branch from
-  `_count_new_store_rows` to the new marker check (same shape as the telemetry branch); delete
-  `_count_new_store_rows` entirely once nothing calls it. Verify:
-  `grep -n _count_new_store_rows src/cc_session_tools/lib/doctor.py` returns nothing; a doctor
-  test asserts a store with rows-but-no-marker is reported pending (the exact bug this task
-  fixes), and a store with a marker is reported complete regardless of row count.
-- [ ] 5.6 Remove the now-resolved "Migration markers for ccmsg, ccsched and sessions" TODO.md
-  section. Verify: `grep -n "Migration markers" TODO.md` returns nothing.
+- [x] 5.3 Backfill: on first non-readonly `connect()` to a store whose legacy sources are already
+  absent on this machine, record the marker (design.md Decision 4). Resolved without code: as
+  written, `check_pending_data_store_migration`'s `legacy_count == 0 -> OK` branch already
+  short-circuits before consulting the marker at all, so a machine with no legacy data for a
+  store is already reported OK regardless of marker state - a backfill-on-connect step would add
+  hot-path filesystem-stat overhead (and, for `sessions.db`, a new coupling to `lib.roots`) for a
+  case already handled correctly. See design.md Decision 4.
+- [x] 5.4 Rewrite `doctor.py`'s `_telemetry_import_recorded` to call `telemetry_store.connect()` +
+  `db.migration_applied()` instead of its own `_db_connect` + duplicated query. Done as a single
+  generic `_migration_recorded(db_path, marker_name)` shared by all four stores instead (the four
+  stores' `connect()` functions have incompatible signatures - some take no path override at all
+  - so this connects directly via `db.connect(db_path, readonly=True)`, same as the code it
+  replaces, while still eliminating the duplicated `SELECT 1 FROM migrations ...` query by calling
+  `db.migration_applied()`). Verify: existing telemetry-migration doctor tests still pass.
+- [x] 5.5 Switch `check_pending_data_store_migration`'s ccmsg/ccsched/sessions branch from
+  `_count_new_store_rows` to the new marker check (same shape as the telemetry branch, now unified
+  into one `_migration_recorded` call for all four); delete `_count_new_store_rows` entirely.
+  Verify: `grep -n _count_new_store_rows src/cc_session_tools/lib/doctor.py` returns nothing;
+  `test_check_pending_migration_fails_when_rows_exist_but_marker_is_absent` (the exact bug this
+  task fixes - previously asserted the buggy WARN behavior under a different name, corrected to
+  assert FAIL and given a real marker-based WARN test alongside it); a store with a marker is
+  reported complete regardless of row count.
+- [x] 5.6 Remove the now-resolved "Migration markers for ccmsg, ccsched and sessions" TODO.md
+  section. Already done in task 1.3's commit (`9a02175`) - both TODO.md sections this branch
+  resolves were removed together at the time item #2's rename was committed, ahead of section 5's
+  actual implementation. Verify: `grep -n "Migration markers" TODO.md` returns nothing.
 
 ## 6. Release
 

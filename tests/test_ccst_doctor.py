@@ -1048,6 +1048,33 @@ def test_telemetry_warns_once_the_import_marker_is_recorded(tmp_path: Path) -> N
 def test_check_pending_migration_warns_when_already_migrated_but_old_files_remain(
     tmp_path: Path,
 ) -> None:
+    from cc_session_tools.lib.messaging.repository import LEGACY_FLAT_FILE_MIGRATION
+
+    paths = _legacy_paths(tmp_path)
+    (paths.ccmsg_old_root / "projects" / "alpha" / "inbox").mkdir(parents=True)
+    (paths.ccmsg_old_root / "projects" / "alpha" / "inbox" / "msg.md").write_text("x")
+    paths.data_home.mkdir(parents=True)
+    conn = _db.connect(
+        paths.data_home / "ccmsg.db",
+        ddl="CREATE TABLE IF NOT EXISTS messages (id INTEGER PRIMARY KEY);\n" + _db.MIGRATIONS_DDL,
+    )
+    conn.execute("INSERT INTO messages (id) VALUES (1)")
+    _db.record_migration(conn, LEGACY_FLAT_FILE_MIGRATION, applied_at="2026-08-05T00:00:00Z")
+    conn.commit()
+    conn.close()
+
+    results = {r.name: r for r in check_pending_data_store_migration(paths)}
+
+    assert results["migration-to-1.0.0:ccmsg"].status == Status.WARN
+    assert "already ran" in results["migration-to-1.0.0:ccmsg"].reason
+
+
+def test_check_pending_migration_fails_when_rows_exist_but_marker_is_absent(
+    tmp_path: Path,
+) -> None:
+    """The exact bug this task fixes: a store that has accumulated rows from normal CCST
+    use (the hook writer starts inserting the moment CCST is installed, well before any
+    migration runs) must still report FAIL, not read the row count as 'already migrated'."""
     paths = _legacy_paths(tmp_path)
     (paths.ccmsg_old_root / "projects" / "alpha" / "inbox").mkdir(parents=True)
     (paths.ccmsg_old_root / "projects" / "alpha" / "inbox" / "msg.md").write_text("x")
@@ -1056,14 +1083,13 @@ def test_check_pending_migration_warns_when_already_migrated_but_old_files_remai
         paths.data_home / "ccmsg.db",
         ddl="CREATE TABLE IF NOT EXISTS messages (id INTEGER PRIMARY KEY);",
     )
-    conn.execute("INSERT INTO messages (id) VALUES (1)")
+    conn.execute("INSERT INTO messages (id) VALUES (1)")  # rows present, no marker
     conn.commit()
     conn.close()
 
     results = {r.name: r for r in check_pending_data_store_migration(paths)}
 
-    assert results["migration-to-1.0.0:ccmsg"].status == Status.WARN
-    assert "already ran" in results["migration-to-1.0.0:ccmsg"].reason
+    assert results["migration-to-1.0.0:ccmsg"].status == Status.FAIL
 
 
 def test_run_all_checks_skips_pending_migration_when_paths_none(tmp_path: Path) -> None:

@@ -167,10 +167,14 @@ table, by reading whether the column is ever touched by an UPDATE/upsert after f
 Implements TODO.md's "Migration markers for ccmsg, ccsched and sessions": append
 `db.MIGRATIONS_DDL` to each of the three stores' DDL, add a per-store marker-name constant,
 switch `doctor.check_pending_data_store_migration` to read markers for all four stores, delete
-`_count_new_store_rows`. Backfill decision (per TODO.md's open question): a store whose legacy
-sources are already gone on this machine has migrated by definition - write the marker on first
-`connect()` in that case rather than leaving a machine that never had legacy data permanently
-`WARN`-ing about an unmigrated store it never had data for.
+`_count_new_store_rows`. Backfill decision (per TODO.md's open question, which explicitly offered
+either option): **no backfill-on-connect needed** -
+`check_pending_data_store_migration`'s existing `legacy_count == 0 -> OK` branch already short-
+circuits before ever consulting the marker, so a machine that never had legacy data for a given
+store is already reported OK regardless of marker state. Adding a marker-backfill step to every
+store's `connect()` (a hot path - every hook fire) would add filesystem-stat overhead and, for
+`sessions.db`, a new coupling to `lib.roots`' session-root config just to check the activity-
+sentinel source, for a case the doctor check already handles correctly.
 
 **Where the marker is recorded, refined during implementation:** `migrate_telemetry.py`'s "same
 transaction as the writes" guarantee assumes one connection, one transaction, one commit for the
