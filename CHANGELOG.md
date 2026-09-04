@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.12.4] - 2026-09-04
+
+### Changed
+
+- `ccst pdata verify`'s retained-run cap (`pdata_verify_runs` history) raised from 30 to 100,
+  giving headroom for several laptops writing verify runs concurrently without evicting recent
+  history.
+
 ### Fixed
 
 - `ccst pdata resolve` no longer leaves a genuine vector-clock fork permanently stuck when both
