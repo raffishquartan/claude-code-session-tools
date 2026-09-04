@@ -75,7 +75,7 @@ wheels = [
 
 [[package]]
 name = "cc-session-tools"
-version = "2.12.3"
+version = "2.12.4"
 source = { editable = "." }
 dependencies = [
     { name = "httpx" },
