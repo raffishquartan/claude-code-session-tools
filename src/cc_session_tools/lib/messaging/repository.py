@@ -13,6 +13,7 @@ import json
 import sqlite3
 from collections.abc import Iterator
 from contextlib import contextmanager
+from datetime import datetime, timezone
 
 from cc_session_tools.lib import db
 from cc_session_tools.lib.messaging import store
@@ -39,7 +40,9 @@ CREATE TABLE IF NOT EXISTS messages (
     receipt_shown   INTEGER NOT NULL DEFAULT 0 CHECK (receipt_shown IN (0,1)),
     thread          TEXT,
     attachments     TEXT NOT NULL DEFAULT '[]',
-    body            TEXT NOT NULL DEFAULT ''
+    body            TEXT NOT NULL DEFAULT '',
+    updated_at      TEXT,
+    version         INTEGER NOT NULL DEFAULT 1
 );
 CREATE INDEX IF NOT EXISTS idx_messages_sweep    ON messages(to_location, id);
 CREATE INDEX IF NOT EXISTS idx_messages_status   ON messages(to_location, status);
@@ -49,13 +52,33 @@ CREATE TABLE IF NOT EXISTS cursors (
     session_uuid          TEXT NOT NULL,
     partition             TEXT NOT NULL,
     high_water_message_id TEXT NOT NULL,
+    created_at            TEXT,
+    updated_at            TEXT,
     PRIMARY KEY (session_uuid, partition)
 );
 """
 
+# Columns added after messages/cursors already shipped - CREATE TABLE IF NOT EXISTS above is a
+# no-op against an existing table, so an already-initialised ccmsg.db needs these backfilled.
+_MESSAGES_BACKFILL_COLUMNS = {"updated_at": "TEXT", "version": "INTEGER NOT NULL DEFAULT 1"}
+_CURSORS_BACKFILL_COLUMNS = {"created_at": "TEXT", "updated_at": "TEXT"}
+
+
+def _migrate_tables(conn: sqlite3.Connection) -> None:
+    db.add_missing_columns(conn, "messages", _MESSAGES_BACKFILL_COLUMNS)
+    db.add_missing_columns(conn, "cursors", _CURSORS_BACKFILL_COLUMNS)
+
 
 class MessageNotFoundError(Exception):
     """Raised when a message id resolves to no row."""
+
+
+def _now_iso() -> str:
+    """Store-local time source for audit columns not tied to a caller-supplied event
+    timestamp (archive_one, mark_receipts_shown, refresh_display_tags, save_cursor). Duplicated
+    from messaging/service.py's identical one-liner rather than imported, since service.py
+    depends on this module and not the other way around."""
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 def connect() -> sqlite3.Connection:
@@ -64,6 +87,7 @@ def connect() -> sqlite3.Connection:
     isolation_level=None turns off sqlite3's implicit BEGIN so every mutation
     can issue its own BEGIN IMMEDIATE (see _immediate)."""
     conn = db.connect(store.db_path(), ddl=_DDL)
+    _migrate_tables(conn)
     conn.isolation_level = None
     return conn
 
@@ -211,8 +235,9 @@ def mark_read(message_id: str, uuid: str, now_iso: str, session_label: str) -> b
         with _immediate(conn):
             cur = conn.execute(
                 "UPDATE messages SET status='read', read_at=?, read_by_uuid=?, "
-                "read_by_session=? WHERE id=? AND status='sent'",
-                (now_iso, uuid, session_label, message_id),
+                "read_by_session=?, updated_at=?, version=version+1 "
+                "WHERE id=? AND status='sent'",
+                (now_iso, uuid, session_label, now_iso, message_id),
             )
             return cur.rowcount == 1
     finally:
@@ -238,9 +263,10 @@ def claim(message_id: str, uuid: str, session: str, now_iso: str) -> Message:
                 raise AlreadyClaimedError(message_id)
             conn.execute(
                 "UPDATE messages SET status='claimed', claimed_at=?, "
-                "read_at=COALESCE(read_at, ?), read_by_uuid=?, read_by_session=? "
+                "read_at=COALESCE(read_at, ?), read_by_uuid=?, read_by_session=?, "
+                "updated_at=?, version=version+1 "
                 "WHERE id=?",
-                (now_iso, now_iso, uuid, session, message_id),
+                (now_iso, now_iso, uuid, session, now_iso, message_id),
             )
             updated = conn.execute(
                 "SELECT * FROM messages WHERE id=?", (message_id,)
@@ -262,7 +288,9 @@ def archive_one(message_id: str) -> Message:
             if row is None:
                 raise MessageNotFoundError(message_id)
             conn.execute(
-                "UPDATE messages SET status='archived' WHERE id=?", (message_id,)
+                "UPDATE messages SET status='archived', updated_at=?, version=version+1 "
+                "WHERE id=?",
+                (_now_iso(), message_id),
             )
             updated = conn.execute(
                 "SELECT * FROM messages WHERE id=?", (message_id,)
@@ -286,12 +314,12 @@ def archive_aged(partition: str, cutoff_iso: str) -> list[str]:
     try:
         with _immediate(conn):
             cur = conn.execute(
-                "UPDATE messages SET status='archived' "
+                "UPDATE messages SET status='archived', updated_at=?, version=version+1 "
                 "WHERE to_location=? AND status IN ('read','claimed') "
                 "AND COALESCE(claimed_at, read_at) IS NOT NULL "
                 "AND COALESCE(claimed_at, read_at) <= ? "
                 "RETURNING id",
-                (partition, cutoff_iso),
+                (_now_iso(), partition, cutoff_iso),
             )
             ids = sorted(r["id"] for r in cur.fetchall())
         return ids
@@ -321,9 +349,11 @@ def mark_receipts_shown(ids: list[str]) -> None:
     conn = connect()
     try:
         with _immediate(conn):
+            now_iso = _now_iso()
             conn.executemany(
-                "UPDATE messages SET receipt_shown=1 WHERE id=?",
-                [(mid,) for mid in ids],
+                "UPDATE messages SET receipt_shown=1, updated_at=?, version=version+1 "
+                "WHERE id=?",
+                [(now_iso, mid) for mid in ids],
             )
     finally:
         conn.close()
@@ -347,11 +377,14 @@ def save_cursor(session_uuid: str, high_water: dict[str, str]) -> None:
     conn = connect()
     try:
         with _immediate(conn):
+            now_iso = _now_iso()
             conn.executemany(
-                "INSERT INTO cursors (session_uuid, partition, high_water_message_id) "
-                "VALUES (?,?,?) ON CONFLICT(session_uuid, partition) "
-                "DO UPDATE SET high_water_message_id=excluded.high_water_message_id",
-                [(session_uuid, p, hw) for p, hw in high_water.items()],
+                "INSERT INTO cursors "
+                "(session_uuid, partition, high_water_message_id, created_at, updated_at) "
+                "VALUES (?,?,?,?,?) ON CONFLICT(session_uuid, partition) "
+                "DO UPDATE SET high_water_message_id=excluded.high_water_message_id, "
+                "updated_at=excluded.updated_at",
+                [(session_uuid, p, hw, now_iso, now_iso) for p, hw in high_water.items()],
             )
     finally:
         conn.close()
@@ -368,12 +401,13 @@ def refresh_display_tags(uuid: str, new_tag: str) -> int:
                 "from_session = CASE WHEN from_uuid=:u AND from_session<>:t "
                 "THEN :t ELSE from_session END, "
                 "read_by_session = CASE WHEN read_by_uuid=:u AND read_by_session<>:t "
-                "THEN :t ELSE read_by_session END "
+                "THEN :t ELSE read_by_session END, "
+                "updated_at=:now, version=version+1 "
                 "WHERE status<>'archived' AND "
                 "((from_uuid=:u AND from_session<>:t) OR "
                 " (read_by_uuid=:u AND read_by_session<>:t)) "
                 "RETURNING id",
-                {"u": uuid, "t": new_tag},
+                {"u": uuid, "t": new_tag, "now": _now_iso()},
             )
             return len(cur.fetchall())
     finally:

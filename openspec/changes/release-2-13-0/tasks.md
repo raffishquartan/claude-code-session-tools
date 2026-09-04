@@ -67,7 +67,7 @@ scoped to `ccsched.db`'s `jobs` table only - the one write path that is a genuin
 read-then-decide-then-write workflow. Every other table below still gets `created_at`/
 `updated_at`; none of the others get an unused `version` column.
 
-- [ ] 4.1 `ccmsg.db`: add `updated_at`+`version` to `messages` (via `ALTER TABLE` idiom matching
+- [x] 4.1 `ccmsg.db`: add `updated_at`+`version` to `messages` (via `ALTER TABLE` idiom matching
   `_migrate_jobs_table` - `version` added for audit/future-readiness per design.md Decision 3,
   not wired to `cas_update()`), add `created_at`+`updated_at` to `cursors`. Bump `updated_at` (and
   increment `version`) on every write in `mark_read`/`claim`/`archive_one`/`archive_aged`/
