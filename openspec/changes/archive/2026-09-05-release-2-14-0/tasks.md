@@ -83,13 +83,13 @@
 
 ## 5. Release
 
-- [ ] 5.1 Full test suite green end-to-end. Verify: `uv run pytest -q`.
-- [ ] 5.2 Update `CHANGELOG.md` for `[2.14.0]` (Added: new-project folder scaffolding, manifest
+- [x] 5.1 Full test suite green end-to-end. Verify: `uv run pytest -q`.
+- [x] 5.2 Update `CHANGELOG.md` for `[2.14.0]` (Added: new-project folder scaffolding, manifest
   permanence + rename with legacy fallback, verify's independent migration-evidence checks,
   `pm-pdata-audit`/`pm-pdata-migrate` bundling). Commit.
-- [ ] 5.3 Bump `pyproject.toml` version to `2.14.0`; run `CCST_NO_AUTO_SYNC=1 uv lock`; commit
+- [x] 5.3 Bump `pyproject.toml` version to `2.14.0`; run `CCST_NO_AUTO_SYNC=1 uv lock`; commit
   both together (follow-on commit per this repo's convention).
-- [ ] 5.4 Sync specs (`pdata/init-scaffolding`, `pdata/manifest-naming`, `pdata/verify-integrity`,
+- [x] 5.4 Sync specs (`pdata/init-scaffolding`, `pdata/manifest-naming`, `pdata/verify-integrity`,
   `cli/bundled-pm-skills`) and archive this change.
 - [ ] 5.5 Push `f/2.14.0`, open a PR (base `main`) - recommend title/body, confirm with the user
   before running `gh pr create`.
