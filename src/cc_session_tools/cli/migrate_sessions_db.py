@@ -29,7 +29,7 @@ import tarfile
 from datetime import datetime, timezone
 from pathlib import Path
 
-from cc_session_tools.lib import doctor_mutes, sessions_db
+from cc_session_tools.lib import db, doctor_mutes, sessions_db
 from cc_session_tools.lib.roots import RootsConfigError, load_session_roots
 from cc_session_tools.lib.sessions import iter_sessions, session_start_date
 
@@ -137,6 +137,26 @@ def _migrate_mutes(mutes_file: Path, *, db_path: Path, dry_run: bool) -> tuple[i
     return len(data), migrated
 
 
+def _record_migration_marker(db_path: Path) -> None:
+    """Called only after the 'problems' verification below has passed.
+
+    Unlike migrate_ccmsg.py/migrate_ccsched.py, this script never refuses a second run:
+    it deliberately never deletes its old flat-file sources (the docstring's design decision
+    #4 - it only prints the rm command for the user to run by hand), so those sources are
+    still present on every re-run by design, not as a leftover-cleanup edge case - gating a
+    refusal on "source still present" would break the intentionally-supported repeated-run
+    workflow test_run_twice_is_idempotent exercises. The marker here exists solely so
+    lib.doctor can tell "migrated" from "not yet migrated"."""
+    conn = sessions_db.connect(path=db_path)
+    try:
+        db.record_migration(
+            conn, sessions_db.LEGACY_FLAT_FILE_MIGRATION, applied_at=sessions_db._now_iso()
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
 def _tar_backup(sources: list[Path], *, backup_dir: Path) -> Path | None:
     existing = [p for p in sources if p.exists()]
     if not existing:
@@ -208,6 +228,7 @@ def run_migration(
         )
         return 1
 
+    _record_migration_marker(db_path)
     backup_path = _tar_backup([tags_dir, mutes_file], backup_dir=backup_dir)
     if backup_path:
         print(f"Backup written: {backup_path}")

@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 from cc_session_tools.cli import migrate_ccsched as mig
+from cc_session_tools.lib import db as db_lib
 from cc_session_tools.lib.scheduler import cursor, registry, state, store, throttle
 
 
@@ -102,3 +103,58 @@ def test_rerun_after_migration_is_safe(tmp_path: Path, monkeypatch: pytest.Monke
     assert mig.run_migration(old_dir=old, db_path=store.db_path(), dry_run=False,
                              backup_dir=tmp_path / "backups") == 0
     assert [s.job_id for s in registry.load_registry()] == ["tesco"]  # not duplicated
+
+
+def test_migration_records_completion_marker(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    old = tmp_path / "old"
+    _seed_old_dir(old)
+    monkeypatch.setenv("CC_SCHEDULER_DIR", str(tmp_path / "new"))
+    mig.run_migration(old_dir=old, db_path=store.db_path(), dry_run=False,
+                      backup_dir=tmp_path / "backups")
+    conn = store.connect()
+    try:
+        assert db_lib.migration_applied(conn, store.LEGACY_FLAT_FILE_MIGRATION)
+    finally:
+        conn.close()
+
+
+def test_refuses_to_reimport_when_marker_already_recorded(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Defends against legacy files somehow reappearing on an already-migrated
+    machine (or a manually-restored old_dir) - the marker, not old_dir's mere
+    presence, is authoritative."""
+    old = tmp_path / "old"
+    _seed_old_dir(old)
+    monkeypatch.setenv("CC_SCHEDULER_DIR", str(tmp_path / "new"))
+    mig.run_migration(old_dir=old, db_path=store.db_path(), dry_run=False,
+                      backup_dir=tmp_path / "backups")
+    _seed_old_dir(old)  # simulate the old dir reappearing
+
+    rc = mig.run_migration(old_dir=old, db_path=store.db_path(), dry_run=False,
+                           backup_dir=tmp_path / "backups")
+    assert rc == 1
+    assert [s.job_id for s in registry.load_registry()] == ["tesco"]  # not duplicated
+
+
+def test_verification_failure_leaves_marker_unset(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    old = tmp_path / "old"
+    _seed_old_dir(old)
+    monkeypatch.setenv("CC_SCHEDULER_DIR", str(tmp_path / "new"))
+    monkeypatch.setattr(
+        mig, "_verify",
+        lambda *a, **k: (_ for _ in ()).throw(mig.MigrationError("forced failure")),
+    )
+
+    rc = mig.run_migration(old_dir=old, db_path=store.db_path(), dry_run=False,
+                           backup_dir=tmp_path / "backups")
+    assert rc == 1
+    conn = store.connect()
+    try:
+        assert not db_lib.migration_applied(conn, store.LEGACY_FLAT_FILE_MIGRATION)
+    finally:
+        conn.close()

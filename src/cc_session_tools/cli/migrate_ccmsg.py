@@ -30,7 +30,7 @@ import tarfile
 from datetime import datetime, timezone
 from pathlib import Path
 
-from cc_session_tools.lib import paths
+from cc_session_tools.lib import db, paths
 from cc_session_tools.lib.messaging import message, repository, store
 
 DEFAULT_OLD_ROOT = Path.home() / ".claude" / "cc-messages"
@@ -45,6 +45,38 @@ def _iter_old_message_files(old_root: Path) -> list[Path]:
         p for p in old_root.rglob("*.md")
         if p.is_file() and ".locks" not in p.parts
     )
+
+
+def _already_imported() -> bool:
+    """True if ccmsg.db records the flat-file import as done.
+
+    Never creates the store: a dry run, and a run with nothing to migrate,
+    must both leave the filesystem exactly as they found it.
+    """
+    if not store.db_path().exists():
+        return False
+    conn = repository.connect()
+    try:
+        return db.migration_applied(conn, repository.LEGACY_FLAT_FILE_MIGRATION)
+    finally:
+        conn.close()
+
+
+def _record_migration_marker() -> None:
+    """Called only after verification has passed - see migrate(). The writes above land
+    across many small per-message transactions (_insert_ignore), not one big transaction
+    like migrate_telemetry.py's, so the marker is recorded here as the last write instead
+    of inside any single insert - never marking this store migrated on unverified data,
+    and safe to retry from any earlier crash point since every write above is idempotent
+    (INSERT OR IGNORE)."""
+    conn = repository.connect()
+    try:
+        db.record_migration(
+            conn, repository.LEGACY_FLAT_FILE_MIGRATION, applied_at=repository._now_iso()
+        )
+        conn.commit()
+    finally:
+        conn.close()
 
 
 def _insert_ignore(msg: message.Message) -> None:
@@ -87,6 +119,16 @@ def migrate(*, old_root: Path, backup_dir: Path, dry_run: bool) -> int:
         print(f"[dry-run] would write {len(parsed)} row(s) to {store.db_path()}")
         return 0
 
+    if (parsed or cursor_files) and _already_imported():
+        print(
+            f"ERROR: {store.db_path()} already records the flat-file import "
+            f"({repository.LEGACY_FLAT_FILE_MIGRATION}). Refusing to import a second time "
+            f"— those rows are already in. {old_root} is a leftover the delete step never "
+            "reached; check it against the tar.gz in the backup dir and remove it by hand.",
+            file=sys.stderr,
+        )
+        return 1
+
     # 1. Write DB (no old files touched).
     for msg in parsed:
         _insert_ignore(msg)
@@ -123,7 +165,12 @@ def migrate(*, old_root: Path, backup_dir: Path, dry_run: bool) -> int:
                   file=sys.stderr)
             return 2
 
-    # 3. Tar-backup the old tree (outside it) only after verification passes.
+    # 3. Record the completion marker now that verification has passed - see
+    # _record_migration_marker's docstring for why this, not step 1's inserts, is where
+    # it's recorded.
+    _record_migration_marker()
+
+    # 4. Tar-backup the old tree (outside it) only after verification passes.
     backup_dir.mkdir(parents=True, exist_ok=True)
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     backup = backup_dir / f"ccmsg-{stamp}.tar.gz"
@@ -131,7 +178,7 @@ def migrate(*, old_root: Path, backup_dir: Path, dry_run: bool) -> int:
         tar.add(old_root, arcname=old_root.name)
     print(f"Backed up old store to {backup}")
 
-    # 4. Delete old flat files (message tree + cursors), leaving orphaned locks.
+    # 5. Delete old flat files (message tree + cursors), leaving orphaned locks.
     for path in files:
         path.unlink(missing_ok=True)
     for cf in cursor_files:

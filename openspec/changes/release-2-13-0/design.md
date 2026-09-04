@@ -182,12 +182,15 @@ scripts' transaction models to force single-transaction atomicity is out of prop
 this task needs, and unnecessary: all three scripts already write via `INSERT OR IGNORE` /
 `ON CONFLICT DO NOTHING`, so a re-run after a crash mid-write safely converges instead of
 duplicating (unlike telemetry, which appends and cannot tolerate a double-import). Given that,
-each script records its marker as the last write, right after verification passes and before any
-backup/cleanup step - never marking a store migrated on unverified data, and safe to retry from
-any earlier crash point because the writes themselves are idempotent. `migrate_ccsched.py` is the
-one exception that already matches telemetry's shape exactly (`_write_db` is one connection, one
-commit) - its marker goes in that same transaction, immediately before commit, as originally
-planned.
+each of the three scripts - `migrate_ccsched.py` included, despite its `_write_db` being one
+connection/one commit like telemetry's - records its marker as the last write, right after
+verification passes and before any backup/cleanup step, in its own small transaction: unlike
+telemetry, `_write_db` commits unconditionally and `_verify()` checks the result afterward
+(existing design, unchanged here), so a marker written inside `_write_db`'s own commit would mark
+a verification failure as migrated. Recording it after verification everywhere keeps the actual
+guarantee that matters uniform across all three scripts: no store is ever marked migrated on
+unverified data, and every script is safe to retry from any earlier crash point because its
+writes are idempotent.
 
 ### 5. Version-policy classification: minor, not major
 

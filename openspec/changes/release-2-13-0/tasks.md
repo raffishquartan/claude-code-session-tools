@@ -121,16 +121,21 @@ read-then-decide-then-write workflow. Every other table below still gets `create
 - [x] 5.1 Append `db.MIGRATIONS_DDL` to each of the three stores' `_DDL`/`DDL` constants; define
   a marker-name constant per store (matching `telemetry_store.LEGACY_JSONL_MIGRATION`'s naming
   style). Verify: a fresh DB for each store has a `migrations` table.
-- [ ] 5.2 Locate each store's one-shot legacy-data migration entry point (mirroring
+- [x] 5.2 Locate each store's one-shot legacy-data migration entry point (mirroring
   `cli/migrate_telemetry.py`) and add `db.migration_applied()` as the refuse-if-already-run guard
   at the top (matching `migrate_telemetry.py`'s `_already_imported`/refusal shape). Record
-  `db.record_migration()` per design.md Decision 4's per-script refinement: `migrate_ccsched.py`
-  matches telemetry exactly (one connection, one commit in `_write_db` - marker goes in that same
-  transaction, immediately before commit); `migrate_ccmsg.py`/`migrate_sessions_db.py` each write
-  across several independent commits with verification running after them, so their marker is
-  recorded as the last write, right after verification passes and before any backup/cleanup step
-  - never on unverified data, safe to retry from any earlier crash point since all three scripts'
-  writes are already idempotent (`INSERT OR IGNORE`/`ON CONFLICT DO NOTHING`). Verify: one test
+  `db.record_migration()` per design.md Decision 4's per-script refinement (revised further during
+  implementation - `_write_db`'s commit happens unconditionally before `_verify()` runs even for
+  `migrate_ccsched.py`, so all three scripts record the marker as the last write, right after
+  verification passes and before any backup/cleanup step - never on unverified data, safe to
+  retry from any earlier crash point since all three scripts' writes are already idempotent
+  (`INSERT OR IGNORE`/`ON CONFLICT DO NOTHING`)). Refuse-if-already-run is scoped to when the
+  legacy source actually has content (`migrate_ccsched.py`/`migrate_ccmsg.py`) - **not** added to
+  `migrate_sessions_db.py`, which by explicit design never deletes its old flat-file sources (only
+  prints the `rm` command for the user to run by hand), so those sources are present on every
+  re-run regardless of migration state; a refusal there would break the intentionally-supported
+  repeated-run workflow `test_run_twice_is_idempotent` already exercises - it only gains the
+  marker, for `ccst doctor` to read. Verify: one test
   per store - running the migration twice only writes data once (or refuses outright); the marker
   is present after a successful run; a test that a verification failure leaves the marker unset.
 - [ ] 5.3 Backfill: on first non-readonly `connect()` to a store whose legacy sources are already

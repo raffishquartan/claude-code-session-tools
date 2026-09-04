@@ -17,10 +17,13 @@ database, and SHALL NOT record it until the migration's data has been written an
   verification step, never before or instead of it - so a verification failure never leaves a
   store marked complete on data that was not actually confirmed migrated
 
-#### Scenario: Re-running a completed migration is a no-op
-- **WHEN** a migration is run again after its marker is already recorded
-- **THEN** it refuses to run a second time (matching `migrate telemetry`'s existing refusal
-  behavior) rather than re-importing or duplicating data
+#### Scenario: Re-running a completed migration never duplicates data
+- **WHEN** a migration is run again after its marker is already recorded and its legacy source
+  still has content to read
+- **THEN** it either refuses to run a second time (matching `migrate telemetry`'s existing
+  refusal behavior) or, for a migration whose writes are idempotent by construction, safely
+  re-applies them without duplicating or corrupting existing rows - never re-importing content as
+  new
 
 ### Requirement: `ccst doctor` reads the marker directly for all four stores
 `ccst doctor`'s pending-migration check SHALL determine migration completion for `ccmsg`,

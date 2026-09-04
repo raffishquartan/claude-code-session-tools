@@ -22,6 +22,7 @@ import tomllib
 from datetime import datetime, timezone
 from pathlib import Path
 
+from cc_session_tools.lib import db
 from cc_session_tools.lib.scheduler import store
 from cc_session_tools.lib.scheduler.jobspec import JobSpec, validate_job_fields
 from cc_session_tools.lib.scheduler.state import InFlight, JobState
@@ -91,6 +92,25 @@ def _read_old_throttles(old_dir: Path) -> dict[str, str]:
     return out
 
 
+def _now_iso() -> str:
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _already_imported(db_path: Path) -> bool:
+    """True if this store records the flat-file import as done.
+
+    Never creates the store: a dry run, and a run with nothing to migrate,
+    must both leave the filesystem exactly as they found it.
+    """
+    if not db_path.exists():
+        return False
+    conn = store.connect()
+    try:
+        return db.migration_applied(conn, store.LEGACY_FLAT_FILE_MIGRATION)
+    finally:
+        conn.close()
+
+
 def _write_db(specs, states, cursors, throttles, db_path: Path) -> None:
     conn = store.connect()  # creates schema
     try:
@@ -118,6 +138,21 @@ def _write_db(specs, states, cursors, throttles, db_path: Path) -> None:
         for uuid, ts in throttles.items():
             conn.execute("INSERT OR IGNORE INTO reconcile_throttle "
                          "(session_uuid, last_reconciled_at) VALUES (?,?)", (uuid, ts))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def _record_migration_marker(db_path: Path) -> None:
+    """Called only after _verify() has passed - see run_migration. Unlike
+    migrate_telemetry.py, _write_db's inserts and this marker are NOT one transaction:
+    _write_db commits unconditionally and _verify() checks afterward (existing design,
+    not changed here), so recording the marker inside _write_db would mark a verification
+    failure as migrated. Recording it here, after verification, keeps the actual guarantee
+    that matters: no store is ever marked migrated on unverified data."""
+    conn = store.connect()
+    try:
+        db.record_migration(conn, store.LEGACY_FLAT_FILE_MIGRATION, applied_at=_now_iso())
         conn.commit()
     finally:
         conn.close()
@@ -164,6 +199,17 @@ def run_migration(
     cursors = _read_old_cursors(old_dir)
     throttles = _read_old_throttles(old_dir)
 
+    if (specs or states or cursors or throttles) and _already_imported(db_path):
+        print(
+            f"ERROR: {db_path} already records the flat-file import "
+            f"({store.LEGACY_FLAT_FILE_MIGRATION}). Refusing to import a second time — "
+            f"those rows are already in. {old_dir} is a leftover the delete step never "
+            "reached; check it against the tar.gz in migration-backups/ and remove it "
+            "by hand.",
+            file=sys.stderr,
+        )
+        return 1
+
     print(f"Source : {old_dir}")
     print(f"Target : {db_path}")
     print(f"  jobs={len(specs)} state={len(states)} cursors={len(cursors)} "
@@ -182,6 +228,7 @@ def run_migration(
               file=sys.stderr)
         return 1
 
+    _record_migration_marker(db_path)
     archive = _backup_and_remove(old_dir, backup_dir)
     print(f"Migrated and verified. Old tree backed up to {archive} and removed.")
     return 0
