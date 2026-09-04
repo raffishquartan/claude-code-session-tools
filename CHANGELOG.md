@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.12.5] - 2026-09-04
+
+### Added
+
+- `ccd` now auto-trusts (via `--add-dir`) every project directory under a configured session
+  root (`CLAUDE_SESSION_TOOLS_REPO_ROOT` / `CLAUDE_SESSION_TOOLS_PROJ_ROOT`), instead of
+  requiring each one listed individually in `settings.json`'s `additionalDirectories` (which
+  has no glob support). An unconfigured or invalid roots setup degrades to no extra trust rather
+  than crashing `ccd`.
+- The CCST-managed CLAUDE.md block now documents `TaskCreate`/`TaskList`/`TaskGet`/`TaskUpdate`
+  as genuine cross-session task tracking (scoped by `CLAUDE_CODE_TASK_LIST_ID`, which `ccd`/`ccr`
+  set from the project directory name), in the same style as the existing "Inter-session
+  messaging" section - sessions were routinely telling users task tracking beyond the current
+  conversation wasn't possible, having never discovered these deferred tools.
+
 ### Changed
 
 - **`ccst doctor`'s `ENV:CLAUDE_SESSION_TOOLS_REPO_ROOT` / `ENV:CLAUDE_SESSION_TOOLS_PROJ_ROOT`
@@ -15,6 +30,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `~/.shellrc.d/ccl.sh` — that fragment is fully rewritten on every `ccst
   shell install --apply` and silently drops hand-edits). The OK case is
   unchanged: just the resolved path.
+
+### Fixed
+
+- The `~/.claude/projects/<encoded-cwd>/` directory-name encoding is now computed by a single
+  shared implementation everywhere it's needed. Two of the three previous, independent copies
+  (`cccs_hooks/transcript.py`'s transcript-lookup helper, and `lib/rules.py::encode_cwd()` used
+  by the `move-session` skill) were missing the `.`→`-` replacement Claude Code itself performs
+  alongside `/`→`-`, so any cwd or username containing a dot broke transcript lookup and
+  `move-session`. Both now delegate to the one corrected implementation.
 
 ## [2.12.4] - 2026-09-04
 
