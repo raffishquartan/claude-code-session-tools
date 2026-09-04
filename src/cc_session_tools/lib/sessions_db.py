@@ -36,7 +36,8 @@ DDL = """
 CREATE TABLE IF NOT EXISTS session_tags (
     uuid       TEXT PRIMARY KEY,
     tag        TEXT NOT NULL,
-    updated_at TEXT NOT NULL
+    updated_at TEXT NOT NULL,
+    created_at TEXT
 );
 
 CREATE TABLE IF NOT EXISTS sessions (
@@ -46,6 +47,7 @@ CREATE TABLE IF NOT EXISTS sessions (
     last_opened   REAL,
     last_active   REAL,
     discovered_at TEXT NOT NULL,
+    updated_at    TEXT,
     PRIMARY KEY (project_dir, basename)
 );
 CREATE INDEX IF NOT EXISTS idx_sessions_basename    ON sessions(basename);
@@ -54,22 +56,35 @@ CREATE INDEX IF NOT EXISTS idx_sessions_last_active ON sessions(last_active);
 CREATE INDEX IF NOT EXISTS idx_sessions_last_opened ON sessions(last_opened);
 
 CREATE TABLE IF NOT EXISTS doctor_mutes (
-    name     TEXT PRIMARY KEY,
-    muted_at TEXT NOT NULL
+    name       TEXT PRIMARY KEY,
+    muted_at   TEXT NOT NULL,
+    created_at TEXT
 );
 
 CREATE TABLE IF NOT EXISTS install_sync (
     key        TEXT PRIMARY KEY,
     value      TEXT NOT NULL,
-    updated_at TEXT NOT NULL
+    updated_at TEXT NOT NULL,
+    created_at TEXT
 );
 
 CREATE TABLE IF NOT EXISTS context_overrides (
     session_id TEXT PRIMARY KEY,
     state      TEXT NOT NULL,
-    updated_at TEXT NOT NULL
+    updated_at TEXT NOT NULL,
+    created_at TEXT
 );
 """
+
+# Columns added after these tables already shipped - CREATE TABLE IF NOT EXISTS above is a
+# no-op against an existing table, so an already-initialised sessions.db needs these backfilled.
+_BACKFILL_COLUMNS: dict[str, dict[str, str]] = {
+    "session_tags": {"created_at": "TEXT"},
+    "sessions": {"updated_at": "TEXT"},
+    "doctor_mutes": {"created_at": "TEXT"},
+    "install_sync": {"created_at": "TEXT"},
+    "context_overrides": {"created_at": "TEXT"},
+}
 
 
 def default_db_path() -> Path:
@@ -78,6 +93,11 @@ def default_db_path() -> Path:
     override = os.environ.get(SESSIONS_DIR_ENV)
     base = Path(override) if override else paths.data_home()
     return base / _DB_FILENAME
+
+
+def _migrate_tables(conn: sqlite3.Connection) -> None:
+    for table, columns in _BACKFILL_COLUMNS.items():
+        db.add_missing_columns(conn, table, columns)
 
 
 def connect(*, path: Path | None = None, readonly: bool = False) -> sqlite3.Connection:
@@ -89,7 +109,9 @@ def connect(*, path: Path | None = None, readonly: bool = False) -> sqlite3.Conn
     target = path if path is not None else default_db_path()
     if readonly:
         return db.connect(target, readonly=True)
-    return db.connect(target, ddl=DDL)
+    conn = db.connect(target, ddl=DDL)
+    _migrate_tables(conn)
+    return conn
 
 
 def _now_iso() -> str:
@@ -113,10 +135,11 @@ def write_tag(
     owns_conn = conn is None
     c = conn if conn is not None else connect(path=path)
     try:
+        now_iso = _now_iso()
         c.execute(
-            "INSERT INTO session_tags (uuid, tag, updated_at) VALUES (?, ?, ?) "
+            "INSERT INTO session_tags (uuid, tag, updated_at, created_at) VALUES (?, ?, ?, ?) "
             "ON CONFLICT(uuid) DO UPDATE SET tag=excluded.tag, updated_at=excluded.updated_at",
-            (uuid, tag, _now_iso()),
+            (uuid, tag, now_iso, now_iso),
         )
         if owns_conn:
             c.commit()
@@ -256,10 +279,12 @@ def touch_last_opened(
     c = conn if conn is not None else connect(path=path)
     try:
         c.execute(
-            "INSERT INTO sessions (project_dir, basename, start_date, discovered_at, last_opened) "
-            "VALUES (?, ?, ?, ?, ?) "
-            "ON CONFLICT(project_dir, basename) DO UPDATE SET last_opened=excluded.last_opened",
-            (str(project_dir), basename, start_date, _now_iso(), ts),
+            "INSERT INTO sessions "
+            "(project_dir, basename, start_date, discovered_at, last_opened, updated_at) "
+            "VALUES (?, ?, ?, ?, ?, ?) "
+            "ON CONFLICT(project_dir, basename) DO UPDATE SET "
+            "last_opened=excluded.last_opened, updated_at=excluded.updated_at",
+            (str(project_dir), basename, start_date, _now_iso(), ts, _now_iso()),
         )
         if owns_conn:
             c.commit()
@@ -294,10 +319,12 @@ def touch_last_active(
     c = conn if conn is not None else connect(path=path)
     try:
         c.execute(
-            "INSERT INTO sessions (project_dir, basename, start_date, discovered_at, last_active) "
-            "VALUES (?, ?, ?, ?, ?) "
-            "ON CONFLICT(project_dir, basename) DO UPDATE SET last_active=excluded.last_active",
-            (str(project_dir), basename, start_date, _now_iso(), ts),
+            "INSERT INTO sessions "
+            "(project_dir, basename, start_date, discovered_at, last_active, updated_at) "
+            "VALUES (?, ?, ?, ?, ?, ?) "
+            "ON CONFLICT(project_dir, basename) DO UPDATE SET "
+            "last_active=excluded.last_active, updated_at=excluded.updated_at",
+            (str(project_dir), basename, start_date, _now_iso(), ts, _now_iso()),
         )
         if owns_conn:
             c.commit()

@@ -98,7 +98,7 @@ read-then-decide-then-write workflow. Every other table below still gets `create
   `JobVersionConflictError` rather than silently overwriting); a test that `bundled_job_installs`'s
   `created_at` survives a reinstall while `installed_at` updates; full existing `ccsched` CLI test
   suite green (proves no legitimate single-writer call site regresses).
-- [ ] 4.3 `sessions.db`: add `updated_at` to `sessions` (no `version`/CAS - design.md Decision 3;
+- [x] 4.3 `sessions.db`: add `updated_at` to `sessions` (no `version`/CAS - design.md Decision 3;
   `discovered_at` already serves as an immutable `created_at`, no new column needed there); add a
   real `created_at` to `doctor_mutes` (new column, preserved across `add_mute`'s existing
   `ON CONFLICT DO UPDATE` - `muted_at` is mutable, last-muted not first-muted, per design.md

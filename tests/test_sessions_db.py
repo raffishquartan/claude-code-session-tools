@@ -75,6 +75,26 @@ def test_write_tag_creates_db_file(db_path):
     assert db_path.exists()
 
 
+def _tag_created_at(db_path, uuid):
+    conn = sessions_db.connect(path=db_path)
+    try:
+        row = conn.execute(
+            "SELECT created_at FROM session_tags WHERE uuid=?", (uuid,)
+        ).fetchone()
+    finally:
+        conn.close()
+    return row["created_at"]
+
+
+def test_write_tag_sets_created_at_and_preserves_it_on_upsert(db_path):
+    sessions_db.write_tag("uuid-1", "old-tag", path=db_path)
+    first_created_at = _tag_created_at(db_path, "uuid-1")
+    assert first_created_at is not None
+
+    sessions_db.write_tag("uuid-1", "new-tag", path=db_path)
+    assert _tag_created_at(db_path, "uuid-1") == first_created_at
+
+
 def test_schema_has_four_tables(db_path):
     sessions_db.write_tag("uuid-1", "my-feature", path=db_path)  # bootstrap schema
     conn = sqlite3.connect(str(db_path))
@@ -155,6 +175,36 @@ def test_touch_last_active_sets_column(db_path):
     rows = sessions_db.list_sessions(path=db_path)
     assert rows[0].last_active == 5678.5
     assert rows[0].last_opened == 0.0
+
+
+def _row_updated_at(db_path, project_dir, basename):
+    conn = sessions_db.connect(path=db_path)
+    try:
+        row = conn.execute(
+            "SELECT updated_at FROM sessions WHERE project_dir=? AND basename=?",
+            (str(project_dir), basename),
+        ).fetchone()
+    finally:
+        conn.close()
+    return row["updated_at"]
+
+
+def test_ensure_session_row_leaves_updated_at_null(db_path):
+    proj = Path("/repos/myproj")
+    sessions_db.ensure_session_row(proj, "20260713-foo", path=db_path)
+    assert _row_updated_at(db_path, proj, "20260713-foo") is None
+
+
+def test_touch_last_opened_bumps_updated_at(db_path):
+    proj = Path("/repos/myproj")
+    sessions_db.touch_last_opened(proj, "20260713-foo", path=db_path, when=1234.5)
+    assert _row_updated_at(db_path, proj, "20260713-foo") is not None
+
+
+def test_touch_last_active_bumps_updated_at(db_path):
+    proj = Path("/repos/myproj")
+    sessions_db.touch_last_active(proj, "20260713-foo", path=db_path, when=5678.5)
+    assert _row_updated_at(db_path, proj, "20260713-foo") is not None
 
 
 def test_touch_last_opened_defaults_to_now_when_no_when_given(db_path):

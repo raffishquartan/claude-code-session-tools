@@ -53,9 +53,9 @@ def add_mute(path: Path, name: str, *, today: str) -> dict[str, str]:
     conn = sessions_db.connect(path=path)
     try:
         conn.execute(
-            "INSERT INTO doctor_mutes (name, muted_at) VALUES (?, ?) "
+            "INSERT INTO doctor_mutes (name, muted_at, created_at) VALUES (?, ?, ?) "
             "ON CONFLICT(name) DO UPDATE SET muted_at=excluded.muted_at",
-            (name, today),
+            (name, today, sessions_db._now_iso()),
         )
         conn.commit()
     finally:
