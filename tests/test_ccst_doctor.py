@@ -93,6 +93,29 @@ def test_check_env_dir_set_missing() -> None:
     assert "does not exist" in r.reason
 
 
+def test_check_env_dir_not_set_with_hint() -> None:
+    r = check_env_dir("MY_VAR", None, hint="set it in ~/.shellrc.d/env.sh")
+    assert r.status == Status.WARN
+    assert "not set" in r.reason
+    assert "~/.shellrc.d/env.sh" in r.reason
+
+
+def test_check_env_dir_set_missing_with_hint() -> None:
+    r = check_env_dir(
+        "MY_VAR", "/nonexistent/path/xyz", hint="set it in ~/.shellrc.d/env.sh"
+    )
+    assert r.status == Status.FAIL
+    assert "does not exist" in r.reason
+    assert "~/.shellrc.d/env.sh" in r.reason
+
+
+def test_check_env_dir_set_exists_omits_hint(tmp_path: Path) -> None:
+    # Once the value is valid there's nothing to point the user at.
+    r = check_env_dir("MY_VAR", str(tmp_path), hint="set it in ~/.shellrc.d/env.sh")
+    assert r.status == Status.OK
+    assert "~/.shellrc.d/env.sh" not in r.reason
+
+
 # ---------- check_settings_json ----------
 
 def test_check_settings_json_exists_valid(tmp_path: Path) -> None:
@@ -193,6 +216,30 @@ def test_run_all_checks_fails_on_a_stale_hook_entry(tmp_path: Path) -> None:
     )
     stale = [r for r in results if r.name.startswith("hooks:stale:")]
     assert [r.status for r in stale] == [Status.FAIL]
+
+
+def test_run_all_checks_root_env_hints_name_env_sh_not_ccl_sh(tmp_path: Path) -> None:
+    """The two session-root checks must wire a concrete, correct hint - not just the
+    generic check_env_dir() hint plumbing exercised in isolation above."""
+    settings = tmp_path / "settings.json"
+    settings.write_text(json.dumps({"hooks": {}}))
+    bundle = Path(__file__).parent.parent / "src" / "cc_session_tools" / "config" / "hooks-bundle.json"
+    results = run_all_checks(
+        installed_version="1.4.1",
+        settings_path=settings,
+        bundle_path=bundle,
+        skills_source_dir=None,
+        skills_target_dir=tmp_path / "skills",
+        env={"CLAUDE_SESSION_TOOLS_REPO_ROOT": None, "CLAUDE_SESSION_TOOLS_PROJ_ROOT": None},
+        skip_pypi=True,
+    )
+    by_name = {r.name: r for r in results}
+    for var in ("ENV:CLAUDE_SESSION_TOOLS_REPO_ROOT", "ENV:CLAUDE_SESSION_TOOLS_PROJ_ROOT"):
+        r = by_name[var]
+        assert r.status == Status.WARN
+        assert "~/.shellrc.d/env.sh" in r.reason
+        assert "ccl.sh" in r.reason
+        assert "export" in r.reason
 
 
 # ---------- check_skill_symlink ----------

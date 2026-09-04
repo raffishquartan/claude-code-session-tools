@@ -137,18 +137,28 @@ uv tool install cc-session-tools          # recommended
 #    messaging block and the scheduled jobs (idempotent — safe to re-run)
 ccst install-everything --apply
 
-# 3. Verify everything is wired up
+# 3. Tell ccst where your sessions live (see Configuration below for what
+#    each root means). Put this in its own file, NOT ccl.sh from step 2 —
+#    ccl.sh is fully rewritten on every `ccst shell install --apply`, so any
+#    hand edits to it are silently lost on the next upgrade.
+cat > ~/.shellrc.d/env.sh <<'EOF'
+export CLAUDE_SESSION_TOOLS_REPO_ROOT="$HOME/repos"
+export CLAUDE_SESSION_TOOLS_PROJ_ROOT="$HOME/cc-claude-code"   # optional, see below
+EOF
+
+# 4. Verify everything is wired up
 ccst doctor
 
-# 4. Add CCST guidance to ~/.claude/CLAUDE.md (see Configure your global CLAUDE.md below)
+# 5. Add CCST guidance to ~/.claude/CLAUDE.md (see Configure your global CLAUDE.md below)
 #    This is required: without it, Claude Code sessions won't know to use CCST's
 #    CLIs and skills, and the 8-digit gate won't have an action list to enforce.
 ```
 
-`ccst shell install` writes the fragment file but does not source it. Your shell rc
+`ccst shell install` writes the `ccl()` fragment but does not source it, and
+neither does anything else write `~/.shellrc.d/env.sh` for you — your shell rc
 must source `~/.shellrc.d/*.sh` — see [`ccst shell install`](#ccst-shell-install)
 below for the loop to add if it doesn't already. Once it's sourced, open a new
-shell (or re-source your rc file) to activate `ccl`.
+shell (or re-source your rc file) to activate `ccl` and the two roots.
 
 > **Installing from source (pre-release or offline):**
 > ```sh
@@ -271,7 +281,7 @@ These tools add:
 
 `ccd` refuses to start a session if your current working directory isn't a direct child of one of your configured **session roots**. This sounds annoying but turns out to be a feature: it stops you from accidentally starting a session in `/tmp` or in `~`, and it lets `ccr`/`ccs` find sessions across your projects without you telling them where to look.
 
-Roots are configured via two environment variables - both optional, but you'll want at least one:
+Roots are configured via two environment variables - both optional, but you'll want at least one. Put the `export` lines in their own file, e.g. `~/.shellrc.d/env.sh` (sourced automatically once you've done the [`ccst shell install`](#ccst-shell-install) rc setup) — **not** `~/.shellrc.d/ccl.sh`, which `ccst shell install --apply` regenerates from scratch on every run and will silently discard anything you add to it. `ccst doctor` prints this same guidance (with the exact `export` line to add) whenever a root is unset or points at a directory that doesn't exist.
 
 ### `CLAUDE_SESSION_TOOLS_REPO_ROOT` - the **loose** root
 
@@ -908,7 +918,11 @@ for f in ~/.shellrc.d/*.sh; do [ -r "$f" ] && source "$f"; done
 ```
 
 `ccl` has no effect until that loop (or equivalent) is in your `.bashrc`/`.zshrc`.
-Idempotent — re-running overwrites the existing fragment.
+Idempotent — re-running overwrites the existing fragment, so `ccl.sh` is not a
+safe place for your own hand-edits. Put personal exports (like the two
+[session-root variables](#configuration-where-do-your-sessions-live)) in a
+sibling file such as `~/.shellrc.d/env.sh` instead — the fragments directory
+happily sources any number of `*.sh` files, only `ccl.sh` itself is managed.
 
 ```sh
 # Dry run (default) - shows what would be added

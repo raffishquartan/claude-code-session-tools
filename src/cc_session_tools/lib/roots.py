@@ -143,3 +143,24 @@ def strict_root_path() -> Path | None:
     """Alias for proj_root(), preserved for callers that think in
     strict-root terminology."""
     return proj_root()
+
+
+def trusted_subdirectories(roots: list[Path]) -> list[Path]:
+    """Immediate, non-hidden subdirectories of each root, sorted and deduped.
+
+    Every project directory under a configured session root (e.g. $HOME/repos,
+    $HOME/cc) is a `ccd` launch target, so it should be trusted by Claude Code
+    without listing it individually in settings.json's additionalDirectories
+    (which has no glob support). Callers pass each result as a `--add-dir` arg.
+    """
+    out: list[Path] = []
+    seen: set[Path] = set()
+    for root in roots:
+        for child in sorted(root.iterdir()):
+            if not child.is_dir() or child.name.startswith("."):
+                continue
+            resolved = child.resolve()
+            if resolved not in seen:
+                out.append(resolved)
+                seen.add(resolved)
+    return out

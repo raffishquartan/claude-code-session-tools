@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pytest
 
+from cc_session_tools.lib.rules import encode_cwd
 from cccs_hooks.transcript import (
     TranscriptNotFound,
     Turn,
@@ -24,8 +25,7 @@ def _write_transcript(
     session_id: str,
     records: list[dict[str, object]],
 ) -> Path:
-    encoded = cwd.replace("/", "-")
-    proj = home / ".claude" / "projects" / encoded
+    proj = home / ".claude" / "projects" / encode_cwd(cwd)
     proj.mkdir(parents=True, exist_ok=True)
     p = proj / f"{session_id}.jsonl"
     with p.open("w", encoding="utf-8") as fh:
@@ -75,6 +75,19 @@ def test_load_transcript_raises_when_file_missing(
     monkeypatch.setenv("HOME", str(tmp_path))
     with pytest.raises(TranscriptNotFound):
         load_transcript(session_id="nope-uuid", cwd="/some/where")
+
+
+def test_load_transcript_finds_dotted_cwd_session(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A cwd/username containing a dot (e.g. /Users/jane.doe/repos/foo) must resolve
+    to the same ~/.claude/projects/<encoded>/ directory Claude Code itself creates -
+    dots replaced with '-', same as slashes."""
+    monkeypatch.setenv("HOME", str(tmp_path))
+    cwd = "/Users/jane.doe/repos/foo"
+    _write_transcript(tmp_path, cwd, "sess-1", [_user("hello")])
+    turns = load_transcript(session_id="sess-1", cwd=cwd)
+    assert [t.content for t in turns] == ["hello"]
 
 
 def test_load_transcript_skips_malformed_jsonl(

@@ -13,6 +13,7 @@ from cc_session_tools.lib.roots import (
     load_session_roots,
     proj_root,
     repo_root,
+    trusted_subdirectories,
 )
 
 
@@ -187,3 +188,59 @@ class TestMatchedSessionRoot:
         elsewhere = tmp_path / "e"
         elsewhere.mkdir()
         assert roots.matched_session_root(elsewhere, [root]) is None
+
+
+class TestTrustedSubdirectories:
+    def test_returns_immediate_subdirs_sorted(self, tmp_path):
+        root = tmp_path / "r"
+        root.mkdir()
+        b = root / "b-proj"
+        a = root / "a-proj"
+        b.mkdir()
+        a.mkdir()
+        assert trusted_subdirectories([root]) == [a.resolve(), b.resolve()]
+
+    def test_excludes_files(self, tmp_path):
+        root = tmp_path / "r"
+        root.mkdir()
+        (root / "not-a-dir.txt").write_text("hi")
+        proj = root / "proj"
+        proj.mkdir()
+        assert trusted_subdirectories([root]) == [proj.resolve()]
+
+    def test_excludes_hidden_directories(self, tmp_path):
+        root = tmp_path / "r"
+        root.mkdir()
+        (root / ".claude").mkdir()
+        proj = root / "proj"
+        proj.mkdir()
+        assert trusted_subdirectories([root]) == [proj.resolve()]
+
+    def test_covers_every_configured_root(self, tmp_path):
+        repo = tmp_path / "repos"
+        proj_root_dir = tmp_path / "cc"
+        repo.mkdir()
+        proj_root_dir.mkdir()
+        repo_child = repo / "repo-proj"
+        proj_child = proj_root_dir / "proj-proj"
+        repo_child.mkdir()
+        proj_child.mkdir()
+        assert trusted_subdirectories([repo, proj_root_dir]) == [
+            repo_child.resolve(),
+            proj_child.resolve(),
+        ]
+
+    def test_dedups_when_same_subdir_reachable_from_two_roots(self, tmp_path):
+        shared_parent = tmp_path / "shared"
+        shared_parent.mkdir()
+        child = shared_parent / "proj"
+        child.mkdir()
+        assert trusted_subdirectories([shared_parent, shared_parent]) == [child.resolve()]
+
+    def test_empty_when_root_has_no_subdirs(self, tmp_path):
+        root = tmp_path / "r"
+        root.mkdir()
+        assert trusted_subdirectories([root]) == []
+
+    def test_empty_when_no_roots(self):
+        assert trusted_subdirectories([]) == []

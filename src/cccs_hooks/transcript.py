@@ -1,8 +1,10 @@
 """Read and walk the parent session's Claude Code transcript JSONL.
 
 The transcript lives at ``~/.claude/projects/<encoded-cwd>/<session_id>.jsonl``
-where the encoded cwd replaces every ``/`` in the absolute cwd with ``-``
-(so ``/home/user/repos/foo`` becomes ``-home-user-repos-foo``).
+where the encoded cwd replaces every ``/`` and every ``.`` in the absolute cwd
+with ``-`` (so ``/home/user/repos/foo`` becomes ``-home-user-repos-foo``, and a
+dotted username like ``/home/jane.doe/repos/foo`` becomes
+``-home-jane-doe-repos-foo``).
 
 Each JSONL line is one event. Relevant types:
 
@@ -27,6 +29,8 @@ import sys
 import time
 from pathlib import Path
 
+from cc_session_tools.lib.rules import encode_cwd
+
 _ASSISTANT_OFFER_PATTERN = re.compile(
     r"respond with[^0-9]*(\d{8})",
     re.IGNORECASE,
@@ -47,15 +51,9 @@ class Turn:
     tool_name: str = ""
 
 
-def _encode_cwd(cwd: str) -> str:
-    """CC encodes the cwd by swapping ``/`` for ``-``. The leading slash
-    becomes a leading dash."""
-    return cwd.replace("/", "-")
-
-
 def _transcript_path(session_id: str, cwd: str) -> Path:
     home = Path.home()
-    return home / ".claude" / "projects" / _encode_cwd(cwd) / f"{session_id}.jsonl"
+    return home / ".claude" / "projects" / encode_cwd(cwd) / f"{session_id}.jsonl"
 
 
 def _extract_text(content: object) -> str:
