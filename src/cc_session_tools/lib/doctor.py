@@ -48,6 +48,15 @@ class CheckResult:
         return f"[{self.status.value:<4}] {self.name}: {self.reason}"
 
 
+# The two session-root env vars, in the order they're checked, mapped to an
+# example value for the doctor WARN/FAIL hint. See README.md's "Configuration:
+# where do your sessions live?" for what each root means.
+_ROOT_ENV_EXAMPLES = {
+    "CLAUDE_SESSION_TOOLS_REPO_ROOT": "$HOME/repos",
+    "CLAUDE_SESSION_TOOLS_PROJ_ROOT": "$HOME/cc-claude-code",
+}
+
+
 # ---------- individual checks ----------
 
 
@@ -86,18 +95,27 @@ def check_cli_on_path(cli_name: str) -> CheckResult:
         )
 
 
-def check_env_dir(var_name: str, env_value: str | None) -> CheckResult:
-    """Check that an env var is set and points to an existing directory."""
+def check_env_dir(
+    var_name: str, env_value: str | None, *, hint: str | None = None
+) -> CheckResult:
+    """Check that an env var is set and points to an existing directory.
+
+    ``hint``, when given, is appended to the WARN/FAIL reason to tell the
+    user where and how to set the variable. It is omitted from the OK reason
+    — once the value is valid, there's nothing left to point the user at.
+    """
     name = f"ENV:{var_name}"
     if env_value is None:
-        return CheckResult(name=name, status=Status.WARN, reason="not set")
+        reason = "not set"
+        if hint:
+            reason = f"{reason} — {hint}"
+        return CheckResult(name=name, status=Status.WARN, reason=reason)
     p = Path(env_value)
     if not p.is_dir():
-        return CheckResult(
-            name=name,
-            status=Status.FAIL,
-            reason=f"set to {env_value!r} but directory does not exist",
-        )
+        reason = f"set to {env_value!r} but directory does not exist"
+        if hint:
+            reason = f"{reason} — {hint}"
+        return CheckResult(name=name, status=Status.FAIL, reason=reason)
     return CheckResult(name=name, status=Status.OK, reason=str(p))
 
 
@@ -872,8 +890,13 @@ def run_all_checks(
         results.append(check_cli_on_path(cli))
 
     # Environment variables
-    for var in ("CLAUDE_SESSION_TOOLS_REPO_ROOT", "CLAUDE_SESSION_TOOLS_PROJ_ROOT"):
-        results.append(check_env_dir(var, env.get(var)))
+    for var, example in _ROOT_ENV_EXAMPLES.items():
+        hint = (
+            f'set via `export {var}="{example}"` in ~/.shellrc.d/env.sh '
+            "(a plain file you create yourself — not ccl.sh, which "
+            "`ccst shell install --apply` overwrites)"
+        )
+        results.append(check_env_dir(var, env.get(var), hint=hint))
 
     # settings.json validity
     results.append(check_settings_json(settings_path))

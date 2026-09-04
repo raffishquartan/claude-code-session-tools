@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **`ccst doctor`'s `ENV:CLAUDE_SESSION_TOOLS_REPO_ROOT` / `ENV:CLAUDE_SESSION_TOOLS_PROJ_ROOT`
+  checks now tell you exactly how to fix a WARN or FAIL**, including the
+  `export` line to add and the file to add it to (`~/.shellrc.d/env.sh`, not
+  `~/.shellrc.d/ccl.sh` — that fragment is fully rewritten on every `ccst
+  shell install --apply` and silently drops hand-edits). The OK case is
+  unchanged: just the resolved path.
+
 ## [2.12.4] - 2026-09-04
 
 ### Changed
