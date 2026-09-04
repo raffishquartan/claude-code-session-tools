@@ -155,6 +155,32 @@ def test_edit_without_success_exit_codes_preserves_existing(tmp_path: Path) -> N
     assert "0,1" in show.stdout
 
 
+def test_edit_reports_version_conflict_without_crashing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """_cmd_edit's registry.JobVersionConflictError -> _err() mapping - the CAS mechanics
+    themselves (registry.replace_job rejecting a stale write) are covered directly in
+    test_registry.py; this covers the CLI layer translating that into a clean exit-2 message
+    instead of an uncaught exception."""
+    sched, hooks = _dirs(tmp_path)
+    monkeypatch.setenv("CC_SCHEDULER_DIR", str(sched))
+    monkeypatch.setenv("CCCS_HOOKS_DIR", str(hooks))
+    _add_direct("tesco", ["true"])
+
+    def raise_conflict(spec):
+        raise reg.JobVersionConflictError("stale version")
+
+    monkeypatch.setattr(reg, "replace_job", raise_conflict)
+
+    rc = ccsched._cmd_edit(
+        argparse.Namespace(
+            id="tesco", cadence=None, coalesce=None, catchup_window=None,
+            timeout="10s", success_exit_codes=None, surface=None, argv=None,
+        )
+    )
+    assert rc == 2
+
+
 def test_enable_clears_suspension(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _add_ok(tmp_path)
     sched, hooks = _dirs(tmp_path)

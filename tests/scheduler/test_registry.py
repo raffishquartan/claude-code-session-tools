@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 
 from cc_session_tools.lib.scheduler import registry as reg
+from cc_session_tools.lib.scheduler import store
 from cc_session_tools.lib.scheduler.jobspec import CoalesceKind, validate_job_fields
 
 
@@ -227,3 +228,117 @@ def test_rename_also_renames_bundled_install_row(
     reg.mark_bundled_installed("pdata-verify-all", "2026-08-27T00:00:00Z")
     reg.rename_job("pdata-verify-all", "pdata-verify-all-v2")
     assert reg.bundled_install_ids() == {"pdata-verify-all-v2"}
+
+
+# ---------- created_at / updated_at / version (CAS) ----------
+
+
+def _row(job_id: str) -> dict:
+    conn = store.connect()
+    try:
+        row = conn.execute(
+            "SELECT created_at, updated_at, version FROM jobs WHERE job_id=?", (job_id,)
+        ).fetchone()
+    finally:
+        conn.close()
+    return dict(row)
+
+
+def test_add_job_sets_created_at_and_default_version(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("CC_SCHEDULER_DIR", str(tmp_path))
+    reg.add_job(_spec())
+    row = _row("tesco-shop-check")
+    assert row["created_at"] is not None
+    assert row["updated_at"] is None  # not yet updated, only inserted
+    assert row["version"] == 1
+
+
+def test_replace_job_bumps_updated_at_and_version(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("CC_SCHEDULER_DIR", str(tmp_path))
+    reg.add_job(_spec())
+    reg.replace_job(_spec())  # default version=1 matches the just-added row
+    row = _row("tesco-shop-check")
+    assert row["updated_at"] is not None
+    assert row["version"] == 2
+
+
+def test_replace_job_with_stale_version_raises_conflict_not_silently_applied(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The concurrent-edit scenario this whole CAS wiring exists for: two `ccsched edit`
+    invocations both read the job at version 1, both compute an edit, both call replace_job.
+    The first wins and advances to version 2; the second must be rejected, not silently
+    overwrite the first edit."""
+    monkeypatch.setenv("CC_SCHEDULER_DIR", str(tmp_path))
+    reg.add_job(_spec())
+    from dataclasses import replace as spec_replace
+
+    winner = spec_replace(_spec(), timeout="90s")
+    reg.replace_job(winner)  # version 1 -> 2
+
+    loser = spec_replace(_spec(), timeout="120s")  # still thinks it's version 1
+    with pytest.raises(reg.JobVersionConflictError):
+        reg.replace_job(loser)
+
+    # The winner's write is intact - the loser's did not silently apply.
+    assert reg.load_registry()[0].timeout == "90s"
+
+
+def test_replace_job_unknown_id_raises_registry_error_not_version_conflict(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("CC_SCHEDULER_DIR", str(tmp_path))
+    with pytest.raises(reg.RegistryError) as exc_info:
+        reg.replace_job(_spec("ghost"))
+    assert not isinstance(exc_info.value, reg.JobVersionConflictError)
+
+
+def test_set_enabled_bumps_updated_at_not_version(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("CC_SCHEDULER_DIR", str(tmp_path))
+    reg.add_job(_spec())
+    reg.set_enabled("tesco-shop-check", False)
+    row = _row("tesco-shop-check")
+    assert row["updated_at"] is not None
+    assert row["version"] == 1  # not a CAS-guarded write path
+
+
+def test_rename_job_bumps_updated_at(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("CC_SCHEDULER_DIR", str(tmp_path))
+    reg.add_job(_spec("old-name"))
+    reg.rename_job("old-name", "new-name")
+    row = _row("new-name")
+    assert row["updated_at"] is not None
+
+
+def test_mark_bundled_installed_created_at_survives_reinstall(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("CC_SCHEDULER_DIR", str(tmp_path))
+    reg.mark_bundled_installed("pdata-verify-all", "2026-08-27T00:00:00Z")
+    conn = store.connect()
+    try:
+        first_created_at = conn.execute(
+            "SELECT created_at FROM bundled_job_installs WHERE job_id=?",
+            ("pdata-verify-all",),
+        ).fetchone()["created_at"]
+    finally:
+        conn.close()
+    assert first_created_at is not None
+
+    reg.mark_bundled_installed("pdata-verify-all", "2026-08-28T00:00:00Z")  # reinstall
+    conn = store.connect()
+    try:
+        row = conn.execute(
+            "SELECT created_at, installed_at FROM bundled_job_installs WHERE job_id=?",
+            ("pdata-verify-all",),
+        ).fetchone()
+    finally:
+        conn.close()
+    assert row["created_at"] == first_created_at  # preserved across the reinstall
+    assert row["installed_at"] == "2026-08-28T00:00:00Z"  # this column still updates

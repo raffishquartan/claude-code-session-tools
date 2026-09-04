@@ -7,8 +7,20 @@ from pathlib import Path
 import pytest
 
 from cc_session_tools.lib.scheduler import state as st
+from cc_session_tools.lib.scheduler import store
 
 UTC = timezone.utc
+
+
+def _updated_at(job_id: str) -> object:
+    conn = store.connect()
+    try:
+        row = conn.execute(
+            "SELECT updated_at FROM job_state WHERE job_id=?", (job_id,)
+        ).fetchone()
+    finally:
+        conn.close()
+    return row["updated_at"]
 
 
 def test_scheduler_dir_honours_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -176,6 +188,66 @@ def test_record_failure_past_threshold_does_not_renotify(
         consecutive_failures=10, in_flight=None, suspended=True)})
     _, new_s, newly = st.record_failure("j", attempt_ts="2026-06-22T10:00:00Z", threshold=10)
     assert (new_s, newly) == (True, False)
+
+
+def test_ensure_registered_db_leaves_updated_at_null(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("CC_SCHEDULER_DIR", str(tmp_path))
+    st.ensure_registered_db("j", datetime(2026, 6, 22, 8, 0, tzinfo=UTC))
+    assert _updated_at("j") is None  # not yet updated, only registered
+
+
+def test_set_in_flight_bumps_updated_at(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("CC_SCHEDULER_DIR", str(tmp_path))
+    st.ensure_registered_db("j", datetime(2026, 6, 22, 8, 0, tzinfo=UTC))
+    st.set_in_flight("j", pid=999, started_at="2026-06-22T08:00:00Z", instants=2)
+    assert _updated_at("j") is not None
+
+
+def test_clear_in_flight_bumps_updated_at(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("CC_SCHEDULER_DIR", str(tmp_path))
+    st.ensure_registered_db("j", datetime(2026, 6, 22, 8, 0, tzinfo=UTC))
+    st.clear_in_flight("j")
+    assert _updated_at("j") is not None
+
+
+def test_clear_suspended_bumps_updated_at(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("CC_SCHEDULER_DIR", str(tmp_path))
+    st.ensure_registered_db("j", datetime(2026, 6, 22, 8, 0, tzinfo=UTC))
+    st.clear_suspended("j")
+    assert _updated_at("j") is not None
+
+
+def test_record_success_bumps_updated_at(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("CC_SCHEDULER_DIR", str(tmp_path))
+    st.ensure_registered_db("j", datetime(2026, 6, 22, 8, 0, tzinfo=UTC))
+    st.record_success("j", new_success="2026-06-22T10:00:00Z", attempt_ts="2026-06-22T10:00:00Z")
+    assert _updated_at("j") is not None
+
+
+def test_record_failure_bumps_updated_at(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("CC_SCHEDULER_DIR", str(tmp_path))
+    st.ensure_registered_db("j", datetime(2026, 6, 22, 8, 0, tzinfo=UTC))
+    st.record_failure("j", attempt_ts="2026-06-22T10:00:00Z", threshold=10)
+    assert _updated_at("j") is not None
+
+
+def test_record_manual_failure_bumps_updated_at(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("CC_SCHEDULER_DIR", str(tmp_path))
+    st.ensure_registered_db("j", datetime(2026, 6, 22, 8, 0, tzinfo=UTC))
+    st.record_manual_failure("j", attempt_ts="2026-06-22T10:00:00Z")
+    assert _updated_at("j") is not None
+
+
+def test_save_all_state_bumps_updated_at(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("CC_SCHEDULER_DIR", str(tmp_path))
+    st.save_all_state({"j": st.JobState(
+        registered_at="2026-01-01T00:00:00Z", last_success=None,
+        last_attempt=None, consecutive_failures=0, in_flight=None)})
+    assert _updated_at("j") is not None
 
 
 def test_concurrent_failure_and_success_on_different_jobs_no_cross_loss(

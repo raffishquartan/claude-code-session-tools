@@ -77,7 +77,7 @@ read-then-decide-then-write workflow. Every other table below still gets `create
   write path in `common-store-cas-research.md` Section 1's table asserting `updated_at`/`version`
   change after the call; existing `test_mark_read_is_first_writer_wins` and
   `test_second_claim_raises_already_claimed` continue to pass unchanged (guards untouched).
-- [ ] 4.2 `ccsched.db`: add `created_at`+`updated_at`+`version` to `jobs` (`created_at` is
+- [x] 4.2 `ccsched.db`: add `created_at`+`updated_at`+`version` to `jobs` (`created_at` is
   genuinely new - `jobs` has no existing first-insert column at all); add `updated_at` to
   `job_state` (no new `created_at` - `registered_at` is already immutable in every production
   write path, per design.md Decision 3a); add `created_at`+`updated_at` to `cursors`; add a real

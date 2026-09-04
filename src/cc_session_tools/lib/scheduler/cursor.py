@@ -4,7 +4,13 @@ session (a monotonic telemetry.db catchup_events.id, not a row count). Per-
 session by design; cross-session dedup is a non-goal."""
 from __future__ import annotations
 
+from datetime import datetime, timezone
+
 from cc_session_tools.lib.scheduler import ledger, store
+
+
+def _now_iso() -> str:
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 def read_cursor(uuid: str) -> int:
@@ -21,10 +27,12 @@ def read_cursor(uuid: str) -> int:
 def write_cursor(uuid: str, offset: int) -> None:
     conn = store.connect()
     try:
+        now_iso = _now_iso()
         conn.execute(
-            "INSERT INTO cursors (session_uuid, offset) VALUES (?, ?) "
-            "ON CONFLICT(session_uuid) DO UPDATE SET offset=excluded.offset",
-            (uuid, offset),
+            "INSERT INTO cursors (session_uuid, offset, created_at, updated_at) "
+            "VALUES (?, ?, ?, ?) ON CONFLICT(session_uuid) DO UPDATE SET "
+            "offset=excluded.offset, updated_at=excluded.updated_at",
+            (uuid, offset, now_iso, now_iso),
         )
         conn.commit()
     finally:
@@ -52,7 +60,8 @@ def advance_all_cursors_to(offset: int) -> int:
     conn = store.connect()
     try:
         cur = conn.execute(
-            "UPDATE cursors SET offset = ? WHERE offset < ?", (offset, offset)
+            "UPDATE cursors SET offset = ?, updated_at = ? WHERE offset < ?",
+            (offset, _now_iso(), offset),
         )
         conn.commit()
         return int(cur.rowcount)
@@ -67,8 +76,9 @@ def seed_new_session(uuid: str) -> None:
     conn = store.connect()
     try:
         conn.execute(
-            "INSERT OR IGNORE INTO cursors (session_uuid, offset) VALUES (?, ?)",
-            (uuid, ledger.current_offset()),
+            "INSERT OR IGNORE INTO cursors (session_uuid, offset, created_at) "
+            "VALUES (?, ?, ?)",
+            (uuid, ledger.current_offset(), _now_iso()),
         )
         conn.commit()
     finally:

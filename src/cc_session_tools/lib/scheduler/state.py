@@ -20,6 +20,10 @@ def format_ts(dt: datetime) -> str:
     return dt.astimezone(_UTC).strftime(_TS_FMT) if dt.tzinfo else dt.strftime(_TS_FMT)
 
 
+def _now_iso() -> str:
+    return format_ts(datetime.now(_UTC))
+
+
 def parse_ts_or_none(value: str | None) -> datetime | None:
     if value is None:
         return None
@@ -88,12 +92,13 @@ def save_all_state(states: dict[str, JobState]) -> None:
     code paths use the targeted single-row ops below, never this."""
     conn = store.connect()
     try:
+        now_iso = _now_iso()
         for job_id, js in states.items():
             conn.execute(
                 "INSERT INTO job_state (job_id, registered_at, last_success, "
                 "last_attempt, consecutive_failures, suspended, in_flight_pid, "
-                "in_flight_started_at, in_flight_instants) "
-                "VALUES (?,?,?,?,?,?,?,?,?) "
+                "in_flight_started_at, in_flight_instants, updated_at) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?) "
                 "ON CONFLICT(job_id) DO UPDATE SET "
                 "registered_at=excluded.registered_at, "
                 "last_success=excluded.last_success, "
@@ -102,13 +107,15 @@ def save_all_state(states: dict[str, JobState]) -> None:
                 "suspended=excluded.suspended, "
                 "in_flight_pid=excluded.in_flight_pid, "
                 "in_flight_started_at=excluded.in_flight_started_at, "
-                "in_flight_instants=excluded.in_flight_instants",
+                "in_flight_instants=excluded.in_flight_instants, "
+                "updated_at=excluded.updated_at",
                 (
                     job_id, js.registered_at, js.last_success, js.last_attempt,
                     js.consecutive_failures, int(js.suspended),
                     None if js.in_flight is None else js.in_flight.pid,
                     None if js.in_flight is None else js.in_flight.started_at,
                     None if js.in_flight is None else js.in_flight.instants,
+                    now_iso,
                 ),
             )
         conn.commit()
@@ -140,8 +147,8 @@ def set_in_flight(job_id: str, *, pid: int, started_at: str, instants: int) -> N
     try:
         conn.execute(
             "UPDATE job_state SET in_flight_pid=?, in_flight_started_at=?, "
-            "in_flight_instants=? WHERE job_id=?",
-            (pid, started_at, instants, job_id),
+            "in_flight_instants=?, updated_at=? WHERE job_id=?",
+            (pid, started_at, instants, _now_iso(), job_id),
         )
         conn.commit()
     finally:
@@ -153,8 +160,8 @@ def clear_in_flight(job_id: str) -> None:
     try:
         conn.execute(
             "UPDATE job_state SET in_flight_pid=NULL, in_flight_started_at=NULL, "
-            "in_flight_instants=NULL WHERE job_id=?",
-            (job_id,),
+            "in_flight_instants=NULL, updated_at=? WHERE job_id=?",
+            (_now_iso(), job_id),
         )
         conn.commit()
     finally:
@@ -165,7 +172,10 @@ def clear_suspended(job_id: str) -> None:
     """Clear one job's suspended flag. No-op if the job has no state yet."""
     conn = store.connect()
     try:
-        conn.execute("UPDATE job_state SET suspended=0 WHERE job_id=?", (job_id,))
+        conn.execute(
+            "UPDATE job_state SET suspended=0, updated_at=? WHERE job_id=?",
+            (_now_iso(), job_id),
+        )
         conn.commit()
     finally:
         conn.close()
@@ -178,8 +188,8 @@ def record_success(job_id: str, *, new_success: str, attempt_ts: str) -> None:
     try:
         conn.execute(
             "UPDATE job_state SET last_success=?, last_attempt=?, "
-            "consecutive_failures=0 WHERE job_id=?",
-            (new_success, attempt_ts, job_id),
+            "consecutive_failures=0, updated_at=? WHERE job_id=?",
+            (new_success, attempt_ts, _now_iso(), job_id),
         )
         conn.commit()
     finally:
@@ -218,9 +228,9 @@ def record_failure(
             cur_failures, suspended=cur_suspended, threshold=threshold
         )
         conn.execute(
-            "UPDATE job_state SET consecutive_failures=?, suspended=?, last_attempt=? "
-            "WHERE job_id=?",
-            (new_c, int(new_s), attempt_ts, job_id),
+            "UPDATE job_state SET consecutive_failures=?, suspended=?, last_attempt=?, "
+            "updated_at=? WHERE job_id=?",
+            (new_c, int(new_s), attempt_ts, _now_iso(), job_id),
         )
         conn.execute("COMMIT")
     finally:
@@ -237,8 +247,8 @@ def record_manual_failure(job_id: str, *, attempt_ts: str) -> int:
     try:
         cur = conn.execute(
             "UPDATE job_state SET consecutive_failures=consecutive_failures+1, "
-            "last_attempt=? WHERE job_id=? RETURNING consecutive_failures",
-            (attempt_ts, job_id),
+            "last_attempt=?, updated_at=? WHERE job_id=? RETURNING consecutive_failures",
+            (attempt_ts, _now_iso(), job_id),
         ).fetchone()
         conn.commit()
     finally:

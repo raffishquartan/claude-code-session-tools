@@ -36,6 +36,12 @@ class JobSpec:
     # drift-monitor command whose exit 1 means "found something"), not a
     # failure - see worker.py's crashed/findings split.
     success_exit_codes: tuple[int, ...] = (0,)
+    # The jobs.version this spec was read at - registry.replace_job() uses it as the
+    # expected version for a compare-and-swap update, rejecting the write if another edit
+    # landed in between. Defaults to 1 (a brand-new, never-edited job) so validate_job_fields
+    # (used both for `ccsched add` and to build a from-scratch spec) doesn't need to know
+    # about persistence; only registry.py's load-then-edit path threads a real value through.
+    version: int = 1
 
 
 def check_job_id(job_id: str) -> None:
@@ -109,6 +115,7 @@ def validate_job_fields(
     catchup_window: str,
     timeout: str,
     success_exit_codes: tuple[int, ...] = (0,),
+    version: int = 1,
 ) -> JobSpec:
     check_job_id(job_id)
     try:
@@ -130,4 +137,5 @@ def validate_job_fields(
         catchup_window=catchup_window,
         timeout=timeout,
         success_exit_codes=success_exit_codes,
+        version=version,
     )

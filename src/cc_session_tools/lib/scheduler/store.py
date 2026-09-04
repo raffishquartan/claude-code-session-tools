@@ -22,7 +22,10 @@ CREATE TABLE IF NOT EXISTS jobs (
     enabled            INTEGER NOT NULL,
     catchup_window     TEXT NOT NULL,
     timeout            TEXT NOT NULL,
-    success_exit_codes TEXT NOT NULL DEFAULT '[0]'
+    success_exit_codes TEXT NOT NULL DEFAULT '[0]',
+    created_at         TEXT,
+    updated_at         TEXT,
+    version            INTEGER NOT NULL DEFAULT 1
 );
 CREATE TABLE IF NOT EXISTS job_state (
     job_id               TEXT PRIMARY KEY,
@@ -33,24 +36,44 @@ CREATE TABLE IF NOT EXISTS job_state (
     suspended            INTEGER NOT NULL DEFAULT 0,
     in_flight_pid        INTEGER,
     in_flight_started_at TEXT,
-    in_flight_instants   INTEGER
+    in_flight_instants   INTEGER,
+    updated_at           TEXT
 );
 CREATE TABLE IF NOT EXISTS cursors (
     session_uuid TEXT PRIMARY KEY,
-    offset       INTEGER NOT NULL
+    offset       INTEGER NOT NULL,
+    created_at   TEXT,
+    updated_at   TEXT
 );
 CREATE TABLE IF NOT EXISTS reconcile_throttle (
     session_uuid       TEXT PRIMARY KEY,
-    last_reconciled_at TEXT NOT NULL
+    last_reconciled_at TEXT NOT NULL,
+    created_at         TEXT
 );
 -- Tombstone-free install history for lib/scheduler/bundled_jobs.py entries: a row here
 -- outlives `ccsched remove`, so `ccst ccsched-jobs install` can tell a job the operator
 -- deliberately removed apart from one this machine has simply never installed yet.
 CREATE TABLE IF NOT EXISTS bundled_job_installs (
     job_id       TEXT PRIMARY KEY,
-    installed_at TEXT NOT NULL
+    installed_at TEXT NOT NULL,
+    created_at   TEXT
 );
 """
+
+# Columns added after these tables already shipped - CREATE TABLE IF NOT EXISTS above is a
+# no-op against an existing table, so an already-initialised ccsched.db needs these backfilled.
+_BACKFILL_COLUMNS: dict[str, dict[str, str]] = {
+    "jobs": {
+        "success_exit_codes": "TEXT NOT NULL DEFAULT '[0]'",
+        "created_at": "TEXT",
+        "updated_at": "TEXT",
+        "version": "INTEGER NOT NULL DEFAULT 1",
+    },
+    "job_state": {"updated_at": "TEXT"},
+    "cursors": {"created_at": "TEXT", "updated_at": "TEXT"},
+    "reconcile_throttle": {"created_at": "TEXT"},
+    "bundled_job_installs": {"created_at": "TEXT"},
+}
 
 
 def scheduler_dir() -> Path:
@@ -66,19 +89,17 @@ def db_path() -> Path:
     return scheduler_dir() / "ccsched.db"
 
 
-def _migrate_jobs_table(conn: sqlite3.Connection) -> None:
-    """Idempotent ALTER TABLE for columns added after a jobs table already
-    existed on disk - CREATE TABLE IF NOT EXISTS in _DDL is a no-op against
-    an existing table, so new columns need an explicit add-if-missing step."""
-    cols = {row["name"] for row in conn.execute("PRAGMA table_info(jobs)")}
-    if "success_exit_codes" not in cols:
-        conn.execute("ALTER TABLE jobs ADD COLUMN success_exit_codes TEXT NOT NULL DEFAULT '[0]'")
-        conn.commit()
+def _migrate_tables(conn: sqlite3.Connection) -> None:
+    """Idempotent ALTER TABLE for columns added after a table already existed on disk -
+    CREATE TABLE IF NOT EXISTS in _DDL is a no-op against an existing table, so new columns
+    need this explicit add-if-missing step, generalized via db.add_missing_columns."""
+    for table, columns in _BACKFILL_COLUMNS.items():
+        db.add_missing_columns(conn, table, columns)
 
 
 def connect(*, readonly: bool = False) -> sqlite3.Connection:
     """Open ccsched.db with the schema applied (WAL + busy-timeout via lib.db)."""
     conn = db.connect(db_path(), ddl=None if readonly else _DDL, readonly=readonly)
     if not readonly:
-        _migrate_jobs_table(conn)
+        _migrate_tables(conn)
     return conn
