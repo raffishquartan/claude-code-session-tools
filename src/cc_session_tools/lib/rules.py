@@ -182,6 +182,9 @@ def check_session_destination(
 
 
 def encode_cwd(abs_path: str) -> str:
+    """Encode an absolute cwd into its ``~/.claude/projects/<encoded>/`` directory
+    name, matching Claude Code's own encoding: every ``/`` and every ``.`` becomes
+    ``-`` (a dotted username or path segment must not leave a literal ``.``)."""
     if not abs_path.startswith("/"):
         raise ValueError(f"Expected absolute path, got {abs_path!r}")
-    return abs_path.replace("/", "-")
+    return abs_path.replace("/", "-").replace(".", "-")

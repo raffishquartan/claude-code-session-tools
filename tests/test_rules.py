@@ -27,6 +27,15 @@ class TestEncodeCwd:
         with pytest.raises(ValueError, match="Expected absolute path"):
             rules.encode_cwd("relative/path")
 
+    def test_encodes_dots_in_path(self):
+        # Claude Code encodes a cwd by replacing both "/" and "." with "-", so a
+        # dotted username (or any dotted path segment) must not leave a literal
+        # "." in the resulting ~/.claude/projects/<encoded>/ directory name.
+        assert (
+            rules.encode_cwd("/Users/jane.doe/repos/foo")
+            == "-Users-jane-doe-repos-foo"
+        )
+
 
 class TestValidateNewTag:
     def test_accepts_well_formed(self):
