@@ -27,8 +27,9 @@ confirms:
 - Every table gets a `created_at` column reflecting first-insert time (added even to tables that
   already have a domain-specific first-seen column, for a uniform audit story).
 - A generic, reusable CAS helper lives in `lib/db.py`, extracted from `lib/pdata/repository.py`'s
-  proven pattern, and is used - not just available - on every table where more than one process
-  can plausibly race to update the same row.
+  proven pattern, and is used - not just available - on every table with a genuine
+  read-then-write staleness gap (see Decision 3 - narrower than "more than one process can touch
+  it", since several tables are already race-safe by construction).
 - `ccmsg`, `ccsched`, and `sessions` each gain an explicit, durable migration-completion marker
   (via `db.MIGRATIONS_DDL`, matching telemetry), and `ccst doctor`'s
   `check_pending_data_store_migration` reads that marker for all four stores. The
@@ -42,12 +43,14 @@ confirms:
   `catchup_events`, `hook_invocations`) - these tables are never updated in place (only
   inserted/pruned), so "compare and swap" does not apply; they still get `created_at` via their
   existing `ts`/timestamp column being treated as such (no new column needed - already present).
-- Not adding a `version` CAS column to pure key-value upsert tables with a single logical owner
-  per key and no read-then-decide workflow above them (`cursors` in ccmsg/ccsched,
-  `reconcile_throttle`, `bundled_job_installs`, `doctor_mutes`) - these get `updated_at`/
-  `created_at` for the audit trail, but plain `INSERT ... ON CONFLICT DO UPDATE` (already how
-  they're all written) is the correct concurrency story for a table with no client-visible read
-  step to go stale.
+- Not adding a `version` CAS column to any table without a genuine read-then-decide-then-write
+  workflow above it - see Decision 3 for the full per-table accounting. This turned out to be
+  everything except `ccsched.db`'s `jobs`: single-field flips reacting to one event
+  (`job_state`, `sessions`), domain-guarded conditional updates that already prevent the lost
+  update they'd otherwise risk (`messages`), a single atomic increment statement
+  (`command_cache`), and plain key-value upserts with no client-visible read step to go stale
+  (`cursors` in ccmsg/ccsched, `reconcile_throttle`, `bundled_job_installs`, `doctor_mutes`) all
+  get `updated_at`/`created_at` for the audit trail, but not `version`/CAS.
 - Not touching `lib/pdata/`'s own CAS implementation - it stays the reference/source for the
   extraction, but this change does not refactor pdata to call the new shared helper (separate
   follow-up, out of scope here to avoid touching a stable, already-shipped subsystem
@@ -99,23 +102,47 @@ sub-timestamp-resolution, while comparing `updated_at` strings/floats is not (tw
 same tick would both "match"). `updated_at` stays a separate, purely informational audit column
 alongside `version` on these tables.
 
-### 3. Scope of CAS: only tables with plausible multi-writer races on an existing row
+### 3. Scope of CAS: only tables with a genuine read-then-write staleness gap
 
-CAS (`version` column + `cas_update`) is added to:
-- `ccsched.db`: `jobs` (edited via `ccsched add/edit/remove`, potentially from two terminals),
-  `job_state` (written by concurrent hook invocations and manual `ccsched` commands)
-- `sessions.db`: `sessions` (written by concurrent SessionStart/Stop hooks across forked
-  sessions - see `docs/fork-disambiguation-spec.md` for the related, separately-tracked forking
-  work this doesn't depend on or block)
-- `ccmsg.db`: `messages` (status transitions - `mark_read`/`claim`/`archive_one` already
-  hand-roll a single-purpose version of this; migrate to the shared helper)
-- `command-cache.db`: `command_cache` (concurrent `bash-security-review` hook invocations racing
-  to record the same command)
+**Revised during implementation** (task 4.1): CAS solves one specific problem - a caller reads a
+row, decides a new value based on what it read, and writes back; the write must fail if the row
+changed since that read. Working through each store's actual write paths (not just their table
+names) shows that gap is much narrower than "any table more than one process might touch":
 
-CAS is NOT added to (see Non-Goals): `cursors` (both stores), `reconcile_throttle`,
-`bundled_job_installs`, `doctor_mutes`, `telemetry_events`, `catchup_events`,
-`hook_invocations`, `session_tags`/`install_sync`/`context_overrides` (already
-`updated_at`-upserted by key, single logical writer per key, no read-modify-write gap to close).
+- **`ccsched.db`: `jobs`** - the one clear case. `ccsched edit <job-id>` reads the job's current
+  definition, a user edits it, and `replace_job` writes the whole row back; two terminals editing
+  the same job concurrently is a real, silent lost-update risk with no read-then-write gap
+  today. Gets `version` + `cas_update()`.
+- **`ccsched.db`: `job_state`** - re-examined, NOT added. Its writers (`set_in_flight`,
+  `record_success`, `record_failure`, ...) each flip specific fields reacting to one job
+  execution event; they don't read the row, decide from what they read, and write back a
+  computed whole-row value. The same job normally only has one execution in flight at a time by
+  design (that's what `in_flight_pid` itself guards). `updated_at` still added for the audit
+  trail; no `version`/CAS.
+- **`ccmsg.db`: `messages`** - re-examined, NOT wired to `cas_update()`. `mark_read`/`claim`
+  already guard against the lost-update race with `WHERE ... AND status='sent'` /
+  `status NOT IN (...)` - a direct conditional command on the field that matters, not a
+  read-then-blind-overwrite. That guard is not weaker than version-based CAS for this shape of
+  write; replacing it with `cas_update()`'s generic `WHERE id=? AND version=?` would actually
+  *drop* the status precondition (a caller could win a version match while overwriting a status
+  another write legitimately set). `updated_at` + `version` are still added (for audit, and so a
+  future genuine read-modify-write caller has something to key off), but no existing write path
+  changes its guard.
+- **`sessions.db`: `sessions`** - re-examined, NOT added. `touch_last_opened`/`touch_last_active`
+  each unconditionally set one timestamp field to "now" - not a read-then-decide write. The
+  actual multi-writer risk here is the *forking* problem in `docs/fork-disambiguation-spec.md`
+  (task #5), which is a different bug (missing PRIMARY KEY dimension) that a `version` column on
+  the current 2-column key would not fix. `updated_at` still added for the audit trail.
+- **`command-cache.db`: `command_cache`** - re-examined, NOT added. `cache_record`'s
+  `ON CONFLICT DO UPDATE SET fire_count=fire_count+1` is a single atomic statement - SQLite
+  serializes it under WAL with no read-then-write gap for `cas_update()` to close.
+  `created_at` still added for symmetry.
+
+Net effect: `version` + `cas_update()` wiring is scoped to `ccsched.db`'s `jobs` table only.
+Every other table in scope for this change gets `created_at`/`updated_at` as originally planned;
+none of them get an unused `version` column added on the strength of a race that, on inspection,
+their existing write shape doesn't actually have - adding one would be exactly the kind of
+"defensive code for a state that cannot occur" this repo's coding standards rule out.
 
 ### 4. Migration markers: exact TODO.md plan, no changes
 
@@ -140,15 +167,13 @@ and genuinely does need a major bump and doctor FAIL-guard.
 
 ## Risks / Trade-offs
 
-- [Risk] `command-cache.db`'s `cache.py` wraps every DB call in `try/except sqlite3.Error: pass`
-  ("never raise from cache") - a CAS conflict there must not be silently swallowed as if it were
-  a generic DB error, or callers would never learn `cache_record` lost a race.
-  → Mitigation: `cache_record`'s CAS check happens inside the existing try/except (a CAS "loss"
-  is `cur.rowcount == 0`, not a `sqlite3.Error`), so it surfaces as a normal Python `bool`, not an
-  exception - the existing exception boundary is untouched and the risk does not materialize.
-  Covered by a test that forces a CAS loss and asserts `cache_record` handles it (retries with a
-  fresh read, per this table's existing "last write wins on re-fire" semantics) rather than
-  raising.
+- [Risk] `ccsched.db`'s `jobs` is the one table gaining real CAS enforcement
+  (`replace_job`/`set_enabled`/`rename_job`) - an existing caller that reads a job then writes it
+  back without threading the version it read would now fail unexpectedly.
+  → Mitigation: `registry.py`'s job-mutating functions are re-read in full before wiring CAS in
+  (task 4.2), and every caller updated in the same commit; a CAS-loss test proves the *rejection*
+  path works, and the full existing `ccsched` CLI test suite proves no legitimate single-writer
+  call site regresses.
 - [Risk] Adding `updated_at` bumps to ~30 write paths across 3 modules is mechanical but
   high-surface-area; a missed call site silently leaves a table with an occasionally-stale
   `updated_at`.

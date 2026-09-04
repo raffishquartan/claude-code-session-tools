@@ -33,11 +33,15 @@ mutates an existing row, including upserts.
 - **THEN** that table is not required to carry an `updated_at` column
 
 ### Requirement: Race-prone tables support compare-and-swap updates
-A common-store table whose rows can plausibly be updated by two concurrent processes reading the
-same row before either writes (e.g. two `ccsched` invocations editing the same job, two
-concurrent hook invocations updating the same session or cached command) SHALL support a
+A common-store table whose rows are edited via a read-then-decide-then-write workflow - a caller
+reads a row's current content, computes a new value from what it read, and writes that back (e.g.
+two `ccsched` invocations both running `ccsched edit` against the same job) SHALL support a
 compare-and-swap update: the write is guarded by a version token read alongside the row, and the
-write is rejected - not silently applied - if the row's version has changed since that read.
+write is rejected - not silently applied - if the row's version has changed since that read. A
+table whose writes are direct field-sets, single atomic statements (e.g. an `UPDATE ... SET
+count=count+1` or an upsert with no prior read), or already guarded by a domain-specific
+conditional (e.g. `WHERE status='sent'`) is not required to support compare-and-swap, since none
+of those write shapes has a read-then-write staleness gap for it to close.
 
 #### Scenario: A CAS write succeeds when the version is current
 - **WHEN** a caller updates a row using the version it most recently read, and no other write has

@@ -62,42 +62,45 @@
 
 ## 4. `created_at`/`updated_at` + CAS wiring per store
 
-- [ ] 4.1 `ccmsg.db`: add `updated_at` to `messages` (via `ALTER TABLE` idiom matching
-  `_migrate_jobs_table`), add `created_at`+`updated_at` to `cursors`, add a `version` column to
-  `messages` and migrate `mark_read`/`claim`/`archive_one`/`archive_aged`/
-  `mark_receipts_shown`/`refresh_display_tags` to bump `updated_at` on every write; migrate
-  `mark_read`/`claim` to use `cas_update()` in place of their hand-rolled conditional UPDATEs.
-  `save_cursor` sets `cursors.updated_at`. Verify: one test per write path in
-  `common-store-cas-research.md` Section 1's table asserting `updated_at` changes after the call;
-  a CAS-loss test for `mark_read`/`claim` (concurrent status flip) asserting the second caller's
-  write is rejected, not silently applied.
+**Scope revised during 4.1** (see design.md Decision 3): `version`/`cas_update()` wiring is
+scoped to `ccsched.db`'s `jobs` table only - the one write path that is a genuine
+read-then-decide-then-write workflow. Every other table below still gets `created_at`/
+`updated_at`; none of the others get an unused `version` column.
+
+- [ ] 4.1 `ccmsg.db`: add `updated_at`+`version` to `messages` (via `ALTER TABLE` idiom matching
+  `_migrate_jobs_table` - `version` added for audit/future-readiness per design.md Decision 3,
+  not wired to `cas_update()`), add `created_at`+`updated_at` to `cursors`. Bump `updated_at` (and
+  increment `version`) on every write in `mark_read`/`claim`/`archive_one`/`archive_aged`/
+  `mark_receipts_shown`/`refresh_display_tags` - keeping each function's own existing conditional
+  guard (e.g. `WHERE status='sent'`) exactly as-is, not replaced by `cas_update()` (see design.md
+  Decision 3 for why). `save_cursor` sets `cursors.created_at`/`updated_at`. Verify: one test per
+  write path in `common-store-cas-research.md` Section 1's table asserting `updated_at`/`version`
+  change after the call; existing `test_mark_read_is_first_writer_wins` and
+  `test_second_claim_raises_already_claimed` continue to pass unchanged (guards untouched).
 - [ ] 4.2 `ccsched.db`: add `created_at`+`updated_at`+`version` to `jobs`; add `updated_at` to
   `job_state`; add `created_at`+`updated_at` to `cursors`; add `created_at` to
-  `reconcile_throttle` and `bundled_job_installs` (no `updated_at`/CAS - insert/upsert-only per
+  `reconcile_throttle` and `bundled_job_installs` (no `updated_at` - insert/upsert-only per
   design.md Non-Goals). Migrate every write path in the research doc's Section 2 table to bump
-  `updated_at`; migrate `jobs`/`job_state` writers (`replace_job`, `set_enabled`, `rename_job`,
-  `save_all_state`, `set_in_flight`, `clear_in_flight`, `clear_suspended`, `record_success`,
-  `record_failure`, `record_manual_failure`) to `cas_update()`. Verify: one test per write path
-  asserting `updated_at` changes; a CAS-loss test for at least `replace_job` and
-  `record_failure` (two concurrent updates to the same job).
-- [ ] 4.3 `sessions.db`: add `updated_at`+`version` to `sessions`; add `created_at` to
-  `doctor_mutes` (no `updated_at` - insert/delete-only); add `created_at` to `session_tags`,
-  `install_sync`, `context_overrides` (already have `updated_at`, gaining `created_at` for
-  symmetry per design.md Goals). Migrate `touch_last_opened`/`touch_last_active` to bump
-  `updated_at` and use `cas_update()` (guard against a fork disambiguation-style race where two
-  concurrent hook invocations touch the same `(project_dir, basename)` row - `ensure_session_row`
-  stays `DO NOTHING`, no CAS needed since it never overwrites). Verify: write-path tests per the
-  research doc's Section 3 table; a CAS-loss test for `touch_last_opened`/`touch_last_active`.
+  `updated_at`. Migrate `jobs`' writers (`replace_job`, `set_enabled`, `rename_job`) to
+  `cas_update()` - re-read `registry.py`'s job-mutating functions and their CLI callers in full
+  first, thread the expected version through every caller in the same commit. `job_state`
+  writers get `updated_at` only, no CAS (design.md Decision 3). Verify: one test per write path
+  asserting `updated_at` changes; a CAS-loss test for `replace_job` (two concurrent edits to the
+  same job - the second, using a stale version, is rejected); full existing `ccsched` CLI test
+  suite green (proves no legitimate single-writer call site regresses).
+- [ ] 4.3 `sessions.db`: add `updated_at` to `sessions` (no `version`/CAS - design.md Decision 3);
+  add `created_at` to `doctor_mutes` (no `updated_at` - insert/delete-only); add `created_at` to
+  `session_tags`, `install_sync`, `context_overrides` (already have `updated_at`, gaining
+  `created_at` for symmetry per design.md Goals). Migrate `touch_last_opened`/`touch_last_active`
+  to bump `updated_at`. Verify: write-path tests per the research doc's Section 3 table.
 - [ ] 4.4 `telemetry.db`: confirmed no changes needed (design.md Non-Goals - pure append-only
   event tables, existing `ts` column already serves as `created_at`). Verify: no code change;
   note this explicitly in the PR description rather than silently skipping.
-- [ ] 4.5 `command-cache.db`: add `created_at`+`version` to `command_cache` (`validated_at`
-  already functions as `updated_at`, kept as-is per design.md); migrate `cache_record` to use
-  `cas_update()` for its `ON CONFLICT DO UPDATE` branch, handling a CAS loss by re-reading and
-  retrying once (last-write-wins semantics, matching this table's existing behavior) rather than
-  raising - inside the existing `try/except sqlite3.Error` boundary per design.md's Risk note.
-  Verify: a test forcing a CAS loss on `cache_record` asserts it retries and succeeds rather than
-  silently dropping the fire count update or raising out of the "never raise from cache" boundary.
+- [ ] 4.5 `command-cache.db`: add `created_at` to `command_cache` (`validated_at` already
+  functions as `updated_at`, kept as-is; no `version`/CAS - `cache_record`'s
+  `ON CONFLICT DO UPDATE SET fire_count=fire_count+1` is already one atomic statement with no
+  read-then-write gap, per design.md Decision 3). Verify: a test asserting `created_at` is set on
+  first insert and unchanged by a subsequent `cache_record` re-fire for the same hash.
 - [ ] 4.6 Full test suite green after all 5 stores' changes. Verify: `uv run pytest -q`.
 
 ## 5. Migration markers (ccmsg, ccsched, sessions) + doctor rewiring
