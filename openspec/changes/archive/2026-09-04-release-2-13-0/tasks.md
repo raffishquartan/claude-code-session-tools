@@ -167,13 +167,13 @@ read-then-decide-then-write workflow. Every other table below still gets `create
 
 ## 6. Release
 
-- [ ] 6.1 Full test suite green end-to-end. Verify: `uv run pytest -q`.
-- [ ] 6.2 Update `CHANGELOG.md` for `[2.13.0]` (Changed: `cccs_hooks` → `hooks` rename; Added:
+- [x] 6.1 Full test suite green end-to-end. Verify: `uv run pytest -q`.
+- [x] 6.2 Update `CHANGELOG.md` for `[2.13.0]` (Changed: `cccs_hooks` → `hooks` rename; Added:
   common-store audit columns + CAS support, migration-completion markers for ccmsg/ccsched/
   sessions; Fixed: `ccst doctor`'s row-count-based migration inference). Commit.
-- [ ] 6.3 Bump `pyproject.toml` version to `2.13.0`; run `CCST_NO_AUTO_SYNC=1 uv lock`; commit
+- [x] 6.3 Bump `pyproject.toml` version to `2.13.0`; run `CCST_NO_AUTO_SYNC=1 uv lock`; commit
   both together (follow-on commit per this repo's convention).
-- [ ] 6.4 Sync specs (`cli/store-audit-columns`, `cli/store-migration-markers`,
+- [x] 6.4 Sync specs (`cli/store-audit-columns`, `cli/store-migration-markers`,
   `cli/packaging-fresh-install`) and archive this change.
 - [ ] 6.5 Push `f/2.13.0`, open a PR (base `main`) - recommend title/body, confirm with the user
   before running `gh pr create`.
