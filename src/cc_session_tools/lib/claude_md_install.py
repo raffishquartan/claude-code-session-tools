@@ -38,6 +38,21 @@ need to coordinate with another session - do not wait to be asked.
 - Delivered messages arrive automatically as injected context. Read a body with
   `ccmsg read <id>`. For a description-addressed proposal, confirm with the user,
   then `ccmsg claim <id>` (first claim wins).
+
+## Cross-session task tracking
+
+Claude Code's built-in `TaskCreate`/`TaskList`/`TaskGet`/`TaskUpdate` tools persist a task
+list beyond the current conversation - do not tell the user you can't track tasks across
+sessions before checking for these.
+
+- They are usually deferred tools: if they aren't already available, use `ToolSearch` with
+  `select:TaskCreate,TaskList,TaskGet,TaskUpdate` to load them before assuming they're absent.
+- Persistence is scoped by `CLAUDE_CODE_TASK_LIST_ID`, which `ccd`/`ccr` set from the current
+  project directory's name. Sessions launched in the same project (via `ccd`/`ccr`) share one
+  task list; sessions in different projects do not.
+- When the user wants a task, todo, or reminder tracked beyond this single conversation, use
+  `TaskCreate` (and `TaskList`/`TaskGet`/`TaskUpdate` to check or update it later) instead of
+  the ephemeral, session-only `TodoWrite` tool, and instead of saying this isn't possible.
 {_SENTINEL_END}
 """
 
