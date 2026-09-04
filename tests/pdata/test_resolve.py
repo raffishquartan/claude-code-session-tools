@@ -410,6 +410,62 @@ def test_apply_resolution_rejects_empty_choices_when_the_diff_is_non_empty(monke
         resolve.apply_resolution("proj", {})
 
 
+def test_apply_resolution_accepts_empty_choices_when_the_diff_is_genuinely_empty(
+    monkeypatch, tmp_path,
+):
+    """A genuine vector-clock fork (neither side's vector dominates) whose actual record content
+    is byte-identical on both sides has nothing for a human to choose between - `choices={}`
+    correctly names every record_id in the (empty) diff. Reproduces the real dead end found
+    2026-08-31 (`home` project's fork-testing walkthrough): two machines independently produced
+    the same content after diverging, and `apply_resolution` used to reject `{}` unconditionally,
+    leaving `dump`/`rehydrate` refusing forever with only `--force` to unblock it."""
+    _setup_env(monkeypatch, tmp_path)
+    conn = repository.connect("proj")
+    try:
+        with repository._immediate(conn):
+            repository.insert_base_record(
+                conn, record_group="g", content="same-content", file_path=None,
+                created_at=1, updated_at=1,
+            )
+            vector_clock_store.write_vector(conn, {"ltxy": 1}, updated_at=1)
+    finally:
+        conn.close()
+    project_root = store.project_root("proj")
+
+    def build(remote_conn):
+        remote_conn.execute(
+            "INSERT INTO records (id, record_group, content, file_path, created_at, updated_at) "
+            "VALUES (1, 'g', 'same-content', NULL, 1, 1)"
+        )
+
+    _publish_remote_dump(
+        project_root, remote_project="proj-remote", machine_id="mbp",
+        vector={"mbp": 1}, build=build,
+    )
+
+    diff = resolve.diff_against_dump("proj")
+    assert diff.records == []
+    assert diff.schema_fields == []
+
+    outcome = resolve.apply_resolution("proj", {})
+
+    assert outcome is resolve.ApplyOutcome.APPLIED
+    conn = repository.connect("proj")
+    try:
+        merged_vector = vector_clock_store.read_vector(conn)
+    finally:
+        conn.close()
+    # Merge-then-bump (apply_resolution's documented order): elementwise max of {"ltxy": 1} and
+    # {"mbp": 1} is {"ltxy": 1, "mbp": 1}, then local's own entry (ltxy) bumps by one.
+    assert merged_vector == {"ltxy": 2, "mbp": 1}
+    # Step 3 of the spec's post-resolve update: immediately re-dumped with the merged vector, so
+    # the fork is actually gone, not just hidden - a subsequent plain `dump`/`rehydrate` would now
+    # succeed without --force.
+    republished = dump.read_latest(project_root)
+    assert republished.vector == merged_vector
+    assert republished.machine_id == "ltxy"
+
+
 def test_apply_resolution_refuses_a_schema_only_fork_instead_of_a_dead_end(monkeypatch, tmp_path):
     """Regression test for a code-review finding: a fork where only record_group_fields differs
     (no record actually differs) has no record_id a caller could put in choices, so the old

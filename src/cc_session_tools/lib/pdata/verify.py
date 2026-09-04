@@ -41,7 +41,7 @@ CREATE TABLE IF NOT EXISTS pdata_verify_runs (
 CREATE INDEX IF NOT EXISTS idx_pdata_verify_runs_run_at ON pdata_verify_runs(run_at);
 """
 
-_MAX_RETAINED_RUNS = 30
+_MAX_RETAINED_RUNS = 100
 _DOUBLE_UPDATE_WINDOW_SECONDS = 6 * 60 * 60  # see plan Decision 4 — not a CLI flag
 
 _SEVERITY_ORDER = {"OK": 0, "WARN": 1, "FAIL": 2}

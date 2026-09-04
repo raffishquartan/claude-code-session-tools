@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.12.4] - 2026-09-04
+
+### Changed
+
+- `ccst pdata verify`'s retained-run cap (`pdata_verify_runs` history) raised from 30 to 100,
+  giving headroom for several laptops writing verify runs concurrently without evicting recent
+  history.
+
+### Fixed
+
+- `ccst pdata resolve` no longer leaves a genuine vector-clock fork permanently stuck when both
+  machines' record content happens to be identical (e.g. two machines independently re-deriving
+  the same auto-reconciled data after diverging) - there is nothing for a human to choose between
+  in that case, but `apply_resolution({})` used to reject an empty `choices` unconditionally, so
+  `dump`/`rehydrate` would refuse forever with only `--force` (a blunt overwrite) able to unblock
+  it. `apply_resolution` now only requires at least one choice when the diff actually has records
+  to resolve; `ccst pdata resolve`'s diagnose mode (with no `--choice`) detects this specific case
+  - a real fork, but a content-empty diff - and closes it automatically, reporting "clean (fork
+  auto-closed)" rather than leaving it open behind a plain "clean" that gave no indication
+  `dump`/`rehydrate` were still blocked. An ordinary already-in-sync project (no fork) is
+  unaffected - diagnose mode stays fully side-effect-free for that, the overwhelmingly common,
+  case. Found and reproduced live working through the `home` project's manual fork-testing
+  walkthrough (multi-laptop pdata sync design doc).
+
 ## [2.12.3] - 2026-08-31
 
 ### Added

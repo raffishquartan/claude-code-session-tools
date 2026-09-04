@@ -390,11 +390,65 @@ def test_resolve_diagnostic_mode_clean_when_no_diff(base_env):
     _build_local("proj", vector={"ltxy": 1})
     dump_pub = _run(base_env, "pdata", "dump", "--project", "proj")
     assert dump_pub.returncode == 0, dump_pub.stderr
+    published = dump.read_latest(store.project_root("proj"))
 
     r = _run(base_env, "pdata", "resolve", "--project", "proj")
 
     assert r.returncode == 0, r.stdout
     assert "clean" in r.stdout
+    assert "auto-closed" not in r.stdout
+    # No fork exists here (local published its own dump, nothing to converge) - diagnose mode
+    # must stay side-effect-free in this, the overwhelmingly common case: same vector, same
+    # dumped_at, i.e. nothing was silently re-published underneath the "clean" message.
+    still_published = dump.read_latest(store.project_root("proj"))
+    assert still_published.vector == published.vector
+    assert still_published.dumped_at == published.dumped_at
+
+
+def test_resolve_diagnostic_mode_closes_a_fork_automatically_when_content_already_matches(
+    base_env,
+):
+    """Reproduces the real dead end found 2026-08-31 (`home` project's fork-testing walkthrough):
+    two machines each made a local write since they last synced (a genuine fork - neither vector
+    dominates), but the resulting content is identical on both sides, so there is nothing for a
+    human to choose between. `ccst pdata resolve` must close it automatically rather than report
+    "clean" while leaving `dump`/`rehydrate` refusing forever with only `--force` to unblock it."""
+    _build_local("proj", content="same-content", vector={"ltxy": 1})
+    project_root = store.project_root("proj")
+    _publish_remote_dump(
+        project_root, remote_project="proj-remote", content="same-content",
+        vector={"mbp": 1}, machine_id="mbp",
+    )
+
+    # Confirm the fork is real before resolving it - `dump` refuses.
+    precheck = _run(base_env, "pdata", "dump", "--project", "proj")
+    assert precheck.returncode == 1
+
+    r = _run(base_env, "pdata", "resolve", "--project", "proj")
+
+    assert r.returncode == 0, r.stdout
+    assert "clean" in r.stdout
+    assert "auto-closed" in r.stdout or "closed the vector-clock fork automatically" in r.stdout
+
+    # The fork is genuinely gone now, not just hidden - both directions work without --force.
+    postcheck = _run(base_env, "pdata", "dump", "--project", "proj")
+    assert postcheck.returncode == 0, postcheck.stderr
+    info = dump.read_latest(project_root)
+    assert info.vector == {"ltxy": 2, "mbp": 1}
+
+
+def test_resolve_diagnostic_all_projects_reports_auto_closed_fork(base_env):
+    _build_local("proj", content="same-content", vector={"ltxy": 1})
+    project_root = store.project_root("proj")
+    _publish_remote_dump(
+        project_root, remote_project="proj-remote", content="same-content",
+        vector={"mbp": 1}, machine_id="mbp",
+    )
+
+    r = _run(base_env, "pdata", "resolve", "--all-projects")
+
+    assert r.returncode == 0, r.stdout
+    assert "proj: clean (fork auto-closed)" in r.stdout
 
 
 def test_resolve_diagnostic_mode_reports_outstanding_records_and_schema_fields(base_env):
