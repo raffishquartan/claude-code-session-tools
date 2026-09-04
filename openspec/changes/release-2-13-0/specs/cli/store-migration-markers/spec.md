@@ -9,13 +9,13 @@ has never been migrated but has simply accumulated normal-use rows since install
 ### Requirement: Each store records an explicit, durable migration-completion marker
 The `ccmsg`, `ccsched`, and `sessions` one-shot legacy-data migrations SHALL each record an
 explicit completion marker (matching `telemetry.db`'s existing marker mechanism) in the same
-database, written in the same transaction as the migration's data writes.
+database, and SHALL NOT record it until the migration's data has been written and verified.
 
-#### Scenario: A migration records its marker atomically with its data
-- **WHEN** one of the three migrations completes its data writes
-- **THEN** the completion marker is recorded in the same transaction, before that transaction
-  commits, so no state exists where the migrated rows are present but the marker is absent (or
-  vice versa)
+#### Scenario: A migration only marks itself complete after its data is verified
+- **WHEN** one of the three migrations finishes writing its data
+- **THEN** the completion marker is recorded only after that data passes the migration's own
+  verification step, never before or instead of it - so a verification failure never leaves a
+  store marked complete on data that was not actually confirmed migrated
 
 #### Scenario: Re-running a completed migration is a no-op
 - **WHEN** a migration is run again after its marker is already recorded

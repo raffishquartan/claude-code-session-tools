@@ -162,17 +162,32 @@ table, by reading whether the column is ever touched by an UPDATE/upsert after f
   from `INSERT OR REPLACE` to `INSERT ... ON CONFLICT DO UPDATE` for this reason - REPLACE has
   no way to preserve a column across the conflict).
 
-### 4. Migration markers: exact TODO.md plan, no changes
+### 4. Migration markers: exact TODO.md plan, refined per script during 5.2
 
-Implements TODO.md's "Migration markers for ccmsg, ccsched and sessions" verbatim: append
+Implements TODO.md's "Migration markers for ccmsg, ccsched and sessions": append
 `db.MIGRATIONS_DDL` to each of the three stores' DDL, add a per-store marker-name constant,
-record the marker inside the same transaction as the migration's writes (matching
-`migrate_telemetry.py`'s documented reasoning), switch `doctor.check_pending_data_store_migration`
-to read markers for all four stores, delete `_count_new_store_rows`. Backfill decision (per
-TODO.md's open question): a store whose legacy sources are already gone on this machine has
-migrated by definition - write the marker on first `connect()` in that case rather than leaving a
-machine that never had legacy data permanently `WARN`-ing about an unmigrated store it never had
-data for.
+switch `doctor.check_pending_data_store_migration` to read markers for all four stores, delete
+`_count_new_store_rows`. Backfill decision (per TODO.md's open question): a store whose legacy
+sources are already gone on this machine has migrated by definition - write the marker on first
+`connect()` in that case rather than leaving a machine that never had legacy data permanently
+`WARN`-ing about an unmigrated store it never had data for.
+
+**Where the marker is recorded, refined during implementation:** `migrate_telemetry.py`'s "same
+transaction as the writes" guarantee assumes one connection, one transaction, one commit for the
+whole migration - true there, but `migrate_ccmsg.py` and `migrate_sessions_db.py` are each
+structured as several independent commit points (per-message/per-tag/per-sentinel writes, or
+several `_migrate_*` helpers each with their own connection), with verification running *after*
+those commits, not inside them. Restructuring three already-working, already-tested migration
+scripts' transaction models to force single-transaction atomicity is out of proportion to what
+this task needs, and unnecessary: all three scripts already write via `INSERT OR IGNORE` /
+`ON CONFLICT DO NOTHING`, so a re-run after a crash mid-write safely converges instead of
+duplicating (unlike telemetry, which appends and cannot tolerate a double-import). Given that,
+each script records its marker as the last write, right after verification passes and before any
+backup/cleanup step - never marking a store migrated on unverified data, and safe to retry from
+any earlier crash point because the writes themselves are idempotent. `migrate_ccsched.py` is the
+one exception that already matches telemetry's shape exactly (`_write_db` is one connection, one
+commit) - its marker goes in that same transaction, immediately before commit, as originally
+planned.
 
 ### 5. Version-policy classification: minor, not major
 
