@@ -107,6 +107,32 @@ def test_print_migration_prompt_reminders_tells_user_to_run_in_project_dir(capsy
     assert "/home/chris/cc/demo" in captured.out
 
 
+def test_discovery_succeeds_against_a_simulated_installed_package_layout(monkeypatch, tmp_path):
+    """The three tests above ('finds the real bundled ...') only ever run against this repo's
+    editable install, which points straight at src/cc_session_tools/ - `uv run python -c
+    "import cc_session_tools; print(cc_session_tools.__file__)"` confirms this. That never
+    exercises the layout a real `pip`/`uv tool install` produces (a flat
+    <site-packages>/cc_session_tools/, no src/ prefix). Build that layout explicitly and confirm
+    all three discovery functions still succeed - a regression here (e.g. a filesystem walk-up
+    or a hardcoded "src" segment reintroduced) could pass the editable-install tests above while
+    breaking a real installed package."""
+    package_root = tmp_path / "site-packages" / "cc_session_tools"
+    (package_root / "cli").mkdir(parents=True)
+    (package_root / "cli" / "ccst.py").touch()
+    (package_root / "skills" / "delete-sessions").mkdir(parents=True)
+    (package_root / "skills" / "delete-sessions" / "SKILL.md").touch()
+    (package_root / "config").mkdir()
+    (package_root / "config" / "hooks-bundle.json").touch()
+    (package_root / "prompts").mkdir()
+    (package_root / "prompts" / "pdata-migration-claude-md-update.md").touch()
+
+    monkeypatch.setattr(ccst, "__file__", str(package_root / "cli" / "ccst.py"))
+
+    assert ccst._discover_source_dir() == package_root / "skills"
+    assert ccst._discover_bundle() == package_root / "config" / "hooks-bundle.json"
+    assert ccst._discover_prompts_dir() == package_root / "prompts"
+
+
 def test_bundled_prompts_are_no_longer_placeholders():
     prompts_dir = ccst._discover_prompts_dir()
     for filename in ("pdata-migration-claude-md-update.md", "pdata-migration-skills-update.md"):
