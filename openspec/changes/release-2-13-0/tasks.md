@@ -77,22 +77,35 @@ read-then-decide-then-write workflow. Every other table below still gets `create
   write path in `common-store-cas-research.md` Section 1's table asserting `updated_at`/`version`
   change after the call; existing `test_mark_read_is_first_writer_wins` and
   `test_second_claim_raises_already_claimed` continue to pass unchanged (guards untouched).
-- [ ] 4.2 `ccsched.db`: add `created_at`+`updated_at`+`version` to `jobs`; add `updated_at` to
-  `job_state`; add `created_at`+`updated_at` to `cursors`; add `created_at` to
-  `reconcile_throttle` and `bundled_job_installs` (no `updated_at` - insert/upsert-only per
-  design.md Non-Goals). Migrate every write path in the research doc's Section 2 table to bump
-  `updated_at`. Migrate `jobs`' writers (`replace_job`, `set_enabled`, `rename_job`) to
-  `cas_update()` - re-read `registry.py`'s job-mutating functions and their CLI callers in full
-  first, thread the expected version through every caller in the same commit. `job_state`
-  writers get `updated_at` only, no CAS (design.md Decision 3). Verify: one test per write path
-  asserting `updated_at` changes; a CAS-loss test for `replace_job` (two concurrent edits to the
-  same job - the second, using a stale version, is rejected); full existing `ccsched` CLI test
+- [ ] 4.2 `ccsched.db`: add `created_at`+`updated_at`+`version` to `jobs` (`created_at` is
+  genuinely new - `jobs` has no existing first-insert column at all); add `updated_at` to
+  `job_state` (no new `created_at` - `registered_at` is already immutable in every production
+  write path, per design.md Decision 3a); add `created_at`+`updated_at` to `cursors`; add a real
+  `created_at` (new column, written once, excluded from each table's `DO UPDATE`/`OR REPLACE`
+  clause so it survives later upserts) to `reconcile_throttle` and `bundled_job_installs` -
+  `last_reconciled_at`/`installed_at` are themselves mutable (last-seen, not first-seen), switch
+  `mark_bundled_installed` from `INSERT OR REPLACE` to `INSERT ... ON CONFLICT DO UPDATE` to make
+  preserving `created_at` possible. Migrate every write path in the research doc's Section 2
+  table to bump `updated_at`. Migrate `jobs`' `replace_job` to `cas_update()`, threading the
+  version `_cmd_edit` already has from its `load_registry()` read (add `version: int = 1` to
+  `JobSpec`, defaulted so every other construction site is unaffected); raise a new
+  `JobVersionConflictError(RegistryError)` distinct from "unknown job id" on a CAS loss.
+  `set_enabled`/`rename_job` keep their existing unconditional writes (not a read-then-decide
+  workflow - re-read `registry.py`'s job-mutating functions and their CLI callers in full first).
+  `job_state` writers get `updated_at` only, no CAS (design.md Decision 3). Verify: one test per
+  write path asserting `updated_at` changes; a CAS-loss test for `replace_job` (two concurrent
+  edits to the same job - the second, using a stale version, raises
+  `JobVersionConflictError` rather than silently overwriting); a test that `bundled_job_installs`'s
+  `created_at` survives a reinstall while `installed_at` updates; full existing `ccsched` CLI test
   suite green (proves no legitimate single-writer call site regresses).
-- [ ] 4.3 `sessions.db`: add `updated_at` to `sessions` (no `version`/CAS - design.md Decision 3);
-  add `created_at` to `doctor_mutes` (no `updated_at` - insert/delete-only); add `created_at` to
-  `session_tags`, `install_sync`, `context_overrides` (already have `updated_at`, gaining
-  `created_at` for symmetry per design.md Goals). Migrate `touch_last_opened`/`touch_last_active`
-  to bump `updated_at`. Verify: write-path tests per the research doc's Section 3 table.
+- [ ] 4.3 `sessions.db`: add `updated_at` to `sessions` (no `version`/CAS - design.md Decision 3;
+  `discovered_at` already serves as an immutable `created_at`, no new column needed there); add a
+  real `created_at` to `doctor_mutes` (new column, preserved across `add_mute`'s existing
+  `ON CONFLICT DO UPDATE` - `muted_at` is mutable, last-muted not first-muted, per design.md
+  Decision 3a); add `created_at` to `session_tags`, `install_sync`, `context_overrides` (already
+  have `updated_at` but no immutable first-write column - a genuine gap, not redundant). Migrate
+  `touch_last_opened`/`touch_last_active` to bump `updated_at`. Verify: write-path tests per the
+  research doc's Section 3 table; a test that `doctor_mutes.created_at` survives a re-mute.
 - [ ] 4.4 `telemetry.db`: confirmed no changes needed (design.md Non-Goals - pure append-only
   event tables, existing `ts` column already serves as `created_at`). Verify: no code change;
   note this explicitly in the PR description rather than silently skipping.

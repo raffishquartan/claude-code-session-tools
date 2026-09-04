@@ -144,6 +144,24 @@ none of them get an unused `version` column added on the strength of a race that
 their existing write shape doesn't actually have - adding one would be exactly the kind of
 "defensive code for a state that cannot occur" this repo's coding standards rule out.
 
+### 3a. `created_at`: reuse an existing immutable column where one already exists
+
+The store-audit-columns spec's own requirement text already allows this ("or an existing
+domain-specific column that already unambiguously records first-insert time"). Checked per
+table, by reading whether the column is ever touched by an UPDATE/upsert after first insert:
+
+- **Already immutable, no new column**: `job_state.registered_at` (only written by
+  `ensure_registered_db`'s `INSERT OR IGNORE` - no production write path ever updates it),
+  `sessions.discovered_at` (`ensure_session_row`'s `INSERT ... ON CONFLICT DO NOTHING`).
+- **Mutable despite the name, needs a real `created_at`**: `bundled_job_installs.installed_at`
+  (`mark_bundled_installed` currently does `INSERT OR REPLACE`, resetting it on every
+  reinstall), `reconcile_throttle.last_reconciled_at` (upserted every reconcile by design - it's
+  a last-seen timestamp, not first-seen), `doctor_mutes.muted_at` (upserted on every re-mute).
+  Each gets a genuine `created_at`, written once on first insert and excluded from that table's
+  `DO UPDATE SET` clause so it survives later upserts (`mark_bundled_installed` also switches
+  from `INSERT OR REPLACE` to `INSERT ... ON CONFLICT DO UPDATE` for this reason - REPLACE has
+  no way to preserve a column across the conflict).
+
 ### 4. Migration markers: exact TODO.md plan, no changes
 
 Implements TODO.md's "Migration markers for ccmsg, ccsched and sessions" verbatim: append

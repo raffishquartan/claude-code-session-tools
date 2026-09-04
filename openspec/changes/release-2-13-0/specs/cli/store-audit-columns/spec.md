@@ -57,10 +57,13 @@ of those write shapes has a read-then-write staleness gap for it to close.
 
 ### Requirement: A single reusable CAS primitive backs every CAS-guarded table
 Compare-and-swap support across the common stores SHALL be implemented via one shared primitive,
-not a separate hand-rolled implementation per table.
+not a separate hand-rolled implementation per table - including when only one table currently
+needs it, so a second CAS-guarded table added later reuses the same function rather than growing
+a second implementation.
 
-#### Scenario: Two different stores' CAS-guarded tables both use the same primitive
-- **WHEN** a CAS-guarded update is issued against a table in one store (e.g. `ccsched.db`'s
-  `jobs`) and against a CAS-guarded table in a different store (e.g. `ccmsg.db`'s `messages`)
-- **THEN** both writes are performed through the same shared compare-and-swap function, not two
-  independent implementations of the same check-then-update logic
+#### Scenario: A CAS-guarded table's write goes through the shared primitive
+- **WHEN** a CAS-guarded update is issued against any common-store table (e.g. `ccsched.db`'s
+  `jobs`)
+- **THEN** that write is performed through the same shared compare-and-swap function every other
+  CAS-guarded table in the common stores uses, not a table-specific hand-rolled implementation of
+  the same check-then-update logic
