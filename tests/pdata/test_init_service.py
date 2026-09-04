@@ -16,6 +16,46 @@ def test_dry_run_empty_project_reports_no_files_and_creates_db(monkeypatch, tmp_
     assert (tmp_path / "dbs" / "biz.db").exists()
 
 
+def test_dry_run_scaffolds_starting_folders_for_a_genuinely_new_project(monkeypatch, tmp_path):
+    monkeypatch.setenv(init_paths.PROJECTS_ROOT_ENV, str(tmp_path / "projects"))
+    monkeypatch.setenv("CCST_PROJECT_DB_DIR", str(tmp_path / "dbs"))
+
+    init_service.dry_run(project="demo")
+
+    project_dir = tmp_path / "projects" / "demo"
+    assert (project_dir / "correspondence").is_dir()
+    assert (project_dir / "meetings-and-calls").is_dir()
+    assert (project_dir / "workstreams").is_dir()
+
+
+def test_dry_run_does_not_scaffold_an_already_existing_project(monkeypatch, tmp_path):
+    monkeypatch.setenv(init_paths.PROJECTS_ROOT_ENV, str(tmp_path / "projects"))
+    monkeypatch.setenv("CCST_PROJECT_DB_DIR", str(tmp_path / "dbs"))
+    project_dir = tmp_path / "projects" / "demo"
+    project_dir.mkdir(parents=True)  # root already existed before dry_run runs
+    (project_dir / "data").mkdir()   # this project uses its own convention
+
+    init_service.dry_run(project="demo")
+
+    assert not (project_dir / "correspondence").exists()
+    assert not (project_dir / "meetings-and-calls").exists()
+    assert not (project_dir / "workstreams").exists()
+    assert (project_dir / "data").is_dir()  # untouched
+
+
+def test_dry_run_second_call_does_not_rescaffold_or_error(monkeypatch, tmp_path):
+    monkeypatch.setenv(init_paths.PROJECTS_ROOT_ENV, str(tmp_path / "projects"))
+    monkeypatch.setenv("CCST_PROJECT_DB_DIR", str(tmp_path / "dbs"))
+    project_dir = tmp_path / "projects" / "demo"
+
+    init_service.dry_run(project="demo")
+    (project_dir / "workstreams").rmdir()  # user deleted the one they didn't want
+
+    init_service.dry_run(project="demo")  # second call - must not recreate it
+
+    assert not (project_dir / "workstreams").exists()
+
+
 def test_dry_run_reports_classified_entries(monkeypatch, tmp_path):
     monkeypatch.setenv(init_paths.PROJECTS_ROOT_ENV, str(tmp_path / "projects"))
     monkeypatch.setenv("CCST_PROJECT_DB_DIR", str(tmp_path / "dbs"))

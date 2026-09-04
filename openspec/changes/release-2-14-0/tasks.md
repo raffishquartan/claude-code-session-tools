@@ -30,16 +30,22 @@
 
 ## 2. New-project folder scaffolding
 
-- [ ] 2.1 Write failing tests for `resolve_project_root()`/`init_service.write()`: a project
-  whose root did not exist gets `correspondence/`, `meetings-and-calls/`, `workstreams/` created
-  alongside it; a project whose root already existed gets none of them, even if none currently
-  exist; a dry-run (no `--write`) never creates any of them regardless of root existence. Verify:
-  tests fail (behavior doesn't exist yet).
-- [ ] 2.2 Implement: capture whether the project root existed before `resolve_project_root()`'s
-  `mkdir` call; in `init_service.write()` only (not `dry_run()`), scaffold the three subfolders
-  when the root did not previously exist. Verify: 2.1's tests pass.
-- [ ] 2.3 Full pdata test suite green, confirming no existing project's re-run of `pdata init`
-  gains new folders. Verify: `uv run pytest -q -k pdata`.
+- [x] 2.1-2.2 **Hook point moved from `write()` to `dry_run()` during implementation** (see
+  design.md Decision 1's revision): in the normal CLI flow `dry_run()` always runs first and
+  already creates the project root as an accepted existing side effect, so a newness check
+  inside `write()` would never fire in real usage - by the time `--write` runs, the root the
+  preceding dry-run created already exists. Added `init_paths.project_root_exists_already()`
+  (checked before `resolve_project_root()`'s own `mkdir`) and
+  `init_paths.scaffold_new_project_dirs()`; `dry_run()` calls both, gated on newness, before its
+  own `resolve_project_root()` call. `write()` is unaffected. Verify: tests in
+  `test_init_paths.py` (new/existing/rehearsal newness detection, scaffold idempotency) and
+  `test_init_service.py` (`test_dry_run_scaffolds_starting_folders_for_a_genuinely_new_project`,
+  `test_dry_run_does_not_scaffold_an_already_existing_project`,
+  `test_dry_run_second_call_does_not_rescaffold_or_error` - covers the deleted-folder-stays-
+  deleted case too).
+- [x] 2.3 Full pdata test suite green, confirming no existing project's re-run of `pdata init`
+  gains new folders. Verify: `uv run pytest -q` (full suite, 29 tests in `test_init_service.py`
+  alone).
 
 ## 3. Verify hardening: independent migration-evidence checks
 

@@ -7,13 +7,16 @@ differently-organized project.
 ## ADDED Requirements
 
 ### Requirement: A genuinely new project gets starting subfolders
-When `ccst pdata init --write` runs against a project whose root directory did not already exist
-before that call, the system SHALL create `correspondence/`, `meetings-and-calls/`, and
-`workstreams/` subdirectories under the new project root.
+The first time `ccst pdata init` runs for a project whose root directory does not already exist,
+the system SHALL create `correspondence/`, `meetings-and-calls/`, and `workstreams/`
+subdirectories under the new project root, whether that first run is a dry-run or `--write` -
+`ccst pdata init` already creates the project root and other bookkeeping (its classification
+manifest, the project's database) on this same first call, so folder scaffolding is not a new
+category of side effect.
 
 #### Scenario: Fresh project gets the starting folders
-- **WHEN** `ccst pdata init --write` is run for a project name whose root directory does not yet
-  exist
+- **WHEN** `ccst pdata init` is run (dry-run or `--write`) for a project name whose root
+  directory does not yet exist
 - **THEN** the project root is created along with `correspondence/`, `meetings-and-calls/`, and
   `workstreams/` subdirectories inside it
 
@@ -22,12 +25,14 @@ When `ccst pdata init` (dry-run or `--write`) runs against a project whose root 
 existed before that call, the system SHALL NOT create `correspondence/`, `meetings-and-calls/`,
 or `workstreams/` (or any other new subfolder) as a side effect.
 
-#### Scenario: Dry-run against an existing project creates nothing
-- **WHEN** `ccst pdata init` is run without `--write` for a project whose root directory already
-  exists
+#### Scenario: Init against an existing project creates no new folder
+- **WHEN** `ccst pdata init` (dry-run or `--write`) is run for a project whose root directory
+  already exists
 - **THEN** no new subfolder is created, regardless of which folders the project currently has
 
 #### Scenario: Re-running init against an already-initialized project is a no-op for folders
-- **WHEN** `ccst pdata init --write` is run a second time for a project whose root directory
-  already existed before this call (including one already initialized by a first run)
-- **THEN** no new subfolder is created and no existing folder is modified or removed
+- **WHEN** `ccst pdata init` is run again for a project whose root directory already existed
+  before this call (including one scaffolded by a first run, and including one where the user
+  has since deleted a scaffolded folder they didn't want)
+- **THEN** no new subfolder is created, no existing folder is modified, and a previously-deleted
+  scaffolded folder is not recreated

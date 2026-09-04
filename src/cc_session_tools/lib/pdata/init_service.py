@@ -41,7 +41,14 @@ class DryRunResult:
 
 
 def dry_run(*, project: str, rehearse: Path | None = None) -> DryRunResult:
+    # Checked before resolve_project_root's own mkdir runs - that call (a few lines below) is
+    # this project's first-ever root creation for a genuinely new project, so newness can only
+    # be detected here, not in write() (which always runs after a dry_run that already created
+    # the root days or weeks earlier in the normal CLI flow).
+    is_new_project = not init_paths.project_root_exists_already(project, rehearse=rehearse)
     project_root = init_paths.resolve_project_root(project, rehearse=rehearse)
+    if is_new_project:
+        init_paths.scaffold_new_project_dirs(project_root)
     proposal_path = init_paths.resolve_proposal_path(project_root)
     with init_paths.project_db_dir_override(rehearse):
         # Checked before anything below opens/creates this project's .db (repository.connect()'s

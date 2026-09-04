@@ -24,6 +24,14 @@ MIGRATED_MANIFEST_FILENAME = "MANIFEST.md"
 REHEARSAL_DB_DIRNAME = ".ccst-pdata-rehearsal-db"
 REHEARSAL_BACKUP_DIRNAME = ".ccst-pdata-rehearsal-backups"
 
+# Optional starting structure for a genuinely new project - see pm-project-layout-reference's
+# own guidance: not every project needs all of these, delete what doesn't apply. A proper
+# subset of that skill's five common folders (correspondence/, meetings-and-calls/, analysis/,
+# workstreams/, workstreams-archived/) - analysis/ and workstreams-archived/ are excluded, the
+# former because it appears under an inconsistent name across real projects (analysis vs
+# analyses) and the latter because the skill itself calls it "not yet observed anywhere".
+NEW_PROJECT_SCAFFOLD_DIRNAMES = ("correspondence", "meetings-and-calls", "workstreams")
+
 # Directories the classifier (classify.py) never walks into — repo/tool bookkeeping, not
 # project content in the sense spec §7.1's classification pass cares about. Both rehearsal
 # sandboxes are here so a reclassification pass never proposes a rehearsal's own .db or
@@ -52,6 +60,30 @@ def resolve_proposal_path(project_root: Path) -> Path:
     if legacy_path.exists():
         return legacy_path
     return new_path
+
+
+def project_root_exists_already(project: str, *, rehearse: Path | None) -> bool:
+    """Whether resolve_project_root's target directory exists BEFORE it is called - used to
+    gate one-time new-project folder scaffolding (see init_service.dry_run, the first and only
+    call site that ever creates a project's root). Must be called before
+    resolve_project_root() for the same (project, rehearse) pair, since that call's own mkdir
+    would otherwise make this always return True.
+
+    A --rehearse target always reads as "already exists" (never a new project in this sense) -
+    rehearsal operates against a pre-populated sandbox copy, not project creation."""
+    if rehearse is not None:
+        return True
+    store.validate_project_name(project)
+    return (default_projects_root() / project).exists()
+
+
+def scaffold_new_project_dirs(project_root: Path) -> None:
+    """Create NEW_PROJECT_SCAFFOLD_DIRNAMES under project_root. Idempotent (mkdir(exist_ok=True)
+    per folder) - safe to call even if some or all already exist, though callers should gate
+    this to a genuinely new project (see project_root_exists_already) so an existing project
+    that deliberately doesn't use these folders is never given them back after deletion."""
+    for name in NEW_PROJECT_SCAFFOLD_DIRNAMES:
+        (project_root / name).mkdir(parents=True, exist_ok=True)
 
 
 def resolve_project_root(project: str, *, rehearse: Path | None) -> Path:

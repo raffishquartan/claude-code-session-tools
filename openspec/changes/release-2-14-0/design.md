@@ -36,14 +36,31 @@ repeating them.
 ### 1. Folder scaffolding: three named folders, new-project-only, deletable by design
 
 Scaffold exactly `correspondence/`, `meetings-and-calls/`, `workstreams/` (the proposal's named
-set, a proper subset of `pm-project-layout-reference`'s five) only when
-`resolve_project_root()`'s target directory does not already exist at the start of the call -
-capture `root.exists()` before the `mkdir`, scaffold the three subfolders only when that was
-`False`. This must happen in `init_service.write()`, not `dry_run()`: the research confirmed both
-currently call `resolve_project_root()`, and scaffolding from `dry_run()` would create real
-directories as a side effect of a command whose entire contract is "don't write anything" -
-`write()` already sits behind the `--write` confirmation gate, which is the correct place for a
-side effect this real.
+set, a proper subset of `pm-project-layout-reference`'s five) only when the project's root
+directory did not already exist before this call - checked via
+`init_paths.project_root_exists_already()`, before `resolve_project_root()`'s own `mkdir` runs.
+
+**Revised during implementation:** originally planned for `init_service.write()` (reasoning:
+`write()` sits behind the `--write` confirmation gate, the correct place for a side effect this
+real). Implementing it there revealed the reasoning didn't hold: in the normal CLI flow,
+`dry_run()` always runs first and already calls `resolve_project_root()`, which already creates
+the root directory as an existing, accepted side effect (along with writing the manifest file
+and creating the `.db` - `dry_run()`'s contract is "don't write project *content*", not "create
+nothing on disk"). By the time `write()` runs - often a separate CLI invocation, possibly
+days later - the root always already exists, so a newness check inside `write()` would never
+fire in real usage. Newness can only be detected once, at `dry_run()`'s first call for a
+project, so scaffolding moved there instead - consistent with what `dry_run()` already does
+(create the root, write the manifest, create the `.db`), not a new category of side effect.
+
+**Alternative considered:** scaffold all five (including `analysis/` and
+`workstreams-archived/`). Rejected per Non-Goals - directly contradicts the skill's own
+"not every project needs all five" framing and the research survey's evidence, and
+`workstreams-archived/` is a convention the skill admits is unobserved anywhere.
+
+**Alternative considered:** scaffold nothing, leave it entirely to the skill's manual guidance
+(status quo). Rejected - this is what item #16 exists to fix; the skill's guidance is judgment-
+based advice for choosing which folders apply to a mature project's needs, not a substitute for a
+new project having anything to look at on day one.
 
 **Alternative considered:** scaffold all five (including `analysis/` and
 `workstreams-archived/`). Rejected per Non-Goals - directly contradicts the skill's own
