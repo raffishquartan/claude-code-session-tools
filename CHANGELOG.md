@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Removed
+
+- `TODO.md`. Every section it held has been disposed of: the `notify-user` skill and `ccmsg`
+  dead-letter items are rescoped into smaller tasks tracked for the next release; the
+  pending-rename backlog was resolved and cleared; the `enforce-git-branch-policy.sh` hardening
+  item was handed off to `claude-code-config-sync`, which owns that hook; the `pdata reorganize`
+  connection-reuse item was dropped as not worth doing. Follow-up work is now tracked via Claude
+  Code's persistent cross-session task list instead of a repo file.
+
 ## [2.14.0] - 2026-09-05
 
 ### Added
