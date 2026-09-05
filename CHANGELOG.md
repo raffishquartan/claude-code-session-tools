@@ -7,6 +7,72 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.0.0] - 2026-09-06
+
+`sessions.db`'s `sessions` table (the table `ccl`/`ccs`/`ccr` list and resume from) has always
+been keyed by `(project_dir, basename)` - no `uuid` column. Ctrl-L-Ctrl-L forking a session
+produces a second live session that keeps the same tag/basename, so its SessionStart/Stop hook
+writes silently overwrote the first fork's row: two live sessions, one row, only the more
+recently active fork ever visible. There was no way for `ccl`/`ccs` to show that a fork existed
+at all. This release makes the table uuid-aware so every fork persists as its own row.
+
+### Added
+
+- **`ccst sessions migrate-uuid` (dry-run by default, `--write` to execute).** Rebuilds the
+  `sessions` table's primary key from `(project_dir, basename)` to
+  `(project_dir, basename, uuid)`. This is a genuine table rebuild - SQLite cannot extend a
+  primary key via `ALTER TABLE` - not an additive migration: it takes a pre-migration backup
+  (`~/.local/share/claude/migration-backups/sessions-pre-3.0.0-<timestamp>.db`) before touching
+  anything, refuses to run while another process holds a write lock on `sessions.db` (close any
+  running `claude` sessions first), and backfills each existing row's uuid from its transcript's
+  `custom-title` record. A row with no matching transcript is never guessed at - it is recorded
+  in a new `sessions_migration_ambiguous` sidecar table instead, and self-heals automatically the
+  next time that session is genuinely opened again (or can be inspected/resolved by hand - see
+  `ccst repair sessions --uuid` below). A row with *more than one* matching transcript is treated
+  as a genuine fork - each becomes its own row.
+- **`ccst doctor` `migration-to-3.0.0:sessions-uuid` check.** FAILs when `sessions.db` still has
+  the pre-3.0.0 schema, naming the exact `ccst sessions migrate-uuid --write` command to run. A
+  brand-new `sessions.db` (3.0.0's own schema from the moment it is created) is never flagged -
+  it has nothing to migrate.
+- **`ccst repair sessions --uuid`.** Lists rows the migration's backfill could not resolve
+  (`sessions_migration_ambiguous`); `--execute` re-attempts resolving each from its transcripts
+  now (a session discovered since the migration may resolve cleanly today); `--forget
+  PROJECT_DIR BASENAME` discards one outright.
+- `ccl`/`ccs --order-by opened|active` now shows every fork of a tag as its own line, each with
+  its own uuid (short prefix), timestamp, and transcript size - sourced from that fork's own
+  `<uuid>.jsonl`, not the directory the forks share. `ccst sessions list` (table and `--json`)
+  now includes a `uuid` column/field on every row.
+
+### Changed
+
+- **BREAKING**: `sessions.db`'s `sessions` table primary key is now `(project_dir, basename,
+  uuid)`. **A migrated `sessions.db` is not readable or writable by any CCST version before
+  3.0.0** - the old code's `ON CONFLICT(project_dir, basename)` upsert raises a SQLite error
+  against the new key, which existing hook error-handling swallows to stderr only, so a
+  downgraded or mixed-version machine silently stops recording session activity. Rolling back
+  means restoring the pre-migration backup the migration writes automatically. Each machine
+  migrates independently (`sessions.db` is machine-local by design, never synced) - a two-laptop
+  setup will hit the `ccst doctor` FAIL on each machine separately, on whatever day that
+  machine's CCST is upgraded, and each machine's backfill quality depends on its own local
+  transcript set.
+- `ensure_session_row`/`touch_last_opened`/`touch_last_active` (`lib/sessions_db.py`) now take a
+  required `uuid` keyword argument. `delete_session_row` now removes every fork of a tag
+  together (they share one `cc-sessions/<basename>/` directory); a new
+  `delete_session_row_exact` removes exactly one fork's row where that distinction matters
+  (`move_session.py`, which re-keys only the one transcript it actually moves).
+- `ccd`'s safety-net `sessions.db` row insert (for the rare case a SessionStart hook never
+  fires) is removed: a row's key now includes the session's real uuid, which `ccd` cannot know
+  before it execs into `claude`. The SessionStart hook remains the sole writer of a session's
+  first row; if hooks are fully disabled, the session simply does not appear until that is
+  fixed, same as today's fully-disabled-hooks case.
+- `ccst sessions migrate` (the pre-1.0.0 flat-file-to-sessions.db import) also now resolves a
+  uuid per migrated session via its transcript, for the same reason - it too predates
+  uuid-aware `sessions.db`.
+- `install_sync`'s auto-sync is now exempt for the whole `sessions` noun (`migrate`,
+  `migrate-uuid`, `list`), matching `doctor`/`repair`/`migrate`'s existing exemption - an
+  auto-apply racing the schema rebuild, or writing to `sessions.db` mid-migration, is exactly
+  the concurrency hazard the migration's own guard exists to prevent.
+
 ### Removed
 
 - `TODO.md`. Every section it held has been disposed of: the `notify-user` skill and `ccmsg`
