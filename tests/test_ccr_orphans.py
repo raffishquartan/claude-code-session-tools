@@ -28,7 +28,7 @@ def _make_session(repos: Path, project: str, basename: str) -> Path:
     sess = repos / project / "cc-sessions" / basename
     (sess / "working").mkdir(parents=True)
     (sess / "out").mkdir()
-    sessions_db.ensure_session_row(repos / project, basename)
+    sessions_db.ensure_session_row(repos / project, basename, uuid=f"uuid-{basename}")
     return sess
 
 

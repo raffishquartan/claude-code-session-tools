@@ -61,7 +61,7 @@ def _make_session(
     (sess / "working").mkdir(parents=True)
     if contents is not None:
         (sess / "working" / "WORKLOG.md").write_text(contents)
-    sessions_db.ensure_session_row(repos / project, basename)
+    sessions_db.ensure_session_row(repos / project, basename, uuid=f"uuid-{basename}")
     return sess
 
 

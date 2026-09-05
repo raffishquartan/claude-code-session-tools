@@ -91,21 +91,25 @@ def repair(
     if not resolutions:
         return report
 
-    # Split out any resolution whose target (new_dir, basename) already has a row —
-    # applying it would violate the PRIMARY KEY. Check before writing anything, not
-    # via try/except around the UPDATE, so one conflict can't abort sibling rows'
+    # Split out any resolution whose target (new_dir, basename, uuid) already has a
+    # row — applying it would violate the PRIMARY KEY. Check before writing anything,
+    # not via try/except around the UPDATE, so one conflict can't abort sibling rows'
     # otherwise-valid updates. `batch_target_counts` catches the same collision
     # when it happens WITHIN this batch (two bad rows resolving to the same
     # target): every row sharing such a target is a conflict, not just whichever
     # one is processed second — picking a "winner" by iteration order would be
-    # arbitrary and non-deterministic.
+    # arbitrary and non-deterministic. Keyed on the full 3-column PK (uuid
+    # included) so two distinct forks resolving to the same (new_dir, basename)
+    # are correctly treated as two independent, non-colliding updates.
     existing_keys = {
-        (r.project_dir, r.basename) for r in sessions_db.list_sessions(path=path)
+        (r.project_dir, r.basename, r.uuid) for r in sessions_db.list_sessions(path=path)
     }
-    batch_target_counts = Counter((new_dir, row.basename) for row, new_dir in resolutions)
+    batch_target_counts = Counter(
+        (new_dir, row.basename, row.uuid) for row, new_dir in resolutions
+    )
     applyable: list[tuple[sessions_db.SessionRow, Path]] = []
     for row, new_dir in resolutions:
-        target = (new_dir, row.basename)
+        target = (new_dir, row.basename, row.uuid)
         if target in existing_keys or batch_target_counts[target] > 1:
             report.conflicts.append(row.basename)
         else:
@@ -119,8 +123,9 @@ def repair(
     try:
         for row, new_dir in applyable:
             conn.execute(
-                "UPDATE sessions SET project_dir = ? WHERE project_dir = ? AND basename = ?",
-                (str(new_dir), str(row.project_dir), row.basename),
+                "UPDATE sessions SET project_dir = ? WHERE project_dir = ? AND basename = ? "
+                "AND uuid = ?",
+                (str(new_dir), str(row.project_dir), row.basename, row.uuid),
             )
         conn.commit()
     finally:

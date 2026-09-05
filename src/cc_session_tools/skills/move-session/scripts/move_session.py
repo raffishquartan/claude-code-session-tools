@@ -554,45 +554,61 @@ def sync_sessions_table(
     src_basename: str,
     dst_project_dir: Path,
     dst_basename: str,
+    uuid: str,
 ) -> str:
-    """Re-key the sessions.db `sessions` table to mirror a move/rename.
+    """Re-key the sessions.db `sessions` table to mirror a move/rename, for the ONE
+    fork whose transcript this invocation actually moved (`uuid`, resolved by
+    discover_session_jsonl() to the single jsonl this move operates on - never every
+    row sharing (project_dir, basename)). A tag with other live forks has other rows
+    for the same basename whose transcripts this move does not touch; re-keying them
+    too would point their DB rows at a project_dir their actual transcript file never
+    moved to, which is worse than leaving them alone. Uses delete_session_row_exact()
+    (not delete_session_row(), which deletes every fork sharing the basename) for
+    exactly this reason.
 
-    The sessions table is keyed by (project_dir, basename) and does NOT follow a
+    The sessions table is keyed by (project_dir, basename, uuid) and does NOT follow a
     filesystem move: before the SQLite migration the .last-opened/.last-active
     sentinels lived inside cc-sessions/<tag>/ and moved with the directory for
-    free; now they are rows keyed by (project_dir, basename). Without this
-    re-key the old row is stale and no row exists for the destination, so
-    ccr/ccs can no longer enumerate the moved session.
+    free; now they are rows keyed by identity, not location. Without this re-key the
+    old row is stale and no row exists for the destination, so ccr/ccs can no longer
+    enumerate the moved session.
 
     Copies the source row's last_opened/last_active onto a fresh destination
-    row, then deletes the source row. A pre-migration session may have no source
-    row; in that case we still create the destination row (so it becomes
-    discoverable going forward) and there is nothing to delete.
+    row, then deletes the source row. A pre-migration session (or a fork whose row
+    was never written) may have no source row; in that case we still create the
+    destination row (so it becomes discoverable going forward) and there is nothing
+    to delete.
 
     Returns a human-readable summary line for the caller to print.
     """
     from cc_session_tools.lib import sessions_db
 
     src_rows = sessions_db.list_sessions(project_dir=src_project_dir)
-    src_row = next((r for r in src_rows if r.basename == src_basename), None)
+    src_row = next(
+        (r for r in src_rows if r.basename == src_basename and r.uuid == uuid), None
+    )
 
-    sessions_db.ensure_session_row(dst_project_dir, dst_basename)
+    sessions_db.ensure_session_row(dst_project_dir, dst_basename, uuid=uuid)
     if src_row is None:
         return (
-            f"sessions.db: no source row for ({src_project_dir}, {src_basename}) "
-            f"(pre-migration session); created destination row "
-            f"({dst_project_dir}, {dst_basename}) for discoverability"
+            f"sessions.db: no source row for ({src_project_dir}, {src_basename}, {uuid}) "
+            f"(pre-migration session, or a fork with no row yet); created destination row "
+            f"({dst_project_dir}, {dst_basename}, {uuid}) for discoverability"
         )
     # Re-apply timestamps to the destination. touch_* upserts; the row already
     # exists from ensure_session_row above, so these are pure updates.
     if src_row.last_opened:
-        sessions_db.touch_last_opened(dst_project_dir, dst_basename, when=src_row.last_opened)
+        sessions_db.touch_last_opened(
+            dst_project_dir, dst_basename, uuid=uuid, when=src_row.last_opened
+        )
     if src_row.last_active:
-        sessions_db.touch_last_active(dst_project_dir, dst_basename, when=src_row.last_active)
-    sessions_db.delete_session_row(src_project_dir, src_basename)
+        sessions_db.touch_last_active(
+            dst_project_dir, dst_basename, uuid=uuid, when=src_row.last_active
+        )
+    sessions_db.delete_session_row_exact(src_project_dir, src_basename, uuid)
     return (
-        f"sessions.db: re-keyed row ({src_project_dir}, {src_basename}) -> "
-        f"({dst_project_dir}, {dst_basename}) "
+        f"sessions.db: re-keyed row ({src_project_dir}, {src_basename}, {uuid}) -> "
+        f"({dst_project_dir}, {dst_basename}, {uuid}) "
         f"[last_opened={src_row.last_opened}, last_active={src_row.last_active}]"
     )
 
@@ -936,6 +952,7 @@ def main() -> int:
         src_basename=src_tag,
         dst_project_dir=dst_cwd_path,
         dst_basename=dst_tag,
+        uuid=summary["path"].stem,
     )
     print(f"  {sync_summary}")
 

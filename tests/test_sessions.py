@@ -63,8 +63,8 @@ def test_find_matching_sessions_substring_match(tmp_path, monkeypatch):
     cc = proj / "cc-sessions"
     (cc / "20260504-foo-bar").mkdir(parents=True)
     (cc / "20260503-baz").mkdir()
-    sessions_db.ensure_session_row(proj, "20260504-foo-bar")
-    sessions_db.ensure_session_row(proj, "20260503-baz")
+    sessions_db.ensure_session_row(proj, "20260504-foo-bar", uuid="uuid-20260504-foo-bar")
+    sessions_db.ensure_session_row(proj, "20260503-baz", uuid="uuid-20260503-baz")
 
     matches = sessions.find_matching_sessions("foo", roots=[root])
     assert len(matches) == 1
@@ -80,7 +80,7 @@ def test_find_matching_sessions_returns_empty_for_no_match(tmp_path, monkeypatch
     proj = root / "myproject"
     cc = proj / "cc-sessions"
     (cc / "20260504-foo").mkdir(parents=True)
-    sessions_db.ensure_session_row(proj, "20260504-foo")
+    sessions_db.ensure_session_row(proj, "20260504-foo", uuid="uuid-20260504-foo")
 
     assert sessions.find_matching_sessions("nope", roots=[root]) == []
 
@@ -92,10 +92,29 @@ def test_find_matching_sessions_excludes_projects_outside_roots(tmp_path, monkey
     monkeypatch.setenv("CCST_SESSIONS_DIR", str(tmp_path / "db"))
     other_root = tmp_path / "other-root"
     proj = other_root / "myproject"
-    sessions_db.ensure_session_row(proj, "20260504-foo")
+    sessions_db.ensure_session_row(proj, "20260504-foo", uuid="uuid-20260504-foo")
 
     configured_root = tmp_path / "configured-root"
     assert sessions.find_matching_sessions("foo", roots=[configured_root]) == []
+
+
+def test_find_matching_sessions_deduplicates_forked_basename(tmp_path, monkeypatch):
+    """Two sessions.db rows for the same (project_dir, basename) - a Ctrl-L fork - must
+    produce exactly one SessionMatch, not two indistinguishable ones: fork
+    disambiguation for resuming is handled downstream by ccr.py's file-based
+    find_all_jsonls_for_session()/_pick_duplicate_transcript(), not by sessions.db row
+    count (design.md's corrected Decision 11 in openspec/changes/release-3-0-0/)."""
+    from cc_session_tools.lib import sessions_db
+
+    monkeypatch.setenv("CCST_SESSIONS_DIR", str(tmp_path / "db"))
+    root = tmp_path / "myroot"
+    proj = root / "myproject"
+    sessions_db.ensure_session_row(proj, "20260504-forked", uuid="uuid-a")
+    sessions_db.ensure_session_row(proj, "20260504-forked", uuid="uuid-b")
+
+    matches = sessions.find_matching_sessions("forked", roots=[root])
+    assert len(matches) == 1
+    assert matches[0].basename == "20260504-forked"
 
 
 def test_grep_session_returns_match_with_one_line_context(tmp_path):
