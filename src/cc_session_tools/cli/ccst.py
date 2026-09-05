@@ -2970,9 +2970,10 @@ def _build_parser() -> argparse.ArgumentParser:
     pdata_rename_group_parser.add_argument("--project", required=True, metavar="NAME")
     pdata_rename_group_parser.add_argument("--from", dest="from_", required=True, metavar="OLD")
     pdata_rename_group_parser.add_argument("--to", required=True, metavar="NEW")
+    from cc_session_tools.lib.pdata.init_paths import PROPOSAL_FILENAME as _proposal_filename
     pdata_rename_group_parser.add_argument(
         "--write", action="store_true",
-        help="Perform the rename and update .ccst-pdata-proposal.json (default: dry-run only)",
+        help=f"Perform the rename and update {_proposal_filename} (default: dry-run only)",
     )
 
     pdata_reconcile_parser = pdata_sub.add_parser(

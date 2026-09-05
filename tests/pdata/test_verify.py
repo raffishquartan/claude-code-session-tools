@@ -59,6 +59,62 @@ def test_row_count_parity_skips_project_with_no_migration_history(monkeypatch, t
         conn.close()
 
 
+def test_row_count_parity_skips_project_using_pdata_add_directly(monkeypatch, tmp_path):
+    """A project that only ever used `pdata add`/service.add_record directly - never
+    `ccst pdata init` - has populated record groups but no manifest and no .pdata-migrated/
+    archive. This must NOT be flagged as 'migrated, manifest missing' - it never went through
+    the classify-and-migrate flow at all, so there's nothing for a manifest to describe."""
+    monkeypatch.setenv("CCST_PROJECT_DB_DIR", str(tmp_path / "dbs"))
+    monkeypatch.setenv(init_paths.PROJECTS_ROOT_ENV, str(tmp_path / "projects"))
+    service.add_record(
+        project="demo", record_group="notes", content="x", file_path=None, fields={},
+    )
+    conn = repository.connect("demo")
+    try:
+        assert verify.check_row_count_parity(conn, "demo") == []
+    finally:
+        conn.close()
+
+
+def test_row_count_parity_fails_when_manifest_missing_but_archive_has_content(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setenv("CCST_PROJECT_DB_DIR", str(tmp_path / "dbs"))
+    monkeypatch.setenv(init_paths.PROJECTS_ROOT_ENV, str(tmp_path / "projects"))
+    project_root = tmp_path / "projects" / "demo"
+    archived = project_root / init_paths.MIGRATED_ARCHIVE_DIRNAME / "notes"
+    archived.mkdir(parents=True)
+    (archived / "notes.md").write_text("archived original")
+    conn = repository.connect("demo")
+    try:
+        issues = verify.check_row_count_parity(conn, "demo")
+    finally:
+        conn.close()
+    assert len(issues) == 1
+    assert issues[0].check == "manifest-missing"
+    assert issues[0].severity == "FAIL"
+    assert "manifest now missing" in issues[0].message
+    assert "ccst pdata schema" in issues[0].message
+
+
+def test_row_count_parity_resolves_legacy_manifest_name(monkeypatch, tmp_path):
+    """A project with only the pre-rename manifest filename must be treated exactly like one
+    with the new name - no manifest-missing issue, normal parity-check behavior."""
+    monkeypatch.setenv("CCST_PROJECT_DB_DIR", str(tmp_path / "dbs"))
+    monkeypatch.setenv(init_paths.PROJECTS_ROOT_ENV, str(tmp_path / "projects"))
+    project_root = tmp_path / "projects" / "demo"
+    project_root.mkdir(parents=True)
+    manifest.save(
+        Manifest(project="demo", entries=[]),
+        project_root / init_paths.LEGACY_PROPOSAL_FILENAME,
+    )
+    conn = repository.connect("demo")
+    try:
+        assert verify.check_row_count_parity(conn, "demo") == []
+    finally:
+        conn.close()
+
+
 def test_row_count_parity_ok_when_counts_match(monkeypatch, tmp_path):
     monkeypatch.setenv("CCST_PROJECT_DB_DIR", str(tmp_path / "dbs"))
     monkeypatch.setenv(init_paths.PROJECTS_ROOT_ENV, str(tmp_path / "projects"))

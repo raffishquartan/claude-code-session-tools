@@ -9,6 +9,8 @@ from pathlib import Path
 
 import pytest
 
+from cc_session_tools.lib.pdata import init_paths
+
 
 def _run(env: dict, *args: str) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
@@ -44,7 +46,7 @@ def test_pdata_init_dry_run_classifies_and_writes_proposal(base_env, tmp_path):
     assert r.returncode == 0, r.stderr
     assert "[folder-owned] CLAUDE.md" in r.stdout
     assert "group=ideas strategy=csv-rows" in r.stdout
-    assert (project_dir / ".ccst-pdata-proposal.json").exists()
+    assert (project_dir / init_paths.PROPOSAL_FILENAME).exists()
 
 
 def test_pdata_init_dry_run_prints_doc_update_prompt_path(base_env, tmp_path):
@@ -69,11 +71,11 @@ def test_pdata_init_rejects_bad_project_name(base_env):
 
 
 def test_pdata_init_rejects_malformed_proposal_file(base_env, tmp_path):
-    """A hand-edited .ccst-pdata-proposal.json missing a required key must produce
-    the documented exit-2 validation error, not an uncaught KeyError traceback."""
+    """A hand-edited manifest file missing a required key must produce the documented exit-2
+    validation error, not an uncaught KeyError traceback."""
     project_dir = tmp_path / "projects" / "demo"
     project_dir.mkdir(parents=True)
-    (project_dir / ".ccst-pdata-proposal.json").write_text(
+    (project_dir / init_paths.PROPOSAL_FILENAME).write_text(
         json.dumps({"entries": [{"path": "x", "classification": "folder-owned"}]})
     )  # missing the required "project" key
 
@@ -124,7 +126,7 @@ def test_pdata_init_write_aborts_on_bad_file_path_without_cutover(base_env, tmp_
     base_env["CCST_PDATA_BACKUP_DIR"] = str(tmp_path / "backups")
 
     _run(base_env, "pdata", "init", "--project", "demo")
-    proposal_path = project_dir / ".ccst-pdata-proposal.json"
+    proposal_path = project_dir / init_paths.PROPOSAL_FILENAME
     data = json.loads(proposal_path.read_text())
     data["entries"][0]["file_path_column"] = "doc_path"
     proposal_path.write_text(json.dumps(data))
@@ -164,7 +166,7 @@ def test_pdata_init_write_log_captures_verification_failure(base_env, tmp_path):
     base_env["CCST_PDATA_BACKUP_DIR"] = str(tmp_path / "backups")
 
     _run(base_env, "pdata", "init", "--project", "demo")
-    proposal_path = project_dir / ".ccst-pdata-proposal.json"
+    proposal_path = project_dir / init_paths.PROPOSAL_FILENAME
     data = json.loads(proposal_path.read_text())
     data["entries"][0]["file_path_column"] = "doc_path"
     proposal_path.write_text(json.dumps(data))
@@ -207,7 +209,7 @@ def test_pdata_init_write_verification_failure_ends_with_error_sentinel(base_env
     base_env["CCST_PDATA_BACKUP_DIR"] = str(tmp_path / "backups")
 
     _run(base_env, "pdata", "init", "--project", "demo")
-    proposal_path = project_dir / ".ccst-pdata-proposal.json"
+    proposal_path = project_dir / init_paths.PROPOSAL_FILENAME
     data = json.loads(proposal_path.read_text())
     data["entries"][0]["file_path_column"] = "doc_path"
     proposal_path.write_text(json.dumps(data))

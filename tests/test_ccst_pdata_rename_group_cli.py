@@ -8,6 +8,8 @@ from pathlib import Path
 
 import pytest
 
+from cc_session_tools.lib.pdata import init_paths
+
 
 def _run(env: dict, *args: str) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
@@ -105,7 +107,7 @@ def test_rename_group_write_updates_manifest_entry(base_env, tmp_path):
             "delimiter": None, "content_column": None, "file_path_column": None, "fields": [],
         }],
     }
-    (project_root / ".ccst-pdata-proposal.json").write_text(json.dumps(proposal))
+    (project_root / init_paths.PROPOSAL_FILENAME).write_text(json.dumps(proposal))
 
     r = _run(base_env, "pdata", "rename-group", "--project", "demo",
               "--from", "old-name", "--to", "new-name", "--write")
@@ -113,5 +115,5 @@ def test_rename_group_write_updates_manifest_entry(base_env, tmp_path):
     assert r.returncode == 0, r.stderr
     assert "1 manifest entry updated" in r.stdout
 
-    reloaded = json.loads((project_root / ".ccst-pdata-proposal.json").read_text())
+    reloaded = json.loads((project_root / init_paths.PROPOSAL_FILENAME).read_text())
     assert reloaded["entries"][0]["record_group"] == "new-name"

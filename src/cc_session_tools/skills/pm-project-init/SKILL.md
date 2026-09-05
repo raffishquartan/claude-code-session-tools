@@ -36,7 +36,9 @@ ccst pdata init --project <project> [--rehearse <path>]
 ```
 
 This prints a report and writes (or, on a second run, simply re-displays) a proposal file at
-`<project-root>/.ccst-pdata-proposal.json`. Read both.
+`<project-root>/.pdata-migration-manifest.json` - permanent tool state, not a scratch file; a
+project migrated before this filename existed may still have it under the legacy name
+`.ccst-pdata-proposal.json`, which `ccst pdata` commands still read transparently. Read both.
 
 ## 3. Review every `[folder-owned]` entry that is a markdown/text file
 
@@ -62,7 +64,8 @@ intend to merge.
 
 ## 4. Hand-edit the proposal to encode overrides
 
-Edit `.ccst-pdata-proposal.json` directly. For an entry that should become db-owned:
+Edit `.pdata-migration-manifest.json` directly (or the legacy `.ccst-pdata-proposal.json` name,
+if this project still has that one). For an entry that should become db-owned:
 
 ```json
 {

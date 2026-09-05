@@ -138,3 +138,15 @@ def test_bundled_prompts_are_no_longer_placeholders():
     for filename in ("pdata-migration-claude-md-update.md", "pdata-migration-skills-update.md"):
         text = (prompts_dir / filename).read_text()
         assert "PLACEHOLDER" not in text
+
+
+def test_pm_pdata_audit_and_migrate_are_bundled_skills():
+    """pm-pdata-audit and pm-pdata-migrate were built directly under ~/.claude/skills/ in an
+    earlier session - moved into this repo's bundled skills/ so ccst skills install /
+    install-everything provision them on every machine, not just the one they were authored
+    on. No registry to update - _discover_skills is a directory scan (any subdir with a
+    SKILL.md), so this test is really asserting the directories/files exist and are named
+    correctly."""
+    discovered = {p.name for p in ccst._discover_skills(ccst._discover_source_dir())}
+    assert "pm-pdata-audit" in discovered
+    assert "pm-pdata-migrate" in discovered

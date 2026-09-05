@@ -4,7 +4,7 @@ migration-test session, message 20260822T114514Z-91ed).
 A record_group rename touches three places that must move together in one transaction -
 `records.record_group`, `record_group_fields.record_group`, and the `ext_<group>` table's own
 name - plus a fourth, non-transactional place that is just as easy to forget: any matching entry
-in `.ccst-pdata-proposal.json` (the classification manifest, spec §7.1). Skip that and
+in the classification manifest (`init_paths.PROPOSAL_FILENAME`, spec §7.1). Skip that and
 verify.check_row_count_parity cross-checks live row counts against the manifest's archived-file
 entries by record_group; every renamed group then fails `ccst pdata verify` forever with a
 "possible data loss" row-count-parity issue that isn't actually data loss - it's just comparing
@@ -72,7 +72,7 @@ def _plan(*, project: str, project_root: Path, old: str, new: str) -> RenameGrou
     finally:
         conn.close()
 
-    proposal_path = project_root / init_paths.PROPOSAL_FILENAME
+    proposal_path = init_paths.resolve_proposal_path(project_root)
     manifest_entry_paths: list[str] = []
     if proposal_path.exists():
         m = manifest.load(proposal_path)
@@ -108,7 +108,7 @@ def _rename_in_db(project: str, *, old: str, new: str) -> None:
 def _rename_in_manifest(project_root: Path, *, old: str, new: str) -> int:
     """Returns the number of entries updated. No-op (returns 0) if the project was never
     migrated - nothing to update against."""
-    proposal_path = project_root / init_paths.PROPOSAL_FILENAME
+    proposal_path = init_paths.resolve_proposal_path(project_root)
     if not proposal_path.exists():
         return 0
     m = manifest.load(proposal_path)
