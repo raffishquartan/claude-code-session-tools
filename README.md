@@ -84,7 +84,7 @@ at install time, so drift introduced between runs of `ccst ccsched-jobs install`
 version upgrade, since it's one of `install-everything`'s five steps) doesn't go unnoticed until
 the next manual re-run.
 
-See [CHANGELOG.md](CHANGELOG.md) for a full version history. See [TODO.md](TODO.md) for known follow-up work (including the notify-user skill integration).
+See [CHANGELOG.md](CHANGELOG.md) for a full version history. Follow-up work is tracked via Claude Code's persistent cross-session task list, not a repo file.
 
 If you've ever tried to remember which `1f4a8b3c-...` UUID is the session where you were debugging that flaky test last Tuesday, or wondered which project burned through last week's Opus budget, this is for you.
 

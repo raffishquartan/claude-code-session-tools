@@ -143,9 +143,9 @@ Certain high-stakes actions require the user to type an 8-digit confirmation
 code before Claude proceeds. The hook `ccst hooks run confirm-8digit` enforces
 this. The list of gated action classes is below.
 
-> NOTE: The `notify-user` skill (tracked in TODO.md of the ccst repo) is a
-> recommended companion: when installed and configured, it sends a push
-> notification when a gate fires so you don't have to be at the terminal.
+> NOTE: The `notify-user` skill is a recommended companion: when installed
+> and configured, it sends a push notification when a gate fires so you
+> don't have to be at the terminal.
 
 **Gated action classes (user-configured below):**
 
@@ -198,11 +198,11 @@ Briefly explain the `notify-user` companion skill:
 > keyboard when a gate fires — meaning the agent silently stalls until you
 > return.
 >
-> A separate `notify-user` skill (tracked in TODO.md of the
-> claude-code-session-tools repo) can send a push notification (Telegram,
+> A separate `notify-user` skill can send a push notification (Telegram,
 > ntfy, Pushover, or similar) whenever a gate fires, so you can confirm from
-> your phone. The skill is not yet publicly released; see TODO.md for current
-> status.
+> your phone. It's a personal skill, not bundled with
+> claude-code-session-tools - install and configure it yourself if you want
+> this.
 
 Ask: "Do you want a reminder about this in your CLAUDE.md? [y/N]"
 
