@@ -1947,6 +1947,18 @@ def _cmd_sessions_migrate(args: argparse.Namespace) -> int:
     )
 
 
+def _cmd_sessions_migrate_uuid(args: argparse.Namespace) -> int:
+    from cc_session_tools.cli.migrate_sessions_db import migrate_uuid
+    from cc_session_tools.lib import sessions_db
+
+    db_path = Path(args.sessions_db) if args.sessions_db else sessions_db.default_db_path()
+    # --write is the only way to opt into the destructive path; --dry-run and no flag at
+    # all both mean "show me what would happen" (matches this repo's other one-shot
+    # migration verbs' --dry-run/no-flag-writes pattern - see design.md Decision 10 in
+    # openspec/changes/release-3-0-0/).
+    return migrate_uuid(db_path=db_path, dry_run=not args.write)
+
+
 def _cmd_sessions_list(args: argparse.Namespace) -> int:
     from cc_session_tools.lib import sessions_db
 
@@ -1962,6 +1974,7 @@ def _cmd_sessions_list(args: argparse.Namespace) -> int:
         print(_json.dumps([
             {
                 "basename": r.basename,
+                "uuid": r.uuid,
                 "project_dir": str(r.project_dir),
                 "start_date": r.start_date,
                 "last_opened": r.last_opened,
@@ -1973,11 +1986,72 @@ def _cmd_sessions_list(args: argparse.Namespace) -> int:
 
     name_w = max(len(r.basename) for r in rows)
     for r in rows:
+        # uuid always printed (not just when a basename has multiple forks): a stable
+        # per-row identifier belongs in a --json-adjacent debug listing regardless, and
+        # omitting it for the common single-fork case would make forked vs. unforked
+        # basenames print in two different formats, which is worse for a `grep`-able tool.
         print(
-            f"{r.basename:<{name_w}}  "
+            f"{r.basename:<{name_w}}  uuid={r.uuid}  "
             f"opened={_fmt_ts(r.last_opened)}  active={_fmt_ts(r.last_active)}  "
             f"{r.project_dir}"
         )
+    return 0
+
+
+def _cmd_repair_sessions_uuid(args: argparse.Namespace) -> int:
+    """`ccst repair sessions --uuid`: inspect/resolve sessions_migration_ambiguous rows
+    left by `ccst sessions migrate-uuid` for a basename whose uuid it could not confidently
+    resolve at migration time. Separate from _cmd_repair_sessions' non-absolute-project_dir
+    repair - a different table, a different kind of corruption - dispatched here by the
+    shared --uuid flag rather than a second `repair` verb, matching this command's existing
+    single-verb-multiple-concerns shape."""
+    from cc_session_tools.cli.migrate_sessions_db import resolve_all_uuids_for_basename
+    from cc_session_tools.lib import sessions_db
+
+    db_path = Path(args.sessions_db) if args.sessions_db else sessions_db.default_db_path()
+
+    if args.forget:
+        project_dir_str, basename = args.forget
+        removed = sessions_db.delete_ambiguous_row(Path(project_dir_str), basename, path=db_path)
+        if removed:
+            print(f"Forgot ambiguous row: {project_dir_str} / {basename}")
+            return 0
+        print(f"No ambiguous row found for {project_dir_str} / {basename}", file=sys.stderr)
+        return 1
+
+    rows = sessions_db.list_ambiguous_rows(path=db_path)
+    if not rows:
+        print("No migration-ambiguous sessions.db rows found.")
+        return 0
+
+    if not args.execute:
+        for row in rows:
+            print(
+                f"  {row.project_dir} / {row.basename}  reason={row.reason}  "
+                f"flagged_at={row.flagged_at}"
+            )
+        print()
+        print(
+            "Dry-run: re-run with --execute to attempt re-resolving each row from its "
+            "transcripts now (a session discovered since the migration may resolve cleanly "
+            "today), or pass --forget PROJECT_DIR BASENAME to discard one outright."
+        )
+        return 0
+
+    resolved_count = 0
+    for row in rows:
+        uuids = resolve_all_uuids_for_basename(row.project_dir, row.basename)
+        if len(uuids) == 1:
+            sessions_db.resolve_ambiguous_row(row.project_dir, row.basename, uuids[0], path=db_path)
+            print(f"  resolved: {row.project_dir} / {row.basename} -> {uuids[0]}")
+            resolved_count += 1
+        else:
+            print(
+                f"  still ambiguous ({len(uuids)} matching transcript(s)): "
+                f"{row.project_dir} / {row.basename}",
+                file=sys.stderr,
+            )
+    print(f"{resolved_count}/{len(rows)} row(s) resolved.")
     return 0
 
 
@@ -1987,6 +2061,9 @@ def _cmd_repair_sessions(args: argparse.Namespace) -> int:
     from cc_session_tools.lib import db as db_lib
     from cc_session_tools.lib import sessions_db, sessions_repair
     from cc_session_tools.lib.roots import RootsConfigError, load_session_roots
+
+    if args.uuid:
+        return _cmd_repair_sessions_uuid(args)
 
     db_path = Path(args.sessions_db) if args.sessions_db else sessions_db.default_db_path()
     try:
@@ -3119,6 +3196,29 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Source doctor-mutes JSON file (default: ~/.claude/cc-doctor-mutes.json)",
     )
 
+    sessions_migrate_uuid_parser = sessions_sub.add_parser(
+        "migrate-uuid",
+        help=(
+            "One-shot 3.0.0 schema migration: rebuilds the `sessions` table's primary key "
+            "from (project_dir, basename) to (project_dir, basename, uuid) so Ctrl-L forks "
+            "persist as distinct rows. Dry-run by default; back up first, and run from a "
+            "plain terminal with no other `claude` session running."
+        ),
+    )
+    sessions_migrate_uuid_mode = sessions_migrate_uuid_parser.add_mutually_exclusive_group()
+    sessions_migrate_uuid_mode.add_argument(
+        "--dry-run", action="store_true",
+        help="Print what would be migrated without writing anything (this is the default).",
+    )
+    sessions_migrate_uuid_mode.add_argument(
+        "--write", action="store_true",
+        help="Perform the migration: back up sessions.db, then rebuild the table.",
+    )
+    sessions_migrate_uuid_parser.add_argument(
+        "--sessions-db", default=None, metavar="PATH",
+        help="sessions.db path override (default: from CCST_SESSIONS_DIR)",
+    )
+
     sessions_list_parser = sessions_sub.add_parser(
         "list",
         help="List all sessions recorded in sessions.db (debug/inspection).",
@@ -3185,6 +3285,19 @@ def _build_parser() -> argparse.ArgumentParser:
     r_sessions.add_argument(
         "--sessions-db", default=None, metavar="PATH",
         help="sessions.db path override (default: from CCST_SESSIONS_DIR)",
+    )
+    r_sessions.add_argument(
+        "--uuid", action="store_true",
+        help=(
+            "Operate on sessions_migration_ambiguous rows (left by `ccst sessions "
+            "migrate-uuid` for a basename with no resolvable transcript) instead of "
+            "non-absolute project_dir rows. Dry-run lists them; --execute re-attempts "
+            "resolving each from its transcripts now."
+        ),
+    )
+    r_sessions.add_argument(
+        "--forget", nargs=2, metavar=("PROJECT_DIR", "BASENAME"), default=None,
+        help="With --uuid: discard one ambiguous row outright instead of re-resolving it.",
     )
 
     # ---- ccsched-jobs ----
@@ -3395,6 +3508,8 @@ def main() -> None:
     if args.noun == "sessions":
         if args.verb == "migrate":
             sys.exit(_cmd_sessions_migrate(args))
+        if args.verb == "migrate-uuid":
+            sys.exit(_cmd_sessions_migrate_uuid(args))
         if args.verb == "list":
             sys.exit(_cmd_sessions_list(args))
 

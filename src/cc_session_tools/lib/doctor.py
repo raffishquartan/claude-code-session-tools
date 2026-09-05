@@ -776,10 +776,39 @@ def check_sessions_project_dir_absolute(sessions_db_path: Path) -> list[CheckRes
     "exists but failed to open" treatment check_data_stores already gives
     this exact condition for other stores; sqlite3.connect() opens lazily
     and only fails once find_non_absolute_rows actually queries the file, so
-    this must be caught here rather than assumed impossible."""
+    this must be caught here rather than assumed impossible.
+
+    Deliberately skipped (WARN, not this function's usual FAIL-on-open-error path) when
+    sessions.db has not yet run the 3.0.0 uuid migration: find_non_absolute_rows() reads
+    via sessions_db.list_sessions(), which selects the `uuid` column the pre-migration
+    schema doesn't have - reachable and confirmed against a real pre-migration file, not
+    hypothetical. Reporting that as "exists but failed to open" would be actively
+    misleading (the file opens fine) and duplicate the clearer, already-actionable
+    migration-to-3.0.0:sessions-uuid FAIL with a confusing second one."""
     import sqlite3
 
-    from cc_session_tools.lib import sessions_repair
+    from cc_session_tools.lib import db as db_lib
+    from cc_session_tools.lib import sessions_db, sessions_repair
+
+    if sessions_db_path.exists():
+        try:
+            conn = db_lib.connect(sessions_db_path, readonly=True)
+            try:
+                schema_migrated = sessions_db.sessions_schema_is_uuid_keyed(conn)
+            finally:
+                conn.close()
+        except sqlite3.DatabaseError:
+            schema_migrated = None  # let the FAIL-on-open-error path below report this
+        else:
+            if not schema_migrated:
+                return [CheckResult(
+                    name="sessions:project-dir-absolute", status=Status.WARN,
+                    reason=(
+                        "sessions.db has not yet run the 3.0.0 uuid migration - this check "
+                        "will run normally once `ccst sessions migrate-uuid --write` "
+                        "completes (see migration-to-3.0.0:sessions-uuid above)"
+                    ),
+                )]
 
     try:
         bad = sessions_repair.find_non_absolute_rows(path=sessions_db_path)
@@ -800,6 +829,93 @@ def check_sessions_project_dir_absolute(sessions_db_path: Path) -> list[CheckRes
             "invisible to `ccl`/`ccs --global` — run 'ccst repair sessions --dry-run' "
             "to see them, then --execute to fix"
         ),
+    )]
+
+
+def check_sessions_uuid_migration(sessions_db_path: Path) -> list[CheckResult]:
+    """FAIL if sessions.db still has the pre-3.0.0 (project_dir, basename) primary key -
+    forked sessions (Ctrl-L) silently clobber each other's activity rows until
+    `ccst sessions migrate-uuid --write` runs. Distinguishes "never migrated" from
+    "migrated, marker lost" from "genuinely migrated" via the two-signal design (PK
+    ordinals + an explicit marker) rather than inferring from row counts - see design.md
+    Decision 1-2 in openspec/changes/release-3-0-0/. Modeled on
+    verify._check_manifest_missing_with_evidence(), not the 1.0.0
+    check_pending_data_store_migration() pattern: this migration has no legacy flat-file
+    source to key detection on, so that pattern doesn't transfer.
+
+    A sessions.db that doesn't exist yet reads OK: connect() records the migration
+    marker at creation time for any brand-new file (sessions_db.py), so a genuinely
+    fresh install is never in a pending state - there is simply nothing to check here
+    yet, and this check must not create the file itself just to inspect it."""
+    import sqlite3
+
+    from cc_session_tools.lib import db as db_lib
+    from cc_session_tools.lib import sessions_db
+
+    name = "migration-to-3.0.0:sessions-uuid"
+    if not sessions_db_path.exists():
+        return [CheckResult(
+            name=name, status=Status.OK,
+            reason="no sessions.db yet — nothing to migrate",
+        )]
+
+    try:
+        conn = db_lib.connect(sessions_db_path, readonly=True)
+    except sqlite3.DatabaseError as exc:
+        return [CheckResult(
+            name=name, status=Status.FAIL,
+            reason=f"{sessions_db_path} exists but failed to open: {exc}",
+        )]
+    try:
+        try:
+            pk_is_uuid_keyed = sessions_db.sessions_schema_is_uuid_keyed(conn)
+        except sqlite3.DatabaseError as exc:
+            # sqlite3.connect() opens lazily - a corrupt file only fails once a
+            # statement actually touches it, which is here, not the connect() above.
+            return [CheckResult(
+                name=name, status=Status.FAIL,
+                reason=f"{sessions_db_path} exists but failed to open: {exc}",
+            )]
+        try:
+            marker_present = db_lib.migration_applied(conn, sessions_db.SESSIONS_UUID_MIGRATION)
+        except sqlite3.DatabaseError:
+            # "no such table: migrations" is the expected shape of a pre-marker schema
+            # (matches _migration_recorded()'s identical handling for the 1.0.0 checks) -
+            # not evidence of corruption, just "can't confirm recorded, so not recorded".
+            marker_present = False
+    finally:
+        conn.close()
+
+    remediation = (
+        "run `ccst sessions migrate-uuid --write` from a plain terminal with no other "
+        "`claude` session running (it takes a backup first; see --help)"
+    )
+    if not pk_is_uuid_keyed and not marker_present:
+        return [CheckResult(
+            name=name, status=Status.FAIL,
+            reason=f"sessions.db has not been migrated to the fork-aware schema — {remediation}",
+        )]
+    if not pk_is_uuid_keyed and marker_present:
+        return [CheckResult(
+            name=name, status=Status.FAIL,
+            reason=(
+                "sessions.db's migration marker is present but the schema is still the old "
+                f"2-column primary key — the schema was reverted or the marker was copied "
+                f"from another file; back up the current file, then {remediation}"
+            ),
+        )]
+    if pk_is_uuid_keyed and not marker_present:
+        return [CheckResult(
+            name=name, status=Status.WARN,
+            reason=(
+                "sessions.db's schema is already fork-aware but its completion marker is "
+                "missing — functionally fine, but unexpected; if this wasn't caused by manual "
+                "editing of sessions.db, no action is needed"
+            ),
+        )]
+    return [CheckResult(
+        name=name, status=Status.OK,
+        reason="sessions.db is migrated to the fork-aware schema",
     )]
 
 
@@ -937,8 +1053,11 @@ def run_all_checks(
     if pdata_verify_projects is not None:
         results.extend(check_pdata_verify(pdata_verify_projects))
 
-    # Non-absolute project_dir rows in sessions.db
+    # Non-absolute project_dir rows in sessions.db - the uuid-migration check runs first,
+    # since project-dir-absolute's own check degrades to a WARN pointing back at it when
+    # the uuid migration hasn't run yet (a pre-migration schema can't be queried the same way).
     if sessions_db_path is not None:
+        results.extend(check_sessions_uuid_migration(sessions_db_path))
         results.extend(check_sessions_project_dir_absolute(sessions_db_path))
 
     # PyPI version check
