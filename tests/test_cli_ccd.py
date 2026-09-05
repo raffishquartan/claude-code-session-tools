@@ -345,7 +345,11 @@ def test_ccd_omits_add_dir_flags_when_roots_not_configured(
     assert "CLAUDE_CODE_TASK_LIST_ID" not in captured_launch["env"]
 
 
-def test_ccd_inserts_sessions_db_row(fake_home, tmp_path, monkeypatch, captured_launch):
+def test_ccd_does_not_write_a_sessions_db_row(fake_home, tmp_path, monkeypatch, captured_launch):
+    """As of 3.0.0, a sessions.db row's key includes the session's real uuid, which Claude
+    Code only assigns after ccd execs into `claude` - ccd itself cannot write a row. The
+    SessionStart hook (session_tag.py) is the sole writer of the first row; this asserts
+    ccd no longer inserts a placeholder ahead of it."""
     repos = tmp_path / "repos"
     proj = repos / "myproj"
     proj.mkdir(parents=True)
@@ -356,9 +360,5 @@ def test_ccd_inserts_sessions_db_row(fake_home, tmp_path, monkeypatch, captured_
 
     assert rc == 0
     assert "cmd" in captured_launch  # ccd launched claude
-    today = datetime.now().strftime("%Y%m%d")
-    rows = sessions_db.list_sessions(path=tmp_path / "db" / "sessions.db")
-    assert any(
-        r.basename == f"{today}-ccd-db-test" and r.project_dir == proj.resolve()
-        for r in rows
-    )
+    db_path = tmp_path / "db" / "sessions.db"
+    assert not db_path.exists() or sessions_db.list_sessions(path=db_path) == []

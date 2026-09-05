@@ -59,7 +59,7 @@ def _make_empty_session(
     # Record the tag in sessions.db and register the session row so the
     # delete loop's sessions.db cleanup has records to remove.
     _write_tag(uuid, tag)
-    sessions_db.ensure_session_row(project, basename)
+    sessions_db.ensure_session_row(project, basename, uuid=uuid)
     jsonl = td / f"{uuid}.jsonl"
     _write_jsonl(jsonl, [
         {"type": "user", "isMeta": True, "message": {"content": "hook output"}},
@@ -85,7 +85,7 @@ def _make_nonempty_session(
     # Record the tag in sessions.db and register the session row so the
     # delete loop's sessions.db cleanup has records to remove.
     _write_tag(uuid, tag)
-    sessions_db.ensure_session_row(project, basename)
+    sessions_db.ensure_session_row(project, basename, uuid=uuid)
     jsonl = td / f"{uuid}.jsonl"
     _write_jsonl(jsonl, [
         {"type": "user", "isMeta": True, "message": {"content": "hook"}},

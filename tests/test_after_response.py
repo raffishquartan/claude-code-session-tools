@@ -9,6 +9,16 @@ from hooks import after_response
 from cc_session_tools.lib import sessions_db
 
 
+class _stdin:
+    """Minimal stdin mock that provides .read() — matches hooks/session_tag.py's tests."""
+
+    def __init__(self, text: str) -> None:
+        self._text = text
+
+    def read(self) -> str:
+        return self._text
+
+
 def test_last_active_recorded_when_cld_session_dir_set(tmp_path: Path, monkeypatch) -> None:
     """CLD_SESSION_DIR shaped like <project>/cc-sessions/<basename>: a row is
     upserted with a fresh last_active timestamp."""
@@ -16,6 +26,7 @@ def test_last_active_recorded_when_cld_session_dir_set(tmp_path: Path, monkeypat
     sess_dir = project / "cc-sessions" / "20260711-my-feature"
     sess_dir.mkdir(parents=True)
     monkeypatch.setenv("CLD_SESSION_DIR", str(sess_dir))
+    monkeypatch.setattr("sys.stdin", _stdin(json.dumps({"session_id": "sid-active"})))
     db_dir = tmp_path / "db"
     monkeypatch.setenv("CCST_SESSIONS_DIR", str(db_dir))
 
@@ -25,6 +36,7 @@ def test_last_active_recorded_when_cld_session_dir_set(tmp_path: Path, monkeypat
     rows = sessions_db.list_sessions(path=db_dir / "sessions.db")
     assert len(rows) == 1
     assert rows[0].basename == "20260711-my-feature"
+    assert rows[0].uuid == "sid-active"
     assert rows[0].last_active > 0.0
 
 
@@ -36,8 +48,11 @@ def test_last_active_updates_existing_row_repeatedly(tmp_path: Path, monkeypatch
     db_dir = tmp_path / "db"
     db_path = db_dir / "sessions.db"
     monkeypatch.setenv("CLD_SESSION_DIR", str(sess_dir))
+    monkeypatch.setattr("sys.stdin", _stdin(json.dumps({"session_id": "sid-active"})))
     monkeypatch.setenv("CCST_SESSIONS_DIR", str(db_dir))
-    sessions_db.touch_last_active(project, "20260711-my-feature", path=db_path, when=100.0)
+    sessions_db.touch_last_active(
+        project, "20260711-my-feature", uuid="sid-active", path=db_path, when=100.0
+    )
 
     after_response.main()
 
@@ -47,6 +62,7 @@ def test_last_active_updates_existing_row_repeatedly(tmp_path: Path, monkeypatch
 
 def test_last_active_not_recorded_when_cld_session_dir_not_set(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.delenv("CLD_SESSION_DIR", raising=False)
+    monkeypatch.setattr("sys.stdin", _stdin("{}"))
     monkeypatch.setenv("CCST_SESSIONS_DIR", str(tmp_path))
 
     rc = after_response.main()
@@ -61,6 +77,7 @@ def test_last_active_not_recorded_when_dir_not_shaped_like_cc_sessions(
     sess_dir = tmp_path / "sess"
     sess_dir.mkdir()
     monkeypatch.setenv("CLD_SESSION_DIR", str(sess_dir))
+    monkeypatch.setattr("sys.stdin", _stdin("{}"))
     db_dir = tmp_path / "db"
     monkeypatch.setenv("CCST_SESSIONS_DIR", str(db_dir))
 
@@ -90,6 +107,24 @@ def test_relative_cld_session_dir_is_skipped_with_visible_system_message(
     assert "not absolute" in payload["systemMessage"]
 
 
+def test_missing_session_id_skips_write_and_logs(tmp_path: Path, monkeypatch, capsys) -> None:
+    project = tmp_path / "myproj"
+    sess_dir = project / "cc-sessions" / "20260711-my-feature"
+    sess_dir.mkdir(parents=True)
+    monkeypatch.setenv("CLD_SESSION_DIR", str(sess_dir))
+    monkeypatch.setattr("sys.stdin", _stdin(json.dumps({"cwd": str(project)})))
+    db_dir = tmp_path / "db"
+    monkeypatch.setenv("CCST_SESSIONS_DIR", str(db_dir))
+
+    rc = after_response.main()
+
+    assert rc == 0
+    assert not (db_dir / "sessions.db").exists()
+    err = capsys.readouterr().err
+    assert "[after-response]" in err
+    assert "session_id absent" in err
+
+
 def test_write_failure_logs_to_stderr_no_exception(tmp_path: Path, monkeypatch, capsys) -> None:
     """DB write failure (e.g. unwritable target): error printed to stderr
     (contains [after-response]), no exception propagated."""
@@ -97,6 +132,7 @@ def test_write_failure_logs_to_stderr_no_exception(tmp_path: Path, monkeypatch, 
     sess_dir = project / "cc-sessions" / "20260711-my-feature"
     sess_dir.mkdir(parents=True)
     monkeypatch.setenv("CLD_SESSION_DIR", str(sess_dir))
+    monkeypatch.setattr("sys.stdin", _stdin(json.dumps({"session_id": "sid-active"})))
 
     # Point CCST_SESSIONS_DIR at a FILE (not a dir) so mkdir fails with OSError.
     blocker = tmp_path / "blocker"
