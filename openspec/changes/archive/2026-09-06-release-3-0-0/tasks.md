@@ -179,6 +179,7 @@
       - fixed to WARN with a clear pointer at `migration-to-3.0.0:sessions-uuid` instead, and
       `run_all_checks`'s ordering swapped so the uuid-migration check prints first.
 - [x] 5.4 `openspec-sync-specs` + `openspec-archive-change` for `release-3-0-0` once 5.3 is green.
-- [ ] 5.5 Recommend a PR title/body (style matching recent merged PRs) and confirm with the user
+- [x] 5.5 Recommend a PR title/body (style matching recent merged PRs) and confirm with the user
       before running `gh pr create`. No attribution lines in commits or the PR description.
-- [ ] 5.6 Mark Task #5 `completed` via `TaskUpdate` once the PR is open.
+      Opened as PR #136.
+- [x] 5.6 Mark Task #5 `completed` via `TaskUpdate` once the PR is open.
