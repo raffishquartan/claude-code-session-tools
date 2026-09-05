@@ -173,7 +173,9 @@ def test_last_opened_mtime_updated_when_row_already_exists(tmp_path, monkeypatch
     sess_dir.mkdir(parents=True)
     db_path = tmp_path / "db" / "sessions.db"
     monkeypatch.setenv("CCST_SESSIONS_DIR", str(db_path.parent))
-    sessions_db.touch_last_opened(project, "20260711-my-feature", path=db_path, when=100.0)
+    sessions_db.touch_last_opened(
+        project, "20260711-my-feature", uuid="open-test2", path=db_path, when=100.0
+    )
 
     payload = json.dumps({"session_id": "open-test2", "cwd": str(project)})
     monkeypatch.setenv("CLD_SESSION_TAG", "my-feature")

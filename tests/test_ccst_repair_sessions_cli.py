@@ -46,8 +46,8 @@ def _seed_bad_row(sessions_db_path: Path, repos_root: Path) -> None:
     (repos_root / "myproj" / "cc-sessions" / "20260101-bad").mkdir(parents=True)
     conn = sessions_db.connect(path=sessions_db_path)
     conn.execute(
-        "INSERT INTO sessions (project_dir, basename, start_date, discovered_at) "
-        "VALUES ('.', '20260101-bad', '20260101', '2026-01-01T00:00:00Z')"
+        "INSERT INTO sessions (project_dir, basename, uuid, start_date, discovered_at) "
+        "VALUES ('.', '20260101-bad', 'uuid-20260101-bad', '20260101', '2026-01-01T00:00:00Z')"
     )
     conn.commit()
     conn.close()
@@ -184,3 +184,100 @@ def test_repair_execute_updates_row_and_backs_up_first(base_env):
         backup_conn.close()
     assert backup_row is not None
     assert backup_row[0] == "."
+
+
+# ---------------------------------------------------------------------------
+# `ccst repair sessions --uuid` — sessions_migration_ambiguous inspection/resolution
+# ---------------------------------------------------------------------------
+
+def test_repair_sessions_uuid_no_ambiguous_rows(base_env):
+    r = _run(base_env, "repair", "sessions", "--uuid")
+    assert r.returncode == 0
+    assert "No migration-ambiguous" in r.stdout
+
+
+def test_repair_sessions_uuid_dry_run_lists_rows(base_env):
+    from cc_session_tools.lib import sessions_db
+
+    db_path = _sessions_db_path(base_env)
+    proj = Path(base_env["CLAUDE_SESSION_TOOLS_REPO_ROOT"]) / "myproj"
+    sessions_db.record_ambiguous_row(
+        proj, "20260101-mystery", "no-transcript-found",
+        start_date="20260101", discovered_at="2026-01-01T00:00:00Z", path=db_path,
+    )
+
+    r = _run(base_env, "repair", "sessions", "--uuid")
+    assert r.returncode == 0
+    assert "20260101-mystery" in r.stdout
+    assert "no-transcript-found" in r.stdout
+    # Dry-run must not have touched the sidecar.
+    assert len(sessions_db.list_ambiguous_rows(path=db_path)) == 1
+
+
+def test_repair_sessions_uuid_execute_resolves_when_transcript_now_exists(base_env, tmp_path):
+    from cc_session_tools.lib import sessions_db
+
+    home = tmp_path / "home"
+    home.mkdir()
+    base_env["HOME"] = str(home)
+    db_path = _sessions_db_path(base_env)
+    proj = Path(base_env["CLAUDE_SESSION_TOOLS_REPO_ROOT"]) / "myproj"
+    sessions_db.record_ambiguous_row(
+        proj, "20260101-found-now", "no-transcript-found",
+        start_date="20260101", discovered_at="2026-01-01T00:00:00Z", path=db_path,
+    )
+    # A transcript has since appeared for this basename.
+    encoded = str(proj).replace("/", "-").replace(".", "-")
+    transcript_dir = home / ".claude" / "projects" / encoded
+    transcript_dir.mkdir(parents=True)
+    (transcript_dir / "uuid-found.jsonl").write_text(
+        '{"type": "custom-title", "customTitle": "20260101-found-now", "sessionId": "uuid-found"}\n'
+    )
+
+    r = _run(base_env, "repair", "sessions", "--uuid", "--execute")
+    assert r.returncode == 0, r.stderr
+    assert "resolved" in r.stdout.lower()
+
+    assert sessions_db.list_ambiguous_rows(path=db_path) == []
+    rows = sessions_db.list_sessions(path=db_path)
+    assert any(r_.basename == "20260101-found-now" and r_.uuid == "uuid-found" for r_ in rows)
+
+
+def test_repair_sessions_uuid_execute_leaves_still_unresolvable_rows(base_env):
+    from cc_session_tools.lib import sessions_db
+
+    db_path = _sessions_db_path(base_env)
+    proj = Path(base_env["CLAUDE_SESSION_TOOLS_REPO_ROOT"]) / "myproj"
+    sessions_db.record_ambiguous_row(
+        proj, "20260101-still-nothing", "no-transcript-found",
+        start_date="20260101", discovered_at="2026-01-01T00:00:00Z", path=db_path,
+    )
+
+    r = _run(base_env, "repair", "sessions", "--uuid", "--execute")
+    assert r.returncode == 0
+    assert "still ambiguous" in r.stderr.lower()
+    assert len(sessions_db.list_ambiguous_rows(path=db_path)) == 1
+
+
+def test_repair_sessions_uuid_forget_deletes_row(base_env):
+    from cc_session_tools.lib import sessions_db
+
+    db_path = _sessions_db_path(base_env)
+    proj = Path(base_env["CLAUDE_SESSION_TOOLS_REPO_ROOT"]) / "myproj"
+    sessions_db.record_ambiguous_row(
+        proj, "20260101-forget-me", "no-transcript-found",
+        start_date="20260101", discovered_at="2026-01-01T00:00:00Z", path=db_path,
+    )
+
+    r = _run(base_env, "repair", "sessions", "--uuid", "--forget", str(proj), "20260101-forget-me")
+    assert r.returncode == 0
+    assert "Forgot" in r.stdout
+    assert sessions_db.list_ambiguous_rows(path=db_path) == []
+
+
+def test_repair_sessions_uuid_forget_reports_error_when_absent(base_env):
+    r = _run(
+        base_env, "repair", "sessions", "--uuid", "--forget", "/repos/nope", "20260101-nope"
+    )
+    assert r.returncode == 1
+    assert "No ambiguous row found" in r.stderr

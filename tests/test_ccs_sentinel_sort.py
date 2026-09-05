@@ -36,7 +36,7 @@ def _make_session(repos: Path, project: str, basename: str) -> Path:
     from cc_session_tools.lib import sessions_db
     sess = repos / project / "cc-sessions" / basename
     (sess / "working").mkdir(parents=True)
-    sessions_db.ensure_session_row(repos / project, basename)
+    sessions_db.ensure_session_row(repos / project, basename, uuid=f"uuid-{basename}")
     return sess
 
 
@@ -111,7 +111,7 @@ class TestListModeSentinelOutput:
         from cc_session_tools.lib import sessions_db
         proj = fake_repos / "myproj"
         _make_session(fake_repos, "myproj", "20260612-a-sess")
-        sessions_db.touch_last_opened(proj, "20260612-a-sess")
+        sessions_db.touch_last_opened(proj, "20260612-a-sess", uuid="uuid-20260612-a-sess")
         monkeypatch.chdir(proj)
 
         rc = ccs.main(["--order-by", "opened"])
@@ -134,7 +134,7 @@ class TestListModeSentinelOutput:
         from cc_session_tools.lib import sessions_db
         proj = fake_repos / "myproj"
         _make_session(fake_repos, "myproj", "20260612-b-sess")
-        sessions_db.touch_last_active(proj, "20260612-b-sess")
+        sessions_db.touch_last_active(proj, "20260612-b-sess", uuid="uuid-20260612-b-sess")
         monkeypatch.chdir(proj)
 
         rc = ccs.main(["--order-by", "active"])
@@ -172,7 +172,9 @@ class TestListModeSentinelOutput:
     def test_list_mode_opened_global_includes_proj_path(self, fake_repos, monkeypatch, capsys):
         from cc_session_tools.lib import sessions_db
         _make_session(fake_repos, "alpha", "20260612-alpha-sess")
-        sessions_db.touch_last_opened(fake_repos / "alpha", "20260612-alpha-sess")
+        sessions_db.touch_last_opened(
+            fake_repos / "alpha", "20260612-alpha-sess", uuid="uuid-20260612-alpha-sess"
+        )
         monkeypatch.chdir(fake_repos)
 
         rc = ccs.main(["--global", "--order-by", "opened"])
@@ -191,7 +193,7 @@ class TestSearchModeSentinelOutput:
         from cc_session_tools.lib import sessions_db
         proj = fake_repos / "myproj"
         _make_session(fake_repos, "myproj", "20260612-search-opened")
-        sessions_db.touch_last_opened(proj, "20260612-search-opened")
+        sessions_db.touch_last_opened(proj, "20260612-search-opened", uuid="uuid-20260612-search-opened")
         monkeypatch.chdir(proj)
 
         rc = ccs.main(["search-opened", "--order-by", "opened"])
@@ -203,7 +205,7 @@ class TestSearchModeSentinelOutput:
         from cc_session_tools.lib import sessions_db
         proj = fake_repos / "myproj"
         _make_session(fake_repos, "myproj", "20260612-search-active")
-        sessions_db.touch_last_active(proj, "20260612-search-active")
+        sessions_db.touch_last_active(proj, "20260612-search-active", uuid="uuid-20260612-search-active")
         monkeypatch.chdir(proj)
 
         rc = ccs.main(["search-active", "--order-by", "active"])
@@ -242,7 +244,7 @@ class TestSessionEnumerationScaling:
         for i in range(start_at, start_at + count):
             name = f"20260101-session-{i:05d}"
             (proj / "cc-sessions" / name).mkdir()
-            sessions_db.touch_last_opened(proj, name)
+            sessions_db.touch_last_opened(proj, name, uuid=f"uuid-{name}")
         return proj
 
     def test_order_by_active_makes_no_per_session_stat_calls_regardless_of_count(
@@ -332,8 +334,8 @@ class TestLimitFlag:
         for i in range(10):
             name = f"20260101-sess-{i:02d}"
             (proj / "cc-sessions" / name).mkdir()
-            sessions_db.ensure_session_row(proj, name)
-            sessions_db.touch_last_active(proj, name, when=float(i))
+            sessions_db.ensure_session_row(proj, name, uuid=f"uuid-{name}")
+            sessions_db.touch_last_active(proj, name, uuid=f"uuid-{name}", when=float(i))
         monkeypatch.chdir(proj)
 
         rc = ccs.main(["--order-by", "active", "--limit", "3"])
@@ -374,16 +376,16 @@ class TestGlobalLimitRootFilter:
         for i in range(8):
             name = f"20260101-foreign-{i:02d}"
             (foreign / "cc-sessions" / name).mkdir()
-            sessions_db.ensure_session_row(foreign, name)
-            sessions_db.touch_last_active(foreign, name, when=1000.0 + i)
+            sessions_db.ensure_session_row(foreign, name, uuid=f"uuid-{name}")
+            sessions_db.touch_last_active(foreign, name, uuid=f"uuid-{name}", when=1000.0 + i)
 
         proj = fake_repos / "myproj"
         (proj / "cc-sessions").mkdir(parents=True)
         for i in range(5):
             name = f"20260101-real-{i:02d}"
             (proj / "cc-sessions" / name).mkdir()
-            sessions_db.ensure_session_row(proj, name)
-            sessions_db.touch_last_active(proj, name, when=500.0 + i)
+            sessions_db.ensure_session_row(proj, name, uuid=f"uuid-{name}")
+            sessions_db.touch_last_active(proj, name, uuid=f"uuid-{name}", when=500.0 + i)
 
         monkeypatch.chdir(fake_repos)
         rc = ccs.main(["--global", "--order-by", "active", "--limit", "5"])
@@ -410,15 +412,15 @@ class TestGlobalLimitRootFilter:
 
         conn = sessions_db.connect()
         conn.execute(
-            "INSERT INTO sessions (project_dir, basename, start_date, discovered_at, last_active) "
-            "VALUES ('.', '20260101-corrupt', '20260101', '2026-01-01T00:00:00Z', 9999.0)"
+            "INSERT INTO sessions (project_dir, basename, uuid, start_date, discovered_at, last_active) "
+            "VALUES ('.', '20260101-corrupt', 'uuid-corrupt', '20260101', '2026-01-01T00:00:00Z', 9999.0)"
         )
         conn.commit()
         conn.close()
 
         proj = fake_repos / "myproj"
         (proj / "cc-sessions" / "20260101-real").mkdir(parents=True)
-        sessions_db.ensure_session_row(proj, "20260101-real")
+        sessions_db.ensure_session_row(proj, "20260101-real", uuid="uuid-20260101-real")
 
         monkeypatch.chdir(fake_repos)
         rc = ccs.main(["--global"])
@@ -438,7 +440,7 @@ class TestGlobalLimitRootFilter:
         proj = fake_repos / "myproj"
         (proj / "cc-sessions" / "20260101-real").mkdir(parents=True)
         from cc_session_tools.lib import sessions_db
-        sessions_db.ensure_session_row(proj, "20260101-real")
+        sessions_db.ensure_session_row(proj, "20260101-real", uuid="uuid-20260101-real")
 
         monkeypatch.chdir(fake_repos)
         rc = ccs.main(["--global", "--order-by", "active", "--limit", "-1"])
@@ -459,8 +461,8 @@ class TestGlobalLimitRootFilter:
         for i in range(3):
             name = f"20260101-real-{i:02d}"
             (proj / "cc-sessions" / name).mkdir()
-            sessions_db.ensure_session_row(proj, name)
-            sessions_db.touch_last_active(proj, name, when=500.0 + i)
+            sessions_db.ensure_session_row(proj, name, uuid=f"uuid-{name}")
+            sessions_db.touch_last_active(proj, name, uuid=f"uuid-{name}", when=500.0 + i)
 
         monkeypatch.chdir(fake_repos)
         rc = ccs.main(["--global", "--order-by", "active", "--limit", "1000"])
@@ -469,3 +471,106 @@ class TestGlobalLimitRootFilter:
         out = capsys.readouterr().out
         session_lines = [ln for ln in out.splitlines() if "20260101-real-" in ln]
         assert len(session_lines) == 3
+
+
+# ---------------------------------------------------------------------------
+# Forked-tag display (design.md Decision 12/13 in openspec/changes/release-3-0-0/)
+# ---------------------------------------------------------------------------
+
+class TestForkedSessionDisplay:
+    def _write_transcript(self, fake_home: Path, proj: Path, uuid: str, size: int) -> None:
+        from cc_session_tools.lib.sessions import transcript_dir_for_project
+
+        t_dir = transcript_dir_for_project(proj)
+        t_dir.mkdir(parents=True, exist_ok=True)
+        (t_dir / f"{uuid}.jsonl").write_text("x" * size)
+
+    def _make_session_dir_only(self, repos: Path, project: str, basename: str) -> Path:
+        """Like the module-level _make_session, but writes no sessions.db row - the fork
+        tests below add exactly the rows they want via touch_last_active themselves,
+        since _make_session's own ensure_session_row() call would otherwise add a third,
+        unwanted fork row."""
+        sess = repos / project / "cc-sessions" / basename
+        (sess / "working").mkdir(parents=True)
+        return sess
+
+    def test_forked_basename_shows_two_lines_with_own_size_and_timestamp(
+        self, fake_home, fake_repos, monkeypatch, capsys
+    ):
+        from cc_session_tools.lib import sessions_db
+
+        proj = fake_repos / "myproj"
+        self._make_session_dir_only(fake_repos, "myproj", "20260701-forked")
+        sessions_db.touch_last_active(proj, "20260701-forked", uuid="uuid-aaaaaaaa", when=100.0)
+        sessions_db.touch_last_active(proj, "20260701-forked", uuid="uuid-bbbbbbbb", when=200.0)
+        self._write_transcript(fake_home, proj, "uuid-aaaaaaaa", 500)
+        self._write_transcript(fake_home, proj, "uuid-bbbbbbbb", 1500)
+        monkeypatch.chdir(proj)
+
+        rc = ccs.main(["--order-by", "active"])
+
+        assert rc == 0
+        out = capsys.readouterr().out
+        assert "20260701-forked" in out
+        assert "2 forks" in out
+        assert "uuid-aaa" in out  # short uuid prefix
+        assert "uuid-bbb" in out
+        assert "500 B" in out
+        assert "1.5 KB" in out
+        # Most-recently-active fork listed first.
+        assert out.index("uuid-bbb") < out.index("uuid-aaa")
+
+    def test_forked_basename_with_missing_transcript_shows_placeholder(
+        self, fake_home, fake_repos, monkeypatch, capsys
+    ):
+        from cc_session_tools.lib import sessions_db
+
+        proj = fake_repos / "myproj"
+        self._make_session_dir_only(fake_repos, "myproj", "20260701-onegone")
+        sessions_db.touch_last_active(proj, "20260701-onegone", uuid="uuid-hashere", when=100.0)
+        sessions_db.touch_last_active(proj, "20260701-onegone", uuid="uuid-goneaway", when=200.0)
+        self._write_transcript(fake_home, proj, "uuid-hashere", 100)
+        # uuid-goneaway's transcript is never written - simulates a GC'd/deleted transcript.
+        monkeypatch.chdir(proj)
+
+        rc = ccs.main(["--order-by", "active"])
+
+        assert rc == 0
+        out = capsys.readouterr().out
+        assert "(transcript missing)" in out
+
+    def test_unforked_basename_display_unchanged(self, fake_repos, monkeypatch, capsys):
+        """A single-session tag must print exactly like before this feature - no
+        'forks' wording, no uuid, no size."""
+        proj = fake_repos / "myproj"
+        _make_session(fake_repos, "myproj", "20260701-solo")
+        monkeypatch.chdir(proj)
+
+        rc = ccs.main(["--order-by", "active"])
+
+        assert rc == 0
+        out = capsys.readouterr().out
+        assert "20260701-solo" in out
+        assert "forks" not in out
+        assert "uuid" not in out.lower()
+
+    def test_forked_basename_content_search_does_not_double_count(
+        self, fake_home, fake_repos, monkeypatch, capsys
+    ):
+        """Two forks sharing one cc-sessions/<basename>/ directory must produce exactly one
+        content-search match, not two - the filesystem work list stays one entry per
+        basename regardless of fork count (design.md Decision 12)."""
+        from cc_session_tools.lib import sessions_db
+
+        proj = fake_repos / "myproj"
+        sess = self._make_session_dir_only(fake_repos, "myproj", "20260701-searchme")
+        (sess / "working" / "WORKLOG.md").write_text("find this needle")
+        sessions_db.touch_last_active(proj, "20260701-searchme", uuid="uuid-1")
+        sessions_db.touch_last_active(proj, "20260701-searchme", uuid="uuid-2")
+        monkeypatch.chdir(proj)
+
+        rc = ccs.main(["needle", "--contents"])
+
+        assert rc == 0
+        out = capsys.readouterr().out
+        assert out.count("20260701-searchme") == 1

@@ -8,6 +8,7 @@ import shutil
 import subprocess
 import sys
 import time
+from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -132,6 +133,25 @@ def _format_sentinel_dt(mtime: float, label: str) -> str:
         return f"{label}: (never)"
     dt = datetime.datetime.fromtimestamp(mtime).strftime("%Y-%m-%d %H:%M")
     return f"{label}: {dt}"
+
+
+def _fork_detail_line(row: sessions_db.SessionRow, proj: Path, *, label: str) -> str:
+    """One fork's disambiguation detail line: its uuid (short prefix), its own
+    opened/active timestamp, and its own transcript size - sourced from THIS fork's
+    <uuid>.jsonl under ~/.claude/projects/<encoded proj>/, never the shared
+    cc-sessions/<basename>/ directory two forks have in common. This is the crux of the
+    fork-disambiguation feature: without per-uuid size/mtime, two forks would still look
+    identical (see docs/fork-disambiguation-spec.md's read-path design)."""
+    mtime = row.last_opened if label == "opened" else row.last_active
+    dt_str = _format_sentinel_dt(mtime, label)
+    jsonl = transcript_dir_for_project(proj) / f"{row.uuid}.jsonl"
+    try:
+        size_str = _format_size(jsonl.stat().st_size)
+    except OSError:
+        # GC'd, or deleted by the delete-sessions/clean-hook-sessions skills - the row
+        # persists but the file backing it does not (design.md Decision 13).
+        size_str = "(transcript missing)"
+    return f"[{row.uuid[:8]}] {dt_str}  size={size_str}"
 
 
 _EPILOG = """\
@@ -1144,16 +1164,31 @@ def main(argv: list[str] | None = None) -> int:
         return 1
     debug(f"sessions found: {len(session_rows)}")
 
-    # (session_dir, project_dir) pairs — kept for every downstream code path in
-    # this file that still needs real filesystem access (emptiness/contents/
-    # messages search, --order-by update's rglob walk; see design decision D1).
+    # basename -> [SessionRow, ...] (>1 entry means a Ctrl-L fork - two or more live
+    # sessions sharing this tag), for O(1) opened/active lookups with zero filesystem
+    # stat calls (replaces the old per-session _get_sentinel_mtime). Built BEFORE the
+    # (session_dir, project_dir) work list below, and that list is derived from this
+    # dict's unique basenames rather than from session_rows directly - session_rows has
+    # one row per fork, and building the work list straight from it would duplicate an
+    # entry per fork, double-scanning content search and --order-by update's rglob walk
+    # for every forked basename (design.md Decision 12 in
+    # openspec/changes/release-3-0-0/ - caught by this exact double-count in
+    # test_forked_basename_content_search_does_not_double_count). Two forks share one
+    # cc-sessions/<basename>/ directory, so scanning it once is correct and sufficient;
+    # only the *display* (list-mode rendering below) expands per fork.
+    rows_by_basename: dict[str, list[sessions_db.SessionRow]] = defaultdict(list)
+    for row in session_rows:
+        rows_by_basename[row.basename].append(row)
+
+    # (session_dir, project_dir) pairs — kept for every downstream code path in this
+    # file that still needs real filesystem access (emptiness/contents/messages search,
+    # --order-by update's rglob walk; see design decision D1). One entry per unique
+    # basename, in the order each first appeared in session_rows (preserves SQL-level
+    # ordering from _collect_session_rows when --limit was used).
     sessions: list[tuple[Path, Path]] = [
-        (row.project_dir / "cc-sessions" / row.basename, row.project_dir)
-        for row in session_rows
+        (rows[0].project_dir / "cc-sessions" / basename, rows[0].project_dir)
+        for basename, rows in rows_by_basename.items()
     ]
-    # basename -> SessionRow, for O(1) opened/active lookups with zero
-    # filesystem stat calls (replaces the old per-session _get_sentinel_mtime).
-    row_by_basename = {row.basename: row for row in session_rows}
 
     # Count hooks and empty sessions BEFORE applying those filters (for the footer).
     n_hook_before_filter = sum(1 for s, _ in sessions if _is_hook_session(s.name))
@@ -1237,12 +1272,18 @@ def main(argv: list[str] | None = None) -> int:
         elif order_by in ("opened", "active"):
             label = order_by  # "opened" or "active"
 
-            def _row_mtime(pair: tuple[Path, Path]) -> float:
-                s, _proj = pair
-                row = row_by_basename.get(s.name)
-                if row is None:
-                    return 0.0
+            def _rows_mtime(row: sessions_db.SessionRow) -> float:
                 return row.last_opened if order_by == "opened" else row.last_active
+
+            def _row_mtime(pair: tuple[Path, Path]) -> float:
+                # Sort key for a basename as a whole: its most-recently-touched fork,
+                # when it has more than one (the filesystem work list stays one entry
+                # per basename regardless - see rows_by_basename's own comment).
+                s, _proj = pair
+                rows = rows_by_basename.get(s.name)
+                if not rows:
+                    return 0.0
+                return max(_rows_mtime(r) for r in rows)
 
             # When --limit was set, session_rows already arrived pre-sorted and
             # pre-limited from SQL (see _collect_session_rows), so avoid a second
@@ -1252,13 +1293,23 @@ def main(argv: list[str] | None = None) -> int:
             else:
                 sessions_sorted_sentinel = sorted(sessions, key=_row_mtime, reverse=True)
             for s, proj in sessions_sorted_sentinel:
-                mtime = _row_mtime((s, proj))
                 display_name = _maybe_link(s.name, s)
-                dt_str = _format_sentinel_dt(mtime, label)
-                if effective_global:
-                    print(f"{display_name} ({dt_str}, {_display_path(proj)})")
+                rows = rows_by_basename.get(s.name) or []
+                if len(rows) > 1:
+                    # Forked tag: one line per fork, each independently disambiguated
+                    # by uuid, timestamp, and its own transcript size.
+                    header = f"{display_name} ({_display_path(proj)}) - {len(rows)} forks:" \
+                        if effective_global else f"{display_name} - {len(rows)} forks:"
+                    print(header)
+                    for row in sorted(rows, key=_rows_mtime, reverse=True):
+                        print(f"    {_fork_detail_line(row, proj, label=label)}")
                 else:
-                    print(f"{display_name} ({dt_str})")
+                    mtime = _rows_mtime(rows[0]) if rows else 0.0
+                    dt_str = _format_sentinel_dt(mtime, label)
+                    if effective_global:
+                        print(f"{display_name} ({dt_str}, {_display_path(proj)})")
+                    else:
+                        print(f"{display_name} ({dt_str})")
         else:
             def _session_sort_key(pair: tuple[Path, Path]) -> str:
                 s, _ = pair
@@ -1325,12 +1376,15 @@ def main(argv: list[str] | None = None) -> int:
             r.update_mtime = sess_mtime_cache[key]
     elif order_by == "opened":
         for r in all_results:
-            row = row_by_basename.get(r.basename)
-            r.opened_mtime = row.last_opened if row is not None else 0.0
+            # One search result per basename regardless of fork count (the search list
+            # is filesystem-scoped, not display-expanded - see rows_by_basename's own
+            # comment); a forked basename sorts by its most-recently-opened fork.
+            rows = rows_by_basename.get(r.basename) or []
+            r.opened_mtime = max((row.last_opened for row in rows), default=0.0)
     elif order_by == "active":
         for r in all_results:
-            row = row_by_basename.get(r.basename)
-            r.active_mtime = row.last_active if row is not None else 0.0
+            rows = rows_by_basename.get(r.basename) or []
+            r.active_mtime = max((row.last_active for row in rows), default=0.0)
 
     # Sort the combined results.
     all_results = _sort_results(all_results, args.sort, order_by=order_by)

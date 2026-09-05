@@ -136,7 +136,7 @@ def get_synced_version(*, path: Path | None = None) -> str | None:
         conn.close()
 
 
-_EXEMPT_NOUNS = frozenset({"install-everything", "doctor", "repair", "migrate"})
+_EXEMPT_NOUNS = frozenset({"install-everything", "doctor", "repair", "migrate", "sessions"})
 
 _EXEMPT_VERBS = frozenset({"install", "uninstall"})
 
@@ -159,9 +159,14 @@ def is_auto_sync_exempt(*, noun: str | None, verb: str | None, opted_out: bool) 
     install-everything (would recurse), doctor (must be able to report the
     out-of-sync state rather than silently erasing it), and repair/migrate
     (the recovery tools for a broken store, which must run under any store
-    state); and any `install`/`uninstall` verb, where the user is driving
-    install state by hand with their own --target/--source/--hook and a
-    default-target auto-apply underneath them would be self-contradictory.
+    state); `sessions` (its own `migrate-uuid`/`migrate`/`list` verbs read and
+    rebuild sessions.db directly - an auto-apply racing `sessions migrate-uuid
+    --write`'s rebuild transaction, or writing an unrelated install_sync row while
+    the schema is mid-migration, is exactly the concurrency hazard the 3.0.0
+    migration's own guard exists to prevent); and any `install`/`uninstall` verb,
+    where the user is driving install state by hand with their own
+    --target/--source/--hook and a default-target auto-apply underneath them would
+    be self-contradictory.
     """
     if opted_out:
         return True

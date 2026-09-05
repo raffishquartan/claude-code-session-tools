@@ -166,10 +166,14 @@ def _messages_cursor_uuids_db(ccmsg_db_path: Path) -> dict[str, Path]:
 
 def _sessions_db_uuids(sessions_db_path: Path) -> dict[str, Path]:
     """Session uuids with a row in sessions.db's ``session_tags`` table
-    (Phase 4). NOT the ``sessions`` table — that is keyed by
-    ``(project_dir, basename)`` and has no uuid column; uuids live only in
-    ``session_tags(uuid, tag, updated_at)``. Note the column is ``uuid``,
-    not ``session_uuid``."""
+    (Phase 4). NOT the ``sessions`` table — as of 3.0.0 that table's PK is
+    ``(project_dir, basename, uuid)`` and does carry a uuid column, but it is
+    deliberately excluded from GC here: a GC'd ``sessions`` row is a bigger
+    behavior change (it disappears from `ccl`/`ccs` entirely) than a GC'd tag-cache
+    entry, and is out of scope for the 3.0.0 uuid migration (a separate policy
+    decision, not an oversight - see design.md Decision 11/13 in
+    openspec/changes/release-3-0-0/). Note the column is ``uuid``, not
+    ``session_uuid``."""
     if not sessions_db_path.exists():
         return {}
     conn = _db.connect(sessions_db_path, readonly=True)

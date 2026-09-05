@@ -197,8 +197,15 @@ def main(argv: list[str] | None = None) -> int:
     (session_dir / "working").mkdir(parents=True, exist_ok=True)
     (session_dir / "out").mkdir(parents=True, exist_ok=True)
 
-    from cc_session_tools.lib import sessions_db
-    sessions_db.ensure_session_row(real_pwd, session_name)
+    # No sessions.db row is written here: as of 3.0.0 a row's primary key includes the
+    # session's real uuid, which Claude Code only assigns after this process execs into
+    # `claude` below - ccd has no uuid to write yet. The SessionStart hook
+    # (hooks/session_tag.py) is the sole writer of the first row for a new session; if
+    # hooks are disabled/broken, the session simply does not appear in ccl/ccs until that
+    # is fixed, rather than this call inserting a row under a synthetic placeholder uuid
+    # that would risk becoming a phantom fork later (see design.md Decision 7 in
+    # openspec/changes/release-3-0-0/, and cc-sessions/20260905-fork-disambiguation-impl-3-0-0/
+    # for the discussion of dropping this safety net).
 
     # Build env for the SessionStart hook + task list. Drop any inherited
     # CLAUDE_CODE_TASK_LIST_ID so the new one (or absence of one) is authoritative.

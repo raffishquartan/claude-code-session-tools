@@ -115,10 +115,17 @@ def main(argv: list[str] | None = None) -> int:
                     "'ccst repair sessions --dry-run' if ccl/ccs --global later looks "
                     "incomplete."
                 )
+            elif not session_id:
+                print(
+                    "[session-tag] session_id absent from hook payload; skipping "
+                    ".last-opened update",
+                    file=sys.stderr,
+                )
             else:
                 try:
                     sessions_db.touch_last_opened(
-                        session_dir_path.parent.parent, session_dir_path.name
+                        session_dir_path.parent.parent, session_dir_path.name,
+                        uuid=session_id,
                     )
                 except (OSError, sqlite3.Error) as exc:
                     print(f"[session-tag] Failed to record .last-opened: {exc}", file=sys.stderr)

@@ -15,11 +15,11 @@ def db_path(tmp_path: Path) -> Path:
 
 
 def test_find_non_absolute_rows_returns_only_bad_rows(db_path):
-    sessions_db.ensure_session_row(Path("/repos/good"), "20260101-good", path=db_path)
+    sessions_db.ensure_session_row(Path("/repos/good"), "20260101-good", uuid="uuid-20260101-good", path=db_path)
     conn = sessions_db.connect(path=db_path)
     conn.execute(
-        "INSERT INTO sessions (project_dir, basename, start_date, discovered_at) "
-        "VALUES ('.', '20260101-bad', '20260101', '2026-01-01T00:00:00Z')"
+        "INSERT INTO sessions (project_dir, basename, uuid, start_date, discovered_at) "
+        "VALUES ('.', '20260101-bad', 'uuid-20260101-bad', '20260101', '2026-01-01T00:00:00Z')"
     )
     conn.commit()
     conn.close()
@@ -34,8 +34,8 @@ def test_repair_dry_run_does_not_modify_db(tmp_path, db_path):
     (proj / "cc-sessions" / "20260101-bad").mkdir(parents=True)
     conn = sessions_db.connect(path=db_path)
     conn.execute(
-        "INSERT INTO sessions (project_dir, basename, start_date, discovered_at) "
-        "VALUES ('.', '20260101-bad', '20260101', '2026-01-01T00:00:00Z')"
+        "INSERT INTO sessions (project_dir, basename, uuid, start_date, discovered_at) "
+        "VALUES ('.', '20260101-bad', 'uuid-20260101-bad', '20260101', '2026-01-01T00:00:00Z')"
     )
     conn.commit()
     conn.close()
@@ -53,8 +53,8 @@ def test_repair_execute_updates_project_dir_and_preserves_timestamps(tmp_path, d
     (proj / "cc-sessions" / "20260101-bad").mkdir(parents=True)
     conn = sessions_db.connect(path=db_path)
     conn.execute(
-        "INSERT INTO sessions (project_dir, basename, start_date, discovered_at, last_active) "
-        "VALUES ('.', '20260101-bad', '20260101', '2026-01-01T00:00:00Z', 12345.0)"
+        "INSERT INTO sessions (project_dir, basename, uuid, start_date, discovered_at, last_active) "
+        "VALUES ('.', '20260101-bad', 'uuid-20260101-bad', '20260101', '2026-01-01T00:00:00Z', 12345.0)"
     )
     conn.commit()
     conn.close()
@@ -72,8 +72,8 @@ def test_repair_reports_unresolved_when_no_on_disk_match(tmp_path, db_path):
     root.mkdir()
     conn = sessions_db.connect(path=db_path)
     conn.execute(
-        "INSERT INTO sessions (project_dir, basename, start_date, discovered_at) "
-        "VALUES ('.', '20260101-orphan', '20260101', '2026-01-01T00:00:00Z')"
+        "INSERT INTO sessions (project_dir, basename, uuid, start_date, discovered_at) "
+        "VALUES ('.', '20260101-orphan', 'uuid-20260101-orphan', '20260101', '2026-01-01T00:00:00Z')"
     )
     conn.commit()
     conn.close()
@@ -90,8 +90,8 @@ def test_repair_reports_ambiguous_when_multiple_on_disk_matches(tmp_path, db_pat
     (root / "proj-b" / "cc-sessions" / "20260101-dup").mkdir(parents=True)
     conn = sessions_db.connect(path=db_path)
     conn.execute(
-        "INSERT INTO sessions (project_dir, basename, start_date, discovered_at) "
-        "VALUES ('.', '20260101-dup', '20260101', '2026-01-01T00:00:00Z')"
+        "INSERT INTO sessions (project_dir, basename, uuid, start_date, discovered_at) "
+        "VALUES ('.', '20260101-dup', 'uuid-20260101-dup', '20260101', '2026-01-01T00:00:00Z')"
     )
     conn.commit()
     conn.close()
@@ -103,7 +103,7 @@ def test_repair_reports_ambiguous_when_multiple_on_disk_matches(tmp_path, db_pat
 
 
 def test_repair_no_bad_rows_returns_empty_report(db_path):
-    sessions_db.ensure_session_row(Path("/repos/good"), "20260101-good", path=db_path)
+    sessions_db.ensure_session_row(Path("/repos/good"), "20260101-good", uuid="uuid-20260101-good", path=db_path)
     report = sessions_repair.repair([Path("/repos")], path=db_path, dry_run=False)
     assert report.repaired == []
     assert report.unresolved == []
@@ -124,12 +124,12 @@ def test_repair_reports_conflict_for_two_bad_rows_resolving_to_same_target_in_on
     (proj / "cc-sessions" / "20260101-dup").mkdir(parents=True)
     conn = sessions_db.connect(path=db_path)
     conn.execute(
-        "INSERT INTO sessions (project_dir, basename, start_date, discovered_at) "
-        "VALUES ('.', '20260101-dup', '20260101', '2026-01-01T00:00:00Z')"
+        "INSERT INTO sessions (project_dir, basename, uuid, start_date, discovered_at) "
+        "VALUES ('.', '20260101-dup', 'uuid-20260101-dup', '20260101', '2026-01-01T00:00:00Z')"
     )
     conn.execute(
-        "INSERT INTO sessions (project_dir, basename, start_date, discovered_at) "
-        "VALUES ('..', '20260101-dup', '20260101', '2026-01-01T00:00:00Z')"
+        "INSERT INTO sessions (project_dir, basename, uuid, start_date, discovered_at) "
+        "VALUES ('..', '20260101-dup', 'uuid-20260101-dup', '20260101', '2026-01-01T00:00:00Z')"
     )
     conn.commit()
     conn.close()
@@ -155,16 +155,16 @@ def test_repair_applies_clean_row_alongside_a_conflicting_pair_in_the_same_batch
 
     conn = sessions_db.connect(path=db_path)
     conn.execute(
-        "INSERT INTO sessions (project_dir, basename, start_date, discovered_at) "
-        "VALUES ('.', '20260101-dup', '20260101', '2026-01-01T00:00:00Z')"
+        "INSERT INTO sessions (project_dir, basename, uuid, start_date, discovered_at) "
+        "VALUES ('.', '20260101-dup', 'uuid-20260101-dup', '20260101', '2026-01-01T00:00:00Z')"
     )
     conn.execute(
-        "INSERT INTO sessions (project_dir, basename, start_date, discovered_at) "
-        "VALUES ('..', '20260101-dup', '20260101', '2026-01-01T00:00:00Z')"
+        "INSERT INTO sessions (project_dir, basename, uuid, start_date, discovered_at) "
+        "VALUES ('..', '20260101-dup', 'uuid-20260101-dup', '20260101', '2026-01-01T00:00:00Z')"
     )
     conn.execute(
-        "INSERT INTO sessions (project_dir, basename, start_date, discovered_at) "
-        "VALUES ('.', '20260101-clean', '20260101', '2026-01-01T00:00:00Z')"
+        "INSERT INTO sessions (project_dir, basename, uuid, start_date, discovered_at) "
+        "VALUES ('.', '20260101-clean', 'uuid-20260101-clean', '20260101', '2026-01-01T00:00:00Z')"
     )
     conn.commit()
     conn.close()
@@ -191,11 +191,13 @@ def test_repair_reports_conflict_instead_of_crashing_when_target_row_already_exi
     root = tmp_path / "repos"
     proj = root / "myproj"
     (proj / "cc-sessions" / "20260101-dup").mkdir(parents=True)
-    sessions_db.ensure_session_row(proj, "20260101-dup", path=db_path)  # the correct row
+    sessions_db.ensure_session_row(
+        proj, "20260101-dup", uuid="uuid-20260101-dup", path=db_path
+    )  # the correct row
     conn = sessions_db.connect(path=db_path)
     conn.execute(
-        "INSERT INTO sessions (project_dir, basename, start_date, discovered_at) "
-        "VALUES ('.', '20260101-dup', '20260101', '2026-01-01T00:00:00Z')"
+        "INSERT INTO sessions (project_dir, basename, uuid, start_date, discovered_at) "
+        "VALUES ('.', '20260101-dup', 'uuid-20260101-dup', '20260101', '2026-01-01T00:00:00Z')"
     )
     conn.commit()
     conn.close()

@@ -1424,6 +1424,36 @@ def test_run_all_checks_includes_pdata_verify_when_projects_given(monkeypatch, t
 # ---------- check_sessions_project_dir_absolute ----------
 
 
+def test_check_sessions_project_dir_absolute_warns_pending_uuid_migration(tmp_path):
+    """Found via manual end-to-end exercise (not unit tests): against a genuine
+    pre-3.0.0-schema sessions.db, this check must not FAIL with a misleading "failed to
+    open" message - the file opens fine, it just can't be queried the uuid-aware way
+    until the schema migration runs (which migration-to-3.0.0:sessions-uuid already
+    reports, clearly, separately)."""
+    import sqlite3
+
+    from cc_session_tools.lib.doctor import Status, check_sessions_project_dir_absolute
+
+    db_path = tmp_path / "sessions.db"
+    conn = sqlite3.connect(str(db_path))
+    conn.execute(
+        "CREATE TABLE sessions (project_dir TEXT NOT NULL, basename TEXT NOT NULL, "
+        "start_date TEXT NOT NULL, PRIMARY KEY (project_dir, basename))"
+    )
+    conn.execute(
+        "INSERT INTO sessions (project_dir, basename, start_date) VALUES "
+        "('/repos/proj', '20260101-x', '20260101')"
+    )
+    conn.commit()
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.close()
+
+    results = check_sessions_project_dir_absolute(db_path)
+    assert results[0].status == Status.WARN
+    assert "failed to open" not in results[0].reason
+    assert "migration-to-3.0.0" in results[0].reason
+
+
 def test_check_sessions_project_dir_absolute_warns_on_bad_row(tmp_path):
     from cc_session_tools.lib import sessions_db
     from cc_session_tools.lib.doctor import Status, check_sessions_project_dir_absolute
@@ -1431,8 +1461,8 @@ def test_check_sessions_project_dir_absolute_warns_on_bad_row(tmp_path):
     db_path = tmp_path / "sessions.db"
     conn = sessions_db.connect(path=db_path)
     conn.execute(
-        "INSERT INTO sessions (project_dir, basename, start_date, discovered_at) "
-        "VALUES ('.', '20260101-bad', '20260101', '2026-01-01T00:00:00Z')"
+        "INSERT INTO sessions (project_dir, basename, uuid, start_date, discovered_at) "
+        "VALUES ('.', '20260101-bad', 'uuid-20260101-bad', '20260101', '2026-01-01T00:00:00Z')"
     )
     conn.commit()
     conn.close()
@@ -1449,7 +1479,9 @@ def test_check_sessions_project_dir_absolute_ok_when_clean(tmp_path):
     from cc_session_tools.lib.doctor import Status, check_sessions_project_dir_absolute
 
     db_path = tmp_path / "sessions.db"
-    sessions_db.ensure_session_row(tmp_path / "repos" / "proj", "20260101-good", path=db_path)
+    sessions_db.ensure_session_row(
+        tmp_path / "repos" / "proj", "20260101-good", uuid="uuid-20260101-good", path=db_path
+    )
 
     results = check_sessions_project_dir_absolute(db_path)
     assert results[0].status == Status.OK
@@ -1462,7 +1494,9 @@ def test_run_all_checks_includes_sessions_project_dir_check_when_path_given(tmp_
     settings.write_text('{"hooks": {}}')
     bundle = Path(__file__).parent.parent / "config" / "hooks-bundle.json"
     db_path = tmp_path / "sessions.db"
-    sessions_db.ensure_session_row(tmp_path / "repos" / "proj", "20260101-good", path=db_path)
+    sessions_db.ensure_session_row(
+        tmp_path / "repos" / "proj", "20260101-good", uuid="uuid-20260101-good", path=db_path
+    )
 
     results = run_all_checks(
         installed_version="0.11.0",
@@ -1475,6 +1509,107 @@ def test_run_all_checks_includes_sessions_project_dir_check_when_path_given(tmp_
         sessions_db_path=db_path,
     )
     assert any(r.name == "sessions:project-dir-absolute" for r in results)
+    assert any(r.name == "migration-to-3.0.0:sessions-uuid" for r in results)
+
+
+# ---------- check_sessions_uuid_migration (3.0.0 schema migration) ----------
+
+def test_check_sessions_uuid_migration_ok_when_db_absent(tmp_path):
+    from cc_session_tools.lib.doctor import Status, check_sessions_uuid_migration
+
+    results = check_sessions_uuid_migration(tmp_path / "sessions.db")
+    assert results[0].status == Status.OK
+    assert not (tmp_path / "sessions.db").exists()  # must not create it just to check
+
+
+def test_check_sessions_uuid_migration_ok_for_fresh_install(tmp_path):
+    """A brand-new sessions.db (3.0.0's own DDL) must never FAIL - it has the 3-column PK
+    and its marker from the moment connect() creates it."""
+    from cc_session_tools.lib import sessions_db
+    from cc_session_tools.lib.doctor import Status, check_sessions_uuid_migration
+
+    db_path = tmp_path / "sessions.db"
+    sessions_db.ensure_session_row(
+        tmp_path / "repos" / "proj", "20260101-good", uuid="uuid-1", path=db_path
+    )
+
+    results = check_sessions_uuid_migration(db_path)
+    assert results[0].status == Status.OK
+
+
+def _seed_old_schema_db(db_path: Path) -> None:
+    import sqlite3
+
+    conn = sqlite3.connect(str(db_path))
+    conn.execute(
+        "CREATE TABLE sessions (project_dir TEXT NOT NULL, basename TEXT NOT NULL, "
+        "start_date TEXT NOT NULL, last_opened REAL, last_active REAL, "
+        "discovered_at TEXT NOT NULL, updated_at TEXT, "
+        "PRIMARY KEY (project_dir, basename))"
+    )
+    conn.execute(
+        "CREATE TABLE migrations (name TEXT PRIMARY KEY, applied_at TEXT NOT NULL)"
+    )
+    conn.commit()
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.close()
+
+
+def test_check_sessions_uuid_migration_fails_when_old_schema_no_marker(tmp_path):
+    from cc_session_tools.lib.doctor import Status, check_sessions_uuid_migration
+
+    db_path = tmp_path / "sessions.db"
+    _seed_old_schema_db(db_path)
+
+    results = check_sessions_uuid_migration(db_path)
+    assert results[0].status == Status.FAIL
+    assert "migrate-uuid --write" in results[0].reason
+
+
+def test_check_sessions_uuid_migration_fails_when_old_schema_with_marker(tmp_path):
+    """Marker present but schema is still the old 2-column PK - a corrupt/reverted state,
+    not a fresh install (a fresh install's marker only ever coexists with the new schema)."""
+    import sqlite3
+
+    from cc_session_tools.lib.doctor import Status, check_sessions_uuid_migration
+
+    db_path = tmp_path / "sessions.db"
+    _seed_old_schema_db(db_path)
+    conn = sqlite3.connect(str(db_path))
+    conn.execute(
+        "INSERT INTO migrations (name, applied_at) VALUES (?, ?)",
+        ("sessions-uuid-pk", "2026-01-01T00:00:00Z"),
+    )
+    conn.commit()
+    conn.close()
+
+    results = check_sessions_uuid_migration(db_path)
+    assert results[0].status == Status.FAIL
+    assert "reverted" in results[0].reason or "copied" in results[0].reason
+
+
+def test_check_sessions_uuid_migration_ok_when_migrated(tmp_path):
+    from cc_session_tools.lib import sessions_db
+    from cc_session_tools.lib.doctor import Status, check_sessions_uuid_migration
+    from cc_session_tools.cli.migrate_sessions_db import migrate_uuid
+
+    db_path = tmp_path / "sessions.db"
+    _seed_old_schema_db(db_path)
+    assert migrate_uuid(db_path=db_path, dry_run=False, backup_dir=tmp_path / "backups") == 0
+
+    results = check_sessions_uuid_migration(db_path)
+    assert results[0].status == Status.OK
+
+
+def test_check_sessions_uuid_migration_fails_on_corrupt_file(tmp_path):
+    from cc_session_tools.lib.doctor import Status, check_sessions_uuid_migration
+
+    db_path = tmp_path / "sessions.db"
+    db_path.write_text("not a sqlite file")
+
+    results = check_sessions_uuid_migration(db_path)
+    assert results[0].status == Status.FAIL
+    assert "failed to open" in results[0].reason
 
 
 def test_run_all_checks_skips_sessions_project_dir_check_when_path_none(tmp_path: Path) -> None:

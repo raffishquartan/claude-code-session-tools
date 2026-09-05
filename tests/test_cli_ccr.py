@@ -52,7 +52,7 @@ def _make_session(repos: Path, project: str, basename: str) -> Path:
     sess = repos / project / "cc-sessions" / basename
     (sess / "working").mkdir(parents=True)
     (sess / "out").mkdir()
-    sessions_db.ensure_session_row(repos / project, basename)
+    sessions_db.ensure_session_row(repos / project, basename, uuid=f"uuid-{basename}")
     return sess
 
 
@@ -322,8 +322,8 @@ def test_ccr_warns_when_fragment_matches_only_a_corrupted_row(fake_repos, capsys
 
     conn = sessions_db.connect()
     conn.execute(
-        "INSERT INTO sessions (project_dir, basename, start_date, discovered_at) "
-        "VALUES ('.', '20260101-corrupt', '20260101', '2026-01-01T00:00:00Z')"
+        "INSERT INTO sessions (project_dir, basename, uuid, start_date, discovered_at) "
+        "VALUES ('.', '20260101-corrupt', 'uuid-20260101-corrupt', '20260101', '2026-01-01T00:00:00Z')"
     )
     conn.commit()
     conn.close()
@@ -343,7 +343,9 @@ def test_ccr_no_corrupted_row_warning_for_ordinary_out_of_root_miss(fake_repos, 
     from pathlib import Path
     from cc_session_tools.lib import sessions_db
 
-    sessions_db.ensure_session_row(Path("/some/other/root/proj"), "20260101-elsewhere")
+    sessions_db.ensure_session_row(
+        Path("/some/other/root/proj"), "20260101-elsewhere", uuid="uuid-elsewhere"
+    )
 
     rc = ccr.main(["elsewhere"])
 
@@ -364,8 +366,8 @@ def test_ccr_warns_about_corrupted_sibling_even_when_a_real_match_resumes(
     _make_session(fake_repos, "myproj", "20260504-shared-real")
     conn = sessions_db.connect()
     conn.execute(
-        "INSERT INTO sessions (project_dir, basename, start_date, discovered_at) "
-        "VALUES ('.', '20260101-shared-corrupt', '20260101', '2026-01-01T00:00:00Z')"
+        "INSERT INTO sessions (project_dir, basename, uuid, start_date, discovered_at) "
+        "VALUES ('.', '20260101-shared-corrupt', 'uuid-20260101-shared-corrupt', '20260101', '2026-01-01T00:00:00Z')"
     )
     conn.commit()
     conn.close()

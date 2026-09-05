@@ -60,15 +60,31 @@ def find_matching_sessions(fragment: str, roots: list[Path]) -> list[SessionMatc
     """Substring-match `fragment` against every session basename recorded in
     sessions.db, scoped to projects whose direct parent is one of `roots`
     (mirrors the historical filesystem-walk scoping: only projects directly
-    under a configured root are searched)."""
+    under a configured root are searched).
+
+    Deduplicated to one SessionMatch per (project_dir, basename): a Ctrl-L fork is
+    multiple sessions.db rows (one per uuid) sharing a basename, but they also share
+    one cc-sessions/<basename>/ directory and, for `ccr`'s purposes, one resume target -
+    disambiguating *which* of a forked tag's transcripts to actually resume is handled
+    downstream by ccr.py's find_all_jsonls_for_session()/_pick_duplicate_transcript(),
+    which reads the transcript files directly and can show size/date per candidate.
+    Returning one row per fork here instead would surface indistinguishable duplicate
+    entries (identical basename and project_dir) in ccr's fragment-match picker/list,
+    a confusing double-disambiguation UX for no benefit - see design.md's corrected
+    Decision 11 entry for this file in openspec/changes/release-3-0-0/."""
     from cc_session_tools.lib import sessions_db
 
     out: list[SessionMatch] = []
+    seen: set[tuple[Path, str]] = set()
     for row in sessions_db.list_sessions():
         if fragment not in row.basename:
             continue
         if row.project_dir.parent not in roots:
             continue
+        key = (row.project_dir, row.basename)
+        if key in seen:
+            continue
+        seen.add(key)
         session_dir = row.project_dir / "cc-sessions" / row.basename
         out.append(SessionMatch(
             basename=row.basename,

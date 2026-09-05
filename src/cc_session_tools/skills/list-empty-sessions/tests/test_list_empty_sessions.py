@@ -56,7 +56,7 @@ def _make_empty_session(
     td = _transcript_dir(fake_home, project)
     td.mkdir(parents=True, exist_ok=True)
     sessions_db.write_tag(uuid, tag)
-    sessions_db.ensure_session_row(project, basename)
+    sessions_db.ensure_session_row(project, basename, uuid=uuid)
     _write_jsonl(td / f"{uuid}.jsonl", [
         {"type": "user", "isMeta": True, "message": {"content": "hook output"}},
     ])
@@ -80,7 +80,7 @@ def _make_nonempty_session(
     td = _transcript_dir(fake_home, project)
     td.mkdir(parents=True, exist_ok=True)
     sessions_db.write_tag(uuid, tag)
-    sessions_db.ensure_session_row(project, basename)
+    sessions_db.ensure_session_row(project, basename, uuid=uuid)
     _write_jsonl(td / f"{uuid}.jsonl", [
         {"type": "user", "isMeta": True, "message": {"content": "hook"}},
         {"type": "user", "message": {"content": "please help me"}},

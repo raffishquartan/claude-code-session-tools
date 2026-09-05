@@ -43,17 +43,37 @@ CREATE TABLE IF NOT EXISTS session_tags (
 CREATE TABLE IF NOT EXISTS sessions (
     project_dir   TEXT NOT NULL,
     basename      TEXT NOT NULL,
+    uuid          TEXT NOT NULL,
     start_date    TEXT NOT NULL,
     last_opened   REAL,
     last_active   REAL,
     discovered_at TEXT NOT NULL,
     updated_at    TEXT,
-    PRIMARY KEY (project_dir, basename)
+    PRIMARY KEY (project_dir, basename, uuid)
 );
 CREATE INDEX IF NOT EXISTS idx_sessions_basename    ON sessions(basename);
 CREATE INDEX IF NOT EXISTS idx_sessions_start_date  ON sessions(start_date);
 CREATE INDEX IF NOT EXISTS idx_sessions_last_active ON sessions(last_active);
 CREATE INDEX IF NOT EXISTS idx_sessions_last_opened ON sessions(last_opened);
+-- fast "how many uuids share this (project_dir, basename)" lookup for fork detection
+CREATE INDEX IF NOT EXISTS idx_sessions_proj_basename ON sessions(project_dir, basename);
+
+-- Rows the 3.0.0 uuid migration could not confidently assign a uuid to (zero matching
+-- transcripts found - see migrate_sessions_db.migrate_uuid()). Never copied into `sessions`
+-- itself: a placeholder uuid value there would be a legal PK tuple that becomes a permanent
+-- phantom fork the next time the session is genuinely opened (see design.md Decision 7 in
+-- openspec/changes/release-3-0-0/). Reconciled automatically by ensure_session_row/
+-- touch_last_opened/touch_last_active the next time this (project_dir, basename) is written
+-- with a real uuid, or explicitly via `ccst repair sessions --uuid`.
+CREATE TABLE IF NOT EXISTS sessions_migration_ambiguous (
+    project_dir   TEXT NOT NULL,
+    basename      TEXT NOT NULL,
+    reason        TEXT NOT NULL,
+    start_date    TEXT NOT NULL,
+    discovered_at TEXT NOT NULL,
+    flagged_at    TEXT NOT NULL,
+    PRIMARY KEY (project_dir, basename)
+);
 
 CREATE TABLE IF NOT EXISTS doctor_mutes (
     name       TEXT PRIMARY KEY,
@@ -82,6 +102,14 @@ CREATE TABLE IF NOT EXISTS context_overrides (
 # not cleaned up").
 LEGACY_FLAT_FILE_MIGRATION = "flat-files-to-sessions-db"
 
+# Marker recorded once the `sessions` table's primary key has been rebuilt to
+# (project_dir, basename, uuid) - either by a completed `ccst sessions migrate-uuid --write` run,
+# or immediately at DDL-creation time for a brand-new file (see connect() below), which already
+# has the 3-column PK and therefore has nothing to migrate. Read by lib.doctor
+# (migration-to-3.0.0:sessions-uuid check) together with sessions_schema_is_uuid_keyed() - see
+# design.md Decision 1-2 in openspec/changes/release-3-0-0/ for the full four-state truth table.
+SESSIONS_UUID_MIGRATION = "sessions-uuid-pk"
+
 # Columns added after these tables already shipped - CREATE TABLE IF NOT EXISTS above is a
 # no-op against an existing table, so an already-initialised sessions.db needs these backfilled.
 _BACKFILL_COLUMNS: dict[str, dict[str, str]] = {
@@ -106,17 +134,47 @@ def _migrate_tables(conn: sqlite3.Connection) -> None:
         db.add_missing_columns(conn, table, columns)
 
 
+def sessions_schema_is_uuid_keyed(conn: sqlite3.Connection) -> bool:
+    """True if the `sessions` table's PRIMARY KEY is the 3-column
+    (project_dir, basename, uuid) form, false for the pre-3.0.0 2-column form (or a
+    `uuid` column that exists but was added via ALTER TABLE ADD COLUMN and is therefore
+    NOT part of the key).
+
+    Reads PRAGMA table_info's `pk` ordinal column (1-based position within the primary
+    key, 0 = not in the key at all) rather than just checking "does a uuid column
+    exist" - a bare ALTER TABLE ADD COLUMN uuid ... satisfies the latter while leaving
+    the original fork bug (upserts still conflict on the old 2-column key) fully
+    present. See design.md Decision 1-2."""
+    cols = {row["name"]: row["pk"] for row in conn.execute("PRAGMA table_info(sessions)")}
+    return (
+        cols.get("project_dir") == 1
+        and cols.get("basename") == 2
+        and cols.get("uuid") == 3
+    )
+
+
 def connect(*, path: Path | None = None, readonly: bool = False) -> sqlite3.Connection:
     """Open sessions.db (or an explicit override path — used by tests and by
     ccst doctor --mutes-file). readonly=True skips schema creation; callers
     that only read must handle sqlite3.OperationalError for a not-yet-created
     file (see lookup_tags/list_sessions/find_exact for the established
-    graceful-degradation pattern)."""
+    graceful-degradation pattern).
+
+    A brand-new file (did not exist before this call) has the current DDL's 3-column
+    PK from the moment it is created, so it records SESSIONS_UUID_MIGRATION immediately
+    - it has nothing to migrate, and must never be reported as pending by `ccst doctor`
+    (see design.md Decision 1-2's fresh-install handling). An existing pre-3.0.0 file is
+    untouched here: CREATE TABLE IF NOT EXISTS is a no-op against its old 2-column-PK
+    table, and only `ccst sessions migrate-uuid --write` rebuilds it."""
     target = path if path is not None else default_db_path()
     if readonly:
         return db.connect(target, readonly=True)
+    is_new_file = not target.exists()
     conn = db.connect(target, ddl=DDL)
     _migrate_tables(conn)
+    if is_new_file:
+        db.record_migration(conn, SESSIONS_UUID_MIGRATION, applied_at=_now_iso())
+        conn.commit()
     return conn
 
 
@@ -183,6 +241,7 @@ def lookup_tags(uuids: list[str], *, path: Path | None = None) -> dict[str, str]
 class SessionRow:
     project_dir: Path
     basename: str
+    uuid: str
     start_date: str
     last_opened: float
     last_active: float
@@ -192,9 +251,33 @@ def _row_to_session(row: sqlite3.Row) -> SessionRow:
     return SessionRow(
         project_dir=Path(row["project_dir"]),
         basename=row["basename"],
+        uuid=row["uuid"],
         start_date=row["start_date"],
         last_opened=row["last_opened"] or 0.0,
         last_active=row["last_active"] or 0.0,
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class AmbiguousRow:
+    """A `sessions` row the uuid migration could not confidently resolve - see
+    sessions_migration_ambiguous in the DDL and design.md Decision 7."""
+    project_dir: Path
+    basename: str
+    reason: str
+    start_date: str
+    discovered_at: str
+    flagged_at: str
+
+
+def _row_to_ambiguous(row: sqlite3.Row) -> AmbiguousRow:
+    return AmbiguousRow(
+        project_dir=Path(row["project_dir"]),
+        basename=row["basename"],
+        reason=row["reason"],
+        start_date=row["start_date"],
+        discovered_at=row["discovered_at"],
+        flagged_at=row["flagged_at"],
     )
 
 
@@ -219,14 +302,29 @@ def _is_valid_project_dir(project_dir: Path, basename: str, *, source: str) -> b
     return False
 
 
+def _reconcile_ambiguous_row(c: sqlite3.Connection, project_dir: Path, basename: str) -> None:
+    """Delete any sessions_migration_ambiguous row for (project_dir, basename) - called
+    before every real write to `sessions`. A row only ever lands in the sidecar because
+    the 3.0.0 migration found no matching transcript for it at migration time (see
+    design.md Decision 7); the moment this basename is genuinely written again with a
+    real uuid, the sidecar entry is stale and must go, or it would sit there forever
+    describing a session that has since been discovered. Cheap no-op when the sidecar
+    table is empty, which is the common case."""
+    c.execute(
+        "DELETE FROM sessions_migration_ambiguous WHERE project_dir = ? AND basename = ?",
+        (str(project_dir), basename),
+    )
+
+
 def ensure_session_row(
     project_dir: Path,
     basename: str,
     *,
+    uuid: str,
     path: Path | None = None,
     conn: sqlite3.Connection | None = None,
 ) -> None:
-    """Insert a row for (project_dir, basename) if absent. Never overwrites an
+    """Insert a row for (project_dir, basename, uuid) if absent. Never overwrites an
     existing row's timestamps — this is the safety-net call ccd.py makes right
     after creating a session directory, in case the SessionStart hook never
     fires (hooks disabled/broken); the hook's own touch_last_opened() upsert
@@ -246,11 +344,12 @@ def ensure_session_row(
     owns_conn = conn is None
     c = conn if conn is not None else connect(path=path)
     try:
+        _reconcile_ambiguous_row(c, project_dir, basename)
         c.execute(
-            "INSERT INTO sessions (project_dir, basename, start_date, discovered_at) "
-            "VALUES (?, ?, ?, ?) "
-            "ON CONFLICT(project_dir, basename) DO NOTHING",
-            (str(project_dir), basename, start_date, _now_iso()),
+            "INSERT INTO sessions (project_dir, basename, uuid, start_date, discovered_at) "
+            "VALUES (?, ?, ?, ?, ?) "
+            "ON CONFLICT(project_dir, basename, uuid) DO NOTHING",
+            (str(project_dir), basename, uuid, start_date, _now_iso()),
         )
         if owns_conn:
             c.commit()
@@ -263,11 +362,15 @@ def touch_last_opened(
     project_dir: Path,
     basename: str,
     *,
+    uuid: str,
     path: Path | None = None,
     when: float | None = None,
     conn: sqlite3.Connection | None = None,
 ) -> None:
-    """Upsert the last_opened timestamp (epoch seconds) for (project_dir, basename).
+    """Upsert the last_opened timestamp (epoch seconds) for (project_dir, basename, uuid).
+    Two forks of the same (project_dir, basename) sharing different uuids land in two
+    distinct rows instead of clobbering each other's timestamps - the fix this schema
+    change exists for.
 
     Also a no-op — with a loud stderr diagnostic — when `project_dir` is not
     absolute; see `_is_valid_project_dir`.
@@ -284,13 +387,14 @@ def touch_last_opened(
     owns_conn = conn is None
     c = conn if conn is not None else connect(path=path)
     try:
+        _reconcile_ambiguous_row(c, project_dir, basename)
         c.execute(
             "INSERT INTO sessions "
-            "(project_dir, basename, start_date, discovered_at, last_opened, updated_at) "
-            "VALUES (?, ?, ?, ?, ?, ?) "
-            "ON CONFLICT(project_dir, basename) DO UPDATE SET "
+            "(project_dir, basename, uuid, start_date, discovered_at, last_opened, updated_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?) "
+            "ON CONFLICT(project_dir, basename, uuid) DO UPDATE SET "
             "last_opened=excluded.last_opened, updated_at=excluded.updated_at",
-            (str(project_dir), basename, start_date, _now_iso(), ts, _now_iso()),
+            (str(project_dir), basename, uuid, start_date, _now_iso(), ts, _now_iso()),
         )
         if owns_conn:
             c.commit()
@@ -303,11 +407,15 @@ def touch_last_active(
     project_dir: Path,
     basename: str,
     *,
+    uuid: str,
     path: Path | None = None,
     when: float | None = None,
     conn: sqlite3.Connection | None = None,
 ) -> None:
-    """Upsert the last_active timestamp (epoch seconds) for (project_dir, basename).
+    """Upsert the last_active timestamp (epoch seconds) for (project_dir, basename, uuid).
+    Two forks of the same (project_dir, basename) sharing different uuids land in two
+    distinct rows instead of clobbering each other's timestamps - the fix this schema
+    change exists for.
 
     Also a no-op — with a loud stderr diagnostic — when `project_dir` is not
     absolute; see `_is_valid_project_dir`.
@@ -324,13 +432,14 @@ def touch_last_active(
     owns_conn = conn is None
     c = conn if conn is not None else connect(path=path)
     try:
+        _reconcile_ambiguous_row(c, project_dir, basename)
         c.execute(
             "INSERT INTO sessions "
-            "(project_dir, basename, start_date, discovered_at, last_active, updated_at) "
-            "VALUES (?, ?, ?, ?, ?, ?) "
-            "ON CONFLICT(project_dir, basename) DO UPDATE SET "
+            "(project_dir, basename, uuid, start_date, discovered_at, last_active, updated_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?) "
+            "ON CONFLICT(project_dir, basename, uuid) DO UPDATE SET "
             "last_active=excluded.last_active, updated_at=excluded.updated_at",
-            (str(project_dir), basename, start_date, _now_iso(), ts, _now_iso()),
+            (str(project_dir), basename, uuid, start_date, _now_iso(), ts, _now_iso()),
         )
         if owns_conn:
             c.commit()
@@ -377,7 +486,10 @@ def list_sessions(
     except sqlite3.OperationalError:
         return []
     try:
-        query = "SELECT project_dir, basename, start_date, last_opened, last_active FROM sessions"
+        query = (
+            "SELECT project_dir, basename, uuid, start_date, last_opened, last_active "
+            "FROM sessions"
+        )
         params: list[object] = []
         if project_dir is not None:
             query += " WHERE project_dir = ?"
@@ -397,15 +509,38 @@ def list_sessions(
 
 
 def delete_session_row(project_dir: Path, basename: str, *, path: Path | None = None) -> bool:
-    """Remove the sessions-table row for (project_dir, basename). Returns True
-    if a row was deleted. Used by the delete-sessions skill so a deleted
-    session stops appearing in ccs/ccr enumeration (there is no automatic GC —
-    see D6)."""
+    """Remove every sessions-table row for (project_dir, basename) - i.e. every fork
+    of this tag, not just one, since (project_dir, basename) is no longer the full key
+    (uuid is) but all of a tag's forks share one on-disk cc-sessions/<basename>/
+    directory being deleted together; leaving orphan rows for the other forks would be
+    worse than removing them all. Returns True if at least one row was deleted. Used by
+    the delete-sessions skill so a deleted session stops appearing in ccs/ccr
+    enumeration (there is no automatic GC — see D6)."""
     conn = connect(path=path)
     try:
         cur = conn.execute(
             "DELETE FROM sessions WHERE project_dir = ? AND basename = ?",
             (str(project_dir), basename),
+        )
+        conn.commit()
+        return cur.rowcount > 0
+    finally:
+        conn.close()
+
+
+def delete_session_row_exact(
+    project_dir: Path, basename: str, uuid: str, *, path: Path | None = None
+) -> bool:
+    """Remove exactly the one (project_dir, basename, uuid) row - unlike
+    delete_session_row(), which deletes every fork sharing (project_dir, basename)
+    (correct for "delete this whole session directory", wrong for a caller like
+    move_session.py that re-keys one specific fork's row at a time and must not touch
+    its siblings). Returns True if a row was deleted."""
+    conn = connect(path=path)
+    try:
+        cur = conn.execute(
+            "DELETE FROM sessions WHERE project_dir = ? AND basename = ? AND uuid = ?",
+            (str(project_dir), basename, uuid),
         )
         conn.commit()
         return cur.rowcount > 0
@@ -435,10 +570,110 @@ def find_exact(basename: str, *, path: Path | None = None) -> list[SessionRow]:
         return []
     try:
         rows = conn.execute(
-            "SELECT project_dir, basename, start_date, last_opened, last_active "
+            "SELECT project_dir, basename, uuid, start_date, last_opened, last_active "
             "FROM sessions WHERE basename = ?",
             (basename,),
         ).fetchall()
         return [_row_to_session(r) for r in rows]
+    finally:
+        conn.close()
+
+
+# ---------------------------------------------------------------------------
+# sessions_migration_ambiguous
+# ---------------------------------------------------------------------------
+
+def record_ambiguous_row(
+    project_dir: Path,
+    basename: str,
+    reason: str,
+    *,
+    start_date: str,
+    discovered_at: str,
+    path: Path | None = None,
+    conn: sqlite3.Connection | None = None,
+) -> None:
+    """Flag a (project_dir, basename) the uuid migration could not resolve. Called only
+    by migrate_sessions_db.migrate_uuid() during the rebuild - conn, if given, is the
+    same connection/transaction the rebuild itself runs in (caller owns commit/close),
+    matching the write_tag()/ensure_session_row() convention."""
+    owns_conn = conn is None
+    c = conn if conn is not None else connect(path=path)
+    try:
+        c.execute(
+            "INSERT INTO sessions_migration_ambiguous "
+            "(project_dir, basename, reason, start_date, discovered_at, flagged_at) "
+            "VALUES (?, ?, ?, ?, ?, ?) "
+            "ON CONFLICT(project_dir, basename) DO UPDATE SET "
+            "reason=excluded.reason, flagged_at=excluded.flagged_at",
+            (str(project_dir), basename, reason, start_date, discovered_at, _now_iso()),
+        )
+        if owns_conn:
+            c.commit()
+    finally:
+        if owns_conn:
+            c.close()
+
+
+def list_ambiguous_rows(*, path: Path | None = None) -> list[AmbiguousRow]:
+    """Every row still sitting in the migration-ambiguous sidecar, for `ccst repair
+    sessions --uuid` to inspect. Empty list if sessions.db has never been written to."""
+    try:
+        conn = connect(path=path, readonly=True)
+    except sqlite3.OperationalError:
+        return []
+    try:
+        rows = conn.execute(
+            "SELECT project_dir, basename, reason, start_date, discovered_at, flagged_at "
+            "FROM sessions_migration_ambiguous"
+        ).fetchall()
+        return [_row_to_ambiguous(r) for r in rows]
+    finally:
+        conn.close()
+
+
+def resolve_ambiguous_row(
+    project_dir: Path, basename: str, uuid: str, *, path: Path | None = None
+) -> bool:
+    """Manually assign a uuid to a sidecar row: inserts it into `sessions` using its
+    own stored start_date/discovered_at, then removes it from the sidecar. Returns
+    False (no-op) if no matching sidecar row exists. Used by `ccst repair sessions
+    --uuid` for a row an operator has independently identified the correct uuid for."""
+    conn = connect(path=path)
+    try:
+        row = conn.execute(
+            "SELECT start_date, discovered_at FROM sessions_migration_ambiguous "
+            "WHERE project_dir = ? AND basename = ?",
+            (str(project_dir), basename),
+        ).fetchone()
+        if row is None:
+            return False
+        conn.execute(
+            "INSERT INTO sessions (project_dir, basename, uuid, start_date, discovered_at) "
+            "VALUES (?, ?, ?, ?, ?) "
+            "ON CONFLICT(project_dir, basename, uuid) DO NOTHING",
+            (str(project_dir), basename, uuid, row["start_date"], row["discovered_at"]),
+        )
+        conn.execute(
+            "DELETE FROM sessions_migration_ambiguous WHERE project_dir = ? AND basename = ?",
+            (str(project_dir), basename),
+        )
+        conn.commit()
+        return True
+    finally:
+        conn.close()
+
+
+def delete_ambiguous_row(project_dir: Path, basename: str, *, path: Path | None = None) -> bool:
+    """Discard a sidecar row outright (e.g. its transcript is confirmed gone for good).
+    Returns True if a row was deleted."""
+    conn = connect(path=path)
+    try:
+        cur = conn.execute(
+            "DELETE FROM sessions_migration_ambiguous WHERE project_dir = ? AND basename = ?",
+            (str(project_dir), basename),
+        )
+        conn.commit()
+        return cur.rowcount > 0
     finally:
         conn.close()

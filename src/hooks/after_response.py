@@ -33,11 +33,24 @@ def main(argv: list[str] | None = None) -> int:
                 print(json.dumps({"systemMessage": msg}))
             else:
                 try:
-                    sessions_db.touch_last_active(
-                        session_dir_path.parent.parent, session_dir_path.name
+                    data: dict[str, object] = json.loads(sys.stdin.read() or "{}")
+                except json.JSONDecodeError:
+                    data = {}
+                session_id = str(data.get("session_id") or "")
+                if not session_id:
+                    print(
+                        "[after-response] session_id absent from hook payload; skipping "
+                        ".last-active update",
+                        file=sys.stderr,
                     )
-                except (OSError, sqlite3.Error) as exc:
-                    print(f"[after-response] Failed to record .last-active: {exc}", file=sys.stderr)
+                else:
+                    try:
+                        sessions_db.touch_last_active(
+                            session_dir_path.parent.parent, session_dir_path.name,
+                            uuid=session_id,
+                        )
+                    except (OSError, sqlite3.Error) as exc:
+                        print(f"[after-response] Failed to record .last-active: {exc}", file=sys.stderr)
 
     return 0
 

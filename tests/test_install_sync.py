@@ -176,11 +176,13 @@ def test_hooks_run_is_exempt() -> None:
     assert install_sync.is_auto_sync_exempt(noun="hooks", verb="run", opted_out=False)
 
 
-@pytest.mark.parametrize("noun", ["install-everything", "doctor", "repair", "migrate"])
+@pytest.mark.parametrize("noun", ["install-everything", "doctor", "repair", "migrate", "sessions"])
 def test_exempt_nouns(noun: str) -> None:
     """install-everything would recurse; doctor must stay able to REPORT the
     out-of-sync state rather than silently erasing it; repair and migrate are
-    the recovery tools for a broken store and must run under any store state."""
+    the recovery tools for a broken store and must run under any store state;
+    sessions' own migrate-uuid/migrate/list verbs read and rebuild sessions.db
+    directly and must not race an auto-apply mid-migration (3.0.0)."""
     assert install_sync.is_auto_sync_exempt(noun=noun, verb=None, opted_out=False)
 
 
@@ -210,7 +212,7 @@ def test_env_opt_out_exempts_everything() -> None:
 
 @pytest.mark.parametrize(
     "noun,verb",
-    [("pdata", "list"), ("sessions", "list"), ("telemetry", "trim"), ("gc", "report")],
+    [("pdata", "list"), ("telemetry", "trim"), ("gc", "report")],
 )
 def test_carriers_are_not_exempt(noun: str, verb: str) -> None:
     assert not install_sync.is_auto_sync_exempt(noun=noun, verb=verb, opted_out=False)

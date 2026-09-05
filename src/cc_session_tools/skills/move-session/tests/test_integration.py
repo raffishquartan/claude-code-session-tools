@@ -638,9 +638,9 @@ class TestSessionsDbSync:
         dst_cwd.mkdir()
         db_path = self._db_path()
         sessions_db.touch_last_opened(
-            src_cwd, "20260503-source", path=db_path, when=1000.0)
+            src_cwd, "20260503-source", uuid=uuid, path=db_path, when=1000.0)
         sessions_db.touch_last_active(
-            src_cwd, "20260503-source", path=db_path, when=2000.0)
+            src_cwd, "20260503-source", uuid=uuid, path=db_path, when=2000.0)
 
         rc, out, err = _run(
             "--src-session", str(src_dir),
@@ -669,7 +669,7 @@ class TestSessionsDbSync:
         cwd = projects_root / "proj"
         db_path = self._db_path()
         sessions_db.touch_last_active(
-            cwd, "20260503-old", path=db_path, when=3000.0)
+            cwd, "20260503-old", uuid=uuid, path=db_path, when=3000.0)
 
         rc, out, err = _run(
             "--src-session", str(src_dir),
@@ -710,6 +710,44 @@ class TestSessionsDbSync:
         dst_row = self._row(dst_cwd, "20260503-renamed")
         assert dst_row is not None, (
             "destination row must be created even when no source row existed")
+
+    def test_move_leaves_a_sibling_forks_row_untouched(
+            self, tmp_home, projects_root, roots_file, make_session):
+        """A forked basename has two sessions.db rows (two uuids). Moving one specific
+        transcript (the one discover_session_jsonl() resolves for this invocation) must
+        re-key only that row - a sibling fork's transcript is untouched by this move, so
+        its row must stay exactly where it was (design.md's corrected Decision 11 in
+        openspec/changes/release-3-0-0/: re-keying it too would point it at a project_dir
+        its real .jsonl never moved to)."""
+        from cc_session_tools.lib import sessions_db
+
+        src_dir, _, moved_uuid = make_session("src-proj", "20260503-forked")
+        src_cwd = projects_root / "src-proj"
+        dst_cwd = projects_root / "dst-proj"
+        dst_cwd.mkdir()
+        db_path = self._db_path()
+        sibling_uuid = "sibling-fork-uuid"
+        sessions_db.touch_last_active(
+            src_cwd, "20260503-forked", uuid=moved_uuid, path=db_path, when=1000.0
+        )
+        sessions_db.touch_last_active(
+            src_cwd, "20260503-forked", uuid=sibling_uuid, path=db_path, when=2000.0
+        )
+
+        rc, out, err = _run(
+            "--src-session", str(src_dir),
+            "--dst-cwd", str(dst_cwd),
+            "--uuid", moved_uuid,
+            "--execute",
+            env={"HOME": str(tmp_home)},
+        )
+        assert rc == 0, f"{err}\n{out}"
+
+        src_rows = sessions_db.list_sessions(project_dir=src_cwd, path=db_path)
+        assert [r.uuid for r in src_rows] == [sibling_uuid], (
+            "sibling fork's row must remain at the source, untouched")
+        dst_rows = sessions_db.list_sessions(project_dir=dst_cwd, path=db_path)
+        assert [r.uuid for r in dst_rows] == [moved_uuid]
 
 
 class TestTombstoneChainWording:

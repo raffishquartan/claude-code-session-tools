@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import sqlite3
 import sys
 import tarfile
 from datetime import datetime, timezone
@@ -31,10 +32,243 @@ from pathlib import Path
 
 from cc_session_tools.lib import db, doctor_mutes, sessions_db
 from cc_session_tools.lib.roots import RootsConfigError, load_session_roots
-from cc_session_tools.lib.sessions import iter_sessions, session_start_date
+from cc_session_tools.lib.sessions import (
+    iter_sessions,
+    session_start_date,
+    transcript_dir_for_project,
+)
+
+
+def resolve_all_uuids_for_basename(project_dir: Path, basename: str) -> list[str]:
+    """Every transcript uuid under project_dir's ~/.claude/projects/<encoded>/ directory
+    whose custom-title record equals `basename` exactly - the same basename<->uuid
+    resolution find_orphan_transcripts() already uses (lib/sessions.py:110-124), reused
+    here by both one-shot migrations that need to backfill a uuid for a
+    (project_dir, basename) row that predates uuid-aware sessions.db:
+
+      - 0 matches: no transcript found - the caller cannot safely guess a uuid and must
+        flag the row instead of writing it (see sessions_db.record_ambiguous_row and
+        design.md Decision 7 in openspec/changes/release-3-0-0/).
+      - 1 match: the unambiguous, common case - use it directly.
+      - >1 matches: this basename is a genuine fork (two live sessions that shared this
+        tag) - the caller should create one row per uuid, not treat it as ambiguous
+        (design.md Decision 6 measured this as the far more common cause of a
+        multi-match than genuine ambiguity)."""
+    from claude_code_usage.session_names import load_jsonl_titles
+
+    transcript_dir = transcript_dir_for_project(project_dir)
+    if not transcript_dir.is_dir():
+        return []
+    name_map = load_jsonl_titles(transcript_dir)
+    return sorted(uuid for uuid, title in name_map.items() if title == basename)
+
 
 DEFAULT_TAGS_DIR = Path.home() / ".cache" / "claude" / "session-tags"
 DEFAULT_MUTES_FILE = Path.home() / ".claude" / "cc-doctor-mutes.json"
+
+# Index statements re-run against the rebuilt table after the rename below - identical to
+# sessions_db.DDL's own set (kept in sync manually; a mismatch here would only affect this
+# one-shot migration's output schema, not the DDL new installs get, so drift would surface
+# immediately as a doctor/behavior difference between a migrated and a fresh-install db).
+_SESSIONS_INDEX_STATEMENTS = (
+    "CREATE INDEX IF NOT EXISTS idx_sessions_basename ON sessions(basename)",
+    "CREATE INDEX IF NOT EXISTS idx_sessions_start_date ON sessions(start_date)",
+    "CREATE INDEX IF NOT EXISTS idx_sessions_last_active ON sessions(last_active)",
+    "CREATE INDEX IF NOT EXISTS idx_sessions_last_opened ON sessions(last_opened)",
+    "CREATE INDEX IF NOT EXISTS idx_sessions_proj_basename ON sessions(project_dir, basename)",
+)
+
+
+def _check_sessions_db_not_locked(db_path: Path) -> None:
+    """Pre-flight concurrency guard, structurally identical to
+    lib/pdata/init_service._check_db_not_locked(): refuse to start the destructive rebuild
+    if another connection already holds a write lock on sessions.db right now - e.g. a live
+    SessionStart/Stop hook mid-write - rather than letting DROP TABLE/RENAME race it and
+    potentially corrupt the file. A throwaway BEGIN IMMEDIATE/ROLLBACK on its own short-lived,
+    busy_timeout=0 connection, not a lock held across the migration itself.
+
+    No-op if db_path does not exist yet - nothing to guard, and connecting would create an
+    empty file just to probe it (mirrors the precedent's same no-op-on-absent-file behavior).
+    """
+    if not db_path.exists():
+        return
+    conn = db.connect(db_path)
+    conn.isolation_level = None
+    try:
+        conn.execute("PRAGMA busy_timeout=0")
+        try:
+            conn.execute("BEGIN IMMEDIATE")
+        except sqlite3.OperationalError as exc:
+            raise ValueError(
+                f"cannot start 'ccst sessions migrate-uuid --write': another process appears "
+                f"to be using {db_path} right now ({exc}) - close any running `claude` "
+                "sessions, wait for it to finish, or confirm it isn't stuck, then re-run"
+            ) from exc
+        else:
+            conn.execute("ROLLBACK")
+    finally:
+        conn.close()
+
+
+def _read_legacy_sessions_rows(conn: sqlite3.Connection) -> list[sqlite3.Row]:
+    """Every row from the pre-3.0.0 (project_dir, basename) `sessions` table, via raw SQL -
+    not sessions_db.list_sessions()/_row_to_session, which require the `uuid` column this
+    migration is the one adding. Safe to call against either schema shape: only the columns
+    that exist pre-3.0.0 are selected."""
+    return conn.execute(
+        "SELECT project_dir, basename, start_date, last_opened, last_active, "
+        "discovered_at, updated_at FROM sessions"
+    ).fetchall()
+
+
+class UuidMigrationPlan:
+    """Result of resolving every legacy row's uuid(s) - shared between --dry-run's report
+    and --write's actual rebuild so the two can never disagree about what would happen."""
+
+    def __init__(self) -> None:
+        self.resolved: list[tuple[sqlite3.Row, str]] = []  # (legacy row, uuid)
+        self.ambiguous: list[sqlite3.Row] = []  # legacy rows with zero matching transcripts
+
+    @property
+    def basenames_processed(self) -> int:
+        seen = {(r["project_dir"], r["basename"]) for r, _ in self.resolved}
+        seen |= {(r["project_dir"], r["basename"]) for r in self.ambiguous}
+        return len(seen)
+
+
+def plan_uuid_migration(legacy_rows: list[sqlite3.Row]) -> UuidMigrationPlan:
+    plan = UuidMigrationPlan()
+    for row in legacy_rows:
+        uuids = resolve_all_uuids_for_basename(Path(row["project_dir"]), row["basename"])
+        if not uuids:
+            plan.ambiguous.append(row)
+        else:
+            for uuid in uuids:
+                plan.resolved.append((row, uuid))
+    return plan
+
+
+def print_uuid_migration_dry_run(plan: UuidMigrationPlan, *, db_path: Path) -> None:
+    print(f"sessions.db: {db_path}")
+    print(f"Legacy rows examined: {plan.basenames_processed}")
+    forked = len(plan.resolved) - (plan.basenames_processed - len(plan.ambiguous))
+    print(f"  resolved: {len(plan.resolved)} row(s) will be written"
+          f"{f' ({forked} from forks with >1 matching transcript)' if forked > 0 else ''}")
+    print(f"  ambiguous (no matching transcript found): {len(plan.ambiguous)}")
+    for row in plan.ambiguous:
+        print(f"    {row['project_dir']} / {row['basename']}")
+    print()
+    print("Dry-run complete - nothing was written. Re-run with --write to migrate, after")
+    print("backing up: this rebuilds the sessions table and is a one-way schema change.")
+
+
+def migrate_uuid(*, db_path: Path, dry_run: bool, backup_dir: Path | None = None) -> int:
+    """The 3.0.0 schema migration: rebuild `sessions` from the pre-3.0.0
+    (project_dir, basename) primary key to (project_dir, basename, uuid), backfilling each
+    existing row's uuid from its transcript (resolve_all_uuids_for_basename). See design.md
+    (openspec/changes/release-3-0-0/) Decision 3-4 for the full rebuild rationale - this is a
+    genuine table rebuild (create/insert-select/drop/rename/reindex), not an ALTER TABLE, since
+    SQLite cannot extend a PRIMARY KEY in place.
+
+    Assumes sessions.db is on a native Linux/macOS filesystem, matching this repo's platform
+    support statement (README.md) - not specifically guarded against a `/mnt/c` 9p-mounted
+    WSL2 path, where WAL and locking are already documented as degraded
+    (lib/pdata/backup.py).
+    """
+    if not db_path.exists():
+        print(f"No sessions.db found at {db_path} - nothing to migrate (a fresh install "
+              "already has the current schema).")
+        return 0
+
+    # A plain db.connect() with no ddl - not sessions_db.connect(), whose DDL script would
+    # contend for a write lock (executescript()) just to inspect a file that may currently
+    # be held by a live hook write, defeating the point of checking before touching anything.
+    conn = db.connect(db_path)
+    try:
+        if sessions_db.sessions_schema_is_uuid_keyed(conn) and db.migration_applied(
+            conn, sessions_db.SESSIONS_UUID_MIGRATION
+        ):
+            print(f"{db_path} is already migrated to the uuid-aware schema - nothing to do.")
+            return 0
+        legacy_rows = _read_legacy_sessions_rows(conn)
+    finally:
+        conn.close()
+
+    plan = plan_uuid_migration(legacy_rows)
+
+    if dry_run:
+        print_uuid_migration_dry_run(plan, db_path=db_path)
+        return 0
+
+    _check_sessions_db_not_locked(db_path)
+
+    backup_dir = backup_dir if backup_dir is not None else db_path.parent / "migration-backups"
+    backup_dir.mkdir(parents=True, exist_ok=True)
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    backup_path = backup_dir / f"sessions-pre-3.0.0-{stamp}.db"
+    db.backup_to(db_path, backup_path)
+    print(f"Backup written: {backup_path}")
+
+    conn = sessions_db.connect(path=db_path)
+    conn.isolation_level = None
+    try:
+        conn.execute("PRAGMA foreign_keys=OFF")
+        conn.execute("BEGIN IMMEDIATE")
+        try:
+            conn.execute("DROP TABLE IF EXISTS sessions_new")
+            conn.execute(
+                "CREATE TABLE sessions_new ("
+                "project_dir TEXT NOT NULL, basename TEXT NOT NULL, uuid TEXT NOT NULL, "
+                "start_date TEXT NOT NULL, last_opened REAL, last_active REAL, "
+                "discovered_at TEXT NOT NULL, updated_at TEXT, "
+                "PRIMARY KEY (project_dir, basename, uuid))"
+            )
+            for row, uuid in plan.resolved:
+                conn.execute(
+                    "INSERT INTO sessions_new (project_dir, basename, uuid, start_date, "
+                    "last_opened, last_active, discovered_at, updated_at) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                    (
+                        row["project_dir"], row["basename"], uuid, row["start_date"],
+                        row["last_opened"], row["last_active"], row["discovered_at"],
+                        row["updated_at"],
+                    ),
+                )
+            for row in plan.ambiguous:
+                conn.execute(
+                    "INSERT INTO sessions_migration_ambiguous "
+                    "(project_dir, basename, reason, start_date, discovered_at, flagged_at) "
+                    "VALUES (?, ?, ?, ?, ?, ?) "
+                    "ON CONFLICT(project_dir, basename) DO UPDATE SET "
+                    "reason=excluded.reason, flagged_at=excluded.flagged_at",
+                    (
+                        row["project_dir"], row["basename"], "no-transcript-found",
+                        row["start_date"], row["discovered_at"], sessions_db._now_iso(),
+                    ),
+                )
+            conn.execute("DROP TABLE sessions")
+            conn.execute("ALTER TABLE sessions_new RENAME TO sessions")
+            for stmt in _SESSIONS_INDEX_STATEMENTS:
+                conn.execute(stmt)
+            db.record_migration(
+                conn, sessions_db.SESSIONS_UUID_MIGRATION, applied_at=sessions_db._now_iso()
+            )
+            conn.execute("COMMIT")
+        except BaseException:
+            conn.execute("ROLLBACK")
+            raise
+        finally:
+            conn.execute("PRAGMA foreign_keys=ON")
+        db.checkpoint(conn)
+    finally:
+        conn.close()
+
+    print(
+        f"Migrated {len(plan.resolved)} row(s) across {plan.basenames_processed} basename(s); "
+        f"{len(plan.ambiguous)} flagged ambiguous (see `ccst repair sessions --uuid` to "
+        "inspect/resolve them)."
+    )
+    return 0
 
 
 def _migrate_tags(tags_dir: Path, *, db_path: Path, dry_run: bool) -> tuple[int, int]:
@@ -103,11 +337,25 @@ def _migrate_activity(roots: list[Path], *, db_path: Path, dry_run: bool) -> tup
                             f"(opened={opened_mtime}, active={active_mtime})"
                         )
                     else:
-                        sessions_db.ensure_session_row(proj, basename, conn=conn)
-                        if opened_mtime is not None:
-                            sessions_db.touch_last_opened(proj, basename, when=opened_mtime, conn=conn)
-                        if active_mtime is not None:
-                            sessions_db.touch_last_active(proj, basename, when=active_mtime, conn=conn)
+                        uuids = resolve_all_uuids_for_basename(proj, basename)
+                        if not uuids:
+                            sessions_db.record_ambiguous_row(
+                                proj, basename, "no-transcript-found",
+                                start_date=session_start_date(basename) or "",
+                                discovered_at=sessions_db._now_iso(),
+                                conn=conn,
+                            )
+                        else:
+                            for uuid in uuids:
+                                sessions_db.ensure_session_row(proj, basename, uuid=uuid, conn=conn)
+                                if opened_mtime is not None:
+                                    sessions_db.touch_last_opened(
+                                        proj, basename, uuid=uuid, when=opened_mtime, conn=conn
+                                    )
+                                if active_mtime is not None:
+                                    sessions_db.touch_last_active(
+                                        proj, basename, uuid=uuid, when=active_mtime, conn=conn
+                                    )
                     migrated += 1
         if conn is not None:
             conn.commit()
@@ -207,8 +455,14 @@ def run_migration(
         return 0
 
     problems: list[str] = []
-    if len(sessions_db.list_sessions(path=db_path)) < sess_migrated:
-        problems.append("sessions table row count is lower than migrated count")
+    # A migrated basename lands either as >=1 row in `sessions` (1 row normally, or one
+    # per uuid for a genuine fork) or as exactly one row in the migration-ambiguous
+    # sidecar (no transcript could be found to resolve its uuid) - never neither, so the
+    # two counts together must be at least the number of basenames processed.
+    written = len(sessions_db.list_sessions(path=db_path))
+    ambiguous = len(sessions_db.list_ambiguous_rows(path=db_path))
+    if written + ambiguous < sess_migrated:
+        problems.append("sessions table + ambiguous-sidecar row count is lower than migrated count")
     migrated_tags = sessions_db.lookup_tags(
         [f.stem for f in tags_dir.glob("*.tag")] if tags_dir.is_dir() else [], path=db_path
     )
