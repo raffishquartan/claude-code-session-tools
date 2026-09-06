@@ -11,7 +11,11 @@ checks (skill-marker exceptions short-circuit them):
 
 If all three hold and the assistant-to-user reply gap is under 30 minutes,
 the call is allowed. Otherwise the hook either prints a warning (default,
-``CCCS_ENFORCE_8DIGIT=warn``) or blocks with exit 2 (``=block``).
+``CCCS_ENFORCE_8DIGIT=warn``) or blocks with exit 2 (``=block``) - and, either
+way, pushes the same message as a Telegram notification via
+``lib.scheduler.notify.send_telegram`` (best-effort; never changes the exit
+code or stderr message on its own failure), so the block/warn reaches the
+user even when they are away from the terminal.
 
 Skill-marker exceptions live under ``~/.cache/claude/markers/`` (override with
 the ``CCCS_MARKERS_DIR`` env var) and have a 1-hour TTL based on file mtime.
@@ -31,6 +35,7 @@ import sys
 import time
 from typing import Literal
 
+from cc_session_tools.lib.scheduler.notify import send_telegram
 from hooks.markers import markers_dir
 from hooks.transcript import (
     TranscriptNotFound,
@@ -209,14 +214,13 @@ def verify(
     try:
         turns = load_transcript(session_id=session_id, cwd=cwd)
     except TranscriptNotFound as e:
-        return VerificationResult(
-            exit_code=2,
-            message=(
-                f"[8digit-block] cannot verify 8-digit confirmation for "
-                f"{tool_name}: transcript not found ({e}). Re-run from a real "
-                f"Claude Code session, or set the appropriate skill marker."
-            ),
+        message = (
+            f"[8digit-block] cannot verify 8-digit confirmation for "
+            f"{tool_name}: transcript not found ({e}). Re-run from a real "
+            f"Claude Code session, or set the appropriate skill marker."
         )
+        send_telegram(message)
+        return VerificationResult(exit_code=2, message=message)
 
     # 3. Three-part verification.
     failures: list[str] = []
@@ -251,21 +255,19 @@ def verify(
 
     detail = "; ".join(failures) if failures else "verification failed"
     if enforce == "block":
-        return VerificationResult(
-            exit_code=2,
-            message=(
-                f"[8digit-block] {tool_name}: {detail}. Generate a fresh "
-                f"8-digit code, share it as 'Respond with NNNNNNNN ...', and "
-                f"only proceed if the user replies with exactly that string."
-            ),
+        message = (
+            f"[8digit-block] {tool_name}: {detail}. Generate a fresh "
+            f"8-digit code, share it as 'Respond with NNNNNNNN ...', and "
+            f"only proceed if the user replies with exactly that string."
         )
-    return VerificationResult(
-        exit_code=0,
-        message=(
-            f"[8digit-warn] {tool_name}: {detail}. "
-            f"(Set CCCS_ENFORCE_8DIGIT=block to enforce.)"
-        ),
+        send_telegram(message)
+        return VerificationResult(exit_code=2, message=message)
+    message = (
+        f"[8digit-warn] {tool_name}: {detail}. "
+        f"(Set CCCS_ENFORCE_8DIGIT=block to enforce.)"
     )
+    send_telegram(message)
+    return VerificationResult(exit_code=0, message=message)
 
 
 def main(argv: list[str] | None = None) -> int:
