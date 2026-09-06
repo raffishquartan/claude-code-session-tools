@@ -169,6 +169,14 @@ def list_extension_columns(conn: sqlite3.Connection, record_group: str) -> list[
     ]
 
 
+def _extension_column_type(conn: sqlite3.Connection, table: str, field_name: str) -> str | None:
+    """The stored SQL type of an existing extension column, or None if it doesn't exist."""
+    for r in conn.execute(f'PRAGMA table_info("{table}")'):
+        if r["name"] == field_name:
+            return str(r["type"])
+    return None
+
+
 def add_extension_column(
     conn: sqlite3.Connection,
     record_group: str,
@@ -179,16 +187,32 @@ def add_extension_column(
 ) -> bool:
     """Idempotent: creates ext_<group> if missing (backfilling existing rows — see
     ensure_extension_table), then ADD COLUMN if field_name isn't already a column (no-op if it
-    already exists — spec §5's schema add-field idempotency). Returns True iff a column was
-    actually added, False on the no-op path — a caller gating a side effect (e.g. a
-    vector-clock bump) on whether this call changed anything needs that distinction, not just
-    "did it run without erroring". Caller owns the transaction."""
+    already exists with the SAME type — spec §5's schema add-field idempotency). Returns True
+    iff a column was actually added, False on the no-op path — a caller gating a side effect
+    (e.g. a vector-clock bump) on whether this call changed anything needs that distinction,
+    not just "did it run without erroring". Caller owns the transaction.
+
+    Raises ValueError if field_name already exists with a DIFFERENT sql_type than requested -
+    rather than silently keeping the original type with no error, which is what this function
+    used to do (a rerun could look successful while dropping the type change entirely). An
+    actual column-type change is a real ALTER-TABLE-cannot-do-this rebuild, the same complexity
+    class as a primary-key change - disproportionate for this metadata-editing command; the
+    remediation text below is the deliberate manual escape hatch instead of building one."""
     naming.validate_field_name(field_name)
     normalized_type = _normalize_column_type(sql_type)
     ensure_extension_table(conn, record_group)
     table = naming.extension_table_name(record_group)
     existing = set(list_extension_columns(conn, record_group))
     if field_name in existing:
+        current_type = _extension_column_type(conn, table, field_name)
+        if current_type is not None and current_type != normalized_type:
+            raise ValueError(
+                f"field {field_name!r} in record_group {record_group!r} already has type "
+                f"{current_type!r}; you requested {normalized_type!r}. add-field never changes "
+                f"an existing column's type in place. To actually change it, drop and recreate "
+                f"the extension column by hand (this loses existing data in that column), or "
+                f"open an issue if this needs first-class support."
+            )
         return False
     if default is None:
         conn.execute(f'ALTER TABLE "{table}" ADD COLUMN "{field_name}" {normalized_type}')
