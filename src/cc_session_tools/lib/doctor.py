@@ -205,6 +205,51 @@ def check_no_stale_hooks(settings: dict[str, Any]) -> list[CheckResult]:
     ]
 
 
+def check_no_stale_skill_symlinks(skills_target_dir: Path) -> list[CheckResult]:
+    """WARN for every symlink under the installed skills directory whose target no longer
+    exists - the case a bundled skill's rename or removal leaves behind
+    (``ccst skills install`` only ever creates symlinks for skills currently in the bundled
+    source; it never removes one for a name that stopped being bundled, and
+    :func:`check_skill_symlink` only checks skills that ARE still bundled, so nothing else
+    catches this). Mirrors :func:`check_no_stale_hooks`'s shape for the same underlying
+    problem (a rename/removal leaving a stale registration behind), but WARN rather than
+    FAIL: a broken skill symlink degrades a feature, it does not break every matching event
+    of a running session the way a stale hook registration does.
+
+    OK (no findings) if the directory doesn't exist yet - nothing to check, not an error."""
+    if not skills_target_dir.is_dir():
+        return [CheckResult(
+            name="skills:no-stale",
+            status=Status.OK,
+            reason="skills directory does not exist yet",
+        )]
+
+    stale = [
+        entry for entry in sorted(skills_target_dir.iterdir())
+        if entry.is_symlink() and not entry.exists()
+    ]
+
+    if not stale:
+        return [CheckResult(
+            name="skills:no-stale",
+            status=Status.OK,
+            reason="no symlinks for removed/renamed skills",
+        )]
+
+    return [
+        CheckResult(
+            name=f"skills:stale:{entry.name}",
+            status=Status.WARN,
+            reason=(
+                f"{entry} points to {os.readlink(entry)}, which no longer exists - the "
+                f"bundled skill it named was likely renamed or removed. Safe to remove: "
+                f"rm {entry}"
+            ),
+        )
+        for entry in stale
+    ]
+
+
 def check_skill_symlink(skill_name: str, skill_src: Path, skills_dir: Path) -> CheckResult:
     """Check that skills_dir/<skill_name> is a valid CCST skill symlink.
 
@@ -1030,6 +1075,11 @@ def run_all_checks(
                 reason="bundled skills/ directory not found; skill checks skipped",
             )
         )
+
+    # ...and the reverse direction: symlinks for skills that no longer exist (renamed/removed).
+    # Runs regardless of whether skills_source_dir resolved above - an orphaned symlink can be
+    # reported even if source discovery failed for an unrelated reason.
+    results.extend(check_no_stale_skill_symlinks(skills_target_dir))
 
     # Bundled ccsched jobs
     from cc_session_tools.lib.scheduler import bundled_jobs
