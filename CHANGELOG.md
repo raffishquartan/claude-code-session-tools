@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.2.1] - 2026-09-06
+
+### Added
+
+- `pm-project-layout-reference` skill now documents a shared `<file type>` vocabulary
+  (`summary`/`transcript`/`audio`) for `meetings-and-calls/` filenames, promoting `audio` from
+  project-local documentation (maxella) to the cross-project reference. Other project-specific
+  values (`analysis`, `transcript-whisper`, `reasoning-summary`, `notes-email`) are noted as
+  precedented extension examples rather than promoted. Takes effect for other sessions only after
+  a reinstall (`uv tool install --reinstall cc-session-tools` or equivalent).
+
 ## [3.2.0] - 2026-09-06
 
 ### Added
