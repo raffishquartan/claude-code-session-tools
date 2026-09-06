@@ -151,3 +151,15 @@ def test_pm_pdata_audit_and_migrate_are_bundled_skills():
     discovered = {p.name for p in ccst._discover_skills(ccst._discover_source_dir())}
     assert "pm-pdata-do-audit-and-prepare-to-migrate" in discovered
     assert "pm-pdata-do-migrate" in discovered
+
+
+def test_compact_smart_is_a_bundled_skill():
+    """compact-smart drafts a /compact preservation paragraph and hands back the exact
+    command to run - see openspec/changes/add-compact-smart-skill (archived) for the design.
+    Pure instruction skill, no backing script - this discovery assertion plus a frontmatter
+    sanity check is the extent of what's mechanically testable (design.md Decision 1)."""
+    skills = {p.name: p for p in ccst._discover_skills(ccst._discover_source_dir())}
+    assert "compact-smart" in skills
+    text = (skills["compact-smart"] / "SKILL.md").read_text()
+    assert text.startswith("---\nname: compact-smart\n")
+    assert "/compact-smart" in text

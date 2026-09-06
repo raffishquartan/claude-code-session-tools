@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.2.0] - 2026-09-06
+
+### Added
+
+- New bundled skill `compact-smart` (`/compact-smart`). Drafts the compaction-preservation
+  paragraph the user otherwise asks for by hand before most `/compact` calls - decisions and
+  their rationale, file/PR/branch pointers, standing constraints, and outstanding tasks split
+  into "Claude's next steps" vs. the user's own to-dos - shows the draft for
+  confirmation/edits, then hands back the exact `/compact <text>` command to run. Does not
+  invoke `/compact` itself (that command is excluded from what a skill can invoke). Refreshes
+  the session's `working/WORKLOG.md` if one already exists (never creates one), which also
+  clears the existing `worklog-guard` PreCompact hook's staleness gate for the command it
+  hands back.
+
 ## [3.1.0] - 2026-09-06
 
 ### Added
