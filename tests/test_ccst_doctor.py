@@ -21,6 +21,7 @@ from cc_session_tools.lib.doctor import (
     check_hook_registered,
     check_install_everything_synced,
     check_no_stale_hooks,
+    check_no_stale_skill_symlinks,
     check_pending_data_store_migration,
     check_pending_pdata_migration,
     check_pypi_version,
@@ -201,6 +202,55 @@ def test_check_no_stale_hooks_ignores_foreign_commands() -> None:
     assert [r.status for r in results] == [Status.OK]
 
 
+# ---------- check_no_stale_skill_symlinks ----------
+
+def test_check_no_stale_skill_symlinks_ok_when_target_exists(tmp_path: Path) -> None:
+    skills_dir = tmp_path / "skills"
+    skills_dir.mkdir()
+    real = tmp_path / "bundled" / "my-skill"
+    real.mkdir(parents=True)
+    (skills_dir / "my-skill").symlink_to(real)
+
+    results = check_no_stale_skill_symlinks(skills_dir)
+    assert [r.status for r in results] == [Status.OK]
+
+
+def test_check_no_stale_skill_symlinks_warns_on_broken_target(tmp_path: Path) -> None:
+    skills_dir = tmp_path / "skills"
+    skills_dir.mkdir()
+    gone = tmp_path / "bundled" / "pm-pdata-audit"  # never created
+    (skills_dir / "pm-pdata-audit").symlink_to(gone)
+
+    results = check_no_stale_skill_symlinks(skills_dir)
+    assert [r.status for r in results] == [Status.WARN]
+    assert "pm-pdata-audit" in results[0].name
+    assert "pm-pdata-audit" in results[0].reason
+
+
+def test_check_no_stale_skill_symlinks_ignores_non_symlinks(tmp_path: Path) -> None:
+    skills_dir = tmp_path / "skills"
+    skills_dir.mkdir()
+    (skills_dir / "not-a-symlink").mkdir()
+
+    results = check_no_stale_skill_symlinks(skills_dir)
+    assert [r.status for r in results] == [Status.OK]
+
+
+def test_check_no_stale_skill_symlinks_ok_when_dir_missing(tmp_path: Path) -> None:
+    results = check_no_stale_skill_symlinks(tmp_path / "does-not-exist")
+    assert [r.status for r in results] == [Status.OK]
+
+
+def test_check_no_stale_skill_symlinks_reports_every_stale_entry(tmp_path: Path) -> None:
+    skills_dir = tmp_path / "skills"
+    skills_dir.mkdir()
+    (skills_dir / "old-one").symlink_to(tmp_path / "gone-one")
+    (skills_dir / "old-two").symlink_to(tmp_path / "gone-two")
+
+    results = check_no_stale_skill_symlinks(skills_dir)
+    assert {r.name for r in results} == {"skills:stale:old-one", "skills:stale:old-two"}
+
+
 def test_run_all_checks_fails_on_a_stale_hook_entry(tmp_path: Path) -> None:
     settings = tmp_path / "settings.json"
     settings.write_text(json.dumps(_settings_with_cmd("ccst hooks run prompt-guard")))
@@ -216,6 +266,27 @@ def test_run_all_checks_fails_on_a_stale_hook_entry(tmp_path: Path) -> None:
     )
     stale = [r for r in results if r.name.startswith("hooks:stale:")]
     assert [r.status for r in stale] == [Status.FAIL]
+
+
+def test_run_all_checks_warns_on_a_stale_skill_symlink(tmp_path: Path) -> None:
+    settings = tmp_path / "settings.json"
+    settings.write_text(json.dumps({"hooks": {}}))
+    bundle = Path(__file__).parent.parent / "src" / "cc_session_tools" / "config" / "hooks-bundle.json"
+    skills_target_dir = tmp_path / "skills"
+    skills_target_dir.mkdir()
+    (skills_target_dir / "pm-pdata-audit").symlink_to(tmp_path / "gone")
+
+    results = run_all_checks(
+        installed_version="1.4.1",
+        settings_path=settings,
+        bundle_path=bundle,
+        skills_source_dir=None,
+        skills_target_dir=skills_target_dir,
+        env={"CLAUDE_SESSION_TOOLS_REPO_ROOT": None, "CLAUDE_SESSION_TOOLS_PROJ_ROOT": None},
+        skip_pypi=True,
+    )
+    stale = [r for r in results if r.name == "skills:stale:pm-pdata-audit"]
+    assert [r.status for r in stale] == [Status.WARN]
 
 
 def test_run_all_checks_root_env_hints_name_env_sh_not_ccl_sh(tmp_path: Path) -> None:

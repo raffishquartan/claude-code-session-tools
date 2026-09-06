@@ -58,12 +58,35 @@ def test_pdata_schema_add_field(base_env):
     assert r.returncode == 0, r.stderr
 
 
+def test_pdata_schema_add_field_help_documents_description_edit_behavior(base_env):
+    r = _run(base_env, "pdata", "schema", "add-field", "--help")
+    assert r.returncode == 0
+    assert "description in place" in r.stdout
+    assert "no separate 'edit-description'" in r.stdout
+
+
 def test_pdata_schema_add_field_rejects_bad_field_spec(base_env):
     r = _run(
         base_env, "pdata", "schema", "add-field", "--project", "testproj",
         "--group", "key-events", "--field", "not-a-valid-spec",
     )
     assert r.returncode == 2
+
+
+def test_pdata_schema_add_field_rejects_type_mismatch_on_rerun(base_env):
+    """Rerunning add-field against an existing field with a different type must exit 2 with
+    a clear message, not silently succeed while dropping the type change."""
+    _run(
+        base_env, "pdata", "schema", "add-field", "--project", "testproj",
+        "--group", "key-events", "--field", "sender:TEXT",
+    )
+    r = _run(
+        base_env, "pdata", "schema", "add-field", "--project", "testproj",
+        "--group", "key-events", "--field", "sender:INTEGER",
+    )
+    assert r.returncode == 2
+    assert "sender" in r.stderr
+    assert "TEXT" in r.stderr and "INTEGER" in r.stderr
 
 
 def test_pdata_schema_list_and_show(base_env):

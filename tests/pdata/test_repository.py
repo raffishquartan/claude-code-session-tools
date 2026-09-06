@@ -191,6 +191,48 @@ def test_add_extension_column_is_idempotent_noop_if_column_exists(monkeypatch, t
         conn.close()
 
 
+def test_add_extension_column_rejects_type_change_on_existing_field(monkeypatch, tmp_path):
+    """Rerunning add-field against an existing field with a DIFFERENT sql_type must be
+    rejected loudly, not silently keep the original type with no error (the bug this test
+    guards against: the original code just returned False here, dropping the type change
+    with no error and no log line)."""
+    import pytest
+
+    monkeypatch.setenv("CCST_PROJECT_DB_DIR", str(tmp_path))
+    conn = repository.connect("testproj")
+    try:
+        with repository._immediate(conn):
+            repository.add_extension_column(conn, "key-events", "sender", "TEXT", default=None)
+        with pytest.raises(ValueError, match="TEXT.*INTEGER|INTEGER.*TEXT"):
+            with repository._immediate(conn):
+                repository.add_extension_column(conn, "key-events", "sender", "INTEGER", default=None)
+        # The original type must survive the rejected rerun untouched.
+        cols = {r["name"]: r["type"] for r in conn.execute('PRAGMA table_info("ext_key_events")')}
+        assert cols["sender"] == "TEXT"
+    finally:
+        conn.close()
+
+
+def test_add_extension_column_same_type_rerun_still_a_noop(monkeypatch, tmp_path):
+    """Rerunning with the SAME sql_type must remain a safe no-op - only an actual type
+    change is rejected."""
+    monkeypatch.setenv("CCST_PROJECT_DB_DIR", str(tmp_path))
+    conn = repository.connect("testproj")
+    try:
+        with repository._immediate(conn):
+            added_first = repository.add_extension_column(
+                conn, "key-events", "sender", "TEXT", default=None
+            )
+        with repository._immediate(conn):
+            added_second = repository.add_extension_column(
+                conn, "key-events", "sender", "TEXT", default=None
+            )
+        assert added_first is True
+        assert added_second is False
+    finally:
+        conn.close()
+
+
 def test_add_extension_column_rejects_bad_type(monkeypatch, tmp_path):
     monkeypatch.setenv("CCST_PROJECT_DB_DIR", str(tmp_path))
     import pytest

@@ -1,21 +1,21 @@
 ---
-name: pm-pdata-migrate
-description: Execute a project's actual migration from flat central/index files to a ccst pdata record store - build a migration plan, adversarially verify the plan itself, present it for the user's confirmation, then execute it and write a results file. Consumes the readiness manifest pm-pdata-audit produces if one exists, but always explores the project independently too, so it works even without that manifest. Triggers on "migrate this project to pdata", "run the pdata migration", "/pm-pdata-migrate", or any request to actually move a project's CSV/index/log files into pdata (as opposed to just auditing readiness, which is pm-pdata-audit, or designing the target schema in the abstract, which is pm-pdata-schema-design).
+name: pm-pdata-do-migrate
+description: Execute a project's actual migration from flat central/index files to a ccst pdata record store - build a migration plan, adversarially verify the plan itself, present it for the user's confirmation, then execute it and write a results file. Consumes the readiness manifest pm-pdata-do-audit-and-prepare-to-migrate produces if one exists, but always explores the project independently too, so it works even without that manifest. Triggers on "migrate this project to pdata", "run the pdata migration", "/pm-pdata-do-migrate", or any request to actually move a project's CSV/index/log files into pdata (as opposed to just auditing readiness, which is pm-pdata-do-audit-and-prepare-to-migrate, or designing the target schema in the abstract, which is pm-pdata-schema-design).
 ---
 
 # Migrate a project to pdata
 
 ## When to use this vs. the other pm-pdata-* skills
 
-- `pm-pdata-audit` - readiness audit. Finds and fixes problems in the CURRENT flat files.
+- `pm-pdata-do-audit-and-prepare-to-migrate` - readiness audit. Finds and fixes problems in the CURRENT flat files.
   Produces a readiness manifest. Does not touch pdata at all.
 - `pm-pdata-schema-design` - designs the TARGET record-group schema in the abstract (field names,
   types, groupings) before any data moves.
-- `pm-pdata-migrate` (this skill) - takes whatever schema exists (designed via the skill above,
+- `pm-pdata-do-migrate` (this skill) - takes whatever schema exists (designed via the skill above,
   or designed inline as part of this skill's own plan if no separate design session happened) and
   actually moves the data: `ccst pdata add`/`batch` calls, verification, and a results record.
 
-Run `pm-pdata-audit` first if the project hasn't been through it recently - a migration
+Run `pm-pdata-do-audit-and-prepare-to-migrate` first if the project hasn't been through it recently - a migration
 plan built against files with known unresolved duplicates or dangling rows just bakes the mess
 into pdata. This skill doesn't refuse to run without that prerequisite (see below), but it will
 re-derive the same checks itself if skipped, which costs more and finds less than a dedicated
@@ -23,7 +23,7 @@ audit pass would.
 
 ## Step 1: gather readiness information (works with or without a manifest)
 
-1. Look for a readiness manifest from `pm-pdata-audit` (check the project's own
+1. Look for a readiness manifest from `pm-pdata-do-audit-and-prepare-to-migrate` (check the project's own
    instructions file for where it said one was written, typically `analysis/pdata-readiness.md`
    or similar). If found: read it, and check its own "STALE IF" condition - if any listed file
    has been edited more recently than the manifest's audit date, treat the manifest as a starting
@@ -32,7 +32,7 @@ audit pass would.
    project's central/index/recordkeeping files: read the project's own instructions file in full,
    list every central file it documents, and for each one note its row/entry count, its apparent
    natural key (if any), and any obvious structural issue (multi-schema single files, inconsistent
-   separators, machine-specific paths) - the same categories `pm-pdata-audit` Phase 4
+   separators, machine-specific paths) - the same categories `pm-pdata-do-audit-and-prepare-to-migrate` Phase 4
    checks for. If a manifest exists, use this pass to spot-check a sample of its claims rather
    than skipping it entirely - a stale or partially-wrong manifest is worse than no manifest if
    trusted blindly.
@@ -50,7 +50,7 @@ ran):
   `filings-index`), not its filename.
 - **Natural key** - prefer a field that's already unique, stable, and won't be reassigned by a
   future session (a project-prefixed sequential id like `FIL-001` is a good sign; a per-session
-  independently-renumbered `row_id` is not - see `pm-pdata-audit`'s own warnings about
+  independently-renumbered `row_id` is not - see `pm-pdata-do-audit-and-prepare-to-migrate`'s own warnings about
   this exact failure mode, which shows up often). If nothing qualifies, mint a synthetic id
   at migration time and record the mapping.
 - **Field types and normalisation** - fix the specific blockers the manifest/your own audit
@@ -127,13 +127,13 @@ have N records instead of the source file's row count" without re-deriving the r
 
 ## Common mistakes
 
-- Refusing to run without a `pm-pdata-audit` manifest present - always fall back to your
+- Refusing to run without a `pm-pdata-do-audit-and-prepare-to-migrate` manifest present - always fall back to your
   own exploration instead; the manifest is an optimisation, not a hard dependency.
 - Trusting a present manifest without checking its staleness condition against current file
   states - a manifest from a project that's had further edits since is actively dangerous if
   taken at face value.
 - Migrating a session-relative or otherwise unstable field as if it were a durable natural key -
-  this is the single most common blocker `pm-pdata-audit` finds in practice; take its
+  this is the single most common blocker `pm-pdata-do-audit-and-prepare-to-migrate` finds in practice; take its
   warnings about this seriously rather than assuming "it looks like an id column" is enough.
 - Executing before the user has explicitly confirmed the plan summary in step 5 - a bulk pdata
   write is exactly the kind of hard-to-reverse, outward-facing action that needs confirmation

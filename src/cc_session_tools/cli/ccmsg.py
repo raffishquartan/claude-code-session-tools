@@ -206,8 +206,10 @@ def _cmd_list(args: argparse.Namespace) -> int:
         partition=args.partition,
         from_uuid=args.from_uuid,
     )
+    now = datetime.now(timezone.utc)
     for r in rows:
-        print(f"[{r.id}] {r.status:8} {r.to_kind}={r.to_value} · {r.subject}")
+        age = service.relative_age(r.sent_at, now)
+        print(f"[{r.id}] {r.status:8} {r.to_kind}={r.to_value} · {r.subject} · {age}")
     return 0
 
 

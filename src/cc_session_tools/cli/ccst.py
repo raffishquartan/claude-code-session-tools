@@ -2921,7 +2921,16 @@ def _build_parser() -> argparse.ArgumentParser:
     pdata_schema_sub.required = True
 
     pdata_schema_add_field_parser = pdata_schema_sub.add_parser(
-        "add-field", help="Add/describe an extension-table field (idempotent)",
+        "add-field",
+        help="Add/describe an extension-table field (idempotent; re-run to edit its description)",
+        description=(
+            "Add an extension-table field, or edit an existing field's description. "
+            "Idempotent: re-running this command against a field name that already exists "
+            "updates its --description in place rather than erroring or duplicating the "
+            "column - there is no separate 'edit-description' command, this is it. "
+            "Re-running with a DIFFERENT --field TYPE than the field already has is "
+            "rejected with an error; add-field never changes an existing column's type."
+        ),
     )
     pdata_schema_add_field_parser.add_argument("--project", required=True, metavar="NAME")
     pdata_schema_add_field_parser.add_argument("--group", required=True, metavar="RECORD_GROUP")

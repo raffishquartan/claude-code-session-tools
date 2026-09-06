@@ -7,6 +7,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.1.0] - 2026-09-06
+
+### Added
+
+- `confirm_8digit`'s 8-digit confirmation gate now pushes a Telegram notification (via the
+  existing `send_telegram()` helper) whenever it blocks or warns a gated tool call, so the
+  outcome reaches the user even when they're away from the terminal. Best-effort - a Telegram
+  failure never changes the gate's exit code or stderr message.
+- `ccmsg list` now shows each message's relative age (e.g. "3m ago", "2h ago"), using the same
+  `relative_age` helper (promoted from a private `_relative_age`) the delivery digest already
+  used.
+- `ccst doctor` gains a `skills:stale:<name>` WARN check for a `~/.claude/skills/` symlink whose
+  target no longer exists - the case a bundled skill's rename or removal leaves behind. General,
+  not special-cased to any particular skill.
+
+### Fixed
+
+- `ccst pdata schema add-field` no longer silently drops a type change when re-run against an
+  existing field with a different `sql_type` - it now rejects the rerun with a message naming
+  both types. (Re-running with the *same* type, optionally updating only the description,
+  still succeeds exactly as before - that idempotent behavior is unchanged and is now documented
+  in the command's own `--help` text.)
+
+### Changed
+
+- Two bundled skills are renamed for clarity: `pm-pdata-audit` -> `pm-pdata-do-audit-and-prepare-to-migrate`,
+  `pm-pdata-migrate` -> `pm-pdata-do-migrate`. Same content, same directories under
+  `src/cc_session_tools/skills/`, only the names changed.
+
 ## [3.0.0] - 2026-09-06
 
 `sessions.db`'s `sessions` table (the table `ccl`/`ccs`/`ccr` list and resume from) has always

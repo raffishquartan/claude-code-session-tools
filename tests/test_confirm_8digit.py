@@ -12,6 +12,19 @@ from hooks.confirm_8digit import markers_dir as confirm_8digit_markers_dir
 from hooks.marker_allow import markers_dir as marker_allow_markers_dir
 
 
+@pytest.fixture(autouse=True)
+def _no_real_telegram_sends(monkeypatch: pytest.MonkeyPatch) -> None:
+    """verify() now calls send_telegram() on every block/warn outcome (see
+    test_block_sends_telegram_notification etc. below). Without this, every test in this file
+    that reaches a block/warn path would call the REAL send_telegram - and this machine has
+    live TELEGRAM_BOT_TOKEN/TELEGRAM_CHAT_ID env vars, so a bare `monkeypatch.setenv("HOME",
+    tmp_path)` (which every test here already does) does NOT stop it: _credentials() reads
+    those two env vars directly, before ever falling back to ~/.creds. Default every test to a
+    no-op stub; tests that specifically assert on Telegram behavior install their own via
+    _patch_send_telegram, which overrides this one for that test."""
+    monkeypatch.setattr("hooks.confirm_8digit.send_telegram", lambda message: True)
+
+
 # ---------- transcript builder ----------
 
 
@@ -544,3 +557,104 @@ def test_self_send_no_notify_email_not_exempt(
     monkeypatch.delenv("NOTIFY_EMAIL", raising=False)
     result = verify(_self_send_input(), GATED_TOOLS_DEFAULT)
     assert result.exit_code == 2
+
+
+# ---------- Telegram notification on block/warn ----------
+
+def _patch_send_telegram(monkeypatch: pytest.MonkeyPatch, *, returns: bool = True) -> list[str]:
+    calls: list[str] = []
+
+    def fake_send(message: str) -> bool:
+        calls.append(message)
+        return returns
+
+    monkeypatch.setattr("hooks.confirm_8digit.send_telegram", fake_send)
+    return calls
+
+
+def test_block_sends_telegram_notification(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("CCCS_ENFORCE_8DIGIT", "block")
+    calls = _patch_send_telegram(monkeypatch)
+    _write_transcript(
+        tmp_path, "/tmp/x", "sid", [_user("hi", ts="2026-05-10T12:00:30.000Z")]
+    )
+
+    result = verify(_hook_input(), GATED_TOOLS_DEFAULT)
+
+    assert result.exit_code == 2
+    assert len(calls) == 1
+    assert calls[0] == result.message
+
+
+def test_warn_sends_telegram_notification(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("CCCS_ENFORCE_8DIGIT", "warn")
+    calls = _patch_send_telegram(monkeypatch)
+    _write_transcript(
+        tmp_path, "/tmp/x", "sid", [_user("hi", ts="2026-05-10T12:00:30.000Z")]
+    )
+
+    result = verify(_hook_input(), GATED_TOOLS_DEFAULT)
+
+    assert result.exit_code == 0
+    assert len(calls) == 1
+    assert calls[0] == result.message
+
+
+def test_allowed_call_sends_no_telegram_notification(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("CCCS_ENFORCE_8DIGIT", "block")
+    calls = _patch_send_telegram(monkeypatch)
+    _write_transcript(
+        tmp_path,
+        "/tmp/x",
+        "sid",
+        [
+            _assistant_text(
+                "Respond with 12345678 only if you want me to send.",
+                ts="2026-05-10T12:00:00.000Z",
+            ),
+            _user("12345678", ts="2026-05-10T12:00:30.000Z"),
+        ],
+    )
+
+    result = verify(_hook_input(), GATED_TOOLS_DEFAULT)
+
+    assert result.exit_code == 0
+    assert calls == []
+
+
+def test_non_gated_tool_sends_no_telegram_notification(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("CCCS_ENFORCE_8DIGIT", "block")
+    calls = _patch_send_telegram(monkeypatch)
+
+    result = verify(_hook_input(tool_name="Read"), GATED_TOOLS_DEFAULT)
+
+    assert result.exit_code == 0
+    assert calls == []
+
+
+def test_telegram_failure_does_not_change_gate_decision(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("CCCS_ENFORCE_8DIGIT", "block")
+    _patch_send_telegram(monkeypatch, returns=False)
+    _write_transcript(
+        tmp_path, "/tmp/x", "sid", [_user("hi", ts="2026-05-10T12:00:30.000Z")]
+    )
+
+    result = verify(_hook_input(), GATED_TOOLS_DEFAULT)
+
+    assert result.exit_code == 2
+    assert "[8digit-block]" in result.message

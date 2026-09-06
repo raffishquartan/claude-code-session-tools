@@ -91,6 +91,14 @@ def test_list_messages_returns_compact_rows(tmp_path: Path, monkeypatch: pytest.
     assert rows[0].to_kind == "project" and rows[0].to_value == "alpha"
 
 
+def test_list_messages_rows_include_sent_at(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("CCST_MESSAGES_ROOT", str(tmp_path))
+    service.send(_sender())
+    rows = service.list_messages()
+    assert len(rows) == 1
+    assert rows[0].sent_at == service.read_one(rows[0].id).sent_at
+
+
 def _ctx(
     uuid: str = "me-uuid",
     project: str = "alpha",

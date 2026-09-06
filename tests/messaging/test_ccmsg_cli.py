@@ -124,6 +124,23 @@ def test_list_empty_store_ok(tmp_path: Path) -> None:
     assert res.returncode == 0
 
 
+def test_list_shows_message_age(tmp_path: Path) -> None:
+    proj_root = tmp_path / "proj"
+    (proj_root / "alpha").mkdir(parents=True)
+    proj_env = {"CLAUDE_SESSION_TOOLS_PROJ_ROOT": str(proj_root)}
+    res = _run(
+        ["send", "--to-project", "alpha", "--subject", "Ping", "--body", "hi",
+         "--from-project", "o", "--from-session", "s", "--from-uuid", "u",
+         "--from-partition", "projects/o", "--to-partition", "projects/alpha"],
+        tmp_path, proj_env,
+    )
+    assert res.returncode == 0, res.stderr
+
+    res = _run(["list"], tmp_path, proj_env)
+    assert res.returncode == 0
+    assert "ago" in res.stdout or "just now" in res.stdout
+
+
 def test_claim_missing_id_errors(tmp_path: Path) -> None:
     res = _run(["claim", "nope", "--uuid", "u", "--session", "s"], tmp_path)
     assert res.returncode != 0
