@@ -518,6 +518,10 @@ Curates the SHA-256 command cache the `bash-security-review` hook reads (`CCCS_U
 
 Archives (tar.gz, verified) then deletes `bash-security-review`'s own hook-security-check session transcripts — those whose first user message begins "Review this shell command for security risks" — which otherwise pile up by the thousands and pollute `claude --resume`/`--continue`. Triggers on "clean up hook sessions", "archive old hook security sessions", or `--resume` being cluttered with security-check conversations. Dry-run by default; 8-digit gated for `--execute` (via `generate-8digit-code`). Also runs unattended weekly via the bundled `clean-hook-sessions-weekly` job (see [Scheduled-task catch-up](#scheduled-task-catch-up)).
 
+### `compact-smart`
+
+Drafts the compaction-preservation paragraph you'd otherwise ask Claude for by hand before `/compact`, then hands back the exact `/compact <paragraph>` command to run — it never invokes `/compact` itself (Claude Code excludes that command from what a skill can invoke). Triggers on `/compact-smart`, "give me a paragraph to pass to compact", "draft a compact instruction", "help me compact this session". Covers decisions and their rationale (especially mid-session corrections), file/PR/branch pointers, standing constraints, and outstanding tasks split into "Claude's next steps" vs. "the user's own to-dos" — then shows you the draft to confirm or edit (including dropping an unrelated thread) before finalizing. Refreshes the session's `working/WORKLOG.md` if one already exists (never creates one), which also clears the `worklog-guard` PreCompact hook's staleness gate for the command it hands back.
+
 See `docs/design.md` for the full design and CLI contract.
 
 ## Inter-session messaging
