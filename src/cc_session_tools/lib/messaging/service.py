@@ -116,6 +116,7 @@ class MessageRow:
     to_value: str
     from_session: str
     subject: str
+    sent_at: str
 
 
 def list_messages(
@@ -128,13 +129,15 @@ def list_messages(
     return [
         MessageRow(
             id=m.id, status=m.status, to_kind=m.to_kind, to_value=m.to_value,
-            from_session=m.from_session, subject=m.subject,
+            from_session=m.from_session, subject=m.subject, sent_at=m.sent_at,
         )
         for m in repository.list_rows(status=status, partition=partition, from_uuid=from_uuid)
     ]
 
 
-def _relative_age(sent_at: str, now: datetime) -> str:
+def relative_age(sent_at: str, now: datetime) -> str:
+    """Public: used by both this module's own digest formatting and ccmsg.py's `list`
+    output - a genuine cross-module utility, not internal-only."""
     sent = datetime.strptime(sent_at, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
     minutes = int((now - sent).total_seconds() // 60)
     if minutes < 1:
@@ -150,7 +153,7 @@ def _relative_age(sent_at: str, now: datetime) -> str:
 def _digest_line(message: Message, now: datetime) -> str:
     return (
         f"[{message.id}] from {message.from_session} ({message.from_project}) · "
-        f"{message.subject} · {_relative_age(message.sent_at, now)}"
+        f"{message.subject} · {relative_age(message.sent_at, now)}"
     )
 
 
@@ -213,7 +216,7 @@ def _collect_receipts(ctx: SessionContext, now: datetime) -> list[str]:
         who = message.read_by_session or "a session"
         lines.append(
             f'✓ read: "{message.subject}" by {who} '
-            f"({_relative_age(message.sent_at, now)}) [{message.id}]"
+            f"({relative_age(message.sent_at, now)}) [{message.id}]"
         )
         shown.append(message.id)
     repository.mark_receipts_shown(shown)
