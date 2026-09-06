@@ -93,6 +93,7 @@
       and `mypy` clean on every touched production file.
 - [x] 7.4 `openspec-sync-specs` (4 new main specs created and validated) +
       `openspec-archive-change` for `release-3-1-0`.
-- [ ] 7.5 Recommend a PR title/body (style matching recent merged PRs) and confirm with the user
+- [x] 7.5 Recommend a PR title/body (style matching recent merged PRs) and confirm with the user
       before running `gh pr create`. No attribution lines in commits or the PR description.
-- [ ] 7.6 Mark Task #6 `completed` via `TaskUpdate` once the PR is open.
+      Opened as PR #137.
+- [x] 7.6 Mark Task #6 `completed` via `TaskUpdate` once the PR is open.
