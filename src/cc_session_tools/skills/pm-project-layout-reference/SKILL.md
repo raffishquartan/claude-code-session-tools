@@ -81,3 +81,25 @@ derivable per file. Topic-based splitting (`analysis/`, or any project-specific 
 natural date) has no tool support and stays a manual `git mv`/`mv` pass, since grouping by topic
 needs human judgement the tool can't safely substitute for. Anything simpler than a split
 (renaming one folder, adding a new folder type) is also a plain `git mv`/`mv`.
+
+## 6. File-type-segment vocabulary for meetings-and-calls/
+
+Files within `meetings-and-calls/` follow a `--`-delimited naming convention:
+
+`<yyyy.MM.dd>-<HHmm>--<participants>--<purpose>--<file type>.<ext>`
+
+The `<file type>` segment recognises three core values, common enough to expect in any project
+with recorded meetings or calls:
+
+| File type | What it holds |
+|---|---|
+| `summary` | Auto-generated summary of the call (e.g. Plaud) |
+| `transcript` | Raw or auto-generated transcript of the call |
+| `audio` | The raw recording itself (`.mp3`/`.mp4`), before any transcription or summary exists |
+
+This isn't exhaustive - as with the five folders in §1, a project may extend the vocabulary with
+values for distinctions specific to its own work: `analysis` and `transcript-whisper` (maxella,
+for a session's own write-up of a meeting and a Whisper-generated transcript alongside the Plaud
+one), or `reasoning-summary` and `notes-email` (pbt, for a modelled reasoning summary and an
+emailed notes write-up). Promote a project-specific value to this shared list once it recurs
+across multiple projects - the same bar the five folders in §1 were held to.
