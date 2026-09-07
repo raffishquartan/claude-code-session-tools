@@ -17,7 +17,7 @@ bundled under this package's skills directory and installed by `ccst skills inst
 - **WHEN** `ccst install-everything --apply` (or `ccst skills install`) runs on a machine that has
   never had these skills installed
 - **THEN** `pm-pdata-do-audit-and-prepare-to-migrate` and `pm-pdata-do-manual-migration` are
-  symlinked into the target skills directory, the same way `pm-project-init` and this package's
+  symlinked into the target skills directory, the same way `pm-pdata-do-init` and this package's
   other bundled `pm-*` skills are
 
 #### Scenario: Both skills stay in sync on subsequent installs
