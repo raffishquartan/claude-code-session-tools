@@ -7,6 +7,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.3.0] - 2026-09-07
+
+### Added
+
+- `ccst pdata init --write` now leaves a Markdown pointer file at each migrated entry's original
+  path by default (record_group, field/schema table, an example query command, and any preserved
+  preface text) - so anything else in the project citing the old path by name finds a live
+  signpost instead of a silent 404. Pass the new `--leave-no-pointer-files` flag to suppress this.
+- The dry-run classification report now flags a `db-owned` entry whose proposed field names read
+  as garbled sentence fragments rather than real column names (a garbled/prose CSV header row) as
+  worth double-checking before `--write`.
+- `pm-pdata-do-migrate`'s `SKILL.md` now leads with a deprecation notice and an explicit
+  user-confirmation gate: `ccst pdata init` (via `pm-project-init`) is the standard, tool-native
+  migration mechanism, and this skill proceeds only as a fallback the user has explicitly
+  confirmed they need. `pm-pdata-do-audit-and-prepare-to-migrate`'s `SKILL.md` now states its
+  readiness manifest feeds `ccst pdata init`/`pm-project-init`, not this fallback, by default.
+- `pm-project-init`'s `SKILL.md` documents several pitfalls and recipes reverse-engineered from a
+  real-world migration: a garbled-CSV-header failure mode and fix recipe, the
+  `file_path_column`-relative-to-a-subfolder pitfall, the `content_column: null` default caveat, a
+  recipe for value transforms the generic importer can't express, the expectation that a real
+  migration is iterative (multiple `--write` rounds are normal), and two deferred-file review
+  criteria (a read-only-by-convention folder; wholesale-replacement vs. append-only growth).
+- The two shipped post-write prompts (`pdata-migration-claude-md-update.md`,
+  `pdata-migration-skills-update.md`) and `ccst pdata init`'s own CLI output now state that a
+  dispatched `Agent` subagent is an acceptable substitute for a literal new `claude -p` session -
+  what matters is a fresh context, not literally a new process.
+
+### Fixed
+
+- `ccst pdata init --write` no longer risks rolling back legitimate new imports on a second/later
+  `--write` round. A successfully cut-over manifest entry is now marked with a `migrated_at`
+  timestamp and skipped by any later `--write`, instead of being re-attempted (and failing, since
+  its source was already archived) alongside genuinely new entries in the same rollback decision.
+  A `db-owned` entry with no `migrated_at` whose source is nonetheless missing now fails with a
+  specific, actionable error instead of a generic `FileNotFoundError` buried in the rollback
+  reasons list.
+
 ## [3.2.1] - 2026-09-06
 
 ### Added
