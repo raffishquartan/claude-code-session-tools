@@ -1,5 +1,5 @@
 ---
-name: pm-pdata-schema-design
+name: pm-pdata-design-schema
 description: Use before writing a genuinely new kind of structured data into any project's ccst pdata store - deciding whether it fits an existing record_group, needs a brand-new group, and whether that group needs an extension table or free-text content suffices. Triggers on "I need to track a new kind of record", "what record_group should this be", "does this need an extension table", "add a new field to ccst pdata", or any session about to call `ccst pdata add`/`schema add-field` for a record shape it hasn't used before. Prevents lazy catch-all groups (`notes`/`misc`) that silently recreate the EAV undifferentiated-bucket problem the schema deliberately rejected.
 ---
 

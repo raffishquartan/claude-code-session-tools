@@ -8,7 +8,7 @@ overwrite (that is rehydrate.py's job for the clean fast-forward case; this modu
 
 Never auto-merges, never silently keeps one side and discards the other — every record surfaced
 here needs an explicit choice from the caller (ultimately Chris, via the CLI/skill), matching the
-existing `pm-pdata-conflict-resolution` skill's single-file-conflict framing exactly. Every
+existing `pm-pdata-resolve-conflicts` skill's single-file-conflict framing exactly. Every
 record: `apply_resolution` is all-or-nothing over the whole diff, for the reasons in its own
 docstring.
 
@@ -342,7 +342,7 @@ def _apply_resolution(
             f"record_id(s) {collisions}: id collision (the same id was independently assigned to "
             f"two unrelated records) — not resolvable as a local/dump choice, since either pick "
             f"would discard one side's real record; needs a manual, out-of-band fix (see the "
-            f"pm-pdata-conflict-resolution skill, point 4)"
+            f"pm-pdata-resolve-conflicts skill, point 4)"
         )
 
     group_mismatches = sorted(rid for rid, rd in by_id.items() if rd.group_mismatch)
@@ -351,7 +351,7 @@ def _apply_resolution(
             f"record_id(s) {group_mismatches}: group mismatch (same id and created_at, but the "
             f"two sides disagree on record_group) — not resolvable as a local/dump choice. "
             f"Compare each side's content/file_path before assuming a rename is safe (see the "
-            f"pm-pdata-conflict-resolution skill, point 5, for why it may instead be a "
+            f"pm-pdata-resolve-conflicts skill, point 5, for why it may instead be a "
             f"same-second id collision), then retry"
         )
 

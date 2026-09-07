@@ -1,13 +1,13 @@
 ---
 name: pm-pdata-do-audit-and-prepare-to-migrate
-description: Full consistency/completeness audit of a project's central and recordkeeping files - OneDrive sync-conflict cleanup, cross-checking every index/register/log against what it claims to describe, and a pdata-migration readiness pass. Ends by writing a readiness manifest file that feeds `ccst pdata init` (via `pm-project-init`) - the tool-native migration mechanism - and, only for the narrow record shapes it can't express, the deprecated `pm-pdata-do-migrate` fallback. Triggers on "review all my central files", "audit the project files", "check everything is up to date and consistent", "get this project ready for pdata", "/pm-pdata-do-audit-and-prepare-to-migrate", or any request for a thorough review/health-check of a project's index/log/register files (as opposed to a single-session wrap-up, which is pm-update-central-files). Especially relevant when a project is scheduled to migrate to pdata - this audit is the recommended prerequisite pass, since a schema design should not be built against files that still have unresolved sync-conflict duplicates or known dangling rows.
+description: Full consistency/completeness audit of a project's central and recordkeeping files - OneDrive sync-conflict cleanup, cross-checking every index/register/log against what it claims to describe, and a pdata-migration readiness pass. Ends by writing a readiness manifest file that feeds `ccst pdata init` (via `pm-project-init`) - the tool-native migration mechanism - and, only for the narrow record shapes it can't express, the deprecated `pm-pdata-do-manual-migration` fallback. Triggers on "review all my central files", "audit the project files", "check everything is up to date and consistent", "get this project ready for pdata", "/pm-pdata-do-audit-and-prepare-to-migrate", or any request for a thorough review/health-check of a project's index/log/register files (as opposed to a single-session wrap-up, which is pm-update-central-files). Especially relevant when a project is scheduled to migrate to pdata - this audit is the recommended prerequisite pass, since a schema design should not be built against files that still have unresolved sync-conflict duplicates or known dangling rows.
 ---
 
 # Audit central files
 
 > **This audit feeds `ccst pdata init`, not a manual migration.** The readiness manifest this
 > skill produces (Phase 5) is a pre-flight pass for `ccst pdata init` (driven by the
-> `pm-project-init` skill) - the tool-native, default migration mechanism. `pm-pdata-do-migrate`
+> `pm-project-init` skill) - the tool-native, default migration mechanism. `pm-pdata-do-manual-migration`
 > is a deprecated fallback for record shapes `ccst pdata init` genuinely can't express; it is not
 > the default next step after this audit.
 
@@ -121,7 +121,7 @@ Give the user a single reviewable delete script for every confirmed-safe deletio
 ## Phase 4: pdata-readiness pass
 
 Compile a dedicated `pdata-readiness-notes.md` (or equivalent) listing, file by file, every
-blocker a future `pm-pdata-schema-design` session would hit if it tried to design a schema
+blocker a future `pm-pdata-design-schema` session would hit if it tried to design a schema
 against the file as it currently stands:
 
 - Inconsistent separator/delimiter use within one logical column.
@@ -137,7 +137,7 @@ against the file as it currently stands:
   means something different from a genuinely blank one).
 
 This file is deliberately NOT a migration plan - it's a findings list for whoever runs the actual
-`pm-pdata-schema-design` session next, so that work isn't designed against a still-messy
+`pm-pdata-design-schema` session next, so that work isn't designed against a still-messy
 substrate.
 
 ## Phase 5: write the readiness manifest (for `ccst pdata init`/`pm-project-init` to consume)
@@ -152,7 +152,7 @@ recorded in the project's own instructions file (`CLAUDE.md`/`AGENTS.md`/equival
 session doesn't have to search for it.
 
 The manifest must have, in this order, so a `pm-project-init` session running `ccst pdata init`
-(or, for the narrow record shapes it can't express, the deprecated `pm-pdata-do-migrate`
+(or, for the narrow record shapes it can't express, the deprecated `pm-pdata-do-manual-migration`
 fallback) can parse it deterministically:
 
 1. **Header**: audit date, session/agent identifier, and an explicit "STALE IF" note - state the
@@ -161,7 +161,7 @@ fallback) can parse it deterministically:
 2. **File inventory**: every central/index/recordkeeping file the audit covered, with: full path,
    row/entry count, last-verified-clean date, and its role (`index`, `register`, `log`,
    `narrative`, `derived-artefact`).
-3. **Per-file migration blockers**, in the exact shape `pm-pdata-schema-design` and
+3. **Per-file migration blockers**, in the exact shape `pm-pdata-design-schema` and
    `pm-project-init` expect to consume - this is the same content this skill's own Phase 4
    already produces, just formalised into the manifest rather than a standalone prose report:
    inconsistent separators, unstable/non-existent natural keys, mixed date formats, multi-schema

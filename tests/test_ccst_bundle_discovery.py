@@ -140,17 +140,18 @@ def test_bundled_prompts_are_no_longer_placeholders():
         assert "PLACEHOLDER" not in text
 
 
-def test_pm_pdata_audit_and_migrate_are_bundled_skills():
-    """pm-pdata-do-audit-and-prepare-to-migrate and pm-pdata-do-migrate (renamed from
-    pm-pdata-audit/pm-pdata-migrate in 3.1.0 for clarity) were built directly under
-    ~/.claude/skills/ in an earlier session - moved into this repo's bundled skills/ so
-    ccst skills install / install-everything provision them on every machine, not just the
-    one they were authored on. No registry to update - _discover_skills is a directory scan
-    (any subdir with a SKILL.md), so this test is really asserting the directories/files
+def test_pm_pdata_audit_and_manual_migration_are_bundled_skills():
+    """pm-pdata-do-audit-and-prepare-to-migrate and pm-pdata-do-manual-migration (renamed from
+    pm-pdata-audit/pm-pdata-migrate in 3.1.0, then pm-pdata-do-migrate renamed again to
+    pm-pdata-do-manual-migration for clarity once it became a deprecated fallback) were built
+    directly under ~/.claude/skills/ in an earlier session - moved into this repo's bundled
+    skills/ so ccst skills install / install-everything provision them on every machine, not
+    just the one they were authored on. No registry to update - _discover_skills is a directory
+    scan (any subdir with a SKILL.md), so this test is really asserting the directories/files
     exist and are named correctly."""
     discovered = {p.name for p in ccst._discover_skills(ccst._discover_source_dir())}
     assert "pm-pdata-do-audit-and-prepare-to-migrate" in discovered
-    assert "pm-pdata-do-migrate" in discovered
+    assert "pm-pdata-do-manual-migration" in discovered
 
 
 def test_compact_smart_is_a_bundled_skill():
