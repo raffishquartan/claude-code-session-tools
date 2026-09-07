@@ -139,7 +139,7 @@ def test_count_source_rows_matches_import_entry_for_every_strategy(tmp_path):
 
 
 def test_import_json_array_rows_rejects_non_array_shape(tmp_path):
-    """A hand-edited manifest entry (pm-project-init Step 4) can assign
+    """A hand-edited manifest entry (pm-pdata-do-init Step 4) can assign
     'json-array-rows' to a file that is actually a JSON object — must raise
     ValueError, not AttributeError from a bare list iteration/`.get()` call."""
     (tmp_path / "chars.json").write_text(json.dumps({"not": "a list"}))

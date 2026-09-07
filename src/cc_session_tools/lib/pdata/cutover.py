@@ -14,7 +14,7 @@ from cc_session_tools.lib.pdata.manifest import ManifestEntry
 def _pointer_file_content(*, project: str, entry: ManifestEntry) -> str:
     """Generic pointer content (spec pdata/init-pointer-files): the record_group now
     holding this file's data, its field/schema table, and an example query — plus,
-    when the entry carries preface_text (set by hand per pm-project-init's
+    when the entry carries preface_text (set by hand per pm-pdata-do-init's
     garbled-CSV-header fix recipe), that text verbatim under its own heading."""
     lines = [
         f"# {Path(entry.path).name} — migrated to pdata",
