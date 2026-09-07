@@ -1,12 +1,4 @@
-# cli/bundled-pm-skills Specification
-
-## Purpose
-
-Defines which `pm-*` skills this repo bundles and installs via its standard skill-sync mechanism,
-so a skill built and proven useful on one machine becomes available on every machine that
-installs this package, not just the one it was authored on.
-
-## Requirements
+## MODIFIED Requirements
 
 ### Requirement: `pm-pdata-do-audit-and-prepare-to-migrate` and `pm-pdata-do-manual-migration` are bundled skills
 The `pm-pdata-do-audit-and-prepare-to-migrate` and `pm-pdata-do-manual-migration` skills SHALL be

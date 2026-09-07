@@ -89,7 +89,7 @@ def import_json_array_rows(project_root: Path, entry: ManifestEntry) -> list[Imp
     path = project_root / entry.path
     created_at = _mtime(path)
     data: Any = json.loads(path.read_text(encoding="utf-8"))
-    # A hand-edited manifest entry (pm-project-init Step 4 instructs editing this
+    # A hand-edited manifest entry (pm-pdata-do-init Step 4 instructs editing this
     # file directly) can assign 'json-array-rows' to a file whose actual JSON
     # shape isn't an array of objects. Validate the shape here and raise
     # ValueError — the exact exception type write()'s per-entry

@@ -43,18 +43,18 @@ import strategies can express). The skill SHALL NOT proceed to Step 1 without th
 
 ### Requirement: `pm-pdata-do-audit-and-prepare-to-migrate` redirects to `ccst pdata init`
 `pm-pdata-do-audit-and-prepare-to-migrate`'s `SKILL.md` SHALL state, before any other content, that
-its readiness-audit output feeds `ccst pdata init` (via `pm-project-init`), not a separate manual
+its readiness-audit output feeds `ccst pdata init` (via `pm-pdata-do-init`), not a separate manual
 `pm-pdata-do-manual-migration` path, and SHALL reposition its coordination-file hygiene checks (row_id
 collisions, CRLF, cross-reference integrity, controlled-vocabulary compliance) as a pre-flight pass
 to run before `ccst pdata init`.
 
 #### Scenario: A session reads the audit skill before running ccst pdata init
 - **WHEN** a session invokes `pm-pdata-do-audit-and-prepare-to-migrate`
-- **THEN** the skill states its output is meant to feed `ccst pdata init`/`pm-project-init`, and
+- **THEN** the skill states its output is meant to feed `ccst pdata init`/`pm-pdata-do-init`, and
   does not present `pm-pdata-do-manual-migration` as the only or default next step
 
-### Requirement: `pm-project-init` documents the garbled-CSV-header failure mode and fix recipe
-`pm-project-init`'s `SKILL.md` SHALL document, as a named caveat (mirroring
+### Requirement: `pm-pdata-do-init` documents the garbled-CSV-header failure mode and fix recipe
+`pm-pdata-do-init`'s `SKILL.md` SHALL document, as a named caveat (mirroring
 `resolve-onedrive-conflicts`' scanner-false-positive caveat pattern), that a CSV whose first row is
 prose/provenance text rather than real column headers produces garbled, sentence-fragment-shaped
 field names in the classification report, and SHALL document the fix recipe: confirm a real header
@@ -63,14 +63,14 @@ correct the manifest entry's `fields`/`content_column`/`classification`, and rec
 text so it survives into the cut-over entry's pointer file.
 
 #### Scenario: A reviewer is warned before trusting a garbled classification
-- **WHEN** a session following `pm-project-init` reviews a dry-run classification report containing
+- **WHEN** a session following `pm-pdata-do-init` reviews a dry-run classification report containing
   a `db-owned` entry with sentence-fragment-shaped field names
 - **THEN** the skill's documented caveat lets the session recognize the pattern and apply the
   documented fix recipe, rather than accepting the garbled fields or discovering the pattern by
   independent trial and error
 
-### Requirement: `pm-project-init` documents the `file_path_column`-relative-to-a-subfolder pitfall
-`pm-project-init`'s `SKILL.md` SHALL document that mapping `file_path_column` directly to a column
+### Requirement: `pm-pdata-do-init` documents the `file_path_column`-relative-to-a-subfolder pitfall
+`pm-pdata-do-init`'s `SKILL.md` SHALL document that mapping `file_path_column` directly to a column
 whose values are relative to a subfolder (not the project root) fails the write phase's
 file_path-resolution verification, and SHALL document the workaround: map that column to a plain
 named field instead (e.g. `source_file_path`) and note in the field's description what path it is
@@ -83,8 +83,8 @@ relative to.
   mapping up front, rather than discovering the verification failure at `--write` time and
   reverse-engineering the fix from `import_csv_rows`' source
 
-### Requirement: `pm-project-init` documents the `content_column: null` default caveat
-`pm-project-init`'s `SKILL.md` SHALL document that a `db-owned` entry with `content_column: null`
+### Requirement: `pm-pdata-do-init` documents the `content_column: null` default caveat
+`pm-pdata-do-init`'s `SKILL.md` SHALL document that a `db-owned` entry with `content_column: null`
 falls back to a raw JSON dump of the row, which is rarely the desired `ccst pdata list` output, and
 SHALL instruct the reviewer to actively choose a real narrative column per entry before `--write`.
 
@@ -93,8 +93,8 @@ SHALL instruct the reviewer to actively choose a real narrative column per entry
 - **THEN** the skill's documented caveat prompts the session to pick a real column rather than
   accepting the JSON-blob default by omission
 
-### Requirement: `pm-project-init` documents the value-transform recipe for computed/split fields
-`pm-project-init`'s `SKILL.md` SHALL document the recipe for a value transform the generic
+### Requirement: `pm-pdata-do-init` documents the value-transform recipe for computed/split fields
+`pm-pdata-do-init`'s `SKILL.md` SHALL document the recipe for a value transform the generic
 `csv-rows` importer cannot express (a computed field such as an `is_canonical` duplicate-key flag,
 or splitting one source column into two): import the file normally via `csv-rows`, then apply a
 post-`--write` `schema add-field` plus a per-record `update` pass.
@@ -105,8 +105,8 @@ post-`--write` `schema add-field` plus a per-record `update` pass.
 - **THEN** the skill's documented recipe lets the session apply the standard
   import-then-schema-add-field-then-update pattern instead of inventing an ad hoc approach
 
-### Requirement: `pm-project-init` sets the expectation that migration is iterative
-`pm-project-init`'s `SKILL.md` SHALL state that a real migration of an existing, non-trivial project
+### Requirement: `pm-pdata-do-init` sets the expectation that migration is iterative
+`pm-pdata-do-init`'s `SKILL.md` SHALL state that a real migration of an existing, non-trivial project
 typically requires multiple `--write` rounds (as source files get fixed, deferred decisions get
 resolved, and garbled entries get corrected) rather than presenting a single `--write` as the
 normal terminal step.
@@ -116,8 +116,8 @@ normal terminal step.
 - **THEN** the skill's guidance leads the session to expect and plan for multiple `--write` rounds,
   rather than treating a first `--write` as necessarily final
 
-### Requirement: `pm-project-init` documents the two deferred-file decision criteria
-`pm-project-init`'s `SKILL.md` SHALL document, as explicit review questions for every `db-owned`
+### Requirement: `pm-pdata-do-init` documents the two deferred-file decision criteria
+`pm-pdata-do-init`'s `SKILL.md` SHALL document, as explicit review questions for every `db-owned`
 proposal entry, (a) whether the file lives in a folder the project's own documentation marks as
 read-only-by-convention (migrating it would move the original out of that folder, conflicting with
 its documented purpose), and (b) whether the file is updated by periodic wholesale replacement

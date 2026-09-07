@@ -8,7 +8,7 @@ apart by a generic scan; guessing wrong here would silently bake a per-project
 judgement call into shared tooling, which this plan must not do (see the
 per-project inventory doc, not this module, for those calls). Every markdown/
 text/unknown-extension file defaults to folder-owned; a human (via the
-pm-project-init skill) reviews the printed report and flips individual entries
+pm-pdata-do-init skill) reviews the printed report and flips individual entries
 to db-owned with an explicit record_group/strategy.
 """
 from __future__ import annotations

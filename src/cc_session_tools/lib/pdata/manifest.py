@@ -44,7 +44,7 @@ class ManifestEntry:
     # --write skips any entry that already carries one instead of re-importing it
     # (spec pdata/init-write-idempotency). None for an entry never yet migrated.
     migrated_at: str | None = None
-    # Hand-set during review (pm-project-init's garbled-CSV-header fix recipe):
+    # Hand-set during review (pm-pdata-do-init's garbled-CSV-header fix recipe):
     # header/provenance text stripped from the source file before migration,
     # preserved verbatim here so cutover.archive_entries can carry it into the
     # entry's pointer file (spec pdata/init-pointer-files). None when not applicable.
@@ -95,7 +95,7 @@ def load(path: Path) -> Manifest:
     """Raises ValueError (never a raw KeyError/TypeError/AttributeError) for any
     malformed proposal file — a missing "project"/"entries" key, an "entries" that
     isn't a list, an entry that isn't an object, or an entry with an unexpected
-    field shape. This is a real hand-edit surface (pm-project-init Step 4
+    field shape. This is a real hand-edit surface (pm-pdata-do-init Step 4
     instructs editing this file directly), so a shape error here must reach
     _cmd_pdata_init's `except (FileNotFoundError, ValueError)` and dry_run's
     `except ValueError` and produce the documented exit-2 validation error instead

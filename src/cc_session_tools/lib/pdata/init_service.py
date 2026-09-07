@@ -136,7 +136,7 @@ def _render_report(m: Manifest) -> str:
                 lines.append(
                     "    ⚠ worth double-checking — these field names read as sentence "
                     "fragments, not column names; this file's header may not be what it "
-                    "looks like (see pm-project-init's garbled-CSV-header caveat)"
+                    "looks like (see pm-pdata-do-init's garbled-CSV-header caveat)"
                 )
     lines.append(
         "Review/override entries in the proposal file listed below before running --write."

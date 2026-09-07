@@ -6,7 +6,7 @@ description: Execute a project's actual migration from flat central/index files 
 # Manually migrate a project to pdata (deprecated fallback)
 
 > **Deprecated fallback — `ccst pdata init` is the standard mechanism.** `ccst pdata init`
-> (driven by the `pm-project-init` skill) is the tool-native migration mechanism: classification,
+> (driven by the `pm-pdata-do-init` skill) is the tool-native migration mechanism: classification,
 > a human-reviewable manifest, backup, verify, atomic cutover, and shipped post-write doc/skill-
 > update prompts. It is the default choice wherever it is available, and this skill is superseded
 > by it for any file `ccst pdata init`'s classifier can already handle (a normal CSV/JSON file

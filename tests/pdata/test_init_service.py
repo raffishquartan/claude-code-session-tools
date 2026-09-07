@@ -321,7 +321,7 @@ def test_write_second_round_skips_already_migrated_entries_and_imports_only_new_
     assert first.failure is None
     first_ids = list(first.created_record_ids)
 
-    # A newly-added file appears. Per pm-project-init's documented convention, a file
+    # A newly-added file appears. Per pm-pdata-do-init's documented convention, a file
     # added after the first dry-run is hand-added to the existing proposal rather than
     # regenerated — dry_run() itself never re-classifies once the proposal file exists.
     (project_dir / "notes.csv").write_text("idea\nsecond\n")
@@ -584,7 +584,7 @@ def test_write_rejects_conflicting_field_sql_types_across_entries(monkeypatch, t
 
 
 def test_write_aborts_and_soft_deletes_on_manifest_strategy_shape_mismatch(monkeypatch, tmp_path):
-    """A hand-edited manifest entry (pm-project-init Step 4) can assign a strategy
+    """A hand-edited manifest entry (pm-pdata-do-init Step 4) can assign a strategy
     that doesn't match the file's actual JSON shape — importers.py raises
     ValueError for this (see test_importers.py), and that ValueError must hit the
     same abort-and-soft-delete path as any other per-entry failure, not crash

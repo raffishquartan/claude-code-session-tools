@@ -1,6 +1,6 @@
 ---
 name: pm-project-layout-reference
-description: Canonical reference for ~/cc/<project>'s optional folder conventions (correspondence/, meetings-and-calls/, analysis/, workstreams/, workstreams-archived/) and the assessment criteria for using them - which folders a given project needs, when correspondence/ should nest by year, and how a workstream moves from active to archived. Read this before setting up a new project's folders, before reorganising an existing project's layout, or before deciding whether a project's correspondence/ needs splitting. Reference-only - does not perform any reorganisation itself; for an actual flat-to-nested split once you've decided one is needed, see `ccst pdata reorganize`. Triggers - "how should this project be organised", "should correspondence/ be split", "archive this workstream", "/pm-project-layout-reference". Do NOT use for the pdata data-store migration itself (pm-project-init) or per-record-group schema design (pm-pdata-design-schema) - those are separate skills; this one is about folder-owned content and structure, not the data store.
+description: Canonical reference for ~/cc/<project>'s optional folder conventions (correspondence/, meetings-and-calls/, analysis/, workstreams/, workstreams-archived/) and the assessment criteria for using them - which folders a given project needs, when correspondence/ should nest by year, and how a workstream moves from active to archived. Read this before setting up a new project's folders, before reorganising an existing project's layout, or before deciding whether a project's correspondence/ needs splitting. Reference-only - does not perform any reorganisation itself; for an actual flat-to-nested split once you've decided one is needed, see `ccst pdata reorganize`. Triggers - "how should this project be organised", "should correspondence/ be split", "archive this workstream", "/pm-project-layout-reference". Do NOT use for the pdata data-store migration itself (pm-pdata-do-init) or per-record-group schema design (pm-pdata-design-schema) - those are separate skills; this one is about folder-owned content and structure, not the data store.
 ---
 
 # pm-project-layout-reference
@@ -64,7 +64,7 @@ These criteria apply to any of the folders above, not just `correspondence/`:
 
 These five folders hold folder-owned content by definition - genuinely file-shaped material
 (attachments, PDFs, `.eml` originals) that isn't a good fit for becoming pdata rows. A project
-being pdata-migrated (see `pm-project-init`) says nothing about whether it also has any of these
+being pdata-migrated (see `pm-pdata-do-init`) says nothing about whether it also has any of these
 five folders, and vice versa - they're orthogonal. `home` is the concrete example: it's
 pdata-migrated (its structured data now lives in SQLite) and still has a live `correspondence/`
 folder full of `.md`+`.pdf` pairs, untouched by the migration, sitting right next to its `data/`
