@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.3.2] - 2026-09-07
+
+### Changed
+
+- Renamed the `pm-project-init` skill to `pm-pdata-do-init`, completing the `pm-pdata-*` family's
+  move to consistent imperative naming (started in 3.3.1). No compatibility alias for the old
+  `/pm-project-init` slash command. Every currently-live cross-reference is updated: the other
+  bundled `pm-*` SKILL.md files, source docstrings, a user-facing dry-run report string in
+  `ccst pdata init`'s output, and the `cli/bundled-pm-skills`/`pdata/migration-guidance` main
+  specs.
+
 ## [3.3.1] - 2026-09-07
 
 ### Changed
