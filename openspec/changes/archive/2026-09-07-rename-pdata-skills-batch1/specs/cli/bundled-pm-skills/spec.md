@@ -1,14 +1,12 @@
-# cli/bundled-pm-skills Specification
+## MODIFIED Requirements
 
-## Purpose
-
-Defines which `pm-*` skills this repo bundles and installs via its standard skill-sync mechanism,
-so a skill built and proven useful on one machine becomes available on every machine that
-installs this package, not just the one it was authored on.
-
-## Requirements
-
-### Requirement: `pm-pdata-do-audit-and-prepare-to-migrate` and `pm-pdata-do-manual-migration` are bundled skills
+### Requirement: `pm-pdata-audit` and `pm-pdata-migrate` are bundled skills
+<!-- Requirement renamed on merge to "`pm-pdata-do-audit-and-prepare-to-migrate` and
+     `pm-pdata-do-manual-migration` are bundled skills" - kept as the original header here so
+     the sync step locates the existing main-spec requirement; the main spec's own name for
+     this requirement changes to match its updated body. This corrects pre-existing drift: the
+     main spec already named the pre-3.1.0 identifiers `pm-pdata-audit`/`pm-pdata-migrate`, not
+     even today's current `pm-pdata-do-audit-and-prepare-to-migrate`/`pm-pdata-do-migrate`. -->
 The `pm-pdata-do-audit-and-prepare-to-migrate` and `pm-pdata-do-manual-migration` skills SHALL be
 bundled under this package's skills directory and installed by `ccst skills install` /
 `ccst install-everything`, the same mechanism that installs every other `pm-*` skill.

@@ -310,7 +310,7 @@ def update_record(
     content and fields are independent — updating fields never re-serializes content, and vice
     versa. This is deliberate (it's what lets a --field-only update skip resending content), not
     a gap: a record group whose content is designed to mirror its fields is the caller's own
-    duplication to keep in sync, on every write, by passing both. See pm-pdata-schema-design
+    duplication to keep in sync, on every write, by passing both. See pm-pdata-design-schema
     SKILL.md's "content and extension fields are never auto-synced" section."""
     if content is None and file_path is None and not fields:
         raise ValueError(

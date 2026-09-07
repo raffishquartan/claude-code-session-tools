@@ -8,20 +8,20 @@ real migration reverse-engineered are documented rather than re-derived from scr
 
 ## Requirements
 
-### Requirement: `pm-pdata-do-migrate` is deprecated in favour of `ccst pdata init`
-`pm-pdata-do-migrate`'s `SKILL.md` SHALL state, before any other content, that `ccst pdata init` is
+### Requirement: `pm-pdata-do-manual-migration` is deprecated in favour of `ccst pdata init`
+`pm-pdata-do-manual-migration`'s `SKILL.md` SHALL state, before any other content, that `ccst pdata init` is
 the tool-native migration mechanism (classification, human-reviewable manifest, backup, verify,
 atomic cutover, post-write doc-update prompts) and that this skill is a deprecated fallback,
 superseded by `ccst pdata init` wherever it is available.
 
 #### Scenario: A session reads the skill before migrating
-- **WHEN** a session invokes `pm-pdata-do-migrate` (directly or via its trigger phrases)
+- **WHEN** a session invokes `pm-pdata-do-manual-migration` (directly or via its trigger phrases)
 - **THEN** the first content it reads states plainly that `ccst pdata init` exists, is the default
   choice, and that this skill is a deprecated fallback - before any of the skill's own
   step-by-step manual-migration instructions
 
-### Requirement: `pm-pdata-do-migrate` gates on explicit user confirmation before proceeding
-`pm-pdata-do-migrate`'s `SKILL.md` SHALL instruct the invoking session to stop, after the
+### Requirement: `pm-pdata-do-manual-migration` gates on explicit user confirmation before proceeding
+`pm-pdata-do-manual-migration`'s `SKILL.md` SHALL instruct the invoking session to stop, after the
 deprecation notice and before any manual-migration step, and obtain the user's explicit
 confirmation that: (a) they understand `ccst pdata init` is the standard, tool-native mechanism and
 this skill is a deprecated fallback; and (b) they intend to use this skill specifically because the
@@ -29,7 +29,7 @@ programmatic approach does not fit their case (e.g. a record shape none of `ccst
 import strategies can express). The skill SHALL NOT proceed to Step 1 without that confirmation.
 
 #### Scenario: A session is invoked without the user having considered ccst pdata init
-- **WHEN** a session invokes `pm-pdata-do-migrate` and the user has not already explicitly stated
+- **WHEN** a session invokes `pm-pdata-do-manual-migration` and the user has not already explicitly stated
   why the programmatic approach doesn't fit
 - **THEN** the session asks the user to confirm they understand this skill is deprecated in favour
   of `ccst pdata init` and to state why the manual path is needed, and does not begin Step 1 (or
@@ -38,20 +38,20 @@ import strategies can express). The skill SHALL NOT proceed to Step 1 without th
 #### Scenario: The user confirms and the skill proceeds
 - **WHEN** the user explicitly confirms they understand the deprecation and states a reason the
   programmatic approach doesn't fit
-- **THEN** the session proceeds with `pm-pdata-do-migrate`'s existing step-by-step instructions
+- **THEN** the session proceeds with `pm-pdata-do-manual-migration`'s existing step-by-step instructions
   exactly as before this change
 
 ### Requirement: `pm-pdata-do-audit-and-prepare-to-migrate` redirects to `ccst pdata init`
 `pm-pdata-do-audit-and-prepare-to-migrate`'s `SKILL.md` SHALL state, before any other content, that
 its readiness-audit output feeds `ccst pdata init` (via `pm-project-init`), not a separate manual
-`pm-pdata-do-migrate` path, and SHALL reposition its coordination-file hygiene checks (row_id
+`pm-pdata-do-manual-migration` path, and SHALL reposition its coordination-file hygiene checks (row_id
 collisions, CRLF, cross-reference integrity, controlled-vocabulary compliance) as a pre-flight pass
 to run before `ccst pdata init`.
 
 #### Scenario: A session reads the audit skill before running ccst pdata init
 - **WHEN** a session invokes `pm-pdata-do-audit-and-prepare-to-migrate`
 - **THEN** the skill states its output is meant to feed `ccst pdata init`/`pm-project-init`, and
-  does not present `pm-pdata-do-migrate` as the only or default next step
+  does not present `pm-pdata-do-manual-migration` as the only or default next step
 
 ### Requirement: `pm-project-init` documents the garbled-CSV-header failure mode and fix recipe
 `pm-project-init`'s `SKILL.md` SHALL document, as a named caveat (mirroring

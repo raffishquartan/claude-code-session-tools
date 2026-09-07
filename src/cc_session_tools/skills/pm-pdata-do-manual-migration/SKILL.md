@@ -1,9 +1,9 @@
 ---
-name: pm-pdata-do-migrate
-description: Execute a project's actual migration from flat central/index files to a ccst pdata record store - build a migration plan, adversarially verify the plan itself, present it for the user's confirmation, then execute it and write a results file. Consumes the readiness manifest pm-pdata-do-audit-and-prepare-to-migrate produces if one exists, but always explores the project independently too, so it works even without that manifest. Triggers on "migrate this project to pdata", "run the pdata migration", "/pm-pdata-do-migrate", or any request to actually move a project's CSV/index/log files into pdata (as opposed to just auditing readiness, which is pm-pdata-do-audit-and-prepare-to-migrate, or designing the target schema in the abstract, which is pm-pdata-schema-design).
+name: pm-pdata-do-manual-migration
+description: Execute a project's actual migration from flat central/index files to a ccst pdata record store - build a migration plan, adversarially verify the plan itself, present it for the user's confirmation, then execute it and write a results file. Consumes the readiness manifest pm-pdata-do-audit-and-prepare-to-migrate produces if one exists, but always explores the project independently too, so it works even without that manifest. Triggers on "migrate this project to pdata", "run the pdata migration", "/pm-pdata-do-manual-migration", or any request to actually move a project's CSV/index/log files into pdata (as opposed to just auditing readiness, which is pm-pdata-do-audit-and-prepare-to-migrate, or designing the target schema in the abstract, which is pm-pdata-design-schema).
 ---
 
-# Migrate a project to pdata
+# Manually migrate a project to pdata (deprecated fallback)
 
 > **Deprecated fallback — `ccst pdata init` is the standard mechanism.** `ccst pdata init`
 > (driven by the `pm-project-init` skill) is the tool-native migration mechanism: classification,
@@ -25,9 +25,9 @@ description: Execute a project's actual migration from flat central/index files 
 
 - `pm-pdata-do-audit-and-prepare-to-migrate` - readiness audit. Finds and fixes problems in the CURRENT flat files.
   Produces a readiness manifest. Does not touch pdata at all.
-- `pm-pdata-schema-design` - designs the TARGET record-group schema in the abstract (field names,
+- `pm-pdata-design-schema` - designs the TARGET record-group schema in the abstract (field names,
   types, groupings) before any data moves.
-- `pm-pdata-do-migrate` (this skill) - takes whatever schema exists (designed via the skill above,
+- `pm-pdata-do-manual-migration` (this skill) - takes whatever schema exists (designed via the skill above,
   or designed inline as part of this skill's own plan if no separate design session happened) and
   actually moves the data: `ccst pdata add`/`batch` calls, verification, and a results record.
 
@@ -59,7 +59,7 @@ audit pass would.
 
 ## Step 2: design or confirm the target schema
 
-For each central file being migrated, decide (or confirm, if `pm-pdata-schema-design` already
+For each central file being migrated, decide (or confirm, if `pm-pdata-design-schema` already
 ran):
 
 - **Record group name** - typically the file's own conceptual name (`correspondence-log`,

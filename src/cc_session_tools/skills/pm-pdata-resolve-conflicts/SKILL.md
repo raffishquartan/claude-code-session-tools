@@ -1,5 +1,5 @@
 ---
-name: pm-pdata-conflict-resolution
+name: pm-pdata-resolve-conflicts
 description: Use immediately when `ccst pdata update` or `ccst pdata delete` exits 3 (a version conflict) - takes the CLI's current-vs-attempted diff and presents it to Chris for reconciliation, per spec §6.2's "the session asks Chris how to reconcile" contract. Also use when `ccst pdata resolve` reports a cross-machine fork (a `.pdata-db-dump` conflict between two laptops), or phrasing like "pdata update conflict", "version conflict on a record", "someone else already updated this row", "sync conflict", "pdata fork between machines". Never auto-retries, never silently picks a side, never discards either version.
 ---
 

@@ -1,6 +1,6 @@
 ---
 name: pm-project-init
-description: Use when initializing a brand-new project's ccst pdata store, or migrating an existing ~/cc/<project>'s informally-accumulated flat files into it - drives `ccst pdata init` and applies judgement reviewing its classification report (spec §3's folder-owned/db-owned framework), since the tool's own defaults are deliberately conservative and need a human decision on every ambiguous file. Triggers - "migrate <project> to pdata", "run pdata init for <project>", "set up the data store for <project>", "/pm-project-init". Do NOT use for ccst pdata verify, per-record-group schema design (pm-pdata-schema-design), or version-conflict reconciliation (pm-pdata-conflict-resolution) - those are separate skills.
+description: Use when initializing a brand-new project's ccst pdata store, or migrating an existing ~/cc/<project>'s informally-accumulated flat files into it - drives `ccst pdata init` and applies judgement reviewing its classification report (spec §3's folder-owned/db-owned framework), since the tool's own defaults are deliberately conservative and need a human decision on every ambiguous file. Triggers - "migrate <project> to pdata", "run pdata init for <project>", "set up the data store for <project>", "/pm-project-init". Do NOT use for ccst pdata verify, per-record-group schema design (pm-pdata-design-schema), or version-conflict reconciliation (pm-pdata-resolve-conflicts) - those are separate skills.
 ---
 
 # pm-project-init
