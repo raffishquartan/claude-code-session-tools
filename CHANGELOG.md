@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.3.1] - 2026-09-07
+
+### Changed
+
+- Renamed three bundled skills for a consistent imperative naming style across the `pm-pdata-*`
+  family, with no compatibility alias kept for the old slash commands:
+  - `pm-pdata-do-migrate` → `pm-pdata-do-manual-migration` (clarifies it's the manual/deprecated
+    fallback, not the tool-native `ccst pdata init` route)
+  - `pm-pdata-conflict-resolution` → `pm-pdata-resolve-conflicts`
+  - `pm-pdata-schema-design` → `pm-pdata-design-schema`
+- Fixed pre-existing drift in the `cli/bundled-pm-skills` spec, which still named the pre-3.1.0
+  `pm-pdata-audit`/`pm-pdata-migrate` identifiers rather than the current skill names.
+
 ## [3.3.0] - 2026-09-07
 
 ### Added
