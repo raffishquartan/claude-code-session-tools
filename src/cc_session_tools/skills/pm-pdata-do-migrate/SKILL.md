@@ -5,6 +5,22 @@ description: Execute a project's actual migration from flat central/index files 
 
 # Migrate a project to pdata
 
+> **Deprecated fallback — `ccst pdata init` is the standard mechanism.** `ccst pdata init`
+> (driven by the `pm-project-init` skill) is the tool-native migration mechanism: classification,
+> a human-reviewable manifest, backup, verify, atomic cutover, and shipped post-write doc/skill-
+> update prompts. It is the default choice wherever it is available, and this skill is superseded
+> by it for any file `ccst pdata init`'s classifier can already handle (a normal CSV/JSON file
+> with a real header row). This skill remains only as a deprecated manual fallback for the narrow
+> case where the programmatic approach genuinely doesn't fit - e.g. a record shape none of `ccst
+> pdata init`'s five import strategies (`whole-file`, `delimited-sections`, `csv-rows`,
+> `json-array-rows`, `json-singleton`) can express.
+>
+> **Before doing anything else, stop and get the user's explicit confirmation** that: (a) they
+> understand `ccst pdata init` is the standard, tool-native mechanism and this skill is a
+> deprecated fallback; and (b) they have a specific reason the programmatic approach doesn't fit
+> this case. Do not proceed to Step 1, or any later step, without that confirmation - if the user
+> hasn't already stated a reason, ask them for one before continuing.
+
 ## When to use this vs. the other pm-pdata-* skills
 
 - `pm-pdata-do-audit-and-prepare-to-migrate` - readiness audit. Finds and fixes problems in the CURRENT flat files.

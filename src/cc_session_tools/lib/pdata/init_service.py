@@ -8,7 +8,7 @@ import csv
 import sqlite3
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 
 from cc_session_tools.lib import db
@@ -96,6 +96,29 @@ def dry_run(*, project: str, rehearse: Path | None = None) -> DryRunResult:
     return DryRunResult(manifest=m, report=_render_report(m), proposal_path=proposal_path)
 
 
+# A field name proposed by _classify_csv is derived from a real CSV header cell (see
+# classify._slugify_field_name) — an ordinary column name slugifies to something short.
+# A garbled header (prose/provenance text on the "header" row, spec pdata/
+# init-classification-report) instead produces long, many-word sentence-fragment names
+# like `pending_chris_s_manual_review`. Neither threshold alone is exact, but a name
+# tripping either is worth a reviewer's second look.
+_SUSPICIOUS_FIELD_NAME_CHAR_THRESHOLD = 40
+_SUSPICIOUS_FIELD_NAME_WORD_THRESHOLD = 5
+
+
+def _looks_like_garbled_header(field_names: list[str]) -> bool:
+    """True when multiple proposed field names read as sentence fragments rather than
+    short domain nouns — see spec pdata/init-classification-report. A single long name
+    isn't enough on its own (a legitimately verbose but real column header shouldn't be
+    flagged); this looks for the pattern repeating across an entry's fields."""
+    suspicious = sum(
+        1 for name in field_names
+        if len(name) > _SUSPICIOUS_FIELD_NAME_CHAR_THRESHOLD
+        or name.count("_") + 1 >= _SUSPICIOUS_FIELD_NAME_WORD_THRESHOLD
+    )
+    return suspicious >= 2
+
+
 def _render_report(m: Manifest) -> str:
     if not m.entries:
         return f"ccst pdata init — {m.project}: no files found, empty base schema created."
@@ -109,6 +132,12 @@ def _render_report(m: Manifest) -> str:
                 f"  [db-owned]     {e.path} -> group={e.record_group} "
                 f"strategy={e.strategy} fields={field_names}"
             )
+            if _looks_like_garbled_header(field_names):
+                lines.append(
+                    "    ⚠ worth double-checking — these field names read as sentence "
+                    "fragments, not column names; this file's header may not be what it "
+                    "looks like (see pm-project-init's garbled-CSV-header caveat)"
+                )
     lines.append(
         "Review/override entries in the proposal file listed below before running --write."
     )
@@ -352,6 +381,7 @@ def _adopt_from_dump(
 def write(
     *, project: str, rehearse: Path | None = None,
     on_progress: Callable[[str], None] | None = None,
+    leave_no_pointer_files: bool = False,
 ) -> WriteResult:
     project_root = init_paths.resolve_project_root(project, rehearse=rehearse)
 
@@ -396,11 +426,33 @@ def write(
         _check_db_not_locked(project)
 
         db_owned = [e for e in m.entries if e.classification == "db-owned"]
-        _emit(on_progress, f"Importing {len(db_owned)} file(s)...")
-        for entry in m.entries:
-            if entry.classification != "db-owned":
-                continue
+        already_migrated = [e for e in db_owned if e.migrated_at is not None]
+        to_import = [e for e in db_owned if e.migrated_at is None]
+        _emit(on_progress, f"Importing {len(to_import)} file(s)...")
+        if already_migrated:
+            _emit(
+                on_progress,
+                f"  skipping {len(already_migrated)} already-migrated file(s): "
+                f"{', '.join(e.path for e in already_migrated)}",
+            )
+        for entry in to_import:
             try:
+                source_path = project_root / entry.path
+                if not source_path.exists():
+                    # entry.migrated_at is None here (to_import excludes already-migrated
+                    # entries above), so this is not the ordinary "already cut over by an
+                    # earlier --write" case — the source is genuinely missing for an entry
+                    # this run believes still needs importing. Fail with a specific,
+                    # actionable message (still caught by this loop's own except clause
+                    # below, so it contributes to `reasons`/rollback exactly like any other
+                    # per-entry import failure) instead of a bare FileNotFoundError only
+                    # discoverable via the rollback reasons list.
+                    raise ValueError(
+                        f"{entry.path}: marked db-owned with no migrated_at, but its source "
+                        f"file does not exist at {source_path} — if this entry was already "
+                        f"migrated by another means, set its classification to folder-owned "
+                        f"(or otherwise correct the manifest) before running --write again"
+                    )
                 _emit(on_progress, f"  importing {entry.path} -> group={entry.db_group()}...")
                 for spec in entry.fields:
                     service.schema_add_field(
@@ -456,7 +508,19 @@ def write(
             )
 
     _emit(on_progress, f"Cutting over {len(written_entries)} file(s)...")
-    cutover.archive_entries(project_root=project_root, entries=written_entries)
+    cutover.archive_entries(
+        project_root=project_root, entries=written_entries, project=project,
+        write_pointer_files=not leave_no_pointer_files,
+    )
+    # Mark every entry this run actually cut over as migrated, and persist that back to
+    # the manifest — write() only ever `manifest.load`s otherwise, so without this a later
+    # --write would re-attempt (and, pre-fix, roll back) these same now-archived entries.
+    # written_entries holds the same ManifestEntry objects m.entries does (see the
+    # `to_import`/`written_entries.append(entry)` loop above), so mutating here mutates m.
+    migrated_at = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+    for entry in written_entries:
+        entry.migrated_at = migrated_at
+    manifest.save(m, proposal_path)
     return WriteResult(
         created_record_ids=created_ids,
         entries_written=[e.path for e in written_entries],

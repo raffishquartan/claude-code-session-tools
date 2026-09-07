@@ -62,6 +62,51 @@ that renames a `record_group` to match an existing one is **not** re-checked. Be
 proposal, scan it yourself for two entries sharing a `record_group` that you did not deliberately
 intend to merge.
 
+### Watch for garbled CSV headers
+
+A CSV whose first row is actually prose/provenance text (a `#`-prefixed comment, or a multi-
+sentence caveat wrapped in CSV quoting) rather than real column names produces a `[db-owned]`
+entry whose proposed field names read as garbled sentence fragments (e.g.
+`pending_chris_s_manual_review`, `generated_2026_08_12_do_not_edit`) rather than short domain
+nouns - syntactically valid-looking identifiers that don't obviously scream "wrong" on a fast
+skim. The dry-run report flags a likely case of this automatically (a "worth double-checking"
+annotation on the entry's line), but always eyeball field-name **shape**, not just presence, for
+every `[db-owned]` entry - the annotation is a heuristic, not a guarantee.
+
+The content on a garbled header line is usually legitimate and valuable (provenance/caveat text a
+later reader genuinely needs), not junk to discard. Fix recipe:
+
+1. Read past the suspect first line to confirm a clean, comma-separated real header exists
+   further down (usually line 2).
+2. Strip the bad line(s) from the source CSV, preserving the removed text exactly - you'll need it
+   in step 4.
+3. Correct the manifest entry: fix `fields` to match the real header, set a real `content_column`,
+   confirm `classification: db-owned`.
+4. Set the entry's `preface_text` field (in `.pdata-migration-manifest.json`) to the exact text you
+   removed in step 2. `--write`'s cutover step carries this into the entry's pointer file (Step 7)
+   automatically, under its own heading - you don't need to compose that by hand.
+
+### Also check every `db-owned` entry against two deferred-file criteria
+
+Beyond field-name shape, review every `db-owned` entry (not just folder-owned markdown/text files)
+against two further questions before approving the proposal - a structurally clean CSV can still
+be a poor migration candidate for reasons the classifier has no way to know about:
+
+- **Does this file live somewhere the project's own docs say only a human should touch?** (e.g. a
+  `references/` folder documented as "only Chris adds/removes/reorganises files here"). Migrating
+  it moves the original out of that folder as part of cutover, which conflicts with the folder's
+  documented purpose. If so, flip the entry to `folder-owned` and flag it explicitly to Chris as a
+  real open decision - do not silently include or silently exclude it.
+- **How does this source file actually get updated going forward - incrementally appended, or
+  periodically replaced wholesale with a fresh full export?** An append-only file (new rows added
+  over time, however often) is a good migration candidate regardless of update frequency. A file
+  whose maintenance model is "drop in a new full export periodically" is a poor candidate under
+  the current tooling even if the CSV itself is clean: `ccst pdata` has no bulk-replace/upsert
+  verb, so every future refresh would mean soft-deleting every old record and individually
+  re-adding every new one, one CLI call per row. Flag this distinction explicitly to Chris rather
+  than deciding it unilaterally - the append-vs-wholesale-replacement axis, not update frequency,
+  is what actually matters here.
+
 ## 4. Hand-edit the proposal to encode overrides
 
 Edit `.pdata-migration-manifest.json` directly (or the legacy `.ccst-pdata-proposal.json` name,
@@ -90,6 +135,25 @@ Two entries may legitimately feed the same `record_group`, but if they share a f
 must give it the same `sql_type` - `--write` rejects a mismatched pair up front rather than
 silently dropping one side's type.
 
+**`file_path_column` pitfall:** don't map `file_path_column` directly to a column whose values are
+relative to a subfolder rather than the project root (e.g. an index-of-a-subfolder CSV like
+`references/INDEX.csv` whose own `file_path` column is relative to `references/`, not the project
+root) - `--write`'s file_path-resolution verification will fail with a bare "does not resolve
+under `<project_root>`" and no further guidance. Instead, map that column to a plain named field
+(e.g. `source_file_path`) and note in the field's `description` what path it's relative to.
+
+**`content_column: null` default caveat:** an entry with `content_column` left unset falls back to
+a raw `json.dumps(row)` dump as every record's content - rarely what you want for readable `ccst
+pdata list` output. Actively choose a real narrative column for every `db-owned` entry before
+`--write`; don't accept the JSON-blob default by omission.
+
+**Value transforms the generic importer can't express:** a computed field (e.g. an `is_canonical`
+flag for a known duplicate key) or splitting one source column into two has no 1:1 mapping in
+`csv-rows`. Don't try to force it into the manifest - import the entry normally via `csv-rows`
+first, then apply a post-`--write` `ccst pdata schema add-field` (to add the new field) followed
+by a per-record `ccst pdata update` pass (to populate it). This is the standard recipe for any
+field the source file doesn't already carry as its own column.
+
 Never delete the proposal file to "start over" without good reason - doing so discards every
 override made so far. If new files appear in the project after the first dry run, add entries for
 them by hand rather than deleting and reclassifying everything.
@@ -101,6 +165,14 @@ Summarise the finished proposal in plain language for Chris - which files become
 explicit approval. **Never invoke `--write` without it.**
 
 ## 6. Run the write phase
+
+A real migration of an existing, non-trivial project is typically **iterative, not a single
+terminal `--write`**: expect multiple `--write` rounds as source files get fixed (garbled
+headers), deferred decisions get resolved, and corrected entries get re-approved. Don't plan for
+or promise a one-shot `--write`. A `--write` round only ever imports entries with no `migrated_at`
+already set - entries already cut over by an earlier successful `--write` are skipped
+automatically, so a later round picking up newly-fixed or newly-added files is safe to run without
+re-touching what already migrated.
 
 ```sh
 ccst pdata init --project <project> [--rehearse <path>] --write
@@ -132,6 +204,12 @@ Archived originals live at `<project-root>/.pdata-migrated/` and are **never aut
 himself - that WARN is expected and not urgent. Do not delete the archive without his explicit
 instruction.
 
+By default, `--write` also leaves a `.md` pointer file at each cut-over entry's original path
+(record_group, field/schema table, an example query command, and any preserved preface text - see
+Step 3's garbled-header recipe) - so anything else in the project citing the old path by name finds
+a live signpost instead of a silent 404. Pass `--leave-no-pointer-files` if this run shouldn't
+leave one (e.g. a rehearsal, or a project convention against extra files at migrated paths).
+
 ## 8. Rollback, if something's found wrong post-cutover
 
 There is no `--rollback` flag. Recover by hand:
@@ -148,6 +226,11 @@ There is no `--rollback` flag. Recover by hand:
    `.db` file directly and re-run `ccst pdata init` from scratch.
 3. Fix whatever was wrong in the proposal (classification, strategy, field mapping) before
    re-attempting.
+
+A genuine intentional re-migration of an entry (e.g. after restoring the backup and deciding to
+redo it) also requires clearing that entry's `migrated_at` field by hand in the manifest, alongside
+the DB/proposal fixes above - `--write` otherwise skips any entry that already carries one (Step 6),
+by design, so it won't be re-imported until you do.
 
 ## Never do without explicit Chris approval
 

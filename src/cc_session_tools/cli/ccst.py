@@ -173,14 +173,19 @@ def _print_migration_prompt_reminders(
     project_root: Path, *labeled_filenames: tuple[str, str]
 ) -> None:
     """Print one "<label>: <path>" reminder line per (label, filename) pair, for the bundled
-    prompts/ directory, followed by a line telling the user to run it in a fresh Claude Code
-    session started in project_root.
+    prompts/ directory, followed by a line telling the user to run it in a fresh context (a new
+    Claude Code session, or a dispatched Agent subagent) started in project_root.
 
     Each prompt's own "Run it via" section already spells out the `cd <project> && claude -p
     ...` invocation (see e.g. pdata-migration-skills-update.md) - that only works if the
     session's cwd is the project root, since every prompt's Step 1 checks for it and aborts
-    otherwise. Printing the reminder without saying so reads as "open this file", which invites
-    running it inline in whatever session called `ccst pdata init` - the wrong cwd entirely.
+    otherwise. What the fresh-context requirement is actually protecting against is an
+    orchestrating session rationalizing away a stale reference it half-remembers writing
+    earlier in the same conversation - a dispatched Agent subagent (same cwd) gets that same
+    benefit without shelling out to a literal second process, so both are offered here rather
+    than only the `claude -p` invocation. Printing the reminder without saying so reads as "open
+    this file", which invites running it inline in whatever session called `ccst pdata init` -
+    the wrong cwd entirely.
 
     Best-effort, deliberately swallowing a missing prompts/ directory: these reminders are a
     nicety layered on top of an otherwise-already-completed classification or migration, not
@@ -197,7 +202,8 @@ def _print_migration_prompt_reminders(
         print(f"{label}: {prompts_dir / filename}")
         print(
             f"  Run in a new Claude Code session started in {project_root} (its own "
-            f"\"Run it via\" section has the exact command) - not in this session."
+            f"\"Run it via\" section has the exact command), or dispatch it as an Agent "
+            f"subagent with the same cwd - not inline in this session."
         )
 
 
@@ -1178,6 +1184,7 @@ def _cmd_pdata_init(args: argparse.Namespace) -> int:
         try:
             write_result = init_service.write(
                 project=args.project, rehearse=rehearse, on_progress=print,
+                leave_no_pointer_files=args.leave_no_pointer_files,
             )
         except (FileNotFoundError, ValueError) as exc:
             print(f"ccst pdata: {exc}", file=sys.stderr)
@@ -3033,6 +3040,14 @@ def _build_parser() -> argparse.ArgumentParser:
             "Perform the write/verify/backup/cutover phase (default: dry-run only). "
             "Streams progress to stdout and also writes it to "
             "<project>/ccst-pdata-init-write.log"
+        ),
+    )
+    pdata_init_parser.add_argument(
+        "--leave-no-pointer-files", action="store_true",
+        help=(
+            "By default, --write leaves a Markdown pointer file at each migrated entry's "
+            "original path (record_group, schema, an example query command). Pass this "
+            "flag to suppress that and leave nothing behind at the original path."
         ),
     )
 

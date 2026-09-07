@@ -12,6 +12,15 @@ cd ~/cc/<project> && \
   claude -p "Check that you are executing with a ~/cc/<project> directory as your cwd. If you are not then exit. If you are then use this file as your prompt: <path-to-cc-session-tools>/src/cc_session_tools/prompts/pdata-migration-skills-update.md"
 ```
 
+**What matters is a fresh context, not literally a new process.** The reason this prompt asks
+for a new session is a genuinely fresh, unbiased read that won't rationalize away a stale
+reference it half-remembers writing earlier in the same conversation. An orchestrating session
+that just ran `ccst pdata init --write` can dispatch this prompt as an `Agent` subagent (with its
+cwd set to the project root) instead of shelling out to a literal `claude -p` process — a
+dispatched subagent gets the same fresh-context benefit without leaving the orchestrating
+session's control flow. Either is acceptable; what is not acceptable is running this prompt
+inline in the same context that just did the migration.
+
 ---
 
 ## Step 1 — Verify project context

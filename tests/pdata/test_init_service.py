@@ -72,6 +72,47 @@ def test_dry_run_reports_classified_entries(monkeypatch, tmp_path):
     assert result.proposal_path.exists()
 
 
+def test_looks_like_garbled_header_flags_sentence_fragment_field_names():
+    assert init_service._looks_like_garbled_header([
+        "pending_chris_s_manual_review", "generated_2026_08_12_do_not_edit",
+    ]) is True
+
+
+def test_looks_like_garbled_header_does_not_flag_ordinary_field_names():
+    assert init_service._looks_like_garbled_header(["idea", "priority", "created_at"]) is False
+
+
+def test_looks_like_garbled_header_requires_more_than_one_suspicious_name():
+    # A single long-but-real field name (e.g. a deliberately descriptive column) alone
+    # shouldn't trip the heuristic - it looks for the pattern repeating.
+    assert init_service._looks_like_garbled_header(
+        ["idea", "internal_reviewer_assigned_ticket_reference_number"]
+    ) is False
+
+
+def test_dry_run_report_flags_garbled_header_entry(monkeypatch, tmp_path):
+    monkeypatch.setenv(init_paths.PROJECTS_ROOT_ENV, str(tmp_path / "projects"))
+    monkeypatch.setenv("CCST_PROJECT_DB_DIR", str(tmp_path / "dbs"))
+    project_dir = tmp_path / "projects" / "demo"
+    project_dir.mkdir(parents=True)
+    # A CSV whose "header" row is actually a wrapped prose caveat split across two commas,
+    # not real columns - both resulting field names are long enough to trip the heuristic.
+    (project_dir / "garbled.csv").write_text(
+        "this is a very long garbled header fragment number one exceeding forty chars,"
+        "this is another very long garbled header fragment exceeding forty chars,short\n"
+        "a,b,c\n"
+    )
+    (project_dir / "ideas.csv").write_text("idea,priority\nfirst,1\n")
+
+    result = init_service.dry_run(project="demo")
+
+    lines = result.report.splitlines()
+    garbled_line_index = next(i for i, line in enumerate(lines) if "garbled.csv" in line)
+    assert "worth double-checking" in lines[garbled_line_index + 1]
+    ideas_line_index = next(i for i, line in enumerate(lines) if "ideas.csv" in line)
+    assert "worth double-checking" not in lines[ideas_line_index + 1]
+
+
 def test_dry_run_second_call_preserves_hand_edited_proposal(monkeypatch, tmp_path):
     monkeypatch.setenv(init_paths.PROJECTS_ROOT_ENV, str(tmp_path / "projects"))
     monkeypatch.setenv("CCST_PROJECT_DB_DIR", str(tmp_path / "dbs"))
@@ -241,6 +282,95 @@ def test_write_imports_csv_rows_and_cuts_over(monkeypatch, tmp_path):
 
     records = service.list_records(project="demo", record_group="ideas")
     assert {r.content for r in records} == {'{"idea": "first"}', '{"idea": "second"}'}
+
+
+def test_write_marks_cut_over_entries_migrated_in_the_persisted_manifest(monkeypatch, tmp_path):
+    from cc_session_tools.lib.pdata import manifest
+
+    monkeypatch.setenv(init_paths.PROJECTS_ROOT_ENV, str(tmp_path / "projects"))
+    monkeypatch.setenv("CCST_PROJECT_DB_DIR", str(tmp_path / "dbs"))
+    monkeypatch.setenv("CCST_PDATA_BACKUP_DIR", str(tmp_path / "backups"))
+    project_dir = tmp_path / "projects" / "demo"
+    project_dir.mkdir(parents=True)
+    (project_dir / "ideas.csv").write_text("idea\nfirst\n")
+
+    dry = init_service.dry_run(project="demo")
+    result = init_service.write(project="demo")
+
+    assert result.failure is None
+    reloaded = manifest.load(dry.proposal_path)
+    assert reloaded.entries[0].migrated_at is not None
+
+
+def test_write_second_round_skips_already_migrated_entries_and_imports_only_new_ones(
+    monkeypatch, tmp_path,
+):
+    """Reproduces ccmsg 20260907T112447Z-fe6b §2: a second --write round, after a prior
+    successful one, must not re-attempt (and roll back) the already-migrated entry."""
+    from cc_session_tools.lib.pdata import manifest, service
+
+    monkeypatch.setenv(init_paths.PROJECTS_ROOT_ENV, str(tmp_path / "projects"))
+    monkeypatch.setenv("CCST_PROJECT_DB_DIR", str(tmp_path / "dbs"))
+    monkeypatch.setenv("CCST_PDATA_BACKUP_DIR", str(tmp_path / "backups"))
+    project_dir = tmp_path / "projects" / "demo"
+    project_dir.mkdir(parents=True)
+    (project_dir / "ideas.csv").write_text("idea\nfirst\n")
+
+    dry = init_service.dry_run(project="demo")
+    first = init_service.write(project="demo")
+    assert first.failure is None
+    first_ids = list(first.created_record_ids)
+
+    # A newly-added file appears. Per pm-project-init's documented convention, a file
+    # added after the first dry-run is hand-added to the existing proposal rather than
+    # regenerated — dry_run() itself never re-classifies once the proposal file exists.
+    (project_dir / "notes.csv").write_text("idea\nsecond\n")
+    reloaded_before_second = manifest.load(dry.proposal_path)
+    reloaded_before_second.entries.append(manifest.ManifestEntry(
+        path="notes.csv", classification="db-owned", record_group="notes",
+        strategy="csv-rows",
+    ))
+    manifest.save(reloaded_before_second, dry.proposal_path)
+    second = init_service.write(project="demo")
+
+    assert second.failure is None
+    assert second.entries_written == ["notes.csv"]
+    # The first run's records are untouched — not re-imported, not soft-deleted.
+    for record_id in first_ids:
+        record = service.get_record(project="demo", record_id=record_id)
+        assert record is not None
+        assert record.deleted_at is None
+    reloaded = manifest.load(dry.proposal_path)
+    by_path = {e.path: e for e in reloaded.entries}
+    assert by_path["ideas.csv"].migrated_at is not None
+    assert by_path["notes.csv"].migrated_at is not None
+
+
+def test_write_reports_specific_error_for_missing_unmarked_db_owned_source(
+    monkeypatch, tmp_path,
+):
+    from cc_session_tools.lib.pdata import manifest, service
+
+    monkeypatch.setenv(init_paths.PROJECTS_ROOT_ENV, str(tmp_path / "projects"))
+    monkeypatch.setenv("CCST_PROJECT_DB_DIR", str(tmp_path / "dbs"))
+    monkeypatch.setenv("CCST_PDATA_BACKUP_DIR", str(tmp_path / "backups"))
+    project_dir = tmp_path / "projects" / "demo"
+    project_dir.mkdir(parents=True)
+    (project_dir / "ideas.csv").write_text("idea\nfirst\n")
+
+    dry = init_service.dry_run(project="demo")
+    # Simulate a manifest entry that's db-owned, has no migrated_at, but whose source
+    # was removed by something other than a --write cutover.
+    (project_dir / "ideas.csv").unlink()
+
+    result = init_service.write(project="demo")
+
+    assert result.failure is not None
+    assert any(
+        "no migrated_at" in reason and "source" in reason
+        for reason in result.failure.reasons
+    )
+    assert service.list_records(project="demo", record_group="ideas") == []
 
 
 def test_write_aborts_and_soft_deletes_on_absolute_file_path(monkeypatch, tmp_path):

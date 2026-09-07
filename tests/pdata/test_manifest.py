@@ -132,6 +132,41 @@ def test_load_or_create_never_overwrites_existing_proposal(tmp_path):
     assert reloaded.entries[0].reviewed is True
 
 
+def test_manifest_entry_defaults_migrated_at_and_preface_text_to_none():
+    entry = manifest.ManifestEntry(path="CLAUDE.md", classification="folder-owned")
+    assert entry.migrated_at is None
+    assert entry.preface_text is None
+
+
+def test_save_then_load_round_trips_migrated_at_and_preface_text(tmp_path):
+    entry = manifest.ManifestEntry(
+        path="ideas.csv", classification="db-owned", record_group="ideas",
+        strategy="csv-rows", migrated_at="2026-09-07T18:00:00Z",
+        preface_text="# provenance: generated 2026-08-12\n",
+    )
+    m = manifest.Manifest(project="demo", entries=[entry])
+    path = tmp_path / "proposal.json"
+    manifest.save(m, path)
+
+    loaded = manifest.load(path)
+    assert loaded.entries[0].migrated_at == "2026-09-07T18:00:00Z"
+    assert loaded.entries[0].preface_text == "# provenance: generated 2026-08-12\n"
+
+
+def test_load_tolerates_manifest_json_missing_migrated_at_and_preface_text(tmp_path):
+    """A manifest written before this change existed has no "migrated_at"/"preface_text"
+    keys at all — manifest.load must still construct a valid ManifestEntry (both fields
+    default to None), not raise."""
+    path = tmp_path / "proposal.json"
+    path.write_text(json.dumps({
+        "project": "demo",
+        "entries": [{"path": "CLAUDE.md", "classification": "folder-owned"}],
+    }))
+    loaded = manifest.load(path)
+    assert loaded.entries[0].migrated_at is None
+    assert loaded.entries[0].preface_text is None
+
+
 def test_load_or_create_passes_existing_record_groups_to_classifier(tmp_path):
     project_root = tmp_path / "demo"
     project_root.mkdir()
