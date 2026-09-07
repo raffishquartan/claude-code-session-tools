@@ -106,6 +106,35 @@ def test_pdata_init_write_end_to_end_imports_and_cuts_over(base_env, tmp_path):
     assert "first" in r_list.stdout and "second" in r_list.stdout
 
 
+def test_pdata_init_write_leaves_pointer_file_by_default(base_env, tmp_path):
+    project_dir = tmp_path / "projects" / "demo"
+    project_dir.mkdir(parents=True)
+    (project_dir / "ideas.csv").write_text("idea\nfirst\nsecond\n")
+    base_env["CCST_PDATA_BACKUP_DIR"] = str(tmp_path / "backups")
+
+    _run(base_env, "pdata", "init", "--project", "demo")
+    r_write = _run(base_env, "pdata", "init", "--project", "demo", "--write")
+
+    assert r_write.returncode == 0, r_write.stderr
+    pointer = project_dir / "ideas.md"
+    assert pointer.exists()
+    assert "ideas" in pointer.read_text()
+
+
+def test_pdata_init_write_leave_no_pointer_files_suppresses_pointer(base_env, tmp_path):
+    project_dir = tmp_path / "projects" / "demo"
+    project_dir.mkdir(parents=True)
+    (project_dir / "ideas.csv").write_text("idea\nfirst\nsecond\n")
+    base_env["CCST_PDATA_BACKUP_DIR"] = str(tmp_path / "backups")
+
+    _run(base_env, "pdata", "init", "--project", "demo")
+    r_write = _run(base_env, "pdata", "init", "--project", "demo", "--write",
+                   "--leave-no-pointer-files")
+
+    assert r_write.returncode == 0, r_write.stderr
+    assert not (project_dir / "ideas.md").exists()
+
+
 def test_pdata_init_write_without_prior_dry_run_errors(base_env, tmp_path):
     project_dir = tmp_path / "projects" / "demo"
     project_dir.mkdir(parents=True)

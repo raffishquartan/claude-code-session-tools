@@ -40,6 +40,15 @@ class ManifestEntry:
     content_column: str | None = None
     file_path_column: str | None = None
     fields: list[FieldSpec] = field(default_factory=list)
+    # Set by init_service.write() on successful cutover (ISO-8601 UTC) — a later
+    # --write skips any entry that already carries one instead of re-importing it
+    # (spec pdata/init-write-idempotency). None for an entry never yet migrated.
+    migrated_at: str | None = None
+    # Hand-set during review (pm-project-init's garbled-CSV-header fix recipe):
+    # header/provenance text stripped from the source file before migration,
+    # preserved verbatim here so cutover.archive_entries can carry it into the
+    # entry's pointer file (spec pdata/init-pointer-files). None when not applicable.
+    preface_text: str | None = None
 
     def __post_init__(self) -> None:
         if self.classification not in _VALID_CLASSIFICATIONS:
