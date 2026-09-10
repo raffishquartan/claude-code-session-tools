@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.5.1] - 2026-09-13
+
+### Fixed
+
+- `ccst skills install` (and therefore `install-everything` and the `ensure_synced` auto-sync
+  path) now removes a dangling, tool-managed symlink under `~/.claude/skills/` left behind when a
+  bundled skill is renamed or removed - a rename now self-heals the same way a hook rename already
+  did via `prune_stale_hooks`. Previously `ccst doctor`'s `check_no_stale_skill_symlinks` could
+  only WARN and suggest a manual `rm`; every `pm-pdata-*` rename since 3.3.0 left exactly this kind
+  of orphaned symlink behind on any machine that had the old name installed. A dangling symlink
+  pointing outside this package's bundled skills source, or a non-symlink entry, is left untouched.
+
 ## [3.5.0] - 2026-09-12
 
 ### Added
