@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.3.3] - 2026-09-12
+
+### Fixed
+
+- `ccst doctor`'s WARN/FAIL output (including the `--drift` report) no longer hard-wraps long
+  reason text into a ragged, hard-to-read run-on - each result now prints as `[STATUS] name` on
+  its own line, followed by the reason as an indented paragraph wrapped to the detected terminal
+  width (`shutil.get_terminal_size()`, falling back to 80 columns for non-tty output such as the
+  scheduled drift-monitor job). Affects every check category equally, since skills, hooks,
+  data-store, and pdata-init checks all share the same formatter.
+
 ## [3.3.2] - 2026-09-07
 
 ### Changed
