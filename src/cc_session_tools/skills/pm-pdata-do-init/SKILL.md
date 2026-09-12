@@ -93,19 +93,19 @@ against two further questions before approving the proposal - a structurally cle
 be a poor migration candidate for reasons the classifier has no way to know about:
 
 - **Does this file live somewhere the project's own docs say only a human should touch?** (e.g. a
-  `references/` folder documented as "only Chris adds/removes/reorganises files here"). Migrating
+  `references/` folder documented as "only the user adds/removes/reorganises files here"). Migrating
   it moves the original out of that folder as part of cutover, which conflicts with the folder's
-  documented purpose. If so, flip the entry to `folder-owned` and flag it explicitly to Chris as a
-  real open decision - do not silently include or silently exclude it.
+  documented purpose. If so, flip the entry to `folder-owned` and flag it explicitly to the user as
+  a real open decision - do not silently include or silently exclude it.
 - **How does this source file actually get updated going forward - incrementally appended, or
   periodically replaced wholesale with a fresh full export?** An append-only file (new rows added
   over time, however often) is a good migration candidate regardless of update frequency. A file
   whose maintenance model is "drop in a new full export periodically" is a poor candidate under
   the current tooling even if the CSV itself is clean: `ccst pdata` has no bulk-replace/upsert
   verb, so every future refresh would mean soft-deleting every old record and individually
-  re-adding every new one, one CLI call per row. Flag this distinction explicitly to Chris rather
-  than deciding it unilaterally - the append-vs-wholesale-replacement axis, not update frequency,
-  is what actually matters here.
+  re-adding every new one, one CLI call per row. Flag this distinction explicitly to the user
+  rather than deciding it unilaterally - the append-vs-wholesale-replacement axis, not update
+  frequency, is what actually matters here.
 
 ## 4. Hand-edit the proposal to encode overrides
 
@@ -160,7 +160,7 @@ them by hand rather than deleting and reclassifying everything.
 
 ## 5. Get explicit approval before `--write`
 
-Summarise the finished proposal in plain language for Chris - which files become which
+Summarise the finished proposal in plain language for the user - which files become which
 `record_group`s, roughly how many rows each will produce, which files stay folder-owned - and get
 explicit approval. **Never invoke `--write` without it.**
 
@@ -185,7 +185,7 @@ log rather than re-running blind. It is excluded from classification (like the p
 itself), so it never shows up as a manifest entry on a later dry-run.
 
 - **Exit 0:** everything imported, verified, backed up, and cut over. Report the backup tar path
-  and the list of cut-over files to Chris.
+  and the list of cut-over files to the user.
 - **Exit 1:** verification failed. Nothing was cut over and no live rows were left behind (they
   were soft-deleted). Read the printed reasons - usually a bad `file_path_column`, a wrong
   `content_column`, or a header that needed a different field name - fix the proposal entry, and
@@ -200,8 +200,8 @@ in place.
 ## 7. After a successful cutover
 
 Archived originals live at `<project-root>/.pdata-migrated/` and are **never auto-deleted** (spec
-§7.1 step 7). `ccst doctor` will keep WARNing about them until Chris explicitly deletes them
-himself - that WARN is expected and not urgent. Do not delete the archive without his explicit
+§7.1 step 7). `ccst doctor` will keep WARNing about them until the user explicitly deletes them
+- that WARN is expected and not urgent. Do not delete the archive without the user's explicit
 instruction.
 
 By default, `--write` also leaves a `.md` pointer file at each cut-over entry's original path
@@ -232,7 +232,7 @@ redo it) also requires clearing that entry's `migrated_at` field by hand in the 
 the DB/proposal fixes above - `--write` otherwise skips any entry that already carries one (Step 6),
 by design, so it won't be re-imported until you do.
 
-## Never do without explicit Chris approval
+## Never do without explicit user approval
 
 - Invoke `--write` on an unreviewed proposal.
 - Delete anything under `.pdata-migrated/`.

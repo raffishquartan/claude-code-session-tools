@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.4.0] - 2026-09-12
+
+### Changed
+
+- The 8-digit confirmation gate's (`confirm-8digit`) gated-tool allowlist is now read from the
+  `CCCS_CONFIRM_8DIGIT_GATED_TOOLS` environment variable (comma-separated tool names) instead of
+  a hardcoded list baked into this public package - CCST ships with no default gated tools; set
+  the variable in your own shell profile / config to restore protection for the tools you want
+  gated. Previously-hardcoded example: `mcp__whatsapp__send_message`,
+  `mcp__google-workspace__send_gmail_message`, `mcp__opentabs__plugin_mark_reviewed`,
+  `mcp__opentabs__gwr_confirm_booking`, `mcp__opentabs__tesco_create_order`,
+  `mcp__opentabs__tesco_place_order`.
+- Reworded the `pm-pdata-do-init` and `pm-pdata-resolve-conflicts` skills to generic
+  second-person phrasing, removing personally-identifying wording that had no place in a
+  publicly-published package. No change in instructional meaning.
+
 ## [3.3.3] - 2026-09-12
 
 ### Fixed
