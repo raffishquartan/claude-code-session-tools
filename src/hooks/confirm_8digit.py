@@ -21,6 +21,12 @@ Skill-marker exceptions live under ``~/.cache/claude/markers/`` (override with
 the ``CCCS_MARKERS_DIR`` env var) and have a 1-hour TTL based on file mtime.
 Each marker permits a narrowly-scoped tool + input combination per CLAUDE.md.
 
+The gated-tool list itself comes from ``CCCS_CONFIRM_8DIGIT_GATED_TOOLS`` (a
+comma-separated list of tool names) - never hardcoded, because this module
+ships in a public repo and which tools a deployment considers sensitive
+enough to gate is that deployment's own configuration, not CCST's. When the
+variable is unset, no tool is gated.
+
 Fail-safe: when the transcript cannot be located the hook ALWAYS exits 2
 with a clear message, regardless of CCCS_ENFORCE_8DIGIT, because we cannot
 verify confirmation without it.
@@ -49,14 +55,17 @@ from hooks.transcript import (
 _MARKER_TTL_S = 60 * 60  # 1 hour
 _GAP_LIMIT_S = 30 * 60  # 30 minutes between offer and reply
 
-GATED_TOOLS_DEFAULT: list[str] = [
-    "mcp__whatsapp__send_message",
-    "mcp__google-workspace__send_gmail_message",
-    "mcp__opentabs__plugin_mark_reviewed",
-    "mcp__opentabs__gwr_confirm_booking",
-    "mcp__opentabs__tesco_create_order",
-    "mcp__opentabs__tesco_place_order",
-]
+
+def _gated_tools_from_env() -> list[str]:
+    """Return the gated-tool allowlist from CCCS_CONFIRM_8DIGIT_GATED_TOOLS.
+
+    Comma-separated tool names, whitespace around each trimmed, empty entries
+    dropped. Unset or empty means no tool is gated - CCST ships no default,
+    since the concrete list is a deployment's own personal-policy
+    configuration, not something this public package hardcodes.
+    """
+    raw = os.environ.get("CCCS_CONFIRM_8DIGIT_GATED_TOOLS", "")
+    return [name.strip() for name in raw.split(",") if name.strip()]
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
@@ -280,7 +289,7 @@ def main(argv: list[str] | None = None) -> int:
     if not isinstance(data, dict):
         print("[8digit-warn] hook input is not a JSON object", file=sys.stderr)
         return 0
-    result = verify(data, gated_tools=GATED_TOOLS_DEFAULT)
+    result = verify(data, gated_tools=_gated_tools_from_env())
     if result.message:
         print(result.message, file=sys.stderr)
     return result.exit_code

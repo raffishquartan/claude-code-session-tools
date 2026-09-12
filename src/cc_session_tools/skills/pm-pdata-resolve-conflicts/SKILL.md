@@ -1,6 +1,6 @@
 ---
 name: pm-pdata-resolve-conflicts
-description: Use immediately when `ccst pdata update` or `ccst pdata delete` exits 3 (a version conflict) - takes the CLI's current-vs-attempted diff and presents it to Chris for reconciliation, per spec §6.2's "the session asks Chris how to reconcile" contract. Also use when `ccst pdata resolve` reports a cross-machine fork (a `.pdata-db-dump` conflict between two laptops), or phrasing like "pdata update conflict", "version conflict on a record", "someone else already updated this row", "sync conflict", "pdata fork between machines". Never auto-retries, never silently picks a side, never discards either version.
+description: Use immediately when `ccst pdata update` or `ccst pdata delete` exits 3 (a version conflict) - takes the CLI's current-vs-attempted diff and presents it to the user for reconciliation, per spec §6.2's "the session asks the user how to reconcile" contract. Also use when `ccst pdata resolve` reports a cross-machine fork (a `.pdata-db-dump` conflict between two laptops), or phrasing like "pdata update conflict", "version conflict on a record", "someone else already updated this row", "sync conflict", "pdata fork between machines". Never auto-retries, never silently picks a side, never discards either version.
 ---
 
 # ccst pdata conflict resolution
@@ -12,10 +12,10 @@ this, exits `3`, and prints the current row's diff against what this session tri
 skill is what happens next.
 
 **Never auto-retry, never auto-merge, never silently keep one side and discard the other.** The
-spec is explicit that this always surfaces to Chris - the layered defense here is structural
+spec is explicit that this always surfaces to the user - the layered defense here is structural
 avoidance -> optimistic concurrency -> **a human decides**, not an increasingly clever automatic
 resolution attempt (spec §6, point 2: "auto-retry or silent-log-and-skip were both rejected in
-favour of always surfacing to Chris").
+favour of always surfacing to the user").
 
 ## When this triggers
 
@@ -34,14 +34,14 @@ move on to its next step with the write silently having failed.
    ccst pdata get --project <name> --id <id>  # confirm current state directly if useful
    ```
 
-2. **Present both sides to Chris plainly** - what's currently stored, what this session tried to
+2. **Present both sides to the user plainly** - what's currently stored, what this session tried to
    change it to, and (if knowable from context - e.g. two different session transcripts, two
    different times of day) what likely produced each version. Do not editorialise about which
-   version is "probably right" - that judgement belongs to Chris, who has context this session
+   version is "probably right" - that judgement belongs to the user, who has context this session
    doesn't (which session was more authoritative, which change was more recent in wall-clock intent
    rather than just `updated_at`).
 
-3. **Ask Chris explicitly how to reconcile.** Typical resolutions, none of them automatic:
+3. **Ask the user explicitly how to reconcile.** Typical resolutions, none of them automatic:
    - Keep the current (winning) version as-is; this session's attempted change is dropped.
    - Re-apply this session's change on top of the current version - re-read the current row to get
      its fresh `version`, then re-run `ccst pdata update --version <fresh-version> ...` with
@@ -58,7 +58,7 @@ move on to its next step with the write silently having failed.
 
 ## Cross-machine fork
 
-Chris runs Claude Code on two machines (a WSL2 laptop and a MacBook) that sync `ccst pdata`
+A user running Claude Code on multiple machines syncs `ccst pdata`
 projects automatically via `.pdata-db-dump/latest.sql` (multi-laptop pdata sync design). This is a
 *different* mechanism from the exit-3 case above - a fork can span every record in a project, not
 one row - but resolving it lands on exactly the same principle: **never auto-retry, never
@@ -72,7 +72,7 @@ they last synced - on any of: SessionStart, SessionEnd, the hourly `ccsched` job
 `ccst pdata rehydrate`/`dump` without `--force`. All of them report the same conflict the same
 way, so it makes no difference to the resolution which one caught it - but note that
 `sync-check` has no `--force` at all, deliberately: it is the unattended trigger, and overriding
-a fork is always a decision Chris makes with `ccst pdata dump`/`rehydrate --force` by hand.
+a fork is always a decision the user makes with `ccst pdata dump`/`rehydrate --force` by hand.
 The affected project shows a warning banner on
 every `ccst pdata` invocation ("unresolved sync conflict - see `ccst pdata resolve --project
 NAME`") until it's resolved. `ccst pdata resolve --project NAME` (Task 10) is what runs
@@ -86,7 +86,7 @@ NAME`") until it's resolved. `ccst pdata resolve --project NAME` (Task 10) is wh
    `record_group_fields` (schema-catalog) divergence as its own category, since a `schema
    add-field` run on only one machine can diverge independently of any actual data row.
 
-2. **Present each differing record to Chris and ask local-vs-dump per record** - the same
+2. **Present each differing record to the user and ask local-vs-dump per record** - the same
    "never auto-retry, never auto-merge, never silently keep one side and discard the other"
    framing as the exit-3 case above applies here too, just fanned out over every record the two
    machines disagree on instead of one.
@@ -96,7 +96,7 @@ NAME`") until it's resolved. `ccst pdata resolve --project NAME` (Task 10) is wh
    updated it live - say so plainly ("machine X deleted this, machine Y has a live edit to it")
    rather than presenting it as if it were an ordinary two-sided content difference. Applying the
    "update" side would silently resurrect a deletion; applying the "delete" side would silently
-   drop a live edit - Chris needs to see the shape of the conflict, not just two content blobs, to
+   drop a live edit - the user needs to see the shape of the conflict, not just two content blobs, to
    choose correctly.
 
 4. **`RecordDiff.id_collision` is not a local-vs-dump choice at all - it's a warning that the
@@ -107,7 +107,7 @@ NAME`") until it's resolved. `ccst pdata resolve --project NAME` (Task 10) is wh
    the expected outcome whenever both sides add the same number of new records to a group after
    diverging. `apply_resolution()` refuses these outright (raises rather than accepting a choice)
    specifically because picking either side would silently discard the other machine's real,
-   unrelated record. Tell Chris this plainly and do not attempt to force a `local`/`dump` pick
+   unrelated record. Tell the user this plainly and do not attempt to force a `local`/`dump` pick
    through `apply_resolution` for these - they need a manual, out-of-band fix (e.g. re-inserting
    the discarded record under a fresh id on whichever machine needs it), never an automatic one.
 
@@ -130,7 +130,7 @@ NAME`") until it's resolved. `ccst pdata resolve --project NAME` (Task 10) is wh
    turn it into an ordinary content diff and let a `local`/`dump` pick silently discard one side's
    real, unrelated record.
 
-6. **Resolution is all-or-nothing per `apply_resolution()` call.** Once Chris has decided *every*
+6. **Resolution is all-or-nothing per `apply_resolution()` call.** Once the user has decided *every*
    differing record, call `resolve.apply_resolution()` with `{record_id: "local" | "dump"}`
    covering every `record_id` in the current diff - no more and no fewer. Omitting any of them
    raises (naming the missing ids) and applies nothing. A partial resolve is not supported and is
@@ -153,7 +153,7 @@ NAME`") until it's resolved. `ccst pdata resolve --project NAME` (Task 10) is wh
    takes per-record `local`/`dump` choices - there is no field-level equivalent yet, so it refuses
    outright (naming the differing `(record_group, field_name)` pairs) rather than either leaving
    an unresolvable dead end or silently dropping one side's field registration while publishing a
-   vector that claims the dump machine is fully incorporated. Tell Chris to reconcile the schema
+   vector that claims the dump machine is fully incorporated. Tell the user to reconcile the schema
    catalog manually first (`ccst pdata schema add-field` on whichever machine is missing a field,
    matching the other's type/description), then retry - there is no automatic path for this yet.
 
