@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.5.0] - 2026-09-12
+
+### Added
+
+- New skill `extract-pptx`: extracts slide text, tables, speaker notes, OCR of embedded images,
+  and embedded file objects from `.pptx` files, plus an optional sibling PDF render - ported from
+  `claude-code-config-sync`, which had it as a generic, non-personal skill misplaced in a personal
+  dotfiles repo.
+- New skill `extract-to-text`: a generic multi-format document-to-markdown extractor -
+  `.docx`/`.doc`/`.rtf`/`.odt` via `pandoc -t markdown` (never `python-docx` `.paragraphs`, which
+  never descends into tables and can silently produce an empty result for a table-only document),
+  `.pptx`/`.pptm` by delegating to `extract-pptx`, `.eml`/`.msg`, `.pdf`, `.xlsx`, and plain-text
+  passthrough. Checks the real file signature rather than trusting the extension alone (catches a
+  `.msg`/`.url` mislabeled `.docx`), and always reports empty output as a distinct failure status,
+  never a silent success.
+
 ## [3.4.0] - 2026-09-12
 
 ### Changed

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "cc-session-tools"
-version = "3.4.0"
+version = "3.5.0"
 description = "Claude Code session management CLI tools (ccd, ccr, ccs, claude-code-usage, ccst) and hook library (hooks package)"
 readme = "README.md"
 license = { file = "LICENSE" }
@@ -72,7 +72,7 @@ cc_session_tools = ["skills/**/*", "config/*", "prompts/**/*"]
 cc_session_tools = ["**/tests/*", "**/__pycache__/*"]
 
 [tool.pytest.ini_options]
-testpaths = ["tests", "tests/scheduler", "src/cc_session_tools/skills/move-session/tests", "src/cc_session_tools/skills/list-empty-sessions/tests", "src/cc_session_tools/skills/delete-sessions/tests", "src/cc_session_tools/skills/generate-8digit-code/tests", "src/cc_session_tools/skills/reduce-persistent-context/tests", "src/cc_session_tools/skills/update-command-cache/tests"]
+testpaths = ["tests", "tests/scheduler", "src/cc_session_tools/skills/move-session/tests", "src/cc_session_tools/skills/list-empty-sessions/tests", "src/cc_session_tools/skills/delete-sessions/tests", "src/cc_session_tools/skills/generate-8digit-code/tests", "src/cc_session_tools/skills/reduce-persistent-context/tests", "src/cc_session_tools/skills/update-command-cache/tests", "src/cc_session_tools/skills/extract-pptx/tests", "src/cc_session_tools/skills/extract-to-text/tests"]
 addopts = "-q"
 pythonpath = ["src"]
 
@@ -82,8 +82,17 @@ dev = [
     "pytest>=7",
     "pytest-mock>=3.12",
     "types-PyYAML>=6.0",
+    "python-pptx>=1.0",
+    "extract-msg>=0.45",
+    "pillow>=10.0",
+    "pytesseract>=0.3",
+    "types-openpyxl>=3.1",
 ]
 
 [[tool.mypy.overrides]]
 module = "tiktoken_tools.*"
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = "pytesseract.*"
 ignore_missing_imports = true
