@@ -14,6 +14,7 @@ import os
 import shutil
 import sqlite3
 import subprocess
+import textwrap
 import time
 from dataclasses import dataclass
 from enum import Enum
@@ -1148,6 +1149,21 @@ def _extract_bundle_hook_names(bundle_path: Path) -> list[str]:
     return names
 
 
+def _wrap_reason(reason: str, *, indent: str = "    ") -> str:
+    """Word-wrap a check's reason to the detected terminal width.
+
+    Reasons are long free-text sentences (often 100-250+ characters, with
+    embedded paths and remediation commands); printed on a single line they
+    hard-wrap at the terminal edge with no continuation indent, making a
+    wrapped reason indistinguishable from a new, unrelated result. Wrapping
+    to the real terminal width — falling back to 80 columns for non-tty
+    output (piped, redirected, or the scheduled drift-monitor job whose
+    stdout is forwarded to Telegram) — and indenting every line fixes that.
+    """
+    width = shutil.get_terminal_size(fallback=(80, 24)).columns
+    return textwrap.fill(reason, width=width, initial_indent=indent, subsequent_indent=indent)
+
+
 def format_results(results: list[CheckResult], *, show_all: bool = False) -> str:
     """Return a human-readable table of check results.
 
@@ -1156,15 +1172,27 @@ def format_results(results: list[CheckResult], *, show_all: bool = False) -> str
     otherwise dozens of [OK] lines a user has to scroll past to find the one
     thing that needs attention. show_all=True reproduces the full table this
     function always printed before this parameter existed.
+
+    A non-OK result renders as a two-line record — `[STATUS] name` on its own
+    line, then the reason wrapped and indented below it — since its reason is
+    the long free-text kind `_wrap_reason` exists for. OK rows (only ever
+    shown via show_all) stay a single fixed-width `[OK]   name  reason` line;
+    their reasons are short and there's nothing to disambiguate from a
+    neighbouring result.
     """
     if not results:
         return "(no checks ran)"
     shown = results if show_all else [r for r in results if r.status is not Status.OK]
     lines = []
     if shown:
-        name_w = max(len(r.name) for r in shown)
+        ok_shown = [r for r in shown if r.status is Status.OK]
+        name_w = max((len(r.name) for r in ok_shown), default=0)
         for r in shown:
-            lines.append(f"[{r.status.value:<4}] {r.name:<{name_w}}  {r.reason}")
+            if r.status is Status.OK:
+                lines.append(f"[{r.status.value:<4}] {r.name:<{name_w}}  {r.reason}")
+            else:
+                lines.append(f"[{r.status.value:<4}] {r.name}")
+                lines.append(_wrap_reason(r.reason))
     elif not show_all:
         lines.append(f"All {len(results)} checks OK.")
     has_issues = any(r.status in (Status.WARN, Status.FAIL) for r in results)
@@ -1201,10 +1229,10 @@ def format_drift_report(unmuted: list[CheckResult], *, muted_count: int) -> str:
     """
     if not unmuted:
         return ""
-    name_w = max(len(r.name) for r in unmuted)
     lines = ["ccst doctor: un-muted drift detected —"]
     for r in unmuted:
-        lines.append(f"  [{r.status.value:<4}] {r.name:<{name_w}}  {r.reason}")
+        lines.append(f"  [{r.status.value:<4}] {r.name}")
+        lines.append(_wrap_reason(r.reason))
     lines.append("")
     lines.append(
         "Acknowledge an item with:  ccst doctor --mute <name>"

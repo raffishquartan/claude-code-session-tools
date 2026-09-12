@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -27,10 +28,12 @@ from cc_session_tools.lib.doctor import (
     check_pypi_version,
     check_settings_json,
     check_skill_symlink,
+    format_drift_report,
     format_results,
     run_all_checks,
     _extract_bundle_hook_names,
     _version_tuple,
+    _wrap_reason,
 )
 from cc_session_tools.lib import db as _db
 from cc_session_tools.lib import telemetry_store
@@ -608,6 +611,98 @@ def test_format_results_default_all_ok_prints_summary_not_full_list() -> None:
 def test_format_results_empty() -> None:
     out = format_results([])
     assert "no checks" in out.lower()
+
+
+def test_format_results_non_ok_header_and_reason_are_separate_lines() -> None:
+    """The status/name header must not share a line with the reason text -
+    that's what made a wrapped reason look like a new, unrelated result."""
+    results = [CheckResult("bar", Status.WARN, "a short reason")]
+    out = format_results(results)
+    lines = out.splitlines()
+    header = next(line for line in lines if "bar" in line)
+    assert "a short reason" not in header
+
+
+def test_format_results_two_non_ok_results_have_distinguishable_headers() -> None:
+    """Regression test: two consecutive WARN/FAIL results must each start a
+    recognisable [STATUS] name header line, so a long wrapped reason can never
+    be mistaken for the next result."""
+    results = [
+        CheckResult("bar", Status.WARN, "missing"),
+        CheckResult("baz", Status.FAIL, "broken"),
+    ]
+    out = format_results(results)
+    headers = [line for line in out.splitlines() if line.startswith("[")]
+    assert any("bar" in h for h in headers)
+    assert any("baz" in h for h in headers)
+
+
+def test_format_results_ok_row_stays_single_line(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(shutil, "get_terminal_size", lambda fallback=(80, 24): os.terminal_size((80, 24)))
+    results = [CheckResult("foo", Status.OK, "all good")]
+    out = format_results(results, show_all=True)
+    lines = [line for line in out.splitlines() if "foo" in line]
+    assert len(lines) == 1
+    assert "all good" in lines[0]
+
+
+# ---------- _wrap_reason ----------
+
+def test_wrap_reason_wraps_at_narrow_terminal_width(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(shutil, "get_terminal_size", lambda fallback=(80, 24): os.terminal_size((40, 24)))
+    reason = "word " * 20
+    out = _wrap_reason(reason)
+    for line in out.splitlines():
+        assert len(line) <= 40
+
+
+def test_wrap_reason_wraps_at_wide_terminal_width(monkeypatch: pytest.MonkeyPatch) -> None:
+    reason = "word " * 40
+    monkeypatch.setattr(shutil, "get_terminal_size", lambda fallback=(80, 24): os.terminal_size((40, 24)))
+    narrow_lines = len(_wrap_reason(reason).splitlines())
+    monkeypatch.setattr(shutil, "get_terminal_size", lambda fallback=(80, 24): os.terminal_size((200, 24)))
+    wide_lines = len(_wrap_reason(reason).splitlines())
+    assert wide_lines < narrow_lines
+
+
+def test_wrap_reason_falls_back_to_80_columns_when_not_a_tty(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Simulates a non-tty consumer (piped output, or the ccsched drift-monitor
+    job) where the real get_terminal_size() call falls through to its
+    fallback=(80, 24) argument."""
+    monkeypatch.setattr(shutil, "get_terminal_size", lambda fallback=(80, 24): os.terminal_size(fallback))
+    reason = "word " * 30
+    out = _wrap_reason(reason)
+    for line in out.splitlines():
+        assert len(line) <= 80
+
+
+def test_wrap_reason_indents_every_line(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(shutil, "get_terminal_size", lambda fallback=(80, 24): os.terminal_size((40, 24)))
+    reason = "word " * 20
+    out = _wrap_reason(reason, indent="    ")
+    lines = out.splitlines()
+    assert len(lines) > 1
+    assert all(line.startswith("    ") for line in lines)
+
+
+# ---------- format_drift_report ----------
+
+def test_format_drift_report_empty_returns_empty_string() -> None:
+    assert format_drift_report([], muted_count=0) == ""
+
+
+def test_format_drift_report_header_and_reason_are_separate_lines() -> None:
+    unmuted = [CheckResult("bar", Status.WARN, "a short reason")]
+    out = format_drift_report(unmuted, muted_count=0)
+    lines = out.splitlines()
+    header = next(line for line in lines if "bar" in line)
+    assert "a short reason" not in header
+
+
+def test_format_drift_report_mentions_muted_count() -> None:
+    unmuted = [CheckResult("bar", Status.WARN, "missing")]
+    out = format_drift_report(unmuted, muted_count=3)
+    assert "3" in out
 
 
 # ---------- _extract_bundle_hook_names ----------
