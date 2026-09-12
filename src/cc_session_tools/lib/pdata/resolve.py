@@ -7,7 +7,7 @@ overwrite (that is rehydrate.py's job for the clean fast-forward case; this modu
 `ccst pdata resolve` reaches for once vector_clock.compare() has already reported a genuine FORK).
 
 Never auto-merges, never silently keeps one side and discards the other — every record surfaced
-here needs an explicit choice from the caller (ultimately Chris, via the CLI/skill), matching the
+here needs an explicit choice from the caller (ultimately the user, via the CLI/skill), matching the
 existing `pm-pdata-resolve-conflicts` skill's single-file-conflict framing exactly. Every
 record: `apply_resolution` is all-or-nothing over the whole diff, for the reasons in its own
 docstring.

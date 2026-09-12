@@ -1,5 +1,19 @@
 # claude-code-session-tools — Claude Code instructions
 
+## No personal identifiers in this repo's own documents
+
+This repo is a public GitHub repo and a public PyPI package (`cc-session-tools`) - the global
+"no personal identifiers in committed code" coding standard applies here with full force, and
+explicitly extends beyond `.py` source to every openspec artifact this repo's workflow produces
+(`proposal.md`, `spec.md`, `design.md`, `tasks.md`) and to any other committed document
+(`SKILL.md` files, code comments/docstrings, README, this file). Refer to the user in the second
+person ("you" / "the user"), never by name, and never describe personal or machine-specific setup
+details (device names, specific personal tool/service integrations, etc.) - write as if for any
+installer of this package, not this one maintainer's own machine. If a genuinely personal
+configuration value is unavoidable (e.g. which MCP tools a deployment wants gated), make it an
+externally-supplied environment variable or config file rather than a hardcoded value - see
+`CCCS_CONFIRM_8DIGIT_GATED_TOOLS` in `src/hooks/confirm_8digit.py` for the pattern.
+
 ## Development workflow
 
 This repo uses git worktrees for feature development. The `.worktrees/` directory
@@ -76,7 +90,7 @@ and failed).
 
 ## Data store conventions
 
-Any new Chris-added data store in this repo (or moved here from elsewhere) must:
+Any new data store added to this repo (or moved here from elsewhere) must:
 
 - Use SQLite (WAL mode) under `~/.local/share/claude/<subsystem>.db`, one file per subsystem —
   not flat files, not hand-rolled locks. Open every connection through the shared

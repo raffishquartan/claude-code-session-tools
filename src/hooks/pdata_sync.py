@@ -54,7 +54,7 @@ def _emit(message: str | None, event: str) -> None:
     """Always emit *something*, matching catchup.py's `_emit`. `additionalContext` alone only
     ever reaches the model; `systemMessage` is what Claude Code prints to the user's terminal, so
     it is added whenever there is a message - which `on_session_start` now always supplies for a
-    pdata-migrated project, on Chris's explicit request to always see that the hook ran and what
+    pdata-migrated project, on the user's explicit request to always see that the hook ran and what
     it decided, rather than trust silence to mean "nothing happened".
 
     `hookSpecificOutput` is omitted for `SessionEnd`: unlike SessionStart (which has an
@@ -115,7 +115,7 @@ def on_session_start(cwd: str, *, session_pid: int | None) -> str | None:
     regardless of project).
 
     For an actual pdata project, always returns a message, however unremarkable the outcome -
-    Chris asked to always be able to see that the hook ran and what it did (rather than trusting
+    The user asked to always be able to see that the hook ran and what it did (rather than trusting
     silence to mean "nothing to report"), so even the common NO_OP case gets one line.
 
     `session_pid` is None when `occupancy.launching_claude_pid` couldn't identify the launching
