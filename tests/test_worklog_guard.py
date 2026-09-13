@@ -35,14 +35,14 @@ def test_stale_worklog_returns_reason(tmp_path: Path) -> None:
 
     assert reason is not None
     assert "WORKLOG.md" in reason
-    assert "CCCS_ALLOW_STALE_WORKLOG" in reason
+    assert "CCST_ALLOW_STALE_WORKLOG" in reason
 
 
 # ---------- main() ----------
 
 def test_main_allows_when_cld_session_dir_not_set(monkeypatch) -> None:
     monkeypatch.delenv("CLD_SESSION_DIR", raising=False)
-    monkeypatch.delenv("CCCS_ALLOW_STALE_WORKLOG", raising=False)
+    monkeypatch.delenv("CCST_ALLOW_STALE_WORKLOG", raising=False)
     monkeypatch.setattr("sys.stdin", io.StringIO("{}"))
 
     assert worklog_guard.main() == 0
@@ -50,7 +50,7 @@ def test_main_allows_when_cld_session_dir_not_set(monkeypatch) -> None:
 
 def test_main_allows_when_no_worklog_yet(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("CLD_SESSION_DIR", str(tmp_path))
-    monkeypatch.delenv("CCCS_ALLOW_STALE_WORKLOG", raising=False)
+    monkeypatch.delenv("CCST_ALLOW_STALE_WORKLOG", raising=False)
     monkeypatch.setattr("sys.stdin", io.StringIO("{}"))
 
     assert worklog_guard.main() == 0
@@ -68,7 +68,7 @@ def test_main_blocks_on_stale_worklog(tmp_path: Path, monkeypatch, capsys) -> No
     os.utime(worklog, (old_time, old_time))
 
     monkeypatch.setenv("CLD_SESSION_DIR", str(tmp_path))
-    monkeypatch.delenv("CCCS_ALLOW_STALE_WORKLOG", raising=False)
+    monkeypatch.delenv("CCST_ALLOW_STALE_WORKLOG", raising=False)
     monkeypatch.setattr("sys.stdin", io.StringIO("{}"))
 
     rc = worklog_guard.main()
@@ -89,7 +89,7 @@ def test_main_escape_hatch_bypasses_block(tmp_path: Path, monkeypatch) -> None:
     os.utime(worklog, (old_time, old_time))
 
     monkeypatch.setenv("CLD_SESSION_DIR", str(tmp_path))
-    monkeypatch.setenv("CCCS_ALLOW_STALE_WORKLOG", "1")
+    monkeypatch.setenv("CCST_ALLOW_STALE_WORKLOG", "1")
     monkeypatch.setattr("sys.stdin", io.StringIO("{}"))
 
     assert worklog_guard.main() == 0

@@ -121,7 +121,7 @@ def _run_main(
     monkeypatch: pytest.MonkeyPatch, home: Path, payload: object
 ) -> str:
     monkeypatch.setenv("HOME", str(home))
-    monkeypatch.delenv("CCCS_MARKERS_DIR", raising=False)
+    monkeypatch.delenv("CCST_MARKERS_DIR", raising=False)
     monkeypatch.delenv("XDG_CACHE_HOME", raising=False)
     monkeypatch.setattr("sys.stdin", io.StringIO(json.dumps(payload)))
     out = io.StringIO()

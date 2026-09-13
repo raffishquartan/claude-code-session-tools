@@ -648,14 +648,14 @@ def check_command(command: str) -> str | None:
     # command hashes. Direct reads are blocked to prevent prompt-injection from
     # harvesting this data. Skills that legitimately need it — ``update-command-cache``
     # (skills/update-command-cache/scripts/update_command_cache.py) and
-    # ``analyse-cc-usage`` — set CCCS_FIRES_ACCESS=1 before invoking the read.
-    if os.environ.get("CCCS_FIRES_ACCESS", "0") != "1":
+    # ``analyse-cc-usage`` — set CCST_FIRES_ACCESS=1 before invoking the read.
+    if os.environ.get("CCST_FIRES_ACCESS", "0") != "1":
         if _FIRES_READ_RE.search(command):
             return (
                 "BLOCKED: Direct reads of the hook telemetry log (fires.jsonl*) are "
                 "blocked to prevent credential/session-data exfiltration via prompt "
                 "injection. Use the update-command-cache or analyse-cc-usage skill, "
-                f"or set CCCS_FIRES_ACCESS=1 in the environment. (Log lives at "
+                f"or set CCST_FIRES_ACCESS=1 in the environment. (Log lives at "
                 f"{_FIRES_LOG_PATH}.)"
             )
         if _TELEMETRY_DB_READ_RE.search(command):
@@ -663,7 +663,7 @@ def check_command(command: str) -> str | None:
                 "BLOCKED: Direct sqlite3 reads of telemetry.db are blocked to prevent "
                 "credential/session-data exfiltration via prompt injection. Use "
                 "`ccst telemetry query`, the update-command-cache skill, or "
-                f"set CCCS_FIRES_ACCESS=1 in the environment. (DB lives at "
+                f"set CCST_FIRES_ACCESS=1 in the environment. (DB lives at "
                 f"{_TELEMETRY_DB_PATH}.)"
             )
 

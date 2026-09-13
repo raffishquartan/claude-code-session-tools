@@ -22,7 +22,7 @@ UTC = timezone.utc
 @pytest.fixture(autouse=True)
 def _dirs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("CC_SCHEDULER_DIR", str(tmp_path / "sched"))
-    monkeypatch.setenv("CCCS_HOOKS_DIR", str(tmp_path / "hooks"))
+    monkeypatch.setenv("CCST_HOOKS_DIR", str(tmp_path / "hooks"))
 
 
 def _add(

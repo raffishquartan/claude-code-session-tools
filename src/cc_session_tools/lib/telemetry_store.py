@@ -1,4 +1,4 @@
-"""Shared schema, CCCS_HOOKS_DIR resolution, and connection helper for
+"""Shared schema, CCST_HOOKS_DIR resolution, and connection helper for
 telemetry.db. Single source of truth so hooks.telemetry (writer),
 hooks.telemetry_trim, hooks.telemetry_query, and
 lib.scheduler.ledger (catch-up reader/writer) can never point at different
@@ -35,7 +35,7 @@ from pathlib import Path
 
 from cc_session_tools.lib import db, paths
 
-HOOKS_DIR_ENV = "CCCS_HOOKS_DIR"
+HOOKS_DIR_ENV = "CCST_HOOKS_DIR"
 DB_FILENAME = "telemetry.db"
 
 # Marker name recorded in the migrations table by cli.migrate_telemetry once
@@ -80,14 +80,14 @@ CREATE INDEX IF NOT EXISTS idx_catchup_events_job_id ON catchup_events(job_id);
 
 # Computed once at import time; tests override it with
 # monkeypatch.setattr(telemetry_store, "_DEFAULT_HOOKS_DIR", tmp_path) to
-# exercise the "CCCS_HOOKS_DIR unset" production-default path, matching the
+# exercise the "CCST_HOOKS_DIR unset" production-default path, matching the
 # existing repo-wide convention for a module-level default.
 _DEFAULT_HOOKS_DIR = paths.data_home()
 
 
 def hooks_dir(explicit: Path | None = None) -> Path:
     """Resolve the telemetry.db directory: explicit override, else
-    CCCS_HOOKS_DIR, else the module default."""
+    CCST_HOOKS_DIR, else the module default."""
     if explicit is not None:
         return explicit
     raw = os.environ.get(HOOKS_DIR_ENV)

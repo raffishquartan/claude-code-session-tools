@@ -512,7 +512,7 @@ Translates a natural-language cadence request ("run my Tesco shop every other Su
 
 ### `update-command-cache`
 
-Curates the SHA-256 command cache the `bash-security-review` hook reads (`CCCS_USE_COMMAND_CACHE=1`). Triggers on "update the command cache", "sweep the fires log for cacheable commands", "promote my recent claude-CLI safe fires". Reads recent `safe`-verdict fires from `telemetry.db`, identifies commands not yet cached, presents them for approval, and records approved ones. Also supports manual `--remove`/`--flip` on existing entries.
+Curates the SHA-256 command cache the `bash-security-review` hook reads (`CCST_USE_COMMAND_CACHE=1`). Triggers on "update the command cache", "sweep the fires log for cacheable commands", "promote my recent claude-CLI safe fires". Reads recent `safe`-verdict fires from `telemetry.db`, identifies commands not yet cached, presents them for approval, and records approved ones. Also supports manual `--remove`/`--flip` on existing entries.
 
 ### `clean-hook-sessions`
 
@@ -622,7 +622,7 @@ Both hooks are included in the standard bundle and installed by
 `ccst hooks install --apply`. Surfacing is per-session (per-session cursor), so
 each session sees each completed run exactly once. Failures never block the
 session; every action is recorded to the shared `telemetry.db` (SQLite, under
-`~/.local/share/claude/`, overridable via `CCCS_HOOKS_DIR`) telemetry ledger —
+`~/.local/share/claude/`, overridable via `CCST_HOOKS_DIR`) telemetry ledger —
 query it with `ccst telemetry query`.
 
 ### `manage-recurring-cc-jobs-using-ccsched` skill
@@ -783,7 +783,7 @@ real risk, which is why this hook blocks rather than just warning like
 - **Only fires if a WORKLOG.md already exists** - it never forces you to
   create one, and never blocks automatic (non-`/compact`) compaction, which
   can happen mid-task in an unattended session with nobody present to react.
-- **Escape hatch:** set `CCCS_ALLOW_STALE_WORKLOG=1` to bypass the block for
+- **Escape hatch:** set `CCST_ALLOW_STALE_WORKLOG=1` to bypass the block for
   one `/compact`.
 
 ### Running modules directly (debugging only)

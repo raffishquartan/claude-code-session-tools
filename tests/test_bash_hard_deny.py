@@ -868,23 +868,23 @@ def test_allows_gh_release_create(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_blocks_fires_jsonl_old_path(
     monkeypatch: pytest.MonkeyPatch, reader: str
 ) -> None:
-    monkeypatch.delenv("CCCS_FIRES_ACCESS", raising=False)
+    monkeypatch.delenv("CCST_FIRES_ACCESS", raising=False)
     rc, _out, _err = _run_bash(monkeypatch, f"{reader} ~/.claude/hooks/fires.jsonl")
     assert rc == 2
 
 
 def test_allows_fires_jsonl_with_access_env(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("CCCS_FIRES_ACCESS", "1")
+    monkeypatch.setenv("CCST_FIRES_ACCESS", "1")
     _assert_allowed(monkeypatch, "cat ~/.claude/hooks/fires.jsonl")
 
 
 def test_allows_unrelated_cat(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.delenv("CCCS_FIRES_ACCESS", raising=False)
+    monkeypatch.delenv("CCST_FIRES_ACCESS", raising=False)
     _assert_allowed(monkeypatch, "cat /tmp/somefile.txt")
 
 
 def test_blocks_fires_rotated_gz(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.delenv("CCCS_FIRES_ACCESS", raising=False)
+    monkeypatch.delenv("CCST_FIRES_ACCESS", raising=False)
     rc, _out, _err = _run_bash(
         monkeypatch, "cat ~/.claude/hooks/fires.2026-W20.jsonl.gz"
     )
@@ -893,7 +893,7 @@ def test_blocks_fires_rotated_gz(monkeypatch: pytest.MonkeyPatch) -> None:
 
 def test_blocks_fires_jsonl_real_cache_path(monkeypatch: pytest.MonkeyPatch) -> None:
     # Path-fix: the real telemetry location (~/.cache/claude/logs) is blocked too.
-    monkeypatch.delenv("CCCS_FIRES_ACCESS", raising=False)
+    monkeypatch.delenv("CCST_FIRES_ACCESS", raising=False)
     rc, _out, _err = _run_bash(monkeypatch, "cat ~/.cache/claude/logs/fires.jsonl")
     assert rc == 2
 
@@ -901,12 +901,12 @@ def test_blocks_fires_jsonl_real_cache_path(monkeypatch: pytest.MonkeyPatch) -> 
 def test_allows_fires_real_cache_path_with_access_env(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setenv("CCCS_FIRES_ACCESS", "1")
+    monkeypatch.setenv("CCST_FIRES_ACCESS", "1")
     _assert_allowed(monkeypatch, "cat ~/.cache/claude/logs/fires.jsonl")
 
 
 def test_blocks_sqlite3_cli_read_of_telemetry_db(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.delenv("CCCS_FIRES_ACCESS", raising=False)
+    monkeypatch.delenv("CCST_FIRES_ACCESS", raising=False)
     rc, _out, _err = _run_bash(
         monkeypatch, 'sqlite3 ~/.local/share/claude/telemetry.db "select * from telemetry_events"'
     )
@@ -914,7 +914,7 @@ def test_blocks_sqlite3_cli_read_of_telemetry_db(monkeypatch: pytest.MonkeyPatch
 
 
 def test_allows_sqlite3_telemetry_db_with_access_env(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("CCCS_FIRES_ACCESS", "1")
+    monkeypatch.setenv("CCST_FIRES_ACCESS", "1")
     _assert_allowed(
         monkeypatch, 'sqlite3 ~/.local/share/claude/telemetry.db "select * from telemetry_events"'
     )
@@ -922,13 +922,13 @@ def test_allows_sqlite3_telemetry_db_with_access_env(monkeypatch: pytest.MonkeyP
 
 def test_blocks_sqlite3_telemetry_db_basename_only(monkeypatch: pytest.MonkeyPatch) -> None:
     # No path prefix, just the basename — still catchable.
-    monkeypatch.delenv("CCCS_FIRES_ACCESS", raising=False)
+    monkeypatch.delenv("CCST_FIRES_ACCESS", raising=False)
     rc, _out, _err = _run_bash(monkeypatch, "sqlite3 telemetry.db '.dump'")
     assert rc == 2
 
 
 def test_allows_sqlite3_unrelated_db(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.delenv("CCCS_FIRES_ACCESS", raising=False)
+    monkeypatch.delenv("CCST_FIRES_ACCESS", raising=False)
     _assert_allowed(monkeypatch, "sqlite3 /tmp/scratch.db '.tables'")
 
 
@@ -938,7 +938,7 @@ def test_blocks_binary_dump_tools_reading_telemetry_db(
 ) -> None:
     # A raw byte dump of telemetry.db leaks the same cleartext columns a
     # sqlite3 SELECT would — must be blocked exactly like the sqlite3 CLI path.
-    monkeypatch.delenv("CCCS_FIRES_ACCESS", raising=False)
+    monkeypatch.delenv("CCST_FIRES_ACCESS", raising=False)
     rc, _out, _err = _run_bash(monkeypatch, f"{tool} ~/.local/share/claude/telemetry.db")
     assert rc == 2
 
@@ -946,7 +946,7 @@ def test_blocks_binary_dump_tools_reading_telemetry_db(
 def test_allows_binary_dump_tools_on_telemetry_db_with_access_env(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setenv("CCCS_FIRES_ACCESS", "1")
+    monkeypatch.setenv("CCST_FIRES_ACCESS", "1")
     _assert_allowed(monkeypatch, "strings ~/.local/share/claude/telemetry.db")
 
 

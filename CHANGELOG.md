@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.5.2] - 2026-09-13
+
+### Changed
+
+- Renamed eleven `CCCS_*`-prefixed environment variables to `CCST_*`, since CCST's own code
+  defines and parses each of them - the `CCCS_` prefix was an inconsistency introduced piecemeal
+  over time, not a deliberate signal (compare the already-correct `CCST_SCREENSHOT_DIR` /
+  `CCST_NO_AUTO_SYNC`, and `NOTIFY_EMAIL`/`TELEGRAM_BOT_TOKEN`/`TELEGRAM_CHAT_ID`, which were
+  never `CCCS_`-prefixed despite also being deployment-supplied). No default, parsing rule, or
+  fallback changes - name only. `CCCS_ALLOW_MAIN` is unaffected (parsed entirely by a
+  CCCS-authored bash script, not CCST). Old name -> new name:
+  - `CCCS_ENFORCE_8DIGIT` -> `CCST_ENFORCE_8DIGIT`
+  - `CCCS_MARKERS_DIR` -> `CCST_MARKERS_DIR`
+  - `CCCS_ALLOW_STALE_WORKLOG` -> `CCST_ALLOW_STALE_WORKLOG`
+  - `CCCS_USE_COMMAND_CACHE` -> `CCST_USE_COMMAND_CACHE`
+  - `CCCS_CACHE_DB` -> `CCST_CACHE_DB`
+  - `CCCS_CLAUDE_BIN` -> `CCST_CLAUDE_BIN`
+  - `CCCS_REVIEW_MODEL` -> `CCST_REVIEW_MODEL`
+  - `CCCS_REVIEW_TIMEOUT` -> `CCST_REVIEW_TIMEOUT`
+  - `CCCS_HOOKS_DIR` -> `CCST_HOOKS_DIR`
+  - `CCCS_FIRES_ACCESS` -> `CCST_FIRES_ACCESS`
+  - `CCCS_CONFIRM_8DIGIT_GATED_TOOLS` -> `CCST_CONFIRM_8DIGIT_GATED_TOOLS` (introduced in 3.4.0,
+    less than 24 hours old - no backward-compatible fallback added for any of these eleven, since
+    this configuration surface has one real deployment, updated alongside this release)
+
 ## [3.5.1] - 2026-09-13
 
 ### Fixed

@@ -12,7 +12,7 @@ details (device names, specific personal tool/service integrations, etc.) - writ
 installer of this package, not this one maintainer's own machine. If a genuinely personal
 configuration value is unavoidable (e.g. which MCP tools a deployment wants gated), make it an
 externally-supplied environment variable or config file rather than a hardcoded value - see
-`CCCS_CONFIRM_8DIGIT_GATED_TOOLS` in `src/hooks/confirm_8digit.py` for the pattern.
+`CCST_CONFIRM_8DIGIT_GATED_TOOLS` in `src/hooks/confirm_8digit.py` for the pattern.
 
 ## Development workflow
 

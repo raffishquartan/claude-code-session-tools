@@ -50,7 +50,7 @@ class LedgerEntry:
 
 
 def _hooks_dir() -> Path:
-    """The telemetry.db directory: the CCCS_HOOKS_DIR override when set,
+    """The telemetry.db directory: the CCST_HOOKS_DIR override when set,
     else telemetry_store's default. Kept as a thin wrapper so catchup.py's
     existing ``ledger._hooks_dir()`` call keeps working unchanged."""
     return telemetry_store.hooks_dir()

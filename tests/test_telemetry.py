@@ -125,7 +125,7 @@ def test_telemetry_cli_log_subcommand(tmp_hooks_dir: Path) -> None:
         "tool_name": "Bash",
         "tool_input": {"command": "ls"},
     })
-    env = {**os.environ, "CCCS_HOOKS_DIR": str(tmp_hooks_dir)}
+    env = {**os.environ, "CCST_HOOKS_DIR": str(tmp_hooks_dir)}
     result = subprocess.run(
         [
             sys.executable, "-m", "hooks.telemetry", "log",

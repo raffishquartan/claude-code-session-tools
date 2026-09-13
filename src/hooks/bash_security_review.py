@@ -8,12 +8,12 @@ Tiers:
       commands like `grep foo | wc -l` and short write-risk-free ones alike.
   1.  Heuristic-flagged (pipe-to-shell, eval, base64 -d, ...) - always claude,
       never cache.
-  2.  Cache hit (CCCS_USE_COMMAND_CACHE=1, fresh entry) - emit cached verdict.
+  2.  Cache hit (CCST_USE_COMMAND_CACHE=1, fresh entry) - emit cached verdict.
   3.  Cache miss / disabled / stale - call claude CLI; on `safe` verdict and
       no heuristic flags, record in cache.
 
 Tier 3 always pins the review model via `--model` (default `sonnet`,
-override with CCCS_REVIEW_MODEL) so the review's cost and behaviour don't
+override with CCST_REVIEW_MODEL) so the review's cost and behaviour don't
 silently drift if the invoking session's default model changes.
 
 Never blocks. On any error/timeout, prints "[security review unavailable: ...]"
@@ -253,7 +253,7 @@ def call_claude(prompt: str, *, claude_bin: str, timeout: int, model: str) -> tu
 
 
 def _resolve_claude_bin() -> str | None:
-    env_bin = os.environ.get("CCCS_CLAUDE_BIN", "").strip()
+    env_bin = os.environ.get("CCST_CLAUDE_BIN", "").strip()
     if env_bin:
         if Path(env_bin).is_file() and os.access(env_bin, os.X_OK):
             return env_bin
@@ -266,7 +266,7 @@ def _resolve_claude_bin() -> str | None:
 def _emit_telemetry(
     *, hi: HookInput, decision: str, cache_state: str, verdict: str, sha: str
 ) -> None:
-    hooks_dir_env = os.environ.get("CCCS_HOOKS_DIR")
+    hooks_dir_env = os.environ.get("CCST_HOOKS_DIR")
     hooks_dir = Path(hooks_dir_env) if hooks_dir_env else None
     entry = TelemetryEntry(
         hook="bash-security-review",
@@ -313,7 +313,7 @@ def run(stdin_text: str) -> int:
         return 0
 
     hits = heuristic_flags(command)
-    use_cache = os.environ.get("CCCS_USE_COMMAND_CACHE", "") == "1"
+    use_cache = os.environ.get("CCST_USE_COMMAND_CACHE", "") == "1"
 
     # ---- Tier 1: heuristic hit -> always escalate, never cache ----
     skip_cache = bool(hits)
@@ -386,10 +386,10 @@ def run(stdin_text: str) -> int:
         return 0
 
     try:
-        timeout = int(os.environ.get("CCCS_REVIEW_TIMEOUT", "30"))
+        timeout = int(os.environ.get("CCST_REVIEW_TIMEOUT", "30"))
     except ValueError:
         timeout = 30
-    model = os.environ.get("CCCS_REVIEW_MODEL", "sonnet")
+    model = os.environ.get("CCST_REVIEW_MODEL", "sonnet")
 
     prompt = build_prompt(command, hi.cwd)
     _t0 = time.monotonic()

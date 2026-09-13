@@ -9,7 +9,7 @@ summarise-and-discard context, so un-persisted progress is at risk right now.
 
 Only acts for sessions started via `ccd`/`ccr` (CLD_SESSION_DIR set) that
 already have a WORKLOG.md — it never creates one. Escape hatch:
-CCCS_ALLOW_STALE_WORKLOG=1 bypasses the block.
+CCST_ALLOW_STALE_WORKLOG=1 bypasses the block.
 """
 from __future__ import annotations
 
@@ -32,14 +32,14 @@ def check_worklog_stale(session_dir: Path, stale_seconds: int = DEFAULT_STALE_SE
     return (
         f"WORKLOG.md at {worklog} was last updated {int(age // 60)} minutes ago. "
         "Update it with a summary of this session's progress before compacting "
-        "(or set CCCS_ALLOW_STALE_WORKLOG=1 to bypass)."
+        "(or set CCST_ALLOW_STALE_WORKLOG=1 to bypass)."
     )
 
 
 def main(argv: list[str] | None = None) -> int:
     sys.stdin.read()
 
-    if os.environ.get("CCCS_ALLOW_STALE_WORKLOG", "0") == "1":
+    if os.environ.get("CCST_ALLOW_STALE_WORKLOG", "0") == "1":
         return 0
 
     session_dir_str = os.environ.get("CLD_SESSION_DIR", "")

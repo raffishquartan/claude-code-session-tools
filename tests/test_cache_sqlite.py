@@ -14,7 +14,7 @@ from hooks.cache import CacheEntry, cache_lookup, cache_record, invocations_reco
 
 @pytest.fixture
 def db(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    monkeypatch.setenv("CCCS_CACHE_DB", str(tmp_path / "cache.db"))
+    monkeypatch.setenv("CCST_CACHE_DB", str(tmp_path / "cache.db"))
     monkeypatch.delenv("CCCS_CACHE_PATH", raising=False)
     return tmp_path / "cache.db"
 
@@ -230,7 +230,7 @@ def test_invocations_prune_removes_old(db: Path) -> None:
 
 def test_stats_main_no_crash(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys) -> None:
     """cccs-stats main() runs against an empty DB without error and prints expected headers."""
-    monkeypatch.setenv("CCCS_CACHE_DB", str(tmp_path / "cache.db"))
+    monkeypatch.setenv("CCST_CACHE_DB", str(tmp_path / "cache.db"))
     monkeypatch.delenv("CCCS_CACHE_PATH", raising=False)
     # Seed one row so the view returns data
     invocations_record(2, "safe", cache_source="exact", ms_elapsed=None)
@@ -242,7 +242,7 @@ def test_stats_main_no_crash(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, ca
 
 
 def test_default_db_path_uses_data_home(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    monkeypatch.delenv("CCCS_CACHE_DB", raising=False)
+    monkeypatch.delenv("CCST_CACHE_DB", raising=False)
     monkeypatch.setenv("CCST_DATA_HOME", str(tmp_path))
     from hooks.cache import _db_path
     assert _db_path() == tmp_path / "command-cache.db"
@@ -250,7 +250,7 @@ def test_default_db_path_uses_data_home(monkeypatch: pytest.MonkeyPatch, tmp_pat
 
 def test_stats_main_no_db_found(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys) -> None:
     """cccs-stats prints a friendly message (not a traceback) when the DB file doesn't exist."""
-    monkeypatch.setenv("CCCS_CACHE_DB", str(tmp_path / "does-not-exist.db"))
+    monkeypatch.setenv("CCST_CACHE_DB", str(tmp_path / "does-not-exist.db"))
     monkeypatch.delenv("CCCS_CACHE_PATH", raising=False)
     from hooks import stats as stats_mod
     stats_mod.main([])

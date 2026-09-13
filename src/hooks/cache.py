@@ -12,7 +12,7 @@ The prune DELETE uses strftime() to produce a cutoff in the same format so the
 text comparison works correctly — bare datetime('now', '-90 days') returns
 'YYYY-MM-DD HH:MM:SS' (no T, no Z) and would never match stored rows.
 
-DB path: CCCS_CACHE_DB env var (absolute file path), else
+DB path: CCST_CACHE_DB env var (absolute file path), else
 cc_session_tools.lib.paths.data_home() / "command-cache.db".
 
 Note: cache_revalidate from the previous CSV implementation is intentionally
@@ -95,7 +95,7 @@ class CacheEntry:
 
 
 def _db_path() -> Path:
-    env = os.environ.get("CCCS_CACHE_DB", "").strip()
+    env = os.environ.get("CCST_CACHE_DB", "").strip()
     if env:
         return Path(env)
     return data_home() / "command-cache.db"

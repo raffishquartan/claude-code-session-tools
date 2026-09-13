@@ -265,7 +265,7 @@ def test_migrate_advances_scheduler_cursors_past_imported_catchup_rows(
     source.mkdir()
     dest = tmp_path / "dest"
     monkeypatch.setenv("CC_SCHEDULER_DIR", str(tmp_path / "sched"))
-    monkeypatch.setenv("CCCS_HOOKS_DIR", str(dest))
+    monkeypatch.setenv("CCST_HOOKS_DIR", str(dest))
 
     # A session that has already seen everything in the live ledger.
     _hook_fire(dest, "2026-08-01T00:00:00Z")
@@ -292,7 +292,7 @@ def test_migrate_leaves_cursors_alone_when_no_catchup_rows_are_imported(
     source.mkdir()
     dest = tmp_path / "dest"
     monkeypatch.setenv("CC_SCHEDULER_DIR", str(tmp_path / "sched"))
-    monkeypatch.setenv("CCCS_HOOKS_DIR", str(dest))
+    monkeypatch.setenv("CCST_HOOKS_DIR", str(dest))
 
     cursor.write_cursor("live-session", 4)
     (source / "fires.jsonl").write_text(_generic_line("2026-06-01T00:00:00Z") + "\n")

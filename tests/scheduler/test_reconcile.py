@@ -18,7 +18,7 @@ UTC = timezone.utc
 @pytest.fixture(autouse=True)
 def _dirs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("CC_SCHEDULER_DIR", str(tmp_path / "sched"))
-    monkeypatch.setenv("CCCS_HOOKS_DIR", str(tmp_path / "hooks"))
+    monkeypatch.setenv("CCST_HOOKS_DIR", str(tmp_path / "hooks"))
 
 
 def _add(job_id: str, cadence: str = "daily@09:00", coalesce: str = "one") -> None:
@@ -120,7 +120,7 @@ def test_registry_load_failure_surfaces_and_launches_nothing(
 ) -> None:
     from cc_session_tools.lib.scheduler import store
     monkeypatch.setenv("CC_SCHEDULER_DIR", str(tmp_path / "sched"))
-    monkeypatch.setenv("CCCS_HOOKS_DIR", str(tmp_path / "hooks"))
+    monkeypatch.setenv("CCST_HOOKS_DIR", str(tmp_path / "hooks"))
     store.scheduler_dir().mkdir(parents=True, exist_ok=True)
     # A non-SQLite file at the DB path makes registry.load_registry() raise; the
     # reconcile boundary must convert that to parse_error, not crash.
@@ -142,7 +142,7 @@ def test_reconcile_concurrent_with_worker_setinflight_no_loss_r4(
     import threading
     from cc_session_tools.lib.scheduler import state as st
     monkeypatch.setenv("CC_SCHEDULER_DIR", str(tmp_path / "sched"))
-    monkeypatch.setenv("CCCS_HOOKS_DIR", str(tmp_path / "hooks"))
+    monkeypatch.setenv("CCST_HOOKS_DIR", str(tmp_path / "hooks"))
     # Several never-seen jobs for reconcile to register, plus one job the
     # "worker" stamps in_flight on.
     for i in range(8):

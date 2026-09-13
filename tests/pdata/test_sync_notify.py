@@ -16,7 +16,7 @@ def _dirs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     a test cannot forget it and silently write a real ledger row - see the incident this module's
     own WORKLOG records: a test that omitted this originally wrote real
     "pdata-sync:myproject" rows into the developer's actual ~/.local/share/claude/telemetry.db."""
-    monkeypatch.setenv("CCCS_HOOKS_DIR", str(tmp_path / "hooks"))
+    monkeypatch.setenv("CCST_HOOKS_DIR", str(tmp_path / "hooks"))
     monkeypatch.setenv("CC_SCHEDULER_DIR", str(tmp_path / "sched"))
 
 
@@ -98,12 +98,12 @@ def test_notify_conflict_does_not_raise_when_telegram_send_fails(
 def test_notify_conflict_does_not_raise_when_ledger_write_fails(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    # Point CCCS_HOOKS_DIR at a path that can't hold a sqlite file (a file, not a dir),
+    # Point CCST_HOOKS_DIR at a path that can't hold a sqlite file (a file, not a dir),
     # so the underlying ledger.record() call's own internal try/except degrades to a
     # logged warning rather than raising - notify_conflict must survive that too.
     unusable = tmp_path / "not-a-dir"
     unusable.write_text("blocking file")
-    monkeypatch.setenv("CCCS_HOOKS_DIR", str(unusable))
+    monkeypatch.setenv("CCST_HOOKS_DIR", str(unusable))
     calls, send = _spy_send()
     monkeypatch.setattr(sync_notify, "send_telegram", send)
     sync_notify.notify_conflict("myproject", outcome="fork", detail="boom")
