@@ -142,6 +142,25 @@ def test_apply_flag_accepted(tmp_path: Path) -> None:
     assert (tmp_path / "CLAUDE.md").exists()
 
 
+# ---------- stale skill symlink pruning ----------
+
+
+def test_apply_prunes_a_stale_skill_symlink(tmp_path: Path) -> None:
+    """install-everything's Skills step reaches the same prune logic as `ccst skills
+    install` directly - a rename self-heals through the full install-everything /
+    ensure_synced path, not just the narrower subcommand."""
+    real_source_dir = Path(__file__).parent.parent / "src" / "cc_session_tools" / "skills"
+    skills_target = tmp_path / "skills"
+    skills_target.mkdir()
+    stale_link = skills_target / "renamed-away-skill"
+    stale_link.symlink_to(real_source_dir / "renamed-away-skill")
+
+    result = _run(*_isolated_apply_args(tmp_path), env=_isolated_apply_env(tmp_path))
+
+    assert result.returncode == 0
+    assert not stale_link.is_symlink() and not stale_link.exists()
+
+
 # ---------- section headers ----------
 
 

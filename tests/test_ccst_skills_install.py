@@ -249,3 +249,71 @@ def test_directory_without_skill_md_is_ignored(tmp_path: Path) -> None:
     assert result.returncode == 0
     assert "valid-skill" in result.stdout
     assert "not-a-skill" not in result.stdout
+
+
+# ---------- Test 11: stale (renamed/removed) tool-managed symlink ----------
+
+
+def _make_stale_tool_managed_symlink(src: Path, tgt: Path, old_name: str) -> Path:
+    """Symlink tgt/old_name -> src/old_name without creating src/old_name — the shape a
+    rename or removal leaves behind (the skill directory it once pointed to is gone, but the
+    symlink still names this tool's own source directory as the parent)."""
+    link = tgt / old_name
+    link.symlink_to(src / old_name)
+    return link
+
+
+def test_dry_run_reports_stale_symlink_without_removing(tmp_path: Path) -> None:
+    src = _make_skills_source(tmp_path / "src", ["alpha"])
+    tgt = _make_target_dir(tmp_path / "tgt")
+    stale_link = _make_stale_tool_managed_symlink(src, tgt, "old-name")
+
+    result = _run("skills", "install", "--source", str(src), "--target", str(tgt))
+
+    assert result.returncode == 0
+    assert "old-name" in result.stdout.lower()
+    assert "stale" in result.stdout.lower()
+    # dry run must NOT remove it
+    assert stale_link.is_symlink()
+
+
+def test_apply_removes_stale_tool_managed_symlink(tmp_path: Path) -> None:
+    src = _make_skills_source(tmp_path / "src", ["alpha"])
+    tgt = _make_target_dir(tmp_path / "tgt")
+    stale_link = _make_stale_tool_managed_symlink(src, tgt, "old-name")
+
+    result = _run("skills", "install", "--source", str(src), "--target", str(tgt), "--apply")
+
+    assert result.returncode == 0
+    assert "removed 1 stale symlink" in result.stdout.lower()
+    assert not stale_link.is_symlink() and not stale_link.exists()
+    # the still-bundled skill is unaffected
+    assert (tgt / "alpha").is_symlink()
+
+
+def test_apply_leaves_a_foreign_dangling_symlink_alone(tmp_path: Path) -> None:
+    """A dangling symlink whose target is NOT under this tool's source dir is not ours to
+    remove — e.g. a user's own broken symlink, unrelated to any bundled skill."""
+    src = _make_skills_source(tmp_path / "src", ["alpha"])
+    tgt = _make_target_dir(tmp_path / "tgt")
+    foreign_link = tgt / "not-ours"
+    foreign_link.symlink_to(tmp_path / "elsewhere" / "does-not-exist")
+
+    result = _run("skills", "install", "--source", str(src), "--target", str(tgt), "--apply")
+
+    assert result.returncode == 0
+    assert foreign_link.is_symlink() and not foreign_link.exists()
+
+
+def test_apply_leaves_a_non_symlink_entry_alone(tmp_path: Path) -> None:
+    """A real directory with no SKILL.md and no matching bundled skill is left alone —
+    pruning only ever touches symlinks this tool created."""
+    src = _make_skills_source(tmp_path / "src", ["alpha"])
+    tgt = _make_target_dir(tmp_path / "tgt")
+    orphan_dir = tgt / "orphan-dir"
+    orphan_dir.mkdir()
+
+    result = _run("skills", "install", "--source", str(src), "--target", str(tgt), "--apply")
+
+    assert result.returncode == 0
+    assert orphan_dir.is_dir() and not orphan_dir.is_symlink()

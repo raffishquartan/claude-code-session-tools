@@ -96,6 +96,7 @@ import importlib
 import json
 import os
 import sys
+from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, TextIO, cast
@@ -239,6 +240,37 @@ def _decide_action(skill_src: Path, target_dir: Path) -> tuple[SkillAction, Path
     return SkillAction.NON_SYMLINK_EXISTS, dest
 
 
+@dataclass(frozen=True)
+class StaleSkillSymlink:
+    dest: Path
+    target: Path
+
+
+def _find_stale_skill_symlinks(source_dir: Path, target_dir: Path) -> list[StaleSkillSymlink]:
+    """Return every symlink under target_dir left behind by a rename or removal from
+    source_dir: dangling (its target no longer exists) AND created by a previous install from
+    source_dir (its stored target's parent resolves to source_dir). `ccst skills install` only
+    ever creates symlinks for skills currently in source_dir, so a name it no longer bundles is
+    never revisited by the create/repoint loop above — this is the matching subtractive pass.
+
+    A dangling symlink pointing somewhere other than source_dir is not ours to remove (e.g. a
+    user's own broken symlink), and neither is a non-symlink entry — both are left untouched.
+    """
+    if not target_dir.is_dir():
+        return []
+    resolved_source = source_dir.resolve()
+    stale: list[StaleSkillSymlink] = []
+    for entry in sorted(target_dir.iterdir()):
+        if not entry.is_symlink() or entry.exists():
+            continue
+        raw_target = Path(os.readlink(entry))
+        target = raw_target if raw_target.is_absolute() else (entry.parent / raw_target)
+        if target.parent.resolve() != resolved_source:
+            continue
+        stale.append(StaleSkillSymlink(dest=entry, target=target))
+    return stale
+
+
 def _cmd_skills_install(args: argparse.Namespace) -> int:
     # Resolve source
     if args.source:
@@ -273,8 +305,16 @@ def _cmd_skills_install(args: argparse.Namespace) -> int:
     for action, skill_src, dest in decisions:
         print(f"{skill_src.name:<{col_w}}  {action.value}")
 
+    stale = _find_stale_skill_symlinks(source_dir, target_dir)
+    if stale:
+        print("\nStale symlink(s) (skill no longer bundled):")
+        for entry in stale:
+            print(f"  {entry.dest.name} -> {entry.target}")
+
     if not args.apply:
         print(f"\nDry run — re-run with --apply to create symlinks in {target_dir}")
+        if stale:
+            print(f"({len(stale)} stale symlink(s) above would also be removed)")
         return 0
 
     # Perform writes
@@ -315,12 +355,20 @@ def _cmd_skills_install(args: argparse.Namespace) -> int:
         linked.append(dest)
         print(f"  linked: {dest} -> {skill_src}")
 
+    pruned: list[Path] = []
+    for entry in stale:
+        entry.dest.unlink()
+        pruned.append(entry.dest)
+        print(f"  removed stale: {entry.dest}")
+
     print()
     if linked:
         print(f"Linked {len(linked)} skill(s) in {target_dir}")
     if skipped:
         print(f"Skipped {len(skipped)} (already correct)")
-    if not linked and not skipped and not failed:
+    if pruned:
+        print(f"Removed {len(pruned)} stale symlink(s) no longer bundled")
+    if not linked and not skipped and not pruned and not failed:
         print(f"Nothing to do in {target_dir}")
 
     if failed:
