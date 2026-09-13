@@ -1,12 +1,4 @@
-# notify/confirm-8digit-gated-tools-config Specification
-
-## Purpose
-
-Defines where the 8-digit confirmation gate's gated-tool allowlist comes from, so this
-personal-policy configuration (which MCP tools count as sensitive enough to require the 8-digit
-gate) lives outside CCST's hardcoded, publicly-published source.
-
-## Requirements
+## MODIFIED Requirements
 
 ### Requirement: The gated-tool list comes from an environment variable, not a hardcoded default
 The 8-digit confirmation gate SHALL read its gated-tool allowlist from the

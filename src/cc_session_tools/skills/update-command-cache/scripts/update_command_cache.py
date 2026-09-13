@@ -6,11 +6,11 @@ surfaces safe-verdict commands not yet in the cache, prompts for approval,
 and records approved ones.
 
 Usage:
-    CCCS_FIRES_ACCESS=1 python3 update_command_cache.py [--list]
+    CCST_FIRES_ACCESS=1 python3 update_command_cache.py [--list]
     python3 update_command_cache.py --remove <sha>
     python3 update_command_cache.py --flip <sha> <verdict>
 
-The CCCS_FIRES_ACCESS=1 env var is required to read telemetry.db through the
+The CCST_FIRES_ACCESS=1 env var is required to read telemetry.db through the
 bash-hard-deny hook's allowlist.
 """
 from __future__ import annotations
@@ -101,10 +101,10 @@ def collect_candidates(fires: list[dict[str, object]]) -> list[dict[str, object]
 
 
 def cmd_list(args: argparse.Namespace) -> int:
-    if os.environ.get("CCCS_FIRES_ACCESS") != "1":
+    if os.environ.get("CCST_FIRES_ACCESS") != "1":
         sys.stderr.write(
-            "Refusing to read telemetry.db without CCCS_FIRES_ACCESS=1.\n"
-            "Re-run as: CCCS_FIRES_ACCESS=1 python3 update_command_cache.py\n"
+            "Refusing to read telemetry.db without CCST_FIRES_ACCESS=1.\n"
+            "Re-run as: CCST_FIRES_ACCESS=1 python3 update_command_cache.py\n"
         )
         return 2
     rows = read_telemetry_events()

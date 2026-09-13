@@ -18,7 +18,7 @@ from cc_session_tools.lib.scheduler.jobspec import validate_job_fields
 @pytest.fixture(autouse=True)
 def _dirs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("CC_SCHEDULER_DIR", str(tmp_path / "sched"))
-    monkeypatch.setenv("CCCS_HOOKS_DIR", str(tmp_path / "hooks"))
+    monkeypatch.setenv("CCST_HOOKS_DIR", str(tmp_path / "hooks"))
 
 
 def _stdin(monkeypatch: pytest.MonkeyPatch, payload: dict[str, object]) -> None:
@@ -144,7 +144,7 @@ def test_hook_emits_empty_on_bad_stdin(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_failure_path_writes_to_env_ledger_not_real_home(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    # The _dirs autouse fixture points CCCS_HOOKS_DIR at tmp_path/hooks. The bad-stdin
+    # The _dirs autouse fixture points CCST_HOOKS_DIR at tmp_path/hooks. The bad-stdin
     # failure path must log there, NOT to the real ~/.local/share/claude/telemetry.db. If
     # _log_failure ever drops the hooks_dir= argument, log_event falls back to
     # paths.data_home() and this test fails. Guard the real home with a sentinel.

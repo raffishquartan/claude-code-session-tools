@@ -7,7 +7,7 @@ All bash hooks call this module via:
 Never raises — write failures are logged to stderr and silently suppressed so
 a telemetry error never blocks a hook.
 
-Storage lives at CCCS_HOOKS_DIR/telemetry.db (default:
+Storage lives at CCST_HOOKS_DIR/telemetry.db (default:
 cc_session_tools.lib.paths.data_home()); see lib.telemetry_store for the
 schema and path-resolution logic shared with telemetry_trim, telemetry_query,
 and lib.scheduler.ledger. Explicit pruning: use ``ccst telemetry trim``.

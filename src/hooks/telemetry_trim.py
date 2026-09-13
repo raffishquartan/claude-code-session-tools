@@ -171,7 +171,7 @@ def main(argv: list[str] | None = None) -> int:
         "--hooks-dir",
         default=None,
         metavar="DIR",
-        help="telemetry.db directory (default: CCCS_HOOKS_DIR or ~/.local/share/claude/)",
+        help="telemetry.db directory (default: CCST_HOOKS_DIR or ~/.local/share/claude/)",
     )
     args = p.parse_args(argv)
 

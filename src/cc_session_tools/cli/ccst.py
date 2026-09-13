@@ -2805,7 +2805,7 @@ def _build_parser() -> argparse.ArgumentParser:
         "--hooks-dir",
         default=None,
         metavar="DIR",
-        help="telemetry.db directory (default: CCCS_HOOKS_DIR or ~/.local/share/claude/)",
+        help="telemetry.db directory (default: CCST_HOOKS_DIR or ~/.local/share/claude/)",
     )
 
     telemetry_query_parser = telemetry_sub.add_parser(
@@ -2832,7 +2832,7 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     telemetry_query_parser.add_argument(
         "--hooks-dir", default=None, metavar="DIR",
-        help="telemetry.db directory (default: CCCS_HOOKS_DIR or ~/.local/share/claude/)",
+        help="telemetry.db directory (default: CCST_HOOKS_DIR or ~/.local/share/claude/)",
     )
 
     # ---- gc ----

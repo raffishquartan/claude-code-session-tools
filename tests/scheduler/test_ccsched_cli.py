@@ -18,7 +18,7 @@ from cc_session_tools.lib.scheduler.jobspec import validate_job_fields
 def _run(args: list[str], sched_dir: Path, hooks_dir: Path) -> subprocess.CompletedProcess[str]:
     env = dict(os.environ)
     env["CC_SCHEDULER_DIR"] = str(sched_dir)
-    env["CCCS_HOOKS_DIR"] = str(hooks_dir)
+    env["CCST_HOOKS_DIR"] = str(hooks_dir)
     return subprocess.run(
         [sys.executable, "-m", "cc_session_tools.cli.ccsched", *args],
         capture_output=True, text=True, env=env,
@@ -164,7 +164,7 @@ def test_edit_reports_version_conflict_without_crashing(
     instead of an uncaught exception."""
     sched, hooks = _dirs(tmp_path)
     monkeypatch.setenv("CC_SCHEDULER_DIR", str(sched))
-    monkeypatch.setenv("CCCS_HOOKS_DIR", str(hooks))
+    monkeypatch.setenv("CCST_HOOKS_DIR", str(hooks))
     _add_direct("tesco", ["true"])
 
     def raise_conflict(spec):
@@ -313,7 +313,7 @@ def test_cmd_run_pushes_ran_outcome_with_stdout_captured_unconditionally(
     pushed at all."""
     sched, hooks = _dirs(tmp_path)
     monkeypatch.setenv("CC_SCHEDULER_DIR", str(sched))
-    monkeypatch.setenv("CCCS_HOOKS_DIR", str(hooks))
+    monkeypatch.setenv("CCST_HOOKS_DIR", str(hooks))
     _add_direct("verify", ["sh", "-c", "printf 'all good'"])
     pushed: list[tuple[str, Outcome, str | None]] = []
 
@@ -332,7 +332,7 @@ def test_cmd_run_pushes_failed_outcome_with_captured_stderr(
 ) -> None:
     sched, hooks = _dirs(tmp_path)
     monkeypatch.setenv("CC_SCHEDULER_DIR", str(sched))
-    monkeypatch.setenv("CCCS_HOOKS_DIR", str(hooks))
+    monkeypatch.setenv("CCST_HOOKS_DIR", str(hooks))
     _add_direct("cal", ["sh", "-c", "echo boom 1>&2; exit 1"])
     pushed: list[tuple[str, Outcome, str | None]] = []
 
@@ -353,7 +353,7 @@ def test_cmd_run_manual_failure_never_auto_suspends_despite_now_pushing(
     `_run_body`'s push behaviour but not its suspend semantics."""
     sched, hooks = _dirs(tmp_path)
     monkeypatch.setenv("CC_SCHEDULER_DIR", str(sched))
-    monkeypatch.setenv("CCCS_HOOKS_DIR", str(hooks))
+    monkeypatch.setenv("CCST_HOOKS_DIR", str(hooks))
     _add_direct("flaky", ["false"])
     st.save_all_state({"flaky": st.JobState(
         registered_at="2026-01-01T00:00:00Z", last_success=None, last_attempt=None,
@@ -379,7 +379,7 @@ def test_status_shows_error_detail_line_when_present(tmp_path: Path, monkeypatch
     failed without going around the CLI to query telemetry.db directly."""
     sched, hooks = _dirs(tmp_path)
     monkeypatch.setenv("CC_SCHEDULER_DIR", str(sched))
-    monkeypatch.setenv("CCCS_HOOKS_DIR", str(hooks))
+    monkeypatch.setenv("CCST_HOOKS_DIR", str(hooks))
     _add_direct("cal", ["sh", "-c", "echo boom 1>&2; exit 1"])
     ccsched._cmd_run(argparse.Namespace(id="cal"), notify_push=lambda *a, **k: True)
 

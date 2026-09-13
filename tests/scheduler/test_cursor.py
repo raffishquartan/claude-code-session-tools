@@ -35,7 +35,7 @@ def test_cursors_are_per_session(tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 
 def test_seed_new_session_only_seeds_once(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("CC_SCHEDULER_DIR", str(tmp_path))
-    monkeypatch.setenv("CCCS_HOOKS_DIR", str(tmp_path / "hooks"))
+    monkeypatch.setenv("CCST_HOOKS_DIR", str(tmp_path / "hooks"))
     cursor.seed_new_session("u")          # ledger empty -> seeds 0
     cursor.write_cursor("u", 5)           # advance
     cursor.seed_new_session("u")          # must NOT reseed back to 0

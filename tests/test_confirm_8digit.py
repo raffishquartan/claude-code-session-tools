@@ -110,24 +110,24 @@ def _hook_input(
 
 
 def test_gated_tools_from_env_unset_is_empty(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.delenv("CCCS_CONFIRM_8DIGIT_GATED_TOOLS", raising=False)
+    monkeypatch.delenv("CCST_CONFIRM_8DIGIT_GATED_TOOLS", raising=False)
     assert _gated_tools_from_env() == []
 
 
 def test_gated_tools_from_env_parses_comma_separated_list(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setenv("CCCS_CONFIRM_8DIGIT_GATED_TOOLS", "tool-a, tool-b,tool-c")
+    monkeypatch.setenv("CCST_CONFIRM_8DIGIT_GATED_TOOLS", "tool-a, tool-b,tool-c")
     assert _gated_tools_from_env() == ["tool-a", "tool-b", "tool-c"]
 
 
 def test_gated_tools_from_env_drops_empty_entries(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("CCCS_CONFIRM_8DIGIT_GATED_TOOLS", "tool-a,,tool-b")
+    monkeypatch.setenv("CCST_CONFIRM_8DIGIT_GATED_TOOLS", "tool-a,,tool-b")
     assert _gated_tools_from_env() == ["tool-a", "tool-b"]
 
 
 def test_gated_tools_from_env_empty_string_is_empty(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("CCCS_CONFIRM_8DIGIT_GATED_TOOLS", "")
+    monkeypatch.setenv("CCST_CONFIRM_8DIGIT_GATED_TOOLS", "")
     assert _gated_tools_from_env() == []
 
 
@@ -137,10 +137,10 @@ def test_gated_tools_from_env_empty_string_is_empty(monkeypatch: pytest.MonkeyPa
 def test_main_allows_would_be_gated_tool_when_env_var_unset(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """With no CCCS_CONFIRM_8DIGIT_GATED_TOOLS configured, main() must not gate anything -
+    """With no CCST_CONFIRM_8DIGIT_GATED_TOOLS configured, main() must not gate anything -
     CCST ships no default gated tools."""
     monkeypatch.setenv("HOME", str(tmp_path))
-    monkeypatch.delenv("CCCS_CONFIRM_8DIGIT_GATED_TOOLS", raising=False)
+    monkeypatch.delenv("CCST_CONFIRM_8DIGIT_GATED_TOOLS", raising=False)
     monkeypatch.setattr("hooks.confirm_8digit.send_telegram", lambda message: True)
     monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps(_hook_input(session_id="missing"))))
     assert main() == 0
@@ -149,10 +149,10 @@ def test_main_allows_would_be_gated_tool_when_env_var_unset(
 def test_main_gates_a_tool_named_in_the_env_var(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    """With the tool named in CCCS_CONFIRM_8DIGIT_GATED_TOOLS, main() falls through to the
+    """With the tool named in CCST_CONFIRM_8DIGIT_GATED_TOOLS, main() falls through to the
     normal verification flow (here: missing transcript, which always blocks)."""
     monkeypatch.setenv("HOME", str(tmp_path))
-    monkeypatch.setenv("CCCS_CONFIRM_8DIGIT_GATED_TOOLS", "mcp__whatsapp__send_message")
+    monkeypatch.setenv("CCST_CONFIRM_8DIGIT_GATED_TOOLS", "mcp__whatsapp__send_message")
     monkeypatch.setattr("hooks.confirm_8digit.send_telegram", lambda message: True)
     monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps(_hook_input(session_id="missing"))))
     assert main() == 2
@@ -168,7 +168,7 @@ def test_non_gated_tool_allowed_without_verification(
     transcript lookup, no 8-digit check - even in block mode. Otherwise a
     no-matcher catch-all registration would block every tool call."""
     monkeypatch.setenv("HOME", str(tmp_path))
-    monkeypatch.setenv("CCCS_ENFORCE_8DIGIT", "block")
+    monkeypatch.setenv("CCST_ENFORCE_8DIGIT", "block")
     # session_id "missing" => no transcript. A gated tool would fail closed
     # (exit 2); a non-gated tool must short-circuit to allow (exit 0) first.
     for tool in ("Read", "Write", "Edit", "Bash"):
@@ -187,7 +187,7 @@ def test_block_when_transcript_not_found(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setenv("HOME", str(tmp_path))
-    monkeypatch.setenv("CCCS_ENFORCE_8DIGIT", "warn")
+    monkeypatch.setenv("CCST_ENFORCE_8DIGIT", "warn")
     result = verify(_hook_input(session_id="missing"), _TEST_GATED_TOOLS)
     # Fail-closed even in warn mode.
     assert result.exit_code == 2
@@ -201,7 +201,7 @@ def test_allow_when_three_conditions_met(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setenv("HOME", str(tmp_path))
-    monkeypatch.setenv("CCCS_ENFORCE_8DIGIT", "block")
+    monkeypatch.setenv("CCST_ENFORCE_8DIGIT", "block")
     _write_transcript(
         tmp_path,
         "/tmp/x",
@@ -226,7 +226,7 @@ def test_block_when_no_recent_8digit(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setenv("HOME", str(tmp_path))
-    monkeypatch.setenv("CCCS_ENFORCE_8DIGIT", "block")
+    monkeypatch.setenv("CCST_ENFORCE_8DIGIT", "block")
     _write_transcript(
         tmp_path,
         "/tmp/x",
@@ -248,7 +248,7 @@ def test_block_replay_attempt_with_stale_match(
     LATEST user turn must be the eight digits. A later 'send another' user
     turn must invalidate the gate (replay defence)."""
     monkeypatch.setenv("HOME", str(tmp_path))
-    monkeypatch.setenv("CCCS_ENFORCE_8DIGIT", "block")
+    monkeypatch.setenv("CCST_ENFORCE_8DIGIT", "block")
     _write_transcript(
         tmp_path,
         "/tmp/x",
@@ -268,7 +268,7 @@ def test_block_when_no_preceding_offer(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setenv("HOME", str(tmp_path))
-    monkeypatch.setenv("CCCS_ENFORCE_8DIGIT", "block")
+    monkeypatch.setenv("CCST_ENFORCE_8DIGIT", "block")
     _write_transcript(
         tmp_path,
         "/tmp/x",
@@ -287,7 +287,7 @@ def test_block_when_gated_tool_already_fired_in_window(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setenv("HOME", str(tmp_path))
-    monkeypatch.setenv("CCCS_ENFORCE_8DIGIT", "block")
+    monkeypatch.setenv("CCST_ENFORCE_8DIGIT", "block")
     _write_transcript(
         tmp_path,
         "/tmp/x",
@@ -311,7 +311,7 @@ def test_block_when_reply_gap_exceeds_30_minutes(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setenv("HOME", str(tmp_path))
-    monkeypatch.setenv("CCCS_ENFORCE_8DIGIT", "block")
+    monkeypatch.setenv("CCST_ENFORCE_8DIGIT", "block")
     _write_transcript(
         tmp_path,
         "/tmp/x",
@@ -335,7 +335,7 @@ def test_warn_mode_exits_zero_for_failed_check(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setenv("HOME", str(tmp_path))
-    monkeypatch.setenv("CCCS_ENFORCE_8DIGIT", "warn")
+    monkeypatch.setenv("CCST_ENFORCE_8DIGIT", "warn")
     _write_transcript(
         tmp_path,
         "/tmp/x",
@@ -351,7 +351,7 @@ def test_block_mode_exits_two_for_failed_check(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setenv("HOME", str(tmp_path))
-    monkeypatch.setenv("CCCS_ENFORCE_8DIGIT", "block")
+    monkeypatch.setenv("CCST_ENFORCE_8DIGIT", "block")
     _write_transcript(
         tmp_path,
         "/tmp/x",
@@ -369,9 +369,9 @@ def test_marker_exception_tesco_happy_path(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setenv("HOME", str(tmp_path))
-    monkeypatch.setenv("CCCS_ENFORCE_8DIGIT", "block")
+    monkeypatch.setenv("CCST_ENFORCE_8DIGIT", "block")
     markers = tmp_path / ".cache" / "claude" / "markers"
-    monkeypatch.setenv("CCCS_MARKERS_DIR", str(markers))
+    monkeypatch.setenv("CCST_MARKERS_DIR", str(markers))
     markers.mkdir(parents=True)
     (markers / "tesco_shop_active").write_text("")
     # No transcript exists - if marker did not short-circuit we'd block.
@@ -390,13 +390,13 @@ def test_marker_exception_tesco_happy_path(
 def test_marker_default_dir_when_env_unset(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """With CCCS_MARKERS_DIR and XDG_CACHE_HOME both unset, _markers_dir()
+    """With CCST_MARKERS_DIR and XDG_CACHE_HOME both unset, _markers_dir()
     must default to ``$HOME/.cache/claude/markers``. This exercises the
     env-UNSET default branch, not just the explicit override."""
     monkeypatch.setenv("HOME", str(tmp_path))
-    monkeypatch.delenv("CCCS_MARKERS_DIR", raising=False)
+    monkeypatch.delenv("CCST_MARKERS_DIR", raising=False)
     monkeypatch.delenv("XDG_CACHE_HOME", raising=False)
-    monkeypatch.setenv("CCCS_ENFORCE_8DIGIT", "block")
+    monkeypatch.setenv("CCST_ENFORCE_8DIGIT", "block")
     markers = tmp_path / ".cache" / "claude" / "markers"
     markers.mkdir(parents=True)
     (markers / "tesco_shop_active").write_text("")
@@ -417,9 +417,9 @@ def test_marker_exception_expired_treated_as_absent(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setenv("HOME", str(tmp_path))
-    monkeypatch.setenv("CCCS_ENFORCE_8DIGIT", "block")
+    monkeypatch.setenv("CCST_ENFORCE_8DIGIT", "block")
     markers = tmp_path / ".cache" / "claude" / "markers"
-    monkeypatch.setenv("CCCS_MARKERS_DIR", str(markers))
+    monkeypatch.setenv("CCST_MARKERS_DIR", str(markers))
     markers.mkdir(parents=True)
     f = markers / "tesco_shop_active"
     f.write_text("")
@@ -444,9 +444,9 @@ def test_marker_telegram_requires_recipient_match(
 ) -> None:
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.setenv("TELEGRAM_CHAT_ID", "987654")
-    monkeypatch.setenv("CCCS_ENFORCE_8DIGIT", "block")
+    monkeypatch.setenv("CCST_ENFORCE_8DIGIT", "block")
     markers = tmp_path / ".cache" / "claude" / "markers"
-    monkeypatch.setenv("CCCS_MARKERS_DIR", str(markers))
+    monkeypatch.setenv("CCST_MARKERS_DIR", str(markers))
     markers.mkdir(parents=True)
     (markers / "telegram_notify").write_text("")
     # Wrong recipient - should NOT match the marker.
@@ -465,9 +465,9 @@ def test_marker_calendar_sync_email_requires_subject_prefix(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setenv("HOME", str(tmp_path))
-    monkeypatch.setenv("CCCS_ENFORCE_8DIGIT", "block")
+    monkeypatch.setenv("CCST_ENFORCE_8DIGIT", "block")
     markers = tmp_path / ".cache" / "claude" / "markers"
-    monkeypatch.setenv("CCCS_MARKERS_DIR", str(markers))
+    monkeypatch.setenv("CCST_MARKERS_DIR", str(markers))
     markers.mkdir(parents=True)
     (markers / "calendar_sync_email").write_text("")
     result_ok = verify(
@@ -504,7 +504,7 @@ def test_confirm_8digit_and_marker_allow_share_markers_dir(
     assert confirm_8digit_markers_dir is marker_allow_markers_dir
 
     monkeypatch.setenv("HOME", str(tmp_path))
-    monkeypatch.delenv("CCCS_MARKERS_DIR", raising=False)
+    monkeypatch.delenv("CCST_MARKERS_DIR", raising=False)
     monkeypatch.delenv("XDG_CACHE_HOME", raising=False)
     expected = tmp_path / ".cache" / "claude" / "markers"
     assert confirm_8digit_markers_dir() == expected
@@ -516,7 +516,7 @@ def test_shared_markers_dir_honours_cccs_markers_dir_override(
 ) -> None:
     custom = tmp_path / "custom-markers"
     monkeypatch.setenv("HOME", str(tmp_path))
-    monkeypatch.setenv("CCCS_MARKERS_DIR", str(custom))
+    monkeypatch.setenv("CCST_MARKERS_DIR", str(custom))
     assert confirm_8digit_markers_dir() == custom
     assert marker_allow_markers_dir() == custom
 
@@ -549,7 +549,7 @@ def test_self_send_exempt(
     """to == from == NOTIFY_EMAIL with no cc/bcc is exempt even with no
     transcript and in block mode."""
     monkeypatch.setenv("HOME", str(tmp_path))
-    monkeypatch.setenv("CCCS_ENFORCE_8DIGIT", "block")
+    monkeypatch.setenv("CCST_ENFORCE_8DIGIT", "block")
     monkeypatch.setenv("NOTIFY_EMAIL", "me@example.com")
     result = verify(_self_send_input(), _TEST_GATED_TOOLS)
     assert result.exit_code == 0
@@ -562,7 +562,7 @@ def test_self_send_alias_sender_exempt(
     """An explicit from_email Send-As alias equal to the self address still
     counts as a self-send."""
     monkeypatch.setenv("HOME", str(tmp_path))
-    monkeypatch.setenv("CCCS_ENFORCE_8DIGIT", "block")
+    monkeypatch.setenv("CCST_ENFORCE_8DIGIT", "block")
     monkeypatch.setenv("NOTIFY_EMAIL", "me@example.com")
     result = verify(
         _self_send_input(user_google_email="svc@example.com", from_email="me@example.com"),
@@ -575,7 +575,7 @@ def test_self_send_case_insensitive(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setenv("HOME", str(tmp_path))
-    monkeypatch.setenv("CCCS_ENFORCE_8DIGIT", "block")
+    monkeypatch.setenv("CCST_ENFORCE_8DIGIT", "block")
     monkeypatch.setenv("NOTIFY_EMAIL", "Me@Example.com")
     result = verify(
         _self_send_input(to="me@example.com", user_google_email="ME@EXAMPLE.COM"),
@@ -588,7 +588,7 @@ def test_self_send_with_cc_not_exempt(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setenv("HOME", str(tmp_path))
-    monkeypatch.setenv("CCCS_ENFORCE_8DIGIT", "block")
+    monkeypatch.setenv("CCST_ENFORCE_8DIGIT", "block")
     monkeypatch.setenv("NOTIFY_EMAIL", "me@example.com")
     result = verify(_self_send_input(cc="other@example.com"), _TEST_GATED_TOOLS)
     assert result.exit_code == 2
@@ -598,7 +598,7 @@ def test_self_send_with_bcc_not_exempt(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setenv("HOME", str(tmp_path))
-    monkeypatch.setenv("CCCS_ENFORCE_8DIGIT", "block")
+    monkeypatch.setenv("CCST_ENFORCE_8DIGIT", "block")
     monkeypatch.setenv("NOTIFY_EMAIL", "me@example.com")
     result = verify(_self_send_input(bcc="other@example.com"), _TEST_GATED_TOOLS)
     assert result.exit_code == 2
@@ -608,7 +608,7 @@ def test_send_to_other_recipient_not_exempt(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setenv("HOME", str(tmp_path))
-    monkeypatch.setenv("CCCS_ENFORCE_8DIGIT", "block")
+    monkeypatch.setenv("CCST_ENFORCE_8DIGIT", "block")
     monkeypatch.setenv("NOTIFY_EMAIL", "me@example.com")
     result = verify(_self_send_input(to="other@example.com"), _TEST_GATED_TOOLS)
     assert result.exit_code == 2
@@ -619,7 +619,7 @@ def test_self_send_no_notify_email_not_exempt(
 ) -> None:
     """With NOTIFY_EMAIL unset the exemption must not fire (fail closed)."""
     monkeypatch.setenv("HOME", str(tmp_path))
-    monkeypatch.setenv("CCCS_ENFORCE_8DIGIT", "block")
+    monkeypatch.setenv("CCST_ENFORCE_8DIGIT", "block")
     monkeypatch.delenv("NOTIFY_EMAIL", raising=False)
     result = verify(_self_send_input(), _TEST_GATED_TOOLS)
     assert result.exit_code == 2
@@ -642,7 +642,7 @@ def test_block_sends_telegram_notification(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setenv("HOME", str(tmp_path))
-    monkeypatch.setenv("CCCS_ENFORCE_8DIGIT", "block")
+    monkeypatch.setenv("CCST_ENFORCE_8DIGIT", "block")
     calls = _patch_send_telegram(monkeypatch)
     _write_transcript(
         tmp_path, "/tmp/x", "sid", [_user("hi", ts="2026-05-10T12:00:30.000Z")]
@@ -659,7 +659,7 @@ def test_warn_sends_telegram_notification(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setenv("HOME", str(tmp_path))
-    monkeypatch.setenv("CCCS_ENFORCE_8DIGIT", "warn")
+    monkeypatch.setenv("CCST_ENFORCE_8DIGIT", "warn")
     calls = _patch_send_telegram(monkeypatch)
     _write_transcript(
         tmp_path, "/tmp/x", "sid", [_user("hi", ts="2026-05-10T12:00:30.000Z")]
@@ -676,7 +676,7 @@ def test_allowed_call_sends_no_telegram_notification(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setenv("HOME", str(tmp_path))
-    monkeypatch.setenv("CCCS_ENFORCE_8DIGIT", "block")
+    monkeypatch.setenv("CCST_ENFORCE_8DIGIT", "block")
     calls = _patch_send_telegram(monkeypatch)
     _write_transcript(
         tmp_path,
@@ -701,7 +701,7 @@ def test_non_gated_tool_sends_no_telegram_notification(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setenv("HOME", str(tmp_path))
-    monkeypatch.setenv("CCCS_ENFORCE_8DIGIT", "block")
+    monkeypatch.setenv("CCST_ENFORCE_8DIGIT", "block")
     calls = _patch_send_telegram(monkeypatch)
 
     result = verify(_hook_input(tool_name="Read"), _TEST_GATED_TOOLS)
@@ -714,7 +714,7 @@ def test_telegram_failure_does_not_change_gate_decision(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setenv("HOME", str(tmp_path))
-    monkeypatch.setenv("CCCS_ENFORCE_8DIGIT", "block")
+    monkeypatch.setenv("CCST_ENFORCE_8DIGIT", "block")
     _patch_send_telegram(monkeypatch, returns=False)
     _write_transcript(
         tmp_path, "/tmp/x", "sid", [_user("hi", ts="2026-05-10T12:00:30.000Z")]

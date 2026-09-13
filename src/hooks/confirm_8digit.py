@@ -11,24 +11,24 @@ checks (skill-marker exceptions short-circuit them):
 
 If all three hold and the assistant-to-user reply gap is under 30 minutes,
 the call is allowed. Otherwise the hook either prints a warning (default,
-``CCCS_ENFORCE_8DIGIT=warn``) or blocks with exit 2 (``=block``) - and, either
+``CCST_ENFORCE_8DIGIT=warn``) or blocks with exit 2 (``=block``) - and, either
 way, pushes the same message as a Telegram notification via
 ``lib.scheduler.notify.send_telegram`` (best-effort; never changes the exit
 code or stderr message on its own failure), so the block/warn reaches the
 user even when they are away from the terminal.
 
 Skill-marker exceptions live under ``~/.cache/claude/markers/`` (override with
-the ``CCCS_MARKERS_DIR`` env var) and have a 1-hour TTL based on file mtime.
+the ``CCST_MARKERS_DIR`` env var) and have a 1-hour TTL based on file mtime.
 Each marker permits a narrowly-scoped tool + input combination per CLAUDE.md.
 
-The gated-tool list itself comes from ``CCCS_CONFIRM_8DIGIT_GATED_TOOLS`` (a
+The gated-tool list itself comes from ``CCST_CONFIRM_8DIGIT_GATED_TOOLS`` (a
 comma-separated list of tool names) - never hardcoded, because this module
 ships in a public repo and which tools a deployment considers sensitive
 enough to gate is that deployment's own configuration, not CCST's. When the
 variable is unset, no tool is gated.
 
 Fail-safe: when the transcript cannot be located the hook ALWAYS exits 2
-with a clear message, regardless of CCCS_ENFORCE_8DIGIT, because we cannot
+with a clear message, regardless of CCST_ENFORCE_8DIGIT, because we cannot
 verify confirmation without it.
 """
 from __future__ import annotations
@@ -57,14 +57,14 @@ _GAP_LIMIT_S = 30 * 60  # 30 minutes between offer and reply
 
 
 def _gated_tools_from_env() -> list[str]:
-    """Return the gated-tool allowlist from CCCS_CONFIRM_8DIGIT_GATED_TOOLS.
+    """Return the gated-tool allowlist from CCST_CONFIRM_8DIGIT_GATED_TOOLS.
 
     Comma-separated tool names, whitespace around each trimmed, empty entries
     dropped. Unset or empty means no tool is gated - CCST ships no default,
     since the concrete list is a deployment's own personal-policy
     configuration, not something this public package hardcodes.
     """
-    raw = os.environ.get("CCCS_CONFIRM_8DIGIT_GATED_TOOLS", "")
+    raw = os.environ.get("CCST_CONFIRM_8DIGIT_GATED_TOOLS", "")
     return [name.strip() for name in raw.split(",") if name.strip()]
 
 
@@ -193,7 +193,7 @@ def verify(
     # which for Bash tool calls reflects the bash working directory and changes
     # with `cd` — it is NOT reliable for locating the session transcript.
     cwd = os.environ.get("CLAUDE_PROJECT_DIR") or str(hook_input.get("cwd", ""))
-    enforce = os.environ.get("CCCS_ENFORCE_8DIGIT", "warn").strip().lower()
+    enforce = os.environ.get("CCST_ENFORCE_8DIGIT", "warn").strip().lower()
 
     # 0. Only gated tools are subject to confirmation. Any other tool is
     #    allowed unconditionally - this makes a no-matcher catch-all hook
@@ -273,7 +273,7 @@ def verify(
         return VerificationResult(exit_code=2, message=message)
     message = (
         f"[8digit-warn] {tool_name}: {detail}. "
-        f"(Set CCCS_ENFORCE_8DIGIT=block to enforce.)"
+        f"(Set CCST_ENFORCE_8DIGIT=block to enforce.)"
     )
     send_telegram(message)
     return VerificationResult(exit_code=0, message=message)

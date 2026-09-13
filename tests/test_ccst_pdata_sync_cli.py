@@ -38,7 +38,7 @@ def base_env(tmp_path, monkeypatch):
     # credentials. This is the same incident test_sync_notify.py's own autouse fixture documents
     # (see its comment); this file needs the identical isolation since it now exercises the same
     # notify_conflict() call path through the real CLI subprocess.
-    monkeypatch.setenv("CCCS_HOOKS_DIR", str(tmp_path / "hooks"))
+    monkeypatch.setenv("CCST_HOOKS_DIR", str(tmp_path / "hooks"))
     monkeypatch.setenv("CC_SCHEDULER_DIR", str(tmp_path / "sched"))
     monkeypatch.delenv("TELEGRAM_BOT_TOKEN", raising=False)
     monkeypatch.delenv("TELEGRAM_CHAT_ID", raising=False)

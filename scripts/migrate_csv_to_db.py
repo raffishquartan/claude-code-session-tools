@@ -16,7 +16,7 @@ Usage:
 
 Defaults:
     --csv   ~/.claude/hooks/command-cache.csv
-    --db    $CCCS_CACHE_DB, else ~/.cache/claude/logs/command-cache.db
+    --db    $CCST_CACHE_DB, else ~/.cache/claude/logs/command-cache.db
 """
 from __future__ import annotations
 
@@ -67,7 +67,7 @@ ON CONFLICT(exact_hash) DO UPDATE SET
 def _db_path(explicit: str | None) -> Path:
     if explicit:
         return Path(explicit)
-    env = os.environ.get("CCCS_CACHE_DB", "").strip()
+    env = os.environ.get("CCST_CACHE_DB", "").strip()
     return Path(env) if env else _DEFAULT_DB
 
 

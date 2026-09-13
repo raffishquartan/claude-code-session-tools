@@ -31,11 +31,11 @@ def isolated_env(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> Path:
     """Point cache + telemetry at tmp_path so tests don't touch ~/.claude/."""
-    monkeypatch.setenv("CCCS_HOOKS_DIR", str(tmp_path / "hooks"))
-    monkeypatch.setenv("CCCS_CACHE_DB", str(tmp_path / "cache.db"))
+    monkeypatch.setenv("CCST_HOOKS_DIR", str(tmp_path / "hooks"))
+    monkeypatch.setenv("CCST_CACHE_DB", str(tmp_path / "cache.db"))
     monkeypatch.delenv("CCCS_CACHE_PATH", raising=False)
-    monkeypatch.delenv("CCCS_USE_COMMAND_CACHE", raising=False)
-    monkeypatch.delenv("CCCS_CLAUDE_BIN", raising=False)
+    monkeypatch.delenv("CCST_USE_COMMAND_CACHE", raising=False)
+    monkeypatch.delenv("CCST_CLAUDE_BIN", raising=False)
     return tmp_path
 
 
@@ -98,7 +98,7 @@ def test_cache_hit_emits_cached_verdict_no_claude(
     mocker: MockerFixture,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setenv("CCCS_USE_COMMAND_CACHE", "1")
+    monkeypatch.setenv("CCST_USE_COMMAND_CACHE", "1")
     now_iso = datetime.datetime.now(datetime.timezone.utc).strftime(
         "%Y-%m-%dT%H:%M:%SZ"
     )
@@ -137,7 +137,7 @@ def test_stale_cache_falls_through_to_claude(
     mocker: MockerFixture,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setenv("CCCS_USE_COMMAND_CACHE", "1")
+    monkeypatch.setenv("CCST_USE_COMMAND_CACHE", "1")
     # cache_lookup returns None for stale entries (stale filtering is inside cache_lookup).
     mocker.patch.object(bsr.cache_mod, "cache_lookup", return_value=None)
     mocker.patch.object(bsr, "_resolve_claude_bin", return_value="/fake/claude")
@@ -152,11 +152,11 @@ def test_stale_cache_falls_through_to_claude(
 
 
 def test_norm_cache_hit_skips_claude(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, mocker: MockerFixture) -> None:
-    monkeypatch.setenv("CCCS_USE_COMMAND_CACHE", "1")
-    monkeypatch.setenv("CCCS_CACHE_DB", str(tmp_path / "cache.db"))
-    monkeypatch.setenv("CCCS_HOOKS_DIR", str(tmp_path / "hooks"))
+    monkeypatch.setenv("CCST_USE_COMMAND_CACHE", "1")
+    monkeypatch.setenv("CCST_CACHE_DB", str(tmp_path / "cache.db"))
+    monkeypatch.setenv("CCST_HOOKS_DIR", str(tmp_path / "hooks"))
     monkeypatch.delenv("CCCS_CACHE_PATH", raising=False)
-    monkeypatch.delenv("CCCS_CLAUDE_BIN", raising=False)
+    monkeypatch.delenv("CCST_CLAUDE_BIN", raising=False)
     from hooks import cache as cache_mod
     from hooks import normalise as norm_mod
     # Use compound commands (nontrivial) so they reach the cache layer.
@@ -189,11 +189,11 @@ def test_uv_sync_norm_cache_hit_skips_claude(
     and the second one never calls Claude. Reaches Tier 2 without any
     compound (&&) trick because Task 1 fixed the nontrivial-gate bug that
     would otherwise have made this test require one."""
-    monkeypatch.setenv("CCCS_USE_COMMAND_CACHE", "1")
-    monkeypatch.setenv("CCCS_CACHE_DB", str(tmp_path / "cache.db"))
-    monkeypatch.setenv("CCCS_HOOKS_DIR", str(tmp_path / "hooks"))
+    monkeypatch.setenv("CCST_USE_COMMAND_CACHE", "1")
+    monkeypatch.setenv("CCST_CACHE_DB", str(tmp_path / "cache.db"))
+    monkeypatch.setenv("CCST_HOOKS_DIR", str(tmp_path / "hooks"))
     monkeypatch.delenv("CCCS_CACHE_PATH", raising=False)
-    monkeypatch.delenv("CCCS_CLAUDE_BIN", raising=False)
+    monkeypatch.delenv("CCST_CLAUDE_BIN", raising=False)
     from hooks import cache as cache_mod
     from hooks import normalise as norm_mod
 
@@ -221,7 +221,7 @@ def test_cache_miss_safe_verdict_records(
     mocker: MockerFixture,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setenv("CCCS_USE_COMMAND_CACHE", "1")
+    monkeypatch.setenv("CCST_USE_COMMAND_CACHE", "1")
     mocker.patch.object(bsr.cache_mod, "cache_lookup", return_value=None)
     mocker.patch.object(bsr, "_resolve_claude_bin", return_value="/fake/claude")
     mocker.patch.object(
@@ -243,7 +243,7 @@ def test_cache_miss_suspicious_verdict_does_not_record(
     mocker: MockerFixture,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setenv("CCCS_USE_COMMAND_CACHE", "1")
+    monkeypatch.setenv("CCST_USE_COMMAND_CACHE", "1")
     mocker.patch.object(bsr.cache_mod, "cache_lookup", return_value=None)
     mocker.patch.object(bsr, "_resolve_claude_bin", return_value="/fake/claude")
     mocker.patch.object(
@@ -262,7 +262,7 @@ def test_heuristic_flag_pipe_to_sh_skips_cache(
     mocker: MockerFixture,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setenv("CCCS_USE_COMMAND_CACHE", "1")
+    monkeypatch.setenv("CCST_USE_COMMAND_CACHE", "1")
     spy_lookup = mocker.patch.object(bsr.cache_mod, "cache_lookup")
     mocker.patch.object(bsr, "_resolve_claude_bin", return_value="/fake/claude")
     mocker.patch.object(
@@ -336,7 +336,7 @@ def test_telemetry_written_on_cache_hit(
     mocker: MockerFixture,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setenv("CCCS_USE_COMMAND_CACHE", "1")
+    monkeypatch.setenv("CCST_USE_COMMAND_CACHE", "1")
     now_iso = datetime.datetime.now(datetime.timezone.utc).strftime(
         "%Y-%m-%dT%H:%M:%SZ"
     )
@@ -364,7 +364,7 @@ def test_telemetry_written_on_claude_path(
     mocker: MockerFixture,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setenv("CCCS_USE_COMMAND_CACHE", "1")
+    monkeypatch.setenv("CCST_USE_COMMAND_CACHE", "1")
     mocker.patch.object(bsr.cache_mod, "cache_lookup", return_value=None)
     mocker.patch.object(bsr, "_resolve_claude_bin", return_value="/fake/claude")
     mocker.patch.object(
@@ -598,8 +598,8 @@ def test_extract_verdict_unknown() -> None:
 
 def test_invocation_row_written_on_cache_hit(tmp_path, monkeypatch, mocker):
     """A Tier 2 cache hit must write an invocations row with exit_tier=2."""
-    monkeypatch.setenv("CCCS_USE_COMMAND_CACHE", "1")
-    monkeypatch.setenv("CCCS_CACHE_DB", str(tmp_path / "cache.db"))
+    monkeypatch.setenv("CCST_USE_COMMAND_CACHE", "1")
+    monkeypatch.setenv("CCST_CACHE_DB", str(tmp_path / "cache.db"))
     monkeypatch.delenv("CCCS_CACHE_PATH", raising=False)
     from hooks import cache as cache_mod
     from hooks import normalise as norm_mod
@@ -632,8 +632,8 @@ def test_invocation_row_written_on_cache_hit(tmp_path, monkeypatch, mocker):
 
 def test_invocation_row_written_on_claude_call(tmp_path, monkeypatch, mocker):
     """A Tier 3 Claude call must write an invocations row with exit_tier=3 and ms_elapsed."""
-    monkeypatch.setenv("CCCS_USE_COMMAND_CACHE", "1")
-    monkeypatch.setenv("CCCS_CACHE_DB", str(tmp_path / "cache.db"))
+    monkeypatch.setenv("CCST_USE_COMMAND_CACHE", "1")
+    monkeypatch.setenv("CCST_CACHE_DB", str(tmp_path / "cache.db"))
     monkeypatch.delenv("CCCS_CACHE_PATH", raising=False)
     mocker.patch.object(bsr, "_resolve_claude_bin", return_value="/fake/claude")
     mocker.patch(
@@ -666,8 +666,8 @@ def test_invocation_row_written_on_claude_call(tmp_path, monkeypatch, mocker):
 
 def test_invocation_row_written_on_claude_error(tmp_path, monkeypatch, mocker):
     """A Tier 3 Claude call that errors must still write an invocations row with verdict='unavailable'."""
-    monkeypatch.setenv("CCCS_USE_COMMAND_CACHE", "1")
-    monkeypatch.setenv("CCCS_CACHE_DB", str(tmp_path / "cache.db"))
+    monkeypatch.setenv("CCST_USE_COMMAND_CACHE", "1")
+    monkeypatch.setenv("CCST_CACHE_DB", str(tmp_path / "cache.db"))
     monkeypatch.delenv("CCCS_CACHE_PATH", raising=False)
     mocker.patch.object(bsr, "_resolve_claude_bin", return_value="/fake/claude")
     mocker.patch(
@@ -763,8 +763,8 @@ def test_call_claude_passes_model_flag(mocker):
 def test_run_defaults_review_model_to_sonnet(
     isolated_env: Path, mocker: MockerFixture, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """With CCCS_REVIEW_MODEL unset, the Tier-3 escalation pins to sonnet."""
-    monkeypatch.delenv("CCCS_REVIEW_MODEL", raising=False)
+    """With CCST_REVIEW_MODEL unset, the Tier-3 escalation pins to sonnet."""
+    monkeypatch.delenv("CCST_REVIEW_MODEL", raising=False)
     mocker.patch.object(bsr, "_resolve_claude_bin", return_value="/fake/claude")
     spy_call = mocker.patch.object(
         bsr, "call_claude", return_value=("SUMMARY: x\nRISKS: none\nVERDICT: safe", None)
@@ -778,8 +778,8 @@ def test_run_defaults_review_model_to_sonnet(
 def test_run_respects_cccs_review_model_override(
     isolated_env: Path, mocker: MockerFixture, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """CCCS_REVIEW_MODEL overrides the default Tier-3 model."""
-    monkeypatch.setenv("CCCS_REVIEW_MODEL", "opus")
+    """CCST_REVIEW_MODEL overrides the default Tier-3 model."""
+    monkeypatch.setenv("CCST_REVIEW_MODEL", "opus")
     mocker.patch.object(bsr, "_resolve_claude_bin", return_value="/fake/claude")
     spy_call = mocker.patch.object(
         bsr, "call_claude", return_value=("SUMMARY: x\nRISKS: none\nVERDICT: safe", None)

@@ -5,7 +5,7 @@ description: Curate the SHA-256 command cache used by the bash-security-review h
 
 # Update command cache
 
-The `bash-security-review` hook (when run with `CCCS_USE_COMMAND_CACHE=1`) records `safe`-verdict fires into the command cache at `~/.cache/claude/logs/command-cache.db` (SQLite; the legacy `command-cache.csv` is retired). Auto-fill is conservative - only verdicts that came back `safe` from the claude CLI escalation are stored. This skill is the curation tool for that cache: it lets you sweep the telemetry log for safe fires not yet captured, vet them, and bulk-promote the ones you want.
+The `bash-security-review` hook (when run with `CCST_USE_COMMAND_CACHE=1`) records `safe`-verdict fires into the command cache at `~/.cache/claude/logs/command-cache.db` (SQLite; the legacy `command-cache.csv` is retired). Auto-fill is conservative - only verdicts that came back `safe` from the claude CLI escalation are stored. This skill is the curation tool for that cache: it lets you sweep the telemetry log for safe fires not yet captured, vet them, and bulk-promote the ones you want.
 
 ## When to use
 
@@ -22,13 +22,13 @@ The bash-security-review hook records every fire to `telemetry.db`. The cache (`
 
 ### Relationship to bash-hard-deny
 
-This skill and the `bash-hard-deny` hook (`src/hooks/bash_hard_deny.py`) share one convention: `CCCS_FIRES_ACCESS=1`. `bash-hard-deny`'s telemetry.db-block section documents this env var as the bypass that lets a legitimate reader touch the telemetry log; this skill's own gate (in `scripts/update_command_cache.py`, `cmd_list`) refuses to read `telemetry.db` unless the same variable is set.
+This skill and the `bash-hard-deny` hook (`src/hooks/bash_hard_deny.py`) share one convention: `CCST_FIRES_ACCESS=1`. `bash-hard-deny`'s telemetry.db-block section documents this env var as the bypass that lets a legitimate reader touch the telemetry log; this skill's own gate (in `scripts/update_command_cache.py`, `cmd_list`) refuses to read `telemetry.db` unless the same variable is set.
 
 The two are NOT structurally coupled — the hook cannot literally intercept this skill's Python-internal file read, so setting the variable is what actually unlocks the read on both sides. They stay consistent only by discipline: if `bash-hard-deny`'s bypass env var name or semantics ever change, this skill's gate must be updated by hand to match. It is a shared convention that must be kept in sync, not an enforced runtime dependency.
 
 This skill:
 
-1. Reads the fires log (gated by `CCCS_FIRES_ACCESS=1` so the bash-hard-deny hook permits the read).
+1. Reads the fires log (gated by `CCST_FIRES_ACCESS=1` so the bash-hard-deny hook permits the read).
 2. Filters to entries with `verdict == "safe"` and `cache != "hit"` (i.e. ones that escalated to claude).
 3. Cross-references each input hash with the current cache; drops anything already cached.
 4. Presents the candidate list to the user with command preview, fire count, and last-seen.
@@ -42,7 +42,7 @@ Manual modes:
 
 From this skill's directory:
 
-    CCCS_FIRES_ACCESS=1 python3 scripts/update_command_cache.py [--list] [--remove <sha>] [--flip <sha> <verdict>]
+    CCST_FIRES_ACCESS=1 python3 scripts/update_command_cache.py [--list] [--remove <sha>] [--flip <sha> <verdict>]
 
 Default behaviour (no flag) is `--list`: show pending candidates and prompt for promotion.
 

@@ -74,7 +74,7 @@ def _emit(message: str | None, event: str) -> None:
 
 def _log_failure(reason: str) -> None:
     # Explicit hooks_dir= for the same reason catchup.py passes one: telemetry.log_event does not
-    # read CCCS_HOOKS_DIR itself, so without this a test would write into the developer's real
+    # read CCST_HOOKS_DIR itself, so without this a test would write into the developer's real
     # ledger.
     log_event(
         TelemetryEntry(
