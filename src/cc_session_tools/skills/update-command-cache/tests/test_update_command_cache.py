@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import subprocess
 import sys
 from pathlib import Path
 
 import pytest
 
 _SCRIPT_DIR = Path(__file__).resolve().parents[1] / "scripts"
+_SCRIPT_PATH = _SCRIPT_DIR / "update_command_cache.py"
 if str(_SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(_SCRIPT_DIR))
 
@@ -57,3 +59,31 @@ def test_collect_candidates_skips_already_cached(tmp_path: Path, monkeypatch: py
     _insert(tmp_path, hook="bash-security-review", verdict="safe", cache="miss", input_hash="sha256:dd")
     rows = ucc.read_telemetry_events(hooks_dir=tmp_path)
     assert ucc.collect_candidates(rows) == []
+
+
+def test_no_broken_repo_relative_sys_path_bootstrap() -> None:
+    """Regression test for ccmsg 20260912T122716Z-c24b bug 1: the script computed its own
+    `sys.path` entry as `Path(__file__).parents[3] / "src"`, which resolves to a nonexistent
+    directory (`.../cc_session_tools/src`) and does nothing useful - `hooks` and
+    `cc_session_tools.lib` are real top-level installed packages (like `hooks.stats`, exposed
+    via the `cccs-stats` console-script entry point) that any interpreter with `cc-session-tools`
+    installed already imports directly, with no bootstrap. A bare system `python3` that lacks the
+    package installed fails with `ModuleNotFoundError` regardless of any path hack - that failure
+    is expected and correct, not something to paper over with more path manipulation."""
+    src = _SCRIPT_PATH.read_text()
+    assert "sys.path" not in src
+    assert "_REPO_ROOT" not in src
+
+
+def test_script_runs_as_real_subprocess_with_package_installed(tmp_path: Path) -> None:
+    """The script must run correctly with no bootstrap of its own, under any interpreter that
+    actually has cc-session-tools installed - here, the same interpreter pytest itself runs
+    under (the dev checkout's venv)."""
+    result = subprocess.run(
+        [sys.executable, str(_SCRIPT_PATH), "list"],
+        env={"CCST_FIRES_ACCESS": "1", "CCST_DATA_HOME": str(tmp_path), "PATH": "/usr/bin:/bin"},
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stderr
+    assert "ModuleNotFoundError" not in result.stderr
