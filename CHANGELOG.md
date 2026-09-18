@@ -7,13 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [3.6.0] - 2026-09-18
+## [3.6.1] - 2026-09-18
 
 ### Changed
 
 - Version bump only; no code changes since 3.5.3. The `v3.6.0` release tag was cut while
   `pyproject.toml` still said 3.5.3, so the release workflow published 3.5.3 to PyPI and no 3.6.0
-  build existed. This release makes the published version match the tag.
+  build exists. 3.6.1 is the first release whose version matches its tag; 3.6.0 was never
+  published.
 
 ## [3.5.3] - 2026-09-18
 
