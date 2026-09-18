@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.5.3] - 2026-09-18
+
+### Fixed
+
+- `update-command-cache`'s script no longer fails with `ModuleNotFoundError: No module named
+  'hooks'` when run through an interpreter that actually has `cc-session-tools` installed - its
+  own `sys.path` bootstrap computed a nonexistent directory and did nothing useful; `hooks` and
+  `cc_session_tools.lib` are ordinary top-level installed packages (like `hooks.stats`, exposed via
+  the `cccs-stats` console-script entry point) that need no path manipulation at all. A bare system
+  `python3` with the package not installed still fails, as expected - `SKILL.md` now documents
+  finding the right interpreter from `ccst`'s own console-script shebang.
+- `update-command-cache`'s `SKILL.md` and the script's own module docstring documented a
+  flag-based CLI (`--list` / `--remove <sha>` / `--flip <sha> <verdict>`) the script never
+  implemented - it takes `list` / `remove` / `flip` / `promote` subcommands. Docs now match.
+- `update-command-cache`'s `SKILL.md` documented the cache database at
+  `~/.cache/claude/logs/command-cache.db`; corrected to the real path,
+  `~/.local/share/claude/command-cache.db` (overridable via `CCST_CACHE_DB`), and dropped the
+  undeliverable "command preview" promise (`telemetry_events` only ever stored a SHA-256 hash) in
+  favor of documenting the actual manual recovery step.
+
 ## [3.5.2] - 2026-09-13
 
 ### Changed

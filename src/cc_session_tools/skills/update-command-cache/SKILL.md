@@ -1,11 +1,11 @@
 ---
 name: update-command-cache
-description: Curate the SHA-256 command cache used by the bash-security-review hook. Reads recent safe-verdict fires from telemetry.db, identifies commands not yet cached, presents them for approval, and records approved ones via hooks.cache.cache_record(). Also supports manual --remove and --flip operations on existing cache entries. Use when the user says "update the command cache", "curate cached commands", "review cache fires", "promote fires to cache", "remove a cache entry", or notices the cache is stale or polluted.
+description: Curate the SHA-256 command cache used by the bash-security-review hook. Reads recent safe-verdict fires from telemetry.db, identifies commands not yet cached, presents them for approval, and records approved ones via hooks.cache.cache_record(). Also supports manual `remove` and `flip` subcommands on existing cache entries. Use when the user says "update the command cache", "curate cached commands", "review cache fires", "promote fires to cache", "remove a cache entry", or notices the cache is stale or polluted.
 ---
 
 # Update command cache
 
-The `bash-security-review` hook (when run with `CCST_USE_COMMAND_CACHE=1`) records `safe`-verdict fires into the command cache at `~/.cache/claude/logs/command-cache.db` (SQLite; the legacy `command-cache.csv` is retired). Auto-fill is conservative - only verdicts that came back `safe` from the claude CLI escalation are stored. This skill is the curation tool for that cache: it lets you sweep the telemetry log for safe fires not yet captured, vet them, and bulk-promote the ones you want.
+The `bash-security-review` hook (when run with `CCST_USE_COMMAND_CACHE=1`) records `safe`-verdict fires into the command cache at `~/.local/share/claude/command-cache.db` (SQLite, overridable via `CCST_CACHE_DB`; the legacy `command-cache.csv` is retired). Auto-fill is conservative - only verdicts that came back `safe` from the claude CLI escalation are stored. This skill is the curation tool for that cache: it lets you sweep the telemetry log for safe fires not yet captured, vet them, and bulk-promote the ones you want.
 
 ## When to use
 
@@ -31,20 +31,42 @@ This skill:
 1. Reads the fires log (gated by `CCST_FIRES_ACCESS=1` so the bash-hard-deny hook permits the read).
 2. Filters to entries with `verdict == "safe"` and `cache != "hit"` (i.e. ones that escalated to claude).
 3. Cross-references each input hash with the current cache; drops anything already cached.
-4. Presents the candidate list to the user with command preview, fire count, and last-seen.
-5. After explicit approval, calls `hooks.cache.cache_record()` for each approved entry.
+4. Prints each remaining candidate's sha, fire count, last-seen timestamp, and a sample session id -
+   **not** the plaintext command: `telemetry_events` only stores a SHA-256 `input_hash`, never the
+   command text itself. Recovering the plaintext to eyeball a candidate before promoting it is a
+   manual step - walk the named sample session's transcript for the command that produced that
+   hash. There is currently no automated command preview.
+5. After you've identified and vetted a candidate's real command by hand, promote it with the
+   `promote` subcommand (or write it directly via `hooks.cache.cache_record()`).
 
-Manual modes:
-- `--remove <sha>` removes a single entry (after confirmation).
-- `--flip <sha> <verdict>` refreshes the entry (re-records it via `cache_record()`) when the new verdict is `safe`, or deletes it when the new verdict is non-safe.
+Manual subcommands:
+- `remove <sha>` removes a single entry (after confirmation).
+- `flip <sha> <verdict>` refreshes the entry (re-records it via `cache_record()`) when the new verdict is `safe`, or deletes it when the new verdict is non-safe.
+- `promote <sha> [--verdict safe] [--risks ...] [--preview ...]` records a single vetted entry directly.
+
+**Note on synthetic rows:** `telemetry.db`'s `bash-security-review` rows can include synthetic
+test-fixture rows (`session_id` values like `test-session-1`) alongside real production fires, if
+this machine's test suite has ever run against the shared database. Don't be surprised if one of
+these dominates the candidate list by fire count - check `sample_session` before promoting.
 
 ## Invocation
 
-From this skill's directory:
+This script `import`s `hooks` and `cc_session_tools.lib` directly - it needs an interpreter that
+actually has `cc-session-tools` installed, not a bare system `python3` (which will fail with
+`ModuleNotFoundError: No module named 'hooks'`). Find that interpreter from whichever `ccst`
+is already on `PATH` - its console-script shebang line names the exact venv Python that has the
+package, regardless of install method (`uv tool install`, `pipx`, `pip --user`):
 
-    CCST_FIRES_ACCESS=1 python3 scripts/update_command_cache.py [--list] [--remove <sha>] [--flip <sha> <verdict>]
+    PY="$(sed -n '1s/^#!//p' "$(command -v ccst)")"
+    CCST_FIRES_ACCESS=1 "$PY" ~/.claude/skills/update-command-cache/scripts/update_command_cache.py list
+    "$PY" ~/.claude/skills/update-command-cache/scripts/update_command_cache.py remove <sha>
+    "$PY" ~/.claude/skills/update-command-cache/scripts/update_command_cache.py flip <sha> <safe|suspicious|dangerous>
+    "$PY" ~/.claude/skills/update-command-cache/scripts/update_command_cache.py promote <sha> [--verdict safe] [--risks ...] [--preview ...]
 
-Default behaviour (no flag) is `--list`: show pending candidates and prompt for promotion.
+In a repo checkout (development), `uv run python3 scripts/update_command_cache.py ...` from this
+skill's source directory works the same way.
+
+Default behaviour (no subcommand) is `list`: show pending candidates and prompt for promotion.
 
 ## Safety notes
 

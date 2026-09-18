@@ -6,9 +6,16 @@ surfaces safe-verdict commands not yet in the cache, prompts for approval,
 and records approved ones.
 
 Usage:
-    CCST_FIRES_ACCESS=1 python3 update_command_cache.py [--list]
-    python3 update_command_cache.py --remove <sha>
-    python3 update_command_cache.py --flip <sha> <verdict>
+    CCST_FIRES_ACCESS=1 python3 update_command_cache.py list
+    python3 update_command_cache.py remove <sha>
+    python3 update_command_cache.py flip <sha> <safe|suspicious|dangerous>
+    python3 update_command_cache.py promote <sha> [--verdict safe] [--risks ...] [--preview ...]
+
+Must be run through an interpreter that has cc-session-tools installed (`uv run
+python3 <path>` in a repo checkout, or the venv `uv tool install` creates) -
+`hooks` and `cc_session_tools.lib` are ordinary top-level installed packages,
+not importable from a bare system `python3` that never had the package
+installed.
 
 The CCST_FIRES_ACCESS=1 env var is required to read telemetry.db through the
 bash-hard-deny hook's allowlist.
@@ -21,17 +28,12 @@ import sys
 from collections import Counter
 from pathlib import Path
 
-# Make hooks / cc_session_tools importable when running from the skill dir.
-_REPO_ROOT = Path(__file__).resolve().parents[3]
-if str(_REPO_ROOT / "src") not in sys.path:
-    sys.path.insert(0, str(_REPO_ROOT / "src"))
-
-from hooks.cache import (  # noqa: E402
+from hooks.cache import (
     _connect,
     cache_lookup,
     cache_record,
 )
-from cc_session_tools.lib import telemetry_store  # noqa: E402
+from cc_session_tools.lib import telemetry_store
 
 _DEFAULT_PREVIEW_LIMIT = 200
 
