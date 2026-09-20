@@ -16,6 +16,13 @@ Tier 3 always pins the review model via `--model` (default `sonnet`,
 override with CCST_REVIEW_MODEL) so the review's cost and behaviour don't
 silently drift if the invoking session's default model changes.
 
+Tier 3's `claude -p` child is deliberately slimmed (REVIEW_CLAUDE_ARGS, run from an
+empty scratch directory) so a one-line review does not load a full interactive
+session's context: measured with scripts/measure_review_call.py, ~50k tokens per
+fire drops to well under 1k. It must keep working on a subscription login, so it
+neither uses --bare (needs ANTHROPIC_API_KEY) nor redirects CLAUDE_CONFIG_DIR
+(changes where OAuth credentials are looked up).
+
 Never blocks. On any error/timeout, prints "[security review unavailable: ...]"
 and exits 0. Telemetry is always written, regardless of tier.
 """
@@ -27,6 +34,7 @@ import os
 import re
 import subprocess
 import sys
+import tempfile
 import time
 from pathlib import Path
 
@@ -60,6 +68,30 @@ _HEURISTIC_PATTERNS: list[tuple[re.Pattern[str], str]] = [
     (re.compile(r"(^|\s)(/etc/|/usr/|/var/|/boot/)"), "system path"),
     (re.compile(r"\b(nc|ncat|netcat|socat)\s"), "raw network tool"),
     (re.compile(r"\b(wget|curl)\b.*-O\s*/"), "download to absolute path"),
+]
+
+REVIEW_SYSTEM_PROMPT = (
+    "You are a shell-command security reviewer for a developer's own machine. Follow the requested "
+    "output format exactly: three lines, SUMMARY, RISKS, VERDICT, and nothing else. Verdict rubric: "
+    "safe = ordinary development or file-management activity confined to the working project "
+    "(build, test, install project dependencies, edit or move project files, run a project script, "
+    "routine git); suspicious = touches credentials, reaches outside the project in unusual ways, or "
+    "is unclear in intent; dangerous = exfiltrates data, runs downloaded or obfuscated code, "
+    "escalates privileges, or destroys data outside the project."
+)
+
+# Flags that keep the review child from loading skills, MCP servers, tool schemas, hooks,
+# user/project CLAUDE.md and a persisted transcript. `--setting-sources local` is what drops
+# the user-level settings, hooks and CLAUDE.md; the empty cwd in call_claude() drops
+# project-level ones.
+REVIEW_CLAUDE_ARGS: list[str] = [
+    "--disable-slash-commands",
+    "--strict-mcp-config",
+    "--tools", "",
+    "--no-session-persistence",
+    "--setting-sources", "local",
+    "--system-prompt", REVIEW_SYSTEM_PROMPT,
+    "--exclude-dynamic-system-prompt-sections",
 ]
 
 _VERDICT_RE = re.compile(r"^VERDICT:\s*(safe|suspicious|dangerous)\s*$", re.MULTILINE)
@@ -230,14 +262,16 @@ def call_claude(prompt: str, *, claude_bin: str, timeout: int, model: str) -> tu
     _env["CLD_SESSION_TAG"] = f"bash-security-review-{time.strftime('%Y%m%d-%H%M')}"
     _env["CLD_SESSION_MODE"] = "hook"
     try:
-        result = subprocess.run(
-            [claude_bin, "-p", "--model", model],
-            input=prompt,
-            capture_output=True,
-            text=True,
-            timeout=timeout,
-            env=_env,
-        )
+        with tempfile.TemporaryDirectory(prefix="ccst-review-") as scratch_cwd:
+            result = subprocess.run(
+                [claude_bin, "-p", "--model", model, *REVIEW_CLAUDE_ARGS],
+                input=prompt,
+                capture_output=True,
+                text=True,
+                timeout=timeout,
+                env=_env,
+                cwd=scratch_cwd,
+            )
     except FileNotFoundError:
         return None, "claude CLI not found"
     except subprocess.TimeoutExpired:
