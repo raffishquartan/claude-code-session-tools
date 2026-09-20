@@ -7,11 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.7.0] - 2026-09-20
+
 ### Added
 
 - `ccst doctor` checks `deps:bun` and `deps:ccusage` (WARN, never FAIL) for the optional bun /
   ccusage dependency of `claude-code-usage reconcile`, with the install command and a distinct
   "installed but not on PATH" state, so an upgrade on an existing machine surfaces a missing install.
+- `bash-security-review` reviewed-script allowlist: a single simple invocation of a project script
+  (`python3 x.py`, `uv run x.py`, `./x.sh`, ...) whose content hash matches an allowlist entry is
+  allowed with no `claude` call, whatever its arguments. Entries are added automatically after a
+  `safe` review that included the script's content, only for scripts inside the project (never under
+  `cc-sessions/`) and never for heuristic-flagged commands. Heuristic hits always escalate; a hash
+  mismatch re-reviews and tells you. New `ccst hooks allowlist list|add|remove|verify`; store is a
+  new `script_allowlist` table in `command-cache.db` (additive).
+- `scripts/measure_review_call.py`: reproducible token/verdict measurement for the review call.
 
 ### Changed
 
@@ -19,6 +29,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `~/.bun/bin`) when it is not on `PATH`, so non-interactive shells work without a shell-rc edit.
 - `analyse-cc-usage` skill setup now has explicit bun-install, `PATH` and verification steps that
   work on macOS and Linux/WSL.
+- `bash-security-review`'s `claude -p` call is slimmed (no skills, MCP, tools, user/project
+  settings or CLAUDE.md, custom system prompt with a verdict rubric, empty working directory,
+  `--no-session-persistence`): measured ~51k tokens down to ~770 per review with the same
+  SUMMARY/RISKS/VERDICT format and the same verdicts on 11 of 12 reference commands (the twelfth,
+  an obfuscated pipe-to-shell, is now rated `suspicious` rather than `safe`). Review sessions are
+  no longer persisted, so they stop accumulating for `clean-hook-sessions`.
 
 ## [3.6.1] - 2026-09-18
 

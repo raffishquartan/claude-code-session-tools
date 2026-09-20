@@ -66,6 +66,16 @@ CREATE TABLE IF NOT EXISTS hook_invocations (
 );
 CREATE INDEX IF NOT EXISTS idx_inv_ts      ON hook_invocations(ts);
 CREATE INDEX IF NOT EXISTS idx_inv_session ON hook_invocations(session_id);
+CREATE TABLE IF NOT EXISTS script_allowlist (
+    script_path  TEXT PRIMARY KEY,
+    sha256       TEXT    NOT NULL,
+    project_root TEXT    NOT NULL,
+    source       TEXT    NOT NULL,
+    added_at     TEXT    NOT NULL,
+    updated_at   TEXT    NOT NULL,
+    last_used    TEXT,
+    use_count    INTEGER NOT NULL DEFAULT 0
+);
 CREATE VIEW IF NOT EXISTS cache_efficiency AS
 SELECT
     DATE(ts)                                                 AS day,
@@ -92,6 +102,18 @@ class CacheEntry:
     last_seen: str
     last_validated_at: str
     cache_source: str
+
+
+@dataclasses.dataclass(frozen=True, slots=True)
+class AllowlistEntry:
+    script_path: str
+    sha256: str
+    project_root: str
+    source: str  # 'auto' (added after a safe review) or 'manual' (user-vouched)
+    added_at: str
+    updated_at: str
+    last_used: str | None
+    use_count: int
 
 
 def _db_path() -> Path:
@@ -271,3 +293,75 @@ def cache_is_stale(age_days: float | None) -> bool:
     if age_days is None:
         return True
     return age_days >= _STALE_DAYS
+
+
+# ---------- script allowlist ----------
+# Entries are never pruned by age: they persist until removed or their script changes. Unlike the
+# command-cache functions above these raise sqlite3.Error; the hook wraps the calls it makes so a
+# store failure never blocks a command, while the `ccst hooks allowlist` CLI reports it.
+
+_ALLOWLIST_COLUMNS = (
+    "script_path,sha256,project_root,source,added_at,updated_at,last_used,use_count"
+)
+
+
+def allowlist_get(script_path: str) -> AllowlistEntry | None:
+    with _connect() as conn:
+        row = conn.execute(
+            f"SELECT {_ALLOWLIST_COLUMNS} FROM script_allowlist WHERE script_path=?",
+            (script_path,),
+        ).fetchone()
+    return AllowlistEntry(*row) if row else None
+
+
+def allowlist_list() -> list[AllowlistEntry]:
+    with _connect() as conn:
+        rows = conn.execute(
+            f"SELECT {_ALLOWLIST_COLUMNS} FROM script_allowlist ORDER BY script_path"
+        ).fetchall()
+    return [AllowlistEntry(*row) for row in rows]
+
+
+def allowlist_upsert(
+    script_path: str,
+    sha256: str,
+    project_root: str,
+    *,
+    source: str,
+    overwrite_source: bool = False,
+) -> None:
+    """Insert an entry, or update an existing one's hash (keeping its source unless told not to)."""
+    now = _now()
+    with _connect() as conn:
+        conn.execute(
+            """INSERT INTO script_allowlist
+               (script_path,sha256,project_root,source,added_at,updated_at)
+               VALUES (?,?,?,?,?,?)
+               ON CONFLICT(script_path) DO UPDATE SET
+                   sha256=excluded.sha256,
+                   project_root=excluded.project_root,
+                   updated_at=excluded.updated_at,
+                   source=CASE WHEN ? THEN excluded.source ELSE source END
+            """,
+            (script_path, sha256, project_root, source, now, now, 1 if overwrite_source else 0),
+        )
+        conn.commit()
+
+
+def allowlist_touch(script_path: str) -> None:
+    with _connect() as conn:
+        conn.execute(
+            "UPDATE script_allowlist SET last_used=?, use_count=use_count+1 WHERE script_path=?",
+            (_now(), script_path),
+        )
+        conn.commit()
+
+
+def allowlist_remove(script_path: str) -> bool:
+    """Delete the entry; True if one existed."""
+    with _connect() as conn:
+        removed = conn.execute(
+            "DELETE FROM script_allowlist WHERE script_path=?", (script_path,)
+        ).rowcount
+        conn.commit()
+    return removed > 0

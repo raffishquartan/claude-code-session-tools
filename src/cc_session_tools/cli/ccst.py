@@ -6,6 +6,8 @@ Current subcommands:
   hooks install [--hook <name>]  Merge hook entries from the bundled set (or a
                                  custom --source) into a target settings.json.
   hooks uninstall [--hook <name>] Remove hook entries from a target settings.json.
+  hooks allowlist list|add|remove|verify
+                                 Manage the bash-security-review reviewed-script allowlist.
   hooks run <name>               Run a Claude Code hook by name.
                                  Available hooks: bash-hard-deny,
                                  bash-security-review, marker-allow,
@@ -1949,6 +1951,65 @@ def _cmd_machine_identity_confirm(args: argparse.Namespace) -> int:
 # ---------- hooks run ----------
 
 
+def _cmd_hooks_allowlist(args: argparse.Namespace) -> int:
+    """`ccst hooks allowlist list|add|remove|verify` - the reviewed-script allowlist store."""
+    import hashlib
+
+    from hooks import cache as cache_mod
+    from hooks import script_allowlist
+
+    verb = args.allowlist_verb
+    if verb == "list":
+        entries = cache_mod.allowlist_list()
+        if not entries:
+            print("No allowlisted scripts.")
+            return 0
+        for e in entries:
+            print(
+                f"{e.script_path}  source={e.source}  sha256={e.sha256[:8]}  added={e.added_at}  "
+                f"last_used={e.last_used or '-'}  uses={e.use_count}"
+            )
+        return 0
+    if verb == "add":
+        path = Path(args.script).expanduser().resolve()
+        if not path.is_file():
+            print(f"error: {args.script}: not a file", file=sys.stderr)
+            return 2
+        root = script_allowlist.find_project_root(path.parent)
+        digest = hashlib.sha256(path.read_bytes()).hexdigest()
+        cache_mod.allowlist_upsert(
+            str(path), digest, str(root), source="manual", overwrite_source=True
+        )
+        print(f"Allowlisted {path} (sha256 {digest[:8]}, project {root})")
+        return 0
+    if verb == "remove":
+        path = Path(args.script).expanduser().resolve()
+        if not cache_mod.allowlist_remove(str(path)):
+            print(f"error: {path} is not in the allowlist", file=sys.stderr)
+            return 1
+        print(f"Removed {path}")
+        return 0
+    # verify
+    drift = 0
+    entries = cache_mod.allowlist_list()
+    if not entries:
+        print("No allowlisted scripts.")
+        return 0
+    for e in entries:
+        p = Path(e.script_path)
+        if not p.is_file():
+            print(f"MISSING  {e.script_path}")
+            drift += 1
+            continue
+        current = hashlib.sha256(p.read_bytes()).hexdigest()
+        if current != e.sha256:
+            print(f"CHANGED  {e.script_path}  {e.sha256[:8]} -> {current[:8]}")
+            drift += 1
+        else:
+            print(f"OK       {e.script_path}")
+    return 1 if drift else 0
+
+
 def _cmd_hooks_run(args: argparse.Namespace) -> int:
     """Dispatch to the named hook, or exit 1 (never 2) if it is unknown.
 
@@ -2596,6 +2657,24 @@ def _build_parser() -> argparse.ArgumentParser:
         "--apply",
         action="store_true",
         help="Write changes (default: dry run)",
+    )
+
+    # hooks allowlist
+    allowlist_parser = hooks_sub.add_parser(
+        "allowlist",
+        help="Manage the bash-security-review reviewed-script allowlist",
+    )
+    allowlist_sub = allowlist_parser.add_subparsers(dest="allowlist_verb", metavar="<action>")
+    allowlist_sub.required = True
+    allowlist_sub.add_parser("list", help="List allowlisted scripts")
+    allowlist_add = allowlist_sub.add_parser(
+        "add", help="Allowlist a script at its current content hash (you vouch for it)"
+    )
+    allowlist_add.add_argument("script", metavar="<script>", help="Path to the script")
+    allowlist_remove = allowlist_sub.add_parser("remove", help="Remove a script from the allowlist")
+    allowlist_remove.add_argument("script", metavar="<script>", help="Path to the script")
+    allowlist_sub.add_parser(
+        "verify", help="Report allowlisted scripts that changed or no longer exist (exit 1 on drift)"
     )
 
     # hooks run
@@ -3500,6 +3579,8 @@ def main() -> None:
             sys.exit(_cmd_hooks_install(args))
         if args.verb == "uninstall":
             sys.exit(_cmd_hooks_uninstall(args))
+        if args.verb == "allowlist":
+            sys.exit(_cmd_hooks_allowlist(args))
         if args.verb == "run":
             sys.exit(_cmd_hooks_run(args))
 
