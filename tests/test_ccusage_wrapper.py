@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
+
+import pytest
 
 from claude_code_usage import ccusage_wrapper as cw
 
@@ -54,3 +57,55 @@ def test_reconcile_flags_mismatch() -> None:
     diff = cw.reconcile_totals(ours, theirs, tolerance=0.005)
     assert not diff.passed
     assert "input_tokens" in diff.failed_fields
+
+
+_DAILY_JSON = json.dumps(
+    {
+        "daily": [],
+        "totals": {
+            "inputTokens": 1,
+            "outputTokens": 2,
+            "cacheCreationTokens": 3,
+            "cacheReadTokens": 4,
+            "totalCost": 0.5,
+            "totalTokens": 10,
+        },
+    }
+)
+
+
+def _install_fake_ccusage_in_bun_bin(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    bun_home = tmp_path / "bunhome"
+    bin_dir = bun_home / "bin"
+    bin_dir.mkdir(parents=True)
+    exe = bin_dir / "ccusage"
+    exe.write_text(f"#!/bin/sh\necho '{_DAILY_JSON}'\n")
+    exe.chmod(0o755)
+    empty = tmp_path / "empty-path"
+    empty.mkdir()
+    monkeypatch.setenv("PATH", str(empty))
+    monkeypatch.setenv("BUN_INSTALL", str(bun_home))
+
+
+def test_run_daily_finds_ccusage_in_bun_bin_dir_without_path_edit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _install_fake_ccusage_in_bun_bin(tmp_path, monkeypatch)
+
+    assert cw.is_available()
+    assert cw.run_daily().totals.total_cost == 0.5
+
+
+def test_run_daily_error_points_at_setup_and_doctor(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    empty = tmp_path / "empty-path"
+    empty.mkdir()
+    monkeypatch.setenv("PATH", str(empty))
+    monkeypatch.setenv("BUN_INSTALL", str(tmp_path / "no-bun"))
+
+    with pytest.raises(cw.CcusageNotInstalled) as excinfo:
+        cw.run_daily()
+
+    assert "analyse-cc-usage" in str(excinfo.value)
+    assert "ccst doctor" in str(excinfo.value)

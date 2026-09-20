@@ -94,7 +94,7 @@ If you've ever tried to remember which `1f4a8b3c-...` UUID is the session where 
 
 - **Python 3.11+** (3.12+ recommended)
 - **The `claude` CLI on your `$PATH`.** Install it first via [the official Claude Code instructions](https://docs.anthropic.com/en/docs/claude-code/setup) and verify with `claude --version`.
-- **`ccusage` (optional)** - if on `$PATH`, `claude-code-usage reconcile` cross-checks dollar totals against it. Skipped gracefully if missing.
+- **`ccusage` (optional)** - if on `$PATH` (or in bun's global bin dir, `~/.bun/bin`), `claude-code-usage reconcile` cross-checks dollar totals against it. Skipped gracefully if missing. Needs `bun` to install; `ccst doctor` reports both under `deps:bun` / `deps:ccusage` and prints the install command. See the `analyse-cc-usage` skill's setup section.
 - **`ripgrep` (optional)** - `ccs --contents` prefers `rg`; falls back to threaded Python `grep` if missing.
 
 ### Install and set up

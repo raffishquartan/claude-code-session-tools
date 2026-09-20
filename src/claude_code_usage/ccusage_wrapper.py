@@ -10,10 +10,11 @@ that's our domain.
 from __future__ import annotations
 
 import json
-import shutil
 import subprocess
 from dataclasses import dataclass, field
 from typing import Any
+
+from cc_session_tools.lib import bun_tools
 
 
 @dataclass
@@ -52,11 +53,11 @@ class ReconcileDiff:
 
 
 class CcusageNotInstalled(RuntimeError):
-    """Raised when ccusage is not on PATH."""
+    """Raised when ccusage is neither on PATH nor in bun's global bin directory."""
 
 
 def is_available() -> bool:
-    return shutil.which("ccusage") is not None
+    return bun_tools.resolve("ccusage") is not None
 
 
 def run_daily(since: str | None = None, until: str | None = None,
@@ -65,9 +66,14 @@ def run_daily(since: str | None = None, until: str | None = None,
 
     Dates are formatted as YYYYMMDD per ccusage's CLI.
     """
-    if not is_available():
-        raise CcusageNotInstalled("ccusage CLI is not on PATH; bun add -g ccusage")
-    cmd = ["ccusage", "daily", "--json"]
+    resolved = bun_tools.resolve("ccusage")
+    if resolved is None:
+        raise CcusageNotInstalled(
+            "ccusage not found on PATH or in bun's global bin directory. Follow the "
+            "analyse-cc-usage skill's setup step 4 (install bun, then "
+            f"`{bun_tools.CCUSAGE_INSTALL_COMMAND}`); `ccst doctor` shows the current state."
+        )
+    cmd = [resolved.path, "daily", "--json"]
     if offline:
         cmd.append("--offline")
     if since:

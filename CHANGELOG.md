@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `ccst doctor` checks `deps:bun` and `deps:ccusage` (WARN, never FAIL) for the optional bun /
+  ccusage dependency of `claude-code-usage reconcile`, with the install command and a distinct
+  "installed but not on PATH" state, so an upgrade on an existing machine surfaces a missing install.
+
+### Changed
+
+- `claude-code-usage` finds `ccusage` in bun's global bin directory (`$BUN_INSTALL/bin`, default
+  `~/.bun/bin`) when it is not on `PATH`, so non-interactive shells work without a shell-rc edit.
+- `analyse-cc-usage` skill setup now has explicit bun-install, `PATH` and verification steps that
+  work on macOS and Linux/WSL.
+
 ## [3.6.1] - 2026-09-18
 
 ### Changed

@@ -206,8 +206,23 @@ claude-code-usage --version    # should print the version
 uv sync --extra dev
 uv run pytest    # all 350+ tests should pass
 
-# 4. Install ccusage globally so reconciliation works
-#    Install bun first if needed: https://bun.com/docs/installation
+# 4a. Install bun (needed to install ccusage). Same command on macOS and Linux/WSL.
+#     Linux/WSL: install `unzip` first (e.g. `sudo apt install unzip`), and install bun
+#     inside the Linux environment - a Windows-side bun is not visible to WSL tools.
+#     macOS alternative: `brew install oven-sh/bun/bun`.
+curl -fsSL https://bun.sh/install | bash
+bun --version
+
+# 4b. Make bun's global bin dir (default ~/.bun/bin) resolvable on PATH, including in
+#     non-interactive shells (hooks, scheduled jobs). The installer edits the rc file of the
+#     shell you ran it from, which non-interactive shells often skip; also add it to
+#     ~/.zshenv (zsh) or ~/.profile (bash):
+#         export PATH="$HOME/.bun/bin:$PATH"
+#     claude-code-usage also falls back to ~/.bun/bin ($BUN_INSTALL/bin) on its own, so
+#     reconcile works without this; the PATH edit is what makes the `ccusage` command itself
+#     (e.g. `ccusage blocks`) available.
+
+# 4c. Install ccusage globally so reconciliation works
 bun add -g ccusage
 ccusage --version
 
@@ -222,6 +237,11 @@ claude-code-usage warm-cache
 # 7. Sanity-check by reconciling against ccusage
 claude-code-usage reconcile
 ```
+
+**Existing machine that already has CCST:** `ccst doctor` reports `deps:bun` and `deps:ccusage`
+(WARN when missing or not on `PATH`, with the exact fix). `ccst install-everything` runs doctor at
+its end, so upgrading surfaces a missing install; CCST never installs bun or ccusage itself. Mute
+with `ccst doctor --mute deps:ccusage` if you deliberately skip it.
 
 The repo can also be sourced from GitHub directly (via the upstream
 remote) if you don't want to clone it - see the README's "Install"
