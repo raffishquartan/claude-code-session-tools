@@ -15,7 +15,9 @@ from cc_session_tools.lib.doctor import (
     CheckResult,
     LegacyMigrationPaths,
     Status,
+    check_bun,
     check_ccsched_job_registered,
+    check_ccusage,
     check_cli_on_path,
     check_data_stores,
     check_env_dir,
@@ -1815,3 +1817,102 @@ def test_run_all_checks_skips_pdata_verify_when_projects_none(monkeypatch, tmp_p
         pdata_verify_projects=None,
     )
     assert not any(r.name.startswith("pdata-verify:") for r in results)
+
+
+# ---------- deps:bun / deps:ccusage ----------
+
+
+def _fake_tool(directory: Path, name: str, body: str) -> Path:
+    directory.mkdir(parents=True, exist_ok=True)
+    exe = directory / name
+    exe.write_text(f"#!/bin/sh\n{body}\n")
+    exe.chmod(0o755)
+    return exe
+
+
+@pytest.fixture
+def no_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    empty = tmp_path / "empty-path"
+    empty.mkdir()
+    monkeypatch.setenv("PATH", str(empty))
+    return empty
+
+
+def test_check_bun_warns_with_install_command_when_absent(tmp_path: Path, no_path: Path) -> None:
+    result = check_bun(bin_dir=tmp_path / "bunbin")
+
+    assert result.name == "deps:bun"
+    assert result.status is Status.WARN
+    assert "curl -fsSL https://bun.sh/install | bash" in result.reason
+
+
+def test_check_ccusage_warns_with_install_command_when_absent(tmp_path: Path, no_path: Path) -> None:
+    result = check_ccusage(bin_dir=tmp_path / "bunbin")
+
+    assert result.name == "deps:ccusage"
+    assert result.status is Status.WARN
+    assert "bun add -g ccusage" in result.reason
+
+
+def test_check_ccusage_ok_reports_version(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    exe = _fake_tool(tmp_path / "onpath", "ccusage", "echo 18.0.11")
+    monkeypatch.setenv("PATH", str(exe.parent))
+
+    result = check_ccusage(bin_dir=tmp_path / "bunbin")
+
+    assert result.status is Status.OK
+    assert "18.0.11" in result.reason
+
+
+def test_check_bun_ok_reports_version(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    exe = _fake_tool(tmp_path / "onpath", "bun", "echo 1.3.2")
+    monkeypatch.setenv("PATH", str(exe.parent))
+
+    result = check_bun(bin_dir=tmp_path / "bunbin")
+
+    assert result.status is Status.OK
+    assert "1.3.2" in result.reason
+
+
+def test_check_ccusage_installed_but_not_on_path_names_the_path_fix(
+    tmp_path: Path, no_path: Path
+) -> None:
+    bin_dir = tmp_path / "bunbin"
+    _fake_tool(bin_dir, "ccusage", "echo 18.0.11")
+
+    result = check_ccusage(bin_dir=bin_dir)
+
+    assert result.status is Status.WARN
+    assert str(bin_dir) in result.reason
+    assert "PATH" in result.reason
+    assert "bun add -g" not in result.reason
+
+
+def test_check_ccusage_warns_when_version_command_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    exe = _fake_tool(tmp_path / "onpath", "ccusage", "exit 3")
+    monkeypatch.setenv("PATH", str(exe.parent))
+
+    result = check_ccusage(bin_dir=tmp_path / "bunbin")
+
+    assert result.status is Status.WARN
+    assert "exited 3" in result.reason
+
+
+def test_run_all_checks_includes_the_deps_checks(tmp_path: Path) -> None:
+    settings = tmp_path / "settings.json"
+    settings.write_text(json.dumps({}))
+    bundle = Path(__file__).parent.parent / "src" / "cc_session_tools" / "config" / "hooks-bundle.json"
+    results = run_all_checks(
+        installed_version="1.4.1",
+        settings_path=settings,
+        bundle_path=bundle,
+        skills_source_dir=None,
+        skills_target_dir=tmp_path / "skills",
+        env={"CLAUDE_SESSION_TOOLS_REPO_ROOT": None, "CLAUDE_SESSION_TOOLS_PROJ_ROOT": None},
+        skip_pypi=True,
+    )
+    by_name = {r.name: r for r in results}
+    assert {"deps:bun", "deps:ccusage"} <= by_name.keys()
+    assert all(by_name[n].status is not Status.FAIL for n in ("deps:bun", "deps:ccusage"))

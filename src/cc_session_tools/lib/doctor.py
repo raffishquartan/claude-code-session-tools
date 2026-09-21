@@ -21,6 +21,7 @@ from enum import Enum
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from cc_session_tools.lib import bun_tools
 from cc_session_tools.lib.db import connect as _db_connect
 from cc_session_tools.lib.db import migration_applied as _migration_applied
 from cc_session_tools.lib.hook_registry import HOOK_VERBS, hook_name_from_command
@@ -119,6 +120,69 @@ def check_env_dir(
             reason = f"{reason} — {hint}"
         return CheckResult(name=name, status=Status.FAIL, reason=reason)
     return CheckResult(name=name, status=Status.OK, reason=str(p))
+
+
+def _check_bun_tool(
+    name: str, *, install_hint: str, bin_dir: Path | None, timeout: float
+) -> CheckResult:
+    """WARN-only check for an optional bun-installed tool (see `bun_tools.resolve`)."""
+    check_name = f"deps:{name}"
+    resolved = bun_tools.resolve(name, bin_dir=bin_dir)
+    if resolved is None:
+        return CheckResult(name=check_name, status=Status.WARN, reason=f"{name!r} not found; {install_hint}")
+    if not resolved.on_path:
+        found_dir = Path(resolved.path).parent
+        return CheckResult(
+            name=check_name,
+            status=Status.WARN,
+            reason=(
+                f"installed at {resolved.path} but {found_dir} is not on PATH; add it to PATH "
+                f"(for non-interactive shells too: ~/.zshenv for zsh, ~/.profile for bash)"
+            ),
+        )
+    try:
+        result = subprocess.run(
+            [resolved.path, "--version"], capture_output=True, text=True, timeout=timeout
+        )
+    except (OSError, subprocess.TimeoutExpired) as e:
+        return CheckResult(
+            name=check_name, status=Status.WARN, reason=f"could not run {name} --version: {e}"
+        )
+    if result.returncode != 0:
+        return CheckResult(
+            name=check_name, status=Status.WARN, reason=f"{name} --version exited {result.returncode}"
+        )
+    return CheckResult(
+        name=check_name,
+        status=Status.OK,
+        reason=(result.stdout + result.stderr).strip().split("\n")[0],
+    )
+
+
+def check_bun(bin_dir: Path | None = None, timeout: float = 5.0) -> CheckResult:
+    """WARN (never FAIL) if bun, needed to install ccusage, is missing or not on PATH."""
+    return _check_bun_tool(
+        "bun",
+        install_hint=(
+            f"install with `{bun_tools.BUN_INSTALL_COMMAND}` (macOS and Linux/WSL; "
+            "Linux/WSL also needs `unzip`)"
+        ),
+        bin_dir=bin_dir,
+        timeout=timeout,
+    )
+
+
+def check_ccusage(bin_dir: Path | None = None, timeout: float = 5.0) -> CheckResult:
+    """WARN (never FAIL) if ccusage, used by `claude-code-usage reconcile`, is missing.
+
+    ccusage is optional: claude-code-usage works without it apart from `reconcile`.
+    """
+    return _check_bun_tool(
+        "ccusage",
+        install_hint=f"install bun first (see deps:bun), then `{bun_tools.CCUSAGE_INSTALL_COMMAND}`",
+        bin_dir=bin_dir,
+        timeout=timeout,
+    )
 
 
 def check_settings_json(settings_path: Path) -> CheckResult:
@@ -1110,6 +1174,10 @@ def run_all_checks(
     if sessions_db_path is not None:
         results.extend(check_sessions_uuid_migration(sessions_db_path))
         results.extend(check_sessions_project_dir_absolute(sessions_db_path))
+
+    # Optional dependencies for claude-code-usage's reconcile / ccusage blocks
+    results.append(check_bun())
+    results.append(check_ccusage())
 
     # PyPI version check
     if not skip_pypi:
