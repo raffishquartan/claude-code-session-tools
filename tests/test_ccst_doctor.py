@@ -687,6 +687,29 @@ def test_wrap_reason_indents_every_line(monkeypatch: pytest.MonkeyPatch) -> None
     assert all(line.startswith("    ") for line in lines)
 
 
+def test_wrap_reason_does_not_split_paths_or_hyphenated_names(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(shutil, "get_terminal_size", lambda fallback=(80, 24): os.terminal_size((60, 24)))
+    path = "/home/alice/.local/share/claude/claude-flags.json"
+    out = _wrap_reason(f"not yet created; will be created at {path} on first use")
+    assert path in out.split()
+
+
+def test_wrap_reason_width_floor_is_40(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(shutil, "get_terminal_size", lambda fallback=(80, 24): os.terminal_size((10, 24)))
+    lines = _wrap_reason("word " * 30).splitlines()
+    assert all(len(line) <= 40 for line in lines)
+    assert max(len(line) for line in lines) > 10
+
+
+def test_format_results_tip_line_wraps_at_80_columns(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(shutil, "get_terminal_size", lambda fallback=(80, 24): os.terminal_size((80, 24)))
+    out = format_results([CheckResult("foo", Status.WARN, "bad")])
+    tip_lines = out.split("Tip: ", 1)[1].split("\n\n", 1)[0].splitlines()
+    assert "Tip: run `ccst install-everything --apply`" in out
+    assert len(tip_lines) > 1
+    assert all(len(line) <= 80 for line in ["Tip: " + tip_lines[0], *tip_lines[1:]])
+
+
 # ---------- format_drift_report ----------
 
 def test_format_drift_report_empty_returns_empty_string() -> None:

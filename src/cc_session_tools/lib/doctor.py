@@ -14,7 +14,6 @@ import os
 import shutil
 import sqlite3
 import subprocess
-import textwrap
 import time
 from dataclasses import dataclass
 from enum import Enum
@@ -29,6 +28,7 @@ from cc_session_tools.lib.pdata.init_paths import (
     MIGRATED_ARCHIVE_DIRNAME,
     MIGRATED_MANIFEST_FILENAME,
 )
+from cc_session_tools.lib.text_wrap import wrap_block
 
 if TYPE_CHECKING:
     from cc_session_tools.lib.install_sync import FailedAttempt
@@ -1224,12 +1224,11 @@ def _wrap_reason(reason: str, *, indent: str = "    ") -> str:
     embedded paths and remediation commands); printed on a single line they
     hard-wrap at the terminal edge with no continuation indent, making a
     wrapped reason indistinguishable from a new, unrelated result. Wrapping
-    to the real terminal width — falling back to 80 columns for non-tty
+    to the real terminal width - falling back to 80 columns for non-tty
     output (piped, redirected, or the scheduled drift-monitor job whose
-    stdout is forwarded to Telegram) — and indenting every line fixes that.
+    stdout is forwarded to Telegram) - and indenting every line fixes that.
     """
-    width = shutil.get_terminal_size(fallback=(80, 24)).columns
-    return textwrap.fill(reason, width=width, initial_indent=indent, subsequent_indent=indent)
+    return wrap_block(reason, indent=indent)
 
 
 def format_results(results: list[CheckResult], *, show_all: bool = False) -> str:
@@ -1265,7 +1264,13 @@ def format_results(results: list[CheckResult], *, show_all: bool = False) -> str
         lines.append(f"All {len(results)} checks OK.")
     has_issues = any(r.status in (Status.WARN, Status.FAIL) for r in results)
     if has_issues:
-        lines.append("\nTip: run `ccst install-everything --apply` to sync skills, hooks, shell, and CLAUDE.md")
+        lines.append("")
+        lines.append(
+            wrap_block(
+                "Tip: run `ccst install-everything --apply` to sync skills, hooks, shell, and CLAUDE.md",
+                indent="",
+            )
+        )
     if not show_all:
         lines.append("\nTo see full doctor output use --all argument")
     return "\n".join(lines)

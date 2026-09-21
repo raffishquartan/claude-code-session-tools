@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -9,13 +10,30 @@ from pathlib import Path
 import pytest
 
 
-def _run(*args: str, cwd: str | None = None) -> subprocess.CompletedProcess[str]:
+def _run(
+    *args: str, cwd: str | None = None, columns: str | None = "80"
+) -> subprocess.CompletedProcess[str]:
+    """Run ccst with COLUMNS pinned (None removes it) so the developer's shell can't change the width."""
+    env = {k: v for k, v in os.environ.items() if k != "COLUMNS"}
+    if columns is not None:
+        env["COLUMNS"] = columns
     return subprocess.run(
         [sys.executable, "-m", "cc_session_tools.cli.ccst", *args],
         capture_output=True,
         text=True,
         cwd=cwd or str(Path(__file__).parent.parent),
+        env=env,
     )
+
+
+def _record(stdout: str, name: str) -> list[str]:
+    """The lines of `name`'s record: its column-0 header plus the indented lines below it."""
+    lines = stdout.splitlines()
+    start = next(i for i, ln in enumerate(lines) if ln.startswith(f"{name} "))
+    end = start + 1
+    while end < len(lines) and lines[end].startswith("    "):
+        end += 1
+    return lines[start:end]
 
 
 def _write(path: Path, data: dict) -> None:
@@ -225,15 +243,30 @@ ALL_HOOK_NAMES = (
 )
 
 
-def test_hooks_install_table_has_expected_headers(tmp_path: Path) -> None:
-    """The table has Hook/Status/Event/Description column headers."""
+def test_hooks_install_records_have_events_line_and_no_column_titles(tmp_path: Path) -> None:
+    """Each hook is a record: header line, indented `Events:` line, indented description."""
     tgt = tmp_path / "settings.json"
     _write(tgt, {})
     result = _run("hooks", "install", "--target", str(tgt))
     assert result.returncode == 0, result.stderr
-    out = result.stdout
-    for header in ("Hook", "Status", "Event", "Description"):
-        assert header in out, f"missing header {header!r} in:\n{out}"
+    for name in ALL_HOOK_NAMES:
+        record = _record(result.stdout, name)
+        assert record[1].startswith("    Events: "), record
+        assert len(record) >= 3, record
+    assert "Description" not in result.stdout
+    assert "-----" not in result.stdout
+
+
+def test_hooks_install_output_respects_terminal_width(tmp_path: Path) -> None:
+    """No indented record line exceeds COLUMNS; with COLUMNS unset the fallback is 80."""
+    tgt = tmp_path / "settings.json"
+    _write(tgt, {})
+    for columns, limit in (("80", 80), ("120", 120), (None, 80)):
+        result = _run("hooks", "install", "--target", str(tgt), columns=columns)
+        assert result.returncode == 0, result.stderr
+        for ln in result.stdout.splitlines():
+            if ln.startswith("    "):
+                assert len(ln) <= limit, f"COLUMNS={columns}: {ln!r}"
 
 
 def test_hooks_install_table_lists_all_bundled_hooks(tmp_path: Path) -> None:
@@ -291,11 +324,14 @@ def test_hooks_install_table_shows_descriptions(tmp_path: Path) -> None:
     tgt = tmp_path / "settings.json"
     _write(tgt, {})
     result = _run("hooks", "install", "--target", str(tgt))
-    # Spot-check that the description column carries meaningful text per hook
-    assert "shell commands" in result.stdout  # bash-security-review
-    assert "8-digit confirmation" in result.stdout
-    assert "last-active" in result.stdout  # after-response
-    assert "session tag" in result.stdout
+    # Descriptions wrap by width, so compare against each record's lines joined together
+    def text(name: str) -> str:
+        return " ".join(" ".join(_record(result.stdout, name)[2:]).split())
+
+    assert "shell commands" in text("bash-security-review")
+    assert "8-digit confirmation" in text("confirm-8digit")
+    assert "last-active" in text("after-response")
+    assert "session tag" in text("session-tag")
 
 
 def test_hooks_install_hook_selector_table_only_named_row(tmp_path: Path) -> None:

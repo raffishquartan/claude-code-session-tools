@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.7.1] - 2026-09-21
+
+### Fixed
+
+- `ccst hooks install` / `ccst install-everything` no longer prints the Hooks step as a table whose
+  unbounded Description column hard-wraps at the screen edge. Each hook is now a record: a
+  `name  status` line, an indented `Events:` line, then the description word-wrapped to the terminal
+  width (`COLUMNS`, else the real terminal, else 80; never below 40). A hook registered for several
+  events (`catchup`, `messaging-deliver`, `pdata-sync`) is one record, with `(new)` marking the
+  events that would be added when it is only partly installed. The column-title row and dashed rule
+  are gone.
+- The wrapper shared with `ccst doctor` no longer splits paths, hyphenated names or backticked
+  commands mid-token (previously `.pdata-` / `migrated`); a single token longer than the width now
+  overflows instead. `ccst doctor`'s fixed `Tip:` line is wrapped too.
+
 ## [3.7.0] - 2026-09-20
 
 ### Added

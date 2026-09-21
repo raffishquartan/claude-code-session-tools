@@ -112,6 +112,7 @@ from cc_session_tools.hooks_install import (
 )
 from cc_session_tools.lib import machine_identity
 from cc_session_tools.lib.hook_registry import HOOK_DESCRIPTIONS, HOOK_VERBS
+from cc_session_tools.lib.text_wrap import wrap_block
 
 if TYPE_CHECKING:
     # Type-only, so the handler's own lazy `from ... import sync_check` (this file's convention:
@@ -538,30 +539,45 @@ def _bundle_inventory(bundle: dict[str, Any]) -> list[tuple[str, str, str | None
     return out
 
 
+def _format_hooks_install_records(
+    inventory: list[tuple[str, str, str | None, str]],
+    added_keys: set[tuple[str, str | None, str]],
+) -> str:
+    """One record per hook: a `name  status` header, an indented `Events:` line, then the
+    indented, terminal-width-wrapped description. Records are separated by a blank line.
+
+    A hook registered for several events is one record; when only some of its registrations
+    would be added, those events carry a `(new)` marker. Order follows the inventory (sorted by
+    hook name).
+    """
+    by_hook: dict[str, list[tuple[bool, str]]] = {}
+    for name, event, matcher, cmd in inventory:
+        event_label = f"{event}[{matcher}]" if matcher else event
+        by_hook.setdefault(name, []).append(((event, matcher, cmd) in added_keys, event_label))
+
+    records: list[str] = []
+    for name, registrations in by_hook.items():
+        any_new = any(is_new for is_new, _ in registrations)
+        mixed = any_new and not all(is_new for is_new, _ in registrations)
+        status = "install" if any_new else "already-installed"
+        events = ", ".join(
+            f"{label} (new)" if mixed and is_new else label for is_new, label in registrations
+        )
+        lines = [f"{name}  {status}", wrap_block(f"Events: {events}")]
+        description = HOOK_DESCRIPTIONS.get(name, "")
+        if description:
+            lines.append(wrap_block(description))
+        records.append("\n".join(lines))
+    return "\n\n".join(records)
+
+
 def _print_hooks_install_table(
     inventory: list[tuple[str, str, str | None, str]],
     added_keys: set[tuple[str, str | None, str]],
 ) -> None:
-    """Print a Hook | Status | Event | Description table to stdout."""
-    headers = ("Hook", "Status", "Event", "Description")
-    if not inventory:
-        return
-
-    rows: list[tuple[str, str, str, str]] = []
-    for name, event, matcher, cmd in inventory:
-        status = "install" if (event, matcher, cmd) in added_keys else "already-installed"
-        event_label = f"{event}[{matcher}]" if matcher else event
-        description = HOOK_DESCRIPTIONS.get(name, "")
-        rows.append((name, status, event_label, description))
-
-    widths = [
-        max([len(headers[i])] + [len(r[i]) for r in rows]) for i in range(4)
-    ]
-    fmt = f"{{:<{widths[0]}}}  {{:<{widths[1]}}}  {{:<{widths[2]}}}  {{:<{widths[3]}}}"
-    print(fmt.format(*headers))
-    print(fmt.format(*("-" * w for w in widths)))
-    for row in rows:
-        print(fmt.format(*row))
+    """Print the per-hook install records to stdout."""
+    if inventory:
+        print(_format_hooks_install_records(inventory, added_keys))
 
 
 def _list_bundle_hook_names(bundle: dict[str, Any]) -> list[str]:
