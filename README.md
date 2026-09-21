@@ -871,6 +871,25 @@ ccst context-override off      # re-enable the warnings
 ccst context-override status   # report the current state
 ```
 
+### `ccst pdata readiness-scan`
+
+A read-only scan of a project's CSV files for the mechanical blockers to a `ccst pdata init`
+migration, used by the `pm-pdata-do-audit-and-prepare-to-migrate` skill and useful on its own:
+
+```sh
+ccst pdata readiness-scan --project myproject                 # compact Markdown report
+ccst pdata readiness-scan --project myproject --format json   # machine-readable
+ccst pdata readiness-scan --project myproject --path notes/ --findings-only   # one folder's findings
+```
+
+It reports ragged rows, empty/duplicate headers, mixed date formats, mixed `|`/`;` separators,
+machine-specific paths, null-like placeholder strings, duplicate rows, comment rows, repeated
+header rows, byte-order marks, CRLF line endings and unreadable files, plus a per-file inventory
+and the columns that are unique on every row. Findings carry counts and row numbers, never cell
+text, and a unique column is a fact rather than a recommended key. It exits 0 whenever the scan
+ran (findings are not failures), and 2 when the project directory does not exist. It scans exactly
+the CSVs `ccst pdata init` would classify.
+
 ### `ccst skills install`
 
 > You normally don't need this: `ccst install-everything --apply` runs it, and `ccst` runs that
