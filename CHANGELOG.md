@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.8.0] - 2026-09-21
+
+### Added
+
+- `ccst pdata readiness-scan --project NAME [--format markdown|json] [--path PREFIX]
+  [--findings-only]`: a deterministic, read-only scan of a project's CSVs for the mechanical
+  pdata-migration blockers (`ragged-rows`, `bad-header`, `mixed-date-formats`, `mixed-separators`,
+  `machine-paths`, `null-strings`, `duplicate-rows`, `comment-rows`, `repeated-header`,
+  `no-unique-column`, `bom`, `crlf`, `unreadable`) plus a per-file inventory and unique-column
+  facts. Findings carry counts and data-row numbers, never cell text. It scans exactly the CSVs
+  `ccst pdata init` would classify and exits 0 whenever the scan ran.
+
+### Changed
+
+- `pm-pdata-do-audit-and-prepare-to-migrate` runs the scan first, gives each audit agent only its
+  own domain's slice, limits agent checklists to judgement checks (naming multi-schema files and
+  comma/semicolon list columns as the scan's blind spots), and dispatches parallel agents only for
+  more than three domains. `SKILL.md` went from 14442 bytes / 199 lines to 10574 bytes / 162 lines; the
+  row_id-instability warning, checkpoint-table split and Phase 5 manifest layout are unchanged.
+  The saving claimed is fewer, exactly-derived facts per audit; a live audit's token cost was not
+  measured.
+
 ## [3.7.1] - 2026-09-21
 
 ### Fixed

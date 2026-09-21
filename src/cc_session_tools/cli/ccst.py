@@ -1858,6 +1858,28 @@ def _cmd_pdata_resolve(args: argparse.Namespace) -> int:
     return 1 if outstanding else 0
 
 
+def _cmd_pdata_readiness_scan(args: argparse.Namespace) -> int:
+    from cc_session_tools.lib.pdata import readiness, store
+
+    try:
+        root = store.project_root(args.project)
+    except ValueError as exc:
+        print(f"ccst pdata readiness-scan: {exc}", file=sys.stderr)
+        return 2
+    if not root.is_dir():
+        print(
+            f"ccst pdata readiness-scan: project directory does not exist: {root}",
+            file=sys.stderr,
+        )
+        return 2
+    report = readiness.scan_project(root, path_prefix=args.path)
+    if args.format == "json":
+        print(readiness.format_json(report))
+    else:
+        print(readiness.format_markdown(report, findings_only=args.findings_only))
+    return 0
+
+
 def _cmd_pdata_sync_check(args: argparse.Namespace) -> int:
     """The spec's "Hourly `ccsched` job" trigger: per project, rehydrate-check and - only if no
     rehydrate happened - dump-check. The whole decision lives in `pdata.sync_check` (shared with
@@ -3256,6 +3278,24 @@ def _build_parser() -> argparse.ArgumentParser:
              "the default one-line summary (--project always prints full detail)",
     )
 
+    pdata_readiness_parser = pdata_sub.add_parser(
+        "readiness-scan",
+        help="Scan a project's CSVs for pdata-migration blockers (read-only)",
+    )
+    pdata_readiness_parser.add_argument("--project", metavar="NAME", required=True)
+    pdata_readiness_parser.add_argument(
+        "--format", choices=("markdown", "json"), default="markdown",
+        help="Output format (default: markdown)",
+    )
+    pdata_readiness_parser.add_argument(
+        "--path", metavar="PREFIX", default=None,
+        help="Only scan CSVs whose project-relative path starts with PREFIX",
+    )
+    pdata_readiness_parser.add_argument(
+        "--findings-only", action="store_true",
+        help="Omit the per-file inventory from the Markdown report",
+    )
+
     pdata_dump_parser = pdata_sub.add_parser(
         "dump", help="Publish the current local DB state to .pdata-db-dump/latest.sql"
     )
@@ -3659,6 +3699,8 @@ def main() -> None:
             sys.exit(_cmd_pdata_reconcile_session_output(args))
         if args.verb == "verify":
             sys.exit(_cmd_pdata_verify(args))
+        if args.verb == "readiness-scan":
+            sys.exit(_cmd_pdata_readiness_scan(args))
         if args.verb == "dump":
             sys.exit(_cmd_pdata_dump(args))
         if args.verb == "rehydrate":
