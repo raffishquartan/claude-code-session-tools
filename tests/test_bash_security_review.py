@@ -703,7 +703,7 @@ def test_call_claude_uses_distinct_session_tag(monkeypatch, mocker):
 
     captured_env: dict = {}
 
-    def fake_run(cmd, *, input, capture_output, text, timeout, env):
+    def fake_run(cmd, *, input, capture_output, text, timeout, env, cwd=None):
         captured_env.update(env)
         class R:
             returncode = 0
@@ -727,7 +727,7 @@ def test_call_claude_preserves_parent_session_dir(monkeypatch, mocker):
 
     captured_env: dict = {}
 
-    def fake_run(cmd, *, input, capture_output, text, timeout, env):
+    def fake_run(cmd, *, input, capture_output, text, timeout, env, cwd=None):
         captured_env.update(env)
         class R:
             returncode = 0
@@ -746,7 +746,7 @@ def test_call_claude_passes_model_flag(mocker):
     the invoking session's default."""
     captured_cmd: list = []
 
-    def fake_run(cmd, *, input, capture_output, text, timeout, env):
+    def fake_run(cmd, *, input, capture_output, text, timeout, env, cwd=None):
         captured_cmd.extend(cmd)
         class R:
             returncode = 0
@@ -757,7 +757,81 @@ def test_call_claude_passes_model_flag(mocker):
 
     bsr.call_claude("some prompt", claude_bin="claude", timeout=30, model="sonnet")
 
-    assert captured_cmd == ["claude", "-p", "--model", "sonnet"]
+    assert captured_cmd[:4] == ["claude", "-p", "--model", "sonnet"]
+    assert captured_cmd[4:] == bsr.REVIEW_CLAUDE_ARGS
+
+
+def _capture_call(mocker: MockerFixture, monkeypatch: pytest.MonkeyPatch | None = None) -> dict[str, Any]:
+    captured: dict[str, Any] = {}
+
+    def fake_run(cmd, *, input, capture_output, text, timeout, env, cwd=None):
+        captured.update(cmd=list(cmd), env=dict(env), cwd=cwd)
+        captured["cwd_listing"] = sorted(Path(cwd).iterdir()) if cwd else None
+        class R:
+            returncode = 0
+            stdout = "SUMMARY: test\nRISKS: none\nVERDICT: safe"
+        return R()
+
+    mocker.patch("hooks.bash_security_review.subprocess.run", side_effect=fake_run)
+    bsr.call_claude("some prompt", claude_bin="claude", timeout=30, model="sonnet")
+    return captured
+
+
+def test_call_claude_loads_no_slash_commands_mcp_tools_or_transcript(mocker: MockerFixture) -> None:
+    cmd = _capture_call(mocker)["cmd"]
+
+    assert "--disable-slash-commands" in cmd
+    assert "--strict-mcp-config" in cmd
+    assert "--no-session-persistence" in cmd
+    assert cmd[cmd.index("--tools") + 1] == ""
+    assert "--exclude-dynamic-system-prompt-sections" in cmd
+
+
+def test_call_claude_limits_setting_sources_and_replaces_system_prompt(mocker: MockerFixture) -> None:
+    cmd = _capture_call(mocker)["cmd"]
+
+    assert cmd[cmd.index("--setting-sources") + 1] == "local"
+    prompt = cmd[cmd.index("--system-prompt") + 1]
+    assert "security reviewer" in prompt
+    assert "VERDICT" in prompt and "SUMMARY" in prompt and "RISKS" in prompt
+
+
+def test_call_claude_never_uses_bare_mode(mocker: MockerFixture) -> None:
+    # --bare needs ANTHROPIC_API_KEY and ignores OAuth, so it cannot work on a subscription.
+    assert "--bare" not in _capture_call(mocker)["cmd"]
+
+
+def test_call_claude_runs_from_an_empty_scratch_directory(mocker: MockerFixture) -> None:
+    import os
+
+    captured = _capture_call(mocker)
+
+    assert captured["cwd"] is not None
+    assert Path(captured["cwd"]).resolve() != Path(os.getcwd()).resolve()
+    assert captured["cwd_listing"] == []
+
+
+def test_call_claude_does_not_redirect_the_claude_config_dir(
+    mocker: MockerFixture, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A different CLAUDE_CONFIG_DIR changes where OAuth credentials are looked up and makes the
+    # review child unauthenticated, so the slimming must not rely on it.
+    monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)
+
+    assert "CLAUDE_CONFIG_DIR" not in _capture_call(mocker)["env"]
+
+
+def test_call_claude_reports_a_nonzero_exit_as_unavailable(mocker: MockerFixture) -> None:
+    class R:
+        returncode = 2
+        stdout = ""
+
+    mocker.patch("hooks.bash_security_review.subprocess.run", return_value=R())
+
+    assert bsr.call_claude("p", claude_bin="claude", timeout=30, model="sonnet") == (
+        None,
+        "claude exited 2",
+    )
 
 
 def test_run_defaults_review_model_to_sonnet(
