@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.10.2] - 2026-09-29
+
+### Fixed
+
+- **The context-window warning now recognises Sonnet 5.5, Opus 5.5 and Fable 5.1.** Their ids
+  (`claude-sonnet-5-5`, `claude-opus-5-5`, `claude-fable-5-1`) were missing from
+  `hooks/model_info.py`, so a Sonnet 5.5 session at 266k tokens was told it was at "133% of an
+  unrecognized model's 200k-token window" instead of about 27% of its 1M-token window. The three
+  ids get 1,000,000-token windows and proper names. Their per-turn cost estimate reuses each
+  family's existing input price (Sonnet $3, Opus $5, Fable $10 per million tokens) - an
+  assumption, not a published figure; it only feeds the rough "~$/turn" estimate.
+- A dated snapshot id (`<known-id>-YYYYMMDD`) now resolves to its undated model. This replaces the
+  Haiku 4.5 prefix rule, so an id that merely begins with a known id (for example
+  `claude-haiku-4-5-garbage`) is now unrecognized like any other unknown id.
+
+### Known, not changed here
+
+- `claude_code_usage`'s pricing table disagrees with this module (Opus 4.x/5.x priced at the old
+  $15 input, Haiku 4.5 $0.80 vs $1.00) and has no Fable/Mythos 5.x rows, so cost reports
+  overstate Opus and report zero for Fable.
+- The warning hook counts zero tokens when a session's last assistant entry is a `<synthetic>`
+  stub, going silent for that turn.
+
 ## [3.10.1] - 2026-09-29
 
 ### Fixed
