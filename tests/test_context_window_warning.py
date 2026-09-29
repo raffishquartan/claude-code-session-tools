@@ -180,3 +180,26 @@ def test_override_end_to_end_via_real_store(tmp_path, monkeypatch, capsys):
     out = capsys.readouterr()
     assert rc == 0
     assert out.out == ""
+
+
+@pytest.mark.parametrize(
+    ("model_id", "name", "cost"),
+    [
+        ("claude-sonnet-5-5", "Sonnet 5.5", "0.07"),
+        ("claude-opus-5-5", "Opus 5.5", "0.13"),
+        ("claude-fable-5-1", "Fable 5.1", "0.26"),
+    ],
+)
+def test_new_5x_models_are_measured_against_their_one_million_token_window(
+    tmp_path, monkeypatch, capsys, model_id, name, cost
+):
+    p = tmp_path / "t.jsonl"
+    _write_transcript(p, [{"type": "assistant", "message": {"model": model_id,
+        "usage": {"input_tokens": 266000, "cache_creation_input_tokens": 0, "cache_read_input_tokens": 0}}}])
+    monkeypatch.setattr(cww, "_is_overridden", lambda session_id: False)
+    rc, out = _run_main(monkeypatch, capsys, {"transcript_path": str(p), "session_id": "s1"})
+    reason = json.loads(out.out)["reason"]
+    assert "~27% of the 1M-token window" in reason
+    assert name in reason
+    assert f"~${cost}/turn" in reason
+    assert "unrecognized" not in reason
