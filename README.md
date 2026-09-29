@@ -135,8 +135,8 @@ Messages can also be addressed to a specific session (`--to-session`) or to a fr
 description for whichever session picks it up first (`--to-description`) - project-
 addressed is by far the most common pattern in practice.
 
-The easiest way to use sessions is just to tell your session to send a message to
-another session (e.g. by name tag and/or location).
+The easiest way to use messages when you need them is just to tell your session to send 
+a message to another session (e.g. by name tag and/or location).
 
 ## Scheduled housekeeping: `ccsched`
 
