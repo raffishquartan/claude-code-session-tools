@@ -112,13 +112,41 @@ def project_db_dir_override(rehearse: Path | None) -> Iterator[None]:
     override_dir = rehearse / REHEARSAL_DB_DIRNAME
     previous = os.environ.get(store.PROJECT_DB_DIR_ENV)
     os.environ[store.PROJECT_DB_DIR_ENV] = str(override_dir)
+    _live_db_dir_env_stack.append(previous)
     try:
         yield
     finally:
-        if previous is None:
-            os.environ.pop(store.PROJECT_DB_DIR_ENV, None)
-        else:
-            os.environ[store.PROJECT_DB_DIR_ENV] = previous
+        _live_db_dir_env_stack.pop()
+        _restore_db_dir_env(previous)
+
+
+# The CCST_PROJECT_DB_DIR value in effect before each active project_db_dir_override (None =
+# unset), outermost first - what live_project_db_dir() restores.
+_live_db_dir_env_stack: list[str | None] = []
+
+
+def _restore_db_dir_env(value: str | None) -> None:
+    if value is None:
+        os.environ.pop(store.PROJECT_DB_DIR_ENV, None)
+    else:
+        os.environ[store.PROJECT_DB_DIR_ENV] = value
+
+
+@contextmanager
+def live_project_db_dir() -> Iterator[None]:
+    """Inside a project_db_dir_override block, temporarily point store.db_path() back at the
+    real per-project .db dir. For questions about the machine rather than the rehearsal copy
+    (e.g. "is this project already migrated here?"): a `cp -r` rehearsal copy never contains the
+    real .db, so the sandbox always answers "no". No-op outside an override."""
+    if not _live_db_dir_env_stack:
+        yield
+        return
+    inside = os.environ.get(store.PROJECT_DB_DIR_ENV)
+    _restore_db_dir_env(_live_db_dir_env_stack[0])
+    try:
+        yield
+    finally:
+        _restore_db_dir_env(inside)
 
 
 @contextmanager
