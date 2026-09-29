@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import time
+from collections.abc import Callable
 from pathlib import Path
 
 from cc_session_tools.lib.pdata.init_paths import (
@@ -59,6 +60,7 @@ def _write_pointer_file(*, project_root: Path, project: str, entry: ManifestEntr
 def archive_entries(
     *, project_root: Path, entries: list[ManifestEntry], project: str,
     write_pointer_files: bool = True,
+    on_archived: Callable[[ManifestEntry], None] | None = None,
 ) -> None:
     """Move every db-owned entry's source file into project_root/.pdata-migrated/,
     preserving its relative path, and append one line per entry to MANIFEST.md.
@@ -69,7 +71,11 @@ def archive_entries(
     Markdown pointer file back at each entry's original path so anything else in the
     project that cites the old path by name finds a live signpost instead of a silent
     404. Pass write_pointer_files=False (--leave-no-pointer-files at the CLI) to
-    suppress this."""
+    suppress this.
+
+    `on_archived`, if given, is called with each entry immediately after its source has been
+    moved (before its log line and pointer file are written), so a caller that sees this
+    function raise part-way knows exactly which entries were already cut over."""
     if not entries:
         return
     archive_root = project_root / MIGRATED_ARCHIVE_DIRNAME
@@ -82,6 +88,8 @@ def archive_entries(
             destination = archive_root / entry.path
             destination.parent.mkdir(parents=True, exist_ok=True)
             source.rename(destination)
+            if on_archived is not None:
+                on_archived(entry)
             log.write(
                 f"- {now} — {entry.path} — migrated source, superseded by ccst pdata "
                 f"(record_group={entry.db_group()})\n"

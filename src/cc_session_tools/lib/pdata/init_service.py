@@ -213,6 +213,69 @@ def _rollback(*, project: str, created_ids: list[int]) -> list[str]:
     return rollback_failures
 
 
+def _rollback_after_error(
+    exc: BaseException, *, project: str, created_ids: list[int],
+    on_progress: Callable[[str], None] | None,
+) -> None:
+    """Roll back `created_ids` after an error `write()` did not anticipate, without ever
+    replacing `exc` (the caller re-raises it): a rollback that itself fails is reported through
+    `on_progress` and attached to `exc` as a note naming every record id still live, so the
+    manual cleanup the failure implies is not a hunt."""
+    if not created_ids:
+        return
+    try:
+        failures = _rollback(project=project, created_ids=created_ids)
+    except Exception as rollback_exc:
+        note = (
+            f"rollback of {len(created_ids)} inserted row(s) aborted: {rollback_exc!r} - rows "
+            f"from this run may still be live; record ids: {created_ids}"
+        )
+        exc.add_note(note)
+        _emit(on_progress, note)
+        return
+    rolled_back = len(created_ids) - len(failures)
+    _emit(
+        on_progress,
+        f"Unexpected {type(exc).__name__} - rolled back {rolled_back} of "
+        f"{len(created_ids)} inserted row(s)",
+    )
+    if failures:
+        exc.add_note("rows from this run still live:\n" + "\n".join(failures))
+        for failure in failures:
+            _emit(on_progress, f"  {failure}")
+
+
+def _recover_from_failed_cutover(
+    exc: BaseException, *, project: str, m: Manifest, proposal_path: Path,
+    written_entries: list[ManifestEntry], archived: list[ManifestEntry],
+    entry_rows: dict[str, list[tuple[int, ImportRow]]],
+    on_progress: Callable[[str], None] | None,
+) -> None:
+    """Cutover failed part-way. An entry whose source was already moved into the archive is cut
+    over: its rows are its live copy, so they stay and the entry is marked migrated (a rerun then
+    skips it). An entry still in place has its rows rolled back, so a rerun imports it once
+    rather than twice."""
+    if archived:
+        stamp = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+        for entry in archived:
+            entry.migrated_at = stamp
+        try:
+            manifest.save(m, proposal_path)
+        except Exception as save_exc:
+            exc.add_note(
+                f"could not record {len(archived)} already cut-over entr(ies) as migrated in "
+                f"{proposal_path}: {save_exc!r}; mark these migrated by hand before re-running: "
+                f"{', '.join(e.path for e in archived)}"
+            )
+    archived_paths = {e.path for e in archived}
+    pending_ids = [
+        record_id
+        for entry in written_entries if entry.path not in archived_paths
+        for record_id, _ in entry_rows[entry.path]
+    ]
+    _rollback_after_error(exc, project=project, created_ids=pending_ids, on_progress=on_progress)
+
+
 def _check_db_not_locked(project: str) -> None:
     """Pre-flight concurrency guard (inter-session message 20260819T114156Z-3ec7,
     gap #2): refuse to start --write if another connection already holds a write
@@ -432,105 +495,125 @@ def write(
         db_owned = [e for e in m.entries if e.classification == "db-owned"]
         already_migrated = [e for e in db_owned if e.migrated_at is not None]
         to_import = [e for e in db_owned if e.migrated_at is None]
-        _emit(on_progress, f"Importing {len(to_import)} file(s)...")
-        if already_migrated:
-            _emit(
-                on_progress,
-                f"  skipping {len(already_migrated)} already-migrated file(s): "
-                f"{', '.join(e.path for e in already_migrated)}",
-            )
-        for entry in to_import:
-            try:
-                source_path = project_root / entry.path
-                if not source_path.exists():
-                    # entry.migrated_at is None here (to_import excludes already-migrated
-                    # entries above), so this is not the ordinary "already cut over by an
-                    # earlier --write" case — the source is genuinely missing for an entry
-                    # this run believes still needs importing. Fail with a specific,
-                    # actionable message (still caught by this loop's own except clause
-                    # below, so it contributes to `reasons`/rollback exactly like any other
-                    # per-entry import failure) instead of a bare FileNotFoundError only
-                    # discoverable via the rollback reasons list.
-                    raise ValueError(
-                        f"{entry.path}: marked db-owned with no migrated_at, but its source "
-                        f"file does not exist at {source_path} — if this entry was already "
-                        f"migrated by another means, set its classification to folder-owned "
-                        f"(or otherwise correct the manifest) before running --write again"
-                    )
-                _emit(on_progress, f"  importing {entry.path} -> group={entry.db_group()}...")
-                for spec in entry.fields:
-                    service.schema_add_field(
-                        project=project, record_group=entry.db_group(),
-                        field_name=spec.name, sql_type=spec.sql_type,
-                        description=spec.description, default=spec.default,
-                    )
-                rows_for_entry: list[tuple[int, ImportRow]] = []
-                for row in import_entry(project_root, entry):
-                    record = service.add_record(
-                        project=project, record_group=entry.db_group(),
-                        content=row.content, file_path=row.file_path,
-                        fields=row.fields, created_at=row.created_at,
-                    )
-                    created_ids.append(record.id)
-                    rows_for_entry.append((record.id, row))
-                entry_rows[entry.path] = rows_for_entry
-                _emit(on_progress, f"    {len(rows_for_entry)} row(s) imported")
-                written_entries.append(entry)
-            except (ValueError, OSError, csv.Error) as exc:
-                reasons.append(f"{entry.path}: {exc}")
-
-        _emit(on_progress, "Verifying imported rows...")
-        reasons.extend(
-            _verify(project=project, project_root=project_root,
-                    written_entries=written_entries, entry_rows=entry_rows)
-        )
-
-        if reasons:
-            _emit(on_progress, "Verification failed — rolling back inserted rows...")
-            return WriteResult(
-                created_record_ids=[], entries_written=[], backup_path=None,
-                failure=WriteFailure(
-                    reasons=reasons + _rollback(project=project, created_ids=created_ids)
-                ),
-            )
-
-        # Still inside both overrides: a rehearsed run's backup must land in the
-        # rehearsal sandbox (backup_dir_override), never in the real backup dir.
-        _emit(on_progress, "Backing up project and database before cutover...")
+        # Everything from the first insert through the backup either returns a WriteResult
+        # (rolling back by hand) or, for any exception this code did not anticipate, rolls the
+        # inserted rows back here before re-raising - never leaves them live with the manifest
+        # unmarked and cutover unrun.
         try:
-            backup_path = backup.create_backup(
-                project=project, project_root=project_root, on_progress=on_progress,
-            )
-            _emit(on_progress, f"Backup written: {backup_path}")
-        except backup.BackupError as exc:
-            _emit(on_progress, "Backup failed — rolling back inserted rows...")
-            return WriteResult(
-                created_record_ids=[], entries_written=[], backup_path=None,
-                failure=WriteFailure(
-                    reasons=[str(exc)] + _rollback(project=project, created_ids=created_ids)
-                ),
+            _emit(on_progress, f"Importing {len(to_import)} file(s)...")
+            if already_migrated:
+                _emit(
+                    on_progress,
+                    f"  skipping {len(already_migrated)} already-migrated file(s): "
+                    f"{', '.join(e.path for e in already_migrated)}",
+                )
+            for entry in to_import:
+                try:
+                    source_path = project_root / entry.path
+                    if not source_path.exists():
+                        # entry.migrated_at is None here (to_import excludes already-migrated
+                        # entries above), so this is not the ordinary "already cut over by an
+                        # earlier --write" case — the source is genuinely missing for an entry
+                        # this run believes still needs importing. Fail with a specific,
+                        # actionable message (still caught by this loop's own except clause
+                        # below, so it contributes to `reasons`/rollback exactly like any other
+                        # per-entry import failure) instead of a bare FileNotFoundError only
+                        # discoverable via the rollback reasons list.
+                        raise ValueError(
+                            f"{entry.path}: marked db-owned with no migrated_at, but its source "
+                            f"file does not exist at {source_path} — if this entry was already "
+                            f"migrated by another means, set its classification to folder-owned "
+                            f"(or otherwise correct the manifest) before running --write again"
+                        )
+                    _emit(on_progress, f"  importing {entry.path} -> group={entry.db_group()}...")
+                    for spec in entry.fields:
+                        service.schema_add_field(
+                            project=project, record_group=entry.db_group(),
+                            field_name=spec.name, sql_type=spec.sql_type,
+                            description=spec.description, default=spec.default,
+                        )
+                    rows_for_entry: list[tuple[int, ImportRow]] = []
+                    for row in import_entry(project_root, entry):
+                        record = service.add_record(
+                            project=project, record_group=entry.db_group(),
+                            content=row.content, file_path=row.file_path,
+                            fields=row.fields, created_at=row.created_at,
+                        )
+                        created_ids.append(record.id)
+                        rows_for_entry.append((record.id, row))
+                    entry_rows[entry.path] = rows_for_entry
+                    _emit(on_progress, f"    {len(rows_for_entry)} row(s) imported")
+                    written_entries.append(entry)
+                except (ValueError, OSError, csv.Error) as exc:
+                    reasons.append(f"{entry.path}: {exc}")
+
+            _emit(on_progress, "Verifying imported rows...")
+            reasons.extend(
+                _verify(project=project, project_root=project_root,
+                        written_entries=written_entries, entry_rows=entry_rows)
             )
 
-    _emit(on_progress, f"Cutting over {len(written_entries)} file(s)...")
-    cutover.archive_entries(
-        project_root=project_root, entries=written_entries, project=project,
-        write_pointer_files=not leave_no_pointer_files,
-    )
-    # Mark every entry this run actually cut over as migrated, and persist that back to
-    # the manifest — write() only ever `manifest.load`s otherwise, so without this a later
-    # --write would re-attempt (and, pre-fix, roll back) these same now-archived entries.
-    # written_entries holds the same ManifestEntry objects m.entries does (see the
-    # `to_import`/`written_entries.append(entry)` loop above), so mutating here mutates m.
-    migrated_at = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
-    for entry in written_entries:
-        entry.migrated_at = migrated_at
-    manifest.save(m, proposal_path)
-    return WriteResult(
-        created_record_ids=created_ids,
-        entries_written=[e.path for e in written_entries],
-        backup_path=backup_path, failure=None,
-        report=_render_diff_report(written_entries=written_entries, entry_rows=entry_rows),
-    )
+            if reasons:
+                _emit(on_progress, "Verification failed — rolling back inserted rows...")
+                return WriteResult(
+                    created_record_ids=[], entries_written=[], backup_path=None,
+                    failure=WriteFailure(
+                        reasons=reasons + _rollback(project=project, created_ids=created_ids)
+                    ),
+                )
+
+            # Still inside both overrides: a rehearsed run's backup must land in the
+            # rehearsal sandbox (backup_dir_override), never in the real backup dir.
+            _emit(on_progress, "Backing up project and database before cutover...")
+            try:
+                backup_path = backup.create_backup(
+                    project=project, project_root=project_root, on_progress=on_progress,
+                )
+                _emit(on_progress, f"Backup written: {backup_path}")
+            except backup.BackupError as exc:
+                _emit(on_progress, "Backup failed — rolling back inserted rows...")
+                return WriteResult(
+                    created_record_ids=[], entries_written=[], backup_path=None,
+                    failure=WriteFailure(
+                        reasons=[str(exc)] + _rollback(project=project, created_ids=created_ids)
+                    ),
+                )
+        except BaseException as exc:
+            _rollback_after_error(
+                exc, project=project, created_ids=created_ids, on_progress=on_progress,
+            )
+            raise
+
+        _emit(on_progress, f"Cutting over {len(written_entries)} file(s)...")
+        archived: list[ManifestEntry] = []
+        try:
+            cutover.archive_entries(
+                project_root=project_root, entries=written_entries, project=project,
+                write_pointer_files=not leave_no_pointer_files, on_archived=archived.append,
+            )
+            # Mark every entry this run actually cut over as migrated, and persist that back to
+            # the manifest — write() only ever `manifest.load`s otherwise, so without this a
+            # later --write would re-attempt (and, pre-fix, roll back) these same now-archived
+            # entries. written_entries holds the same ManifestEntry objects m.entries does (see
+            # the `to_import`/`written_entries.append(entry)` loop above), so mutating here
+            # mutates m.
+            migrated_at = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+            for entry in written_entries:
+                entry.migrated_at = migrated_at
+            manifest.save(m, proposal_path)
+        except BaseException as exc:
+            _recover_from_failed_cutover(
+                exc, project=project, m=m, proposal_path=proposal_path,
+                written_entries=written_entries, archived=archived, entry_rows=entry_rows,
+                on_progress=on_progress,
+            )
+            raise
+        return WriteResult(
+            created_record_ids=created_ids,
+            entries_written=[e.path for e in written_entries],
+            backup_path=backup_path, failure=None,
+            report=_render_diff_report(written_entries=written_entries, entry_rows=entry_rows),
+        )
 
 
 def _verify(
@@ -544,12 +627,18 @@ def _verify(
     reasons: list[str] = []
     for entry in written_entries:
         rows = entry_rows[entry.path]
-        expected_count = count_source_rows(project_root, entry)
-        if len(rows) != expected_count:
+        try:
+            expected_count = count_source_rows(project_root, entry)
+        except (ValueError, OSError, csv.Error) as exc:
             reasons.append(
-                f"{entry.path}: imported {len(rows)} row(s) but re-counting the source "
-                f"gives {expected_count} — entry-count parity check failed"
+                f"{entry.path}: could not re-count the source rows for the parity check: {exc}"
             )
+        else:
+            if len(rows) != expected_count:
+                reasons.append(
+                    f"{entry.path}: imported {len(rows)} row(s) but re-counting the source "
+                    f"gives {expected_count} — entry-count parity check failed"
+                )
         for record_id, import_row in rows:
             record = service.get_record(project=project, record_id=record_id)
             assert record is not None, (
@@ -562,7 +651,17 @@ def _verify(
                 )
             if record.file_path:
                 target = project_root / record.file_path
-                if not target.exists():
+                try:
+                    resolves = target.exists()
+                except OSError as exc:
+                    # A string the OS rejects outright (e.g. "File name too long") raises
+                    # instead of returning False; it is the same "does not resolve" outcome.
+                    reasons.append(
+                        f"{entry.path}: record {record_id} file_path "
+                        f"{record.file_path!r} cannot be checked under {project_root}: {exc}"
+                    )
+                    continue
+                if not resolves:
                     reasons.append(
                         f"{entry.path}: record {record_id} file_path "
                         f"{record.file_path!r} does not resolve under {project_root}"
