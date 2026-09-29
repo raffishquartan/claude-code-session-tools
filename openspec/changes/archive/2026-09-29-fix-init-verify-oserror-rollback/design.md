@@ -59,4 +59,4 @@ rehearse fix (shipped in 3.9.1).
 
 ## Migration Plan
 
-No on-disk or interface change. Ship as 3.9.3.
+No on-disk or interface change. Ship as 3.10.1.

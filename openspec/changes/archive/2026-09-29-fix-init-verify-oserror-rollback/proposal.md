@@ -49,4 +49,4 @@ the adopt-from-dump branch", was already fixed and released in 3.9.1 (change
 ## Impact
 
 - `src/cc_session_tools/lib/pdata/init_service.py` (`_verify`, `write`), `src/cc_session_tools/lib/pdata/cutover.py`, `tests/pdata/test_init_service.py`.
-- CHANGELOG entry and patch version bump (3.9.3); no interface or on-disk change.
+- CHANGELOG entry and patch version bump (3.10.1); no interface or on-disk change.

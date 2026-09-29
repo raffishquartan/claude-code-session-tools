@@ -10,4 +10,4 @@
 
 ## 3. Release
 
-- [ ] 3.1 Add the CHANGELOG entry and bump to 3.9.3 in `pyproject.toml`, run `uv lock`; verify `uv run pytest -q`, `mypy` on the changed modules, and `openspec validate fix-init-verify-oserror-rollback --strict` all exit 0
+- [x] 3.1 Add the CHANGELOG entry and bump to 3.10.1 in `pyproject.toml`, run `uv lock`; verify `uv run pytest -q`, `mypy` on the changed modules, and `openspec validate fix-init-verify-oserror-rollback --strict` all exit 0

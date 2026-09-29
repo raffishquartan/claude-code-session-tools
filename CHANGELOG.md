@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.10.1] - 2026-09-29
+
+### Fixed
+
+- **`ccst pdata init --write` no longer leaves rows live when something goes wrong after inserting
+  them.** A `file_path` string the operating system rejects (for example `File name too long`,
+  reachable when a `file_path_column` maps a column holding brace-expansion shorthand) made the
+  verification's existence check raise `OSError`, which escaped `write()` past its rollback: every
+  imported row stayed live with no cutover, and recovery meant soft-deleting each row by hand.
+  Now:
+  - that `OSError`, and any error re-counting a source file for the parity check, is a
+    verification failure reason and the run rolls back as usual;
+  - any other unexpected error (including Ctrl-C) between the first insert and the backup rolls
+    the run's rows back and then re-raises unchanged. A rollback that itself fails no longer hides
+    the original error: the record ids still live are printed and attached to it;
+  - a failure part-way through cutover keeps the rows of entries whose source was already moved
+    into `.pdata-migrated/` and marks them migrated, and rolls back the rest. Previously the rows
+    stayed live with the manifest unmarked, and a rerun imported every row a second time without
+    error.
+- The report that `--rehearse` wrongly takes the adopt-from-dump branch was already fixed in 3.9.1.
+
 ## [3.10.0] - 2026-09-29
 
 ### Added
