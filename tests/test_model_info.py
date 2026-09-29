@@ -1,31 +1,33 @@
 from hooks import model_info
 
+# (model id, context window, published cache-read price per MTok, display name)
 CASES = [
-    ("claude-fable-5", 1_000_000, 10.00, "Fable 5"),
-    ("claude-mythos-5", 1_000_000, 10.00, "Mythos 5"),
-    ("claude-opus-5", 1_000_000, 5.00, "Opus 5"),
-    ("claude-opus-4-8", 1_000_000, 5.00, "Opus 4.8"),
-    ("claude-opus-4-7", 1_000_000, 5.00, "Opus 4.7"),
-    ("claude-opus-4-6", 1_000_000, 5.00, "Opus 4.6"),
-    ("claude-sonnet-5", 1_000_000, 3.00, "Sonnet 5"),
-    ("claude-sonnet-4-6", 1_000_000, 3.00, "Sonnet 4.6"),
-    ("claude-sonnet-5-5", 1_000_000, 3.00, "Sonnet 5.5"),
-    ("claude-opus-5-5", 1_000_000, 5.00, "Opus 5.5"),
-    ("claude-fable-5-1", 1_000_000, 10.00, "Fable 5.1"),
-    ("claude-haiku-4-5-20251001", 200_000, 1.00, "Haiku 4.5"),
+    ("claude-fable-5", 1_000_000, 1.00, "Fable 5"),
+    ("claude-mythos-5", 1_000_000, 1.00, "Mythos 5"),
+    ("claude-opus-5", 1_000_000, 0.50, "Opus 5"),
+    ("claude-opus-4-8", 1_000_000, 0.50, "Opus 4.8"),
+    ("claude-opus-4-7", 1_000_000, 0.50, "Opus 4.7"),
+    ("claude-opus-4-6", 1_000_000, 0.50, "Opus 4.6"),
+    ("claude-sonnet-5", 1_000_000, 0.20, "Sonnet 5"),
+    ("claude-sonnet-4-6", 1_000_000, 0.30, "Sonnet 4.6"),
+    ("claude-sonnet-5-5", 1_000_000, 0.20, "Sonnet 5.5"),
+    ("claude-opus-5-5", 1_000_000, 0.20, "Opus 5.5"),
+    ("claude-fable-5-1", 1_000_000, 0.25, "Fable 5.1"),
+    ("claude-mythos-5-1", 1_000_000, 0.25, "Mythos 5.1"),
+    ("claude-haiku-4-5-20251001", 200_000, 0.10, "Haiku 4.5"),
 ]
 
 
 def test_known_models():
     for model_id, window, price, name in CASES:
         assert model_info.context_window(model_id) == window
-        assert model_info.input_price_per_mtok(model_id) == price
+        assert model_info.cache_read_price_per_mtok(model_id) == price
         assert model_info.display_name(model_id) == name
 
 
 def test_unrecognized_model_falls_back():
     assert model_info.context_window("claude-nonexistent-9") == 200_000
-    assert model_info.input_price_per_mtok("claude-nonexistent-9") == 5.00
+    assert model_info.cache_read_price_per_mtok("claude-nonexistent-9") == 0.50
     assert model_info.display_name("claude-nonexistent-9") == "an unrecognized model"
 
 
@@ -41,7 +43,7 @@ def test_dated_snapshot_ids_resolve_like_their_family_id():
             continue
         dated = f"{base}-20261001"
         assert model_info.context_window(dated) == window
-        assert model_info.input_price_per_mtok(dated) == price
+        assert model_info.cache_read_price_per_mtok(dated) == price
         assert model_info.display_name(dated) == name
 
 
