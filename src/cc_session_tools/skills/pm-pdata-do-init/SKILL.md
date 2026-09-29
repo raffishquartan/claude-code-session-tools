@@ -210,6 +210,22 @@ Step 3's garbled-header recipe) - so anything else in the project citing the old
 a live signpost instead of a silent 404. Pass `--leave-no-pointer-files` if this run shouldn't
 leave one (e.g. a rehearsal, or a project convention against extra files at migrated paths).
 
+### Then run both post-migration skills
+
+After a successful `--write` (not after a dry-run or a rehearsal), update everything that still
+describes or uses the old flat-file layout. Run these in order, each in its own fresh-context
+`Agent` subagent whose prompt begins with `cd ~/cc/<project>` - not inline in this session, which
+has just written the migration and would rationalize away stale references it remembers:
+
+1. `pm-pdata-do-update-project-docs` - rewrites the project's `CLAUDE.md` and other top-level docs
+   to name the pdata record_groups and `ccst pdata` commands, and reports folder-layout drift.
+2. `pm-pdata-do-update-consuming-skills` - finds skills that literally reference the old paths and
+   rewrites direct reads/writes to `ccst pdata` commands, flagging anything it cannot rewrite
+   mechanically.
+
+Relay each subagent's report to the user, including anything flagged for a human decision. If a
+later `--write` round adds more record groups, run both again; they are safe to re-run.
+
 ## 8. Rollback, if something's found wrong post-cutover
 
 There is no `--rollback` flag. Recover by hand:

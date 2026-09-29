@@ -49,19 +49,21 @@ def test_pdata_init_dry_run_classifies_and_writes_proposal(base_env, tmp_path):
     assert (project_dir / init_paths.PROPOSAL_FILENAME).exists()
 
 
-def test_pdata_init_dry_run_prints_doc_update_prompt_path(base_env, tmp_path):
+def test_pdata_init_dry_run_names_doc_update_skill(base_env, tmp_path):
     project_dir = tmp_path / "projects" / "demo"
     project_dir.mkdir(parents=True)
     (project_dir / "ideas.csv").write_text("idea\nfirst\n")
 
     r = _run(base_env, "pdata", "init", "--project", "demo")
     assert r.returncode == 0, r.stderr
-    assert "pdata-migration-claude-md-update.md" in r.stdout
-    # Must tell the user to run it in a fresh session started in the project dir - the
-    # prompt's own Step 1 aborts otherwise, so a bare path alone invites running it inline
-    # in whatever session called `ccst pdata init`.
-    assert "new Claude Code session" in r.stdout
+    assert "pm-pdata-do-update-project-docs" in r.stdout
+    assert "pm-pdata-do-update-consuming-skills" not in r.stdout  # only relevant after --write
+    # Must tell the user to run it in a fresh context rooted at the project dir - the skill's
+    # Step 1 aborts otherwise, so a bare name alone invites running it inline in whatever
+    # session called `ccst pdata init`.
+    assert "fresh context" in r.stdout
     assert str(project_dir) in r.stdout
+    assert "pdata-migration-claude-md-update" not in r.stdout
 
 
 def test_pdata_init_rejects_bad_project_name(base_env):
@@ -221,9 +223,13 @@ def test_pdata_init_write_success_ends_with_success_sentinel_and_verify_command(
 
     assert r_write.returncode == 0, r_write.stderr
     assert "ccst pdata verify --project demo --full" in r_write.stdout
-    assert "pdata-migration-claude-md-update.md" in r_write.stdout
-    assert "pdata-migration-skills-update.md" in r_write.stdout
-    assert r_write.stdout.count("new Claude Code session") == 2  # one per prompt reminder
+    assert "pm-pdata-do-update-project-docs" in r_write.stdout
+    assert "pm-pdata-do-update-consuming-skills" in r_write.stdout
+    assert r_write.stdout.index("pm-pdata-do-update-project-docs") < r_write.stdout.index(
+        "pm-pdata-do-update-consuming-skills"
+    )
+    assert r_write.stdout.count("fresh context") == 2  # one per skill reminder
+    assert "pdata-migration-skills-update" not in r_write.stdout
     assert str(project_dir) in r_write.stdout
     assert r_write.stdout.rstrip().splitlines()[-1] == "SUCCESS"
 

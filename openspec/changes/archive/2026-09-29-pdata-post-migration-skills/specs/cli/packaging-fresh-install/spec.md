@@ -1,12 +1,4 @@
-# cli/packaging-fresh-install Specification
-
-## Purpose
-
-Defines what a fresh install of this package (a machine with no prior editable checkout) must be
-able to locate on disk, so packaging regressions in bundled data (skills, hook config)
-are caught by an automated test rather than discovered by a user's first `ccst` invocation.
-
-## Requirements
+## MODIFIED Requirements
 
 ### Requirement: A fresh install locates all bundled data directories
 Installing this package into a clean environment (no source checkout, no editable install) via a

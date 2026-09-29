@@ -138,17 +138,6 @@ Both SHALL be flagged as explicit open decisions for the user, never silently re
   candidate under current tooling, distinct from an append-only file with the same update
   frequency
 
-### Requirement: The post-write prompts accept a dispatched subagent as a fresh-context substitute
-`pdata-migration-claude-md-update.md` and `pdata-migration-skills-update.md` SHALL state that
-running in a fresh context is the requirement, and that a dispatched `Agent` subagent from the
-orchestrating session is an acceptable substitute for shelling out to a literal new `claude -p`
-process.
-
-#### Scenario: An orchestrating session runs the post-write prompts
-- **WHEN** a session that just completed `ccst pdata init --write` runs the two post-write prompts
-- **THEN** the prompts' own instructions permit dispatching each as an `Agent` subagent from the
-  orchestrating session, without requiring a separate `claude -p` invocation
-
 ### Requirement: The audit skill runs the readiness scan before dispatching agents
 `pm-pdata-do-audit-and-prepare-to-migrate`'s `SKILL.md` SHALL instruct the session to run
 `ccst pdata readiness-scan` on the project before dispatching any audit agent, and to pass each

@@ -160,56 +160,25 @@ def _discover_bundle() -> Path:
     )
 
 
-def _discover_prompts_dir() -> Path:
-    """Return the bundled prompts/ directory (pdata-migration follow-up prompts).
-
-    prompts/ is packaged inside cc_session_tools the same way skills/ and config/ are (see
-    _discover_source_dir) - src/cc_session_tools/cli/ccst.py -> ../prompts. No install-location
-    fallback, same reasoning as the other two: a fallback here would just mask a broken install.
-    """
-    candidate = Path(__file__).resolve().parent.parent / "prompts"
-    if candidate.is_dir():
-        return candidate
-    raise FileNotFoundError(
-        "Cannot locate bundled prompts/ directory. Run from the source tree or reinstall ccst."
-    )
-
-
-def _print_migration_prompt_reminders(
-    project_root: Path, *labeled_filenames: tuple[str, str]
+def _print_post_migration_skill_reminders(
+    project_root: Path, *labeled_skills: tuple[str, str]
 ) -> None:
-    """Print one "<label>: <path>" reminder line per (label, filename) pair, for the bundled
-    prompts/ directory, followed by a line telling the user to run it in a fresh context (a new
-    Claude Code session, or a dispatched Agent subagent) started in project_root.
+    """Print one "<label>: <skill-name>" reminder per (label, skill) pair, each followed by a
+    line telling the user to run it in a fresh context rooted at project_root.
 
-    Each prompt's own "Run it via" section already spells out the `cd <project> && claude -p
-    ...` invocation (see e.g. pdata-migration-skills-update.md) - that only works if the
-    session's cwd is the project root, since every prompt's Step 1 checks for it and aborts
-    otherwise. What the fresh-context requirement is actually protecting against is an
-    orchestrating session rationalizing away a stale reference it half-remembers writing
-    earlier in the same conversation - a dispatched Agent subagent (same cwd) gets that same
-    benefit without shelling out to a literal second process, so both are offered here rather
-    than only the `claude -p` invocation. Printing the reminder without saying so reads as "open
-    this file", which invites running it inline in whatever session called `ccst pdata init` -
-    the wrong cwd entirely.
-
-    Best-effort, deliberately swallowing a missing prompts/ directory: these reminders are a
-    nicety layered on top of an otherwise-already-completed classification or migration, not
-    the operation itself — a broken/partial install must never turn a successful --write (rows
-    already written, files already cut over) or dry-run (proposal already written) into a
-    reported failure just because this follow-up reminder couldn't be printed.
+    Each skill's Step 1 checks that cwd is the project root and aborts otherwise, so a bare skill
+    name invites running it inline in whatever session called `ccst pdata init` - the wrong cwd,
+    and the wrong context: the fresh-context requirement protects against an orchestrating
+    session rationalizing away a stale reference it half-remembers writing earlier in the same
+    conversation. A dispatched Agent subagent whose prompt starts with a `cd` into project_root
+    gets that same benefit as a new Claude Code session, so both are offered.
     """
-    try:
-        prompts_dir = _discover_prompts_dir()
-    except FileNotFoundError as exc:
-        print(f"({exc})", file=sys.stderr)
-        return
-    for label, filename in labeled_filenames:
-        print(f"{label}: {prompts_dir / filename}")
+    for label, skill in labeled_skills:
+        print(f"{label}: {skill}")
         print(
-            f"  Run in a new Claude Code session started in {project_root} (its own "
-            f"\"Run it via\" section has the exact command), or dispatch it as an Agent "
-            f"subagent with the same cwd - not inline in this session."
+            f"  Run it in a fresh context rooted at {project_root}: dispatch an Agent subagent "
+            f"whose prompt starts with `cd {project_root}`, or start a new Claude Code session "
+            f"there - not inline in this session."
         )
 
 
@@ -1236,9 +1205,9 @@ def _cmd_pdata_init(args: argparse.Namespace) -> int:
             # apply here.
             return 0
         print(f"\nProposal: {result.proposal_path}")
-        _print_migration_prompt_reminders(
+        _print_post_migration_skill_reminders(
             result.proposal_path.parent,
-            ("After a successful --write, update project docs", "pdata-migration-claude-md-update.md"),
+            ("After a successful --write, update project docs", "pm-pdata-do-update-project-docs"),
         )
         return 0
 
@@ -1286,10 +1255,10 @@ def _cmd_pdata_init(args: argparse.Namespace) -> int:
         print()
         print(write_result.report)  # spec §7.1 step 4's diff report, for review
         print(f"\nVerify: ccst pdata verify --project {args.project} --full")
-        _print_migration_prompt_reminders(
+        _print_post_migration_skill_reminders(
             project_root,
-            ("Update project docs", "pdata-migration-claude-md-update.md"),
-            ("Update consuming skills", "pdata-migration-skills-update.md"),
+            ("Update project docs", "pm-pdata-do-update-project-docs"),
+            ("Update consuming skills", "pm-pdata-do-update-consuming-skills"),
         )
         print("SUCCESS")
         return 0
