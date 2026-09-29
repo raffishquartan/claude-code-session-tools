@@ -33,6 +33,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `pdata-migration-skills-update.md`), its packaging entries, and the prompt-discovery code. Their
   procedures are the two new skills.
 
+## [3.9.2] - 2026-09-29
+
+### Fixed
+
+- **Upgrading a pre-3.0.0 `sessions.db` with the legacy flat-file import still pending no longer
+  crashes with `table sessions has no column named uuid`.** The import (`ccst sessions migrate`,
+  step 1 of `ccst migrate all`, and what `ccst doctor` tells you to run) writes uuid-keyed rows,
+  but only `ccst sessions migrate-uuid --write` adds that column, and nothing ordered the two - the
+  import failed part-way, after already writing tags and mutes. Now:
+  - `ccst migrate all` rebuilds a pre-uuid `sessions.db` first (existing backup and lock guard),
+    then imports. If the rebuild fails or is refused, only the sessions import is skipped; the other
+    steps still run and the closing line names the failed step.
+  - The standalone `ccst sessions migrate` refuses before touching anything (also under
+    `--dry-run`), naming `ccst sessions migrate-uuid --write`. A missing file or missing `sessions`
+    table is not refused; a corrupt file exits cleanly.
+  - `ccst sessions migrate-uuid` names any missing `sessions` column instead of crashing, accepts
+    a table without `updated_at` (absent from v1.0.0 through v2.12.x), treats a database with no
+    `sessions` table as nothing to rebuild, and records the completion marker without rebuilding
+    when the table is already uuid-keyed (previously a forked table crashed with a UNIQUE error
+    after writing a backup).
+  - `ccst doctor`'s `migration-to-1.0.0:sessions` and `migration-to-3.0.0:sessions-uuid` findings
+    read the same `sessions.db` (they previously resolved it from different environment
+    variables) and say that `ccst migrate all` performs the rebuild and the import in order.
+
+### Added
+
+- `tests/test_sessions_db_migration_chain.py`: pins the two shipped pre-3.0.0 `sessions.db`
+  schemas (copied from v1.0.0 and v2.14.1) and the rebuild-then-import upgrade path. Its docstring
+  explains that a failure there means the schema changed and later migration steps' tests need
+  updating too.
+
 ## [3.9.1] - 2026-09-29
 
 ### Fixed

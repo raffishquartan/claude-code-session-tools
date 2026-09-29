@@ -153,6 +153,53 @@ def sessions_schema_is_uuid_keyed(conn: sqlite3.Connection) -> bool:
     )
 
 
+# Columns of the pre-3.0.0 `sessions` table that the uuid rebuild copies into the new table.
+# `updated_at` is deliberately absent: databases from v1.0.0 through v2.12.x never had it.
+REBUILD_REQUIRED_COLUMNS = (
+    "project_dir", "basename", "start_date", "last_opened", "last_active", "discovered_at",
+)
+
+
+def sessions_table_exists(conn: sqlite3.Connection) -> bool:
+    return conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='sessions'"
+    ).fetchone() is not None
+
+
+def sessions_column_names(conn: sqlite3.Connection) -> set[str]:
+    return {row["name"] for row in conn.execute("PRAGMA table_info(sessions)")}
+
+
+def missing_rebuild_columns(conn: sqlite3.Connection) -> list[str]:
+    """Columns the 3.0.0 rebuild must copy that the existing `sessions` table lacks."""
+    present = sessions_column_names(conn)
+    return [c for c in REBUILD_REQUIRED_COLUMNS if c not in present]
+
+
+def migration_marker_recorded(conn: sqlite3.Connection, name: str) -> bool:
+    """`db.migration_applied`, but False (not an error) on a database that predates the
+    `migrations` table (v1.0.0 through roughly v2.8)."""
+    try:
+        return db.migration_applied(conn, name)
+    except sqlite3.OperationalError:
+        return False
+
+
+def pre_uuid_sessions_table(path: Path) -> bool:
+    """True iff `path` exists, has a `sessions` table, and that table is not uuid-keyed - the
+    one state in which the 1.0.0 legacy import cannot write. A missing file or a missing
+    `sessions` table is False: `connect()` creates the current schema for both. Read-only, so it
+    never creates or alters anything; raises sqlite3.DatabaseError for a file that is not a
+    valid database."""
+    if not path.exists():
+        return False
+    conn = db.connect(path, readonly=True)
+    try:
+        return sessions_table_exists(conn) and not sessions_schema_is_uuid_keyed(conn)
+    finally:
+        conn.close()
+
+
 def connect(*, path: Path | None = None, readonly: bool = False) -> sqlite3.Connection:
     """Open sessions.db (or an explicit override path — used by tests and by
     ccst doctor --mutes-file). readonly=True skips schema creation; callers
