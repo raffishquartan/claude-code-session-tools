@@ -7,6 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.10.0] - 2026-09-29
+
+### Added
+
+- Skill `pm-pdata-do-update-project-docs`: after `ccst pdata init --write`, rewrites stale
+  flat-file references in a project's `CLAUDE.md` and other top-level docs to name the pdata
+  record_group and `ccst pdata` command, and reports folder-layout drift without acting on it.
+- Skill `pm-pdata-do-update-consuming-skills`: after `ccst pdata init --write`, finds skills that
+  literally reference the project's old flat-file paths, rewrites direct reads/writes to
+  `ccst pdata` commands, and flags anything that cannot be rewritten mechanically.
+- `pm-pdata-do-init` now ends a successful `--write` by running both skills, in order, each in a
+  fresh-context subagent.
+
+### Changed
+
+- `ccst pdata init` now names the two skills (with a fresh-context reminder) instead of printing
+  prompt-file paths.
+- The two skills need `ccst skills install` (or a reinstall) on each machine to appear in
+  `~/.claude/skills/`.
+
+### Removed
+
+- The bundled `prompts/` directory (`pdata-migration-claude-md-update.md`,
+  `pdata-migration-skills-update.md`), its packaging entries, and the prompt-discovery code. Their
+  procedures are the two new skills.
+
 ## [3.9.1] - 2026-09-29
 
 ### Fixed
