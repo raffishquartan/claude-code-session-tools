@@ -65,16 +65,14 @@ def _additional_context_message(tag: str, session_dir: str, mode: str) -> str:
             "The session is being resumed today. The session directory "
             f"`{session_dir}/` already exists. Session names reflect the start "
             "date only and are not renamed just because activity spans multiple "
-            "days. Do NOT ask the user for a name tag — skip that step in the "
-            "CLAUDE.md startup flow. Proceed directly to the hooks report as normal."
+            "days. Do NOT ask the user for a name tag — it's already set."
         )
     return (
         f"Session tag is already set to `{tag}` by the ccd shell wrapper. "
         f"The session directory `{session_dir}/` (with working/ and out/ "
         "subdirs) has already been created. The session display name has "
         "already been set via `claude -n` at startup, so /rename is "
-        "unnecessary. Do NOT ask the user for a name tag — skip that step in "
-        "the CLAUDE.md startup flow. Proceed directly to the hooks report as normal."
+        "unnecessary. Do NOT ask the user for a name tag — it's already set."
     )
 
 
