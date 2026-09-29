@@ -78,9 +78,10 @@ agents/<session-tag>--assessor-<n>/
 ```
 
 The orchestrator's own folder (if dispatched as an agent rather than being
-the main session) is `agents/<session-tag>--orchestrator/`. See the
-`agent-usage.md` conventions for what each agent folder must contain
-(`prompt.md`, `WORKLOG.md`, deliverables).
+the main session) is `agents/<session-tag>--orchestrator/`. See the CCST
+`agents` CLAUDE.md section (installed via `ccst claude-md install --section
+agents`) for what each agent folder must contain (`prompt.md`, `WORKLOG.md`,
+deliverables).
 
 ## Cost note
 

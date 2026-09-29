@@ -73,9 +73,10 @@ Current subcommands:
   migrate all                    Run every one-shot migration above in sequence.
                                  Run from a plain terminal, not inside Claude Code
                                  — the delete steps are blocked by bash-hard-deny.
-  claude-md install              Add/update the inter-session-messaging block in
-                                 ~/.claude/CLAUDE.md.
-  claude-md uninstall            Remove the messaging block from CLAUDE.md.
+  claude-md install [--section ID]  Add/update the managed section(s) in
+                                 ~/.claude/CLAUDE.md (messaging, workflow, agents,
+                                 confirm-gate). Omit --section for all four.
+  claude-md uninstall [--section ID]  Remove the managed section(s) from CLAUDE.md.
   ccsched-jobs install           Register CCST's bundled ccsched jobs (see
                                  lib/scheduler/bundled_jobs.py) if not already present.
                                  Dry run by default; pass --apply to register. An
@@ -111,6 +112,7 @@ from cc_session_tools.hooks_install import (
     write_json_atomic,
 )
 from cc_session_tools.lib import machine_identity
+from cc_session_tools.lib.claude_md_install import SECTION_IDS as CLAUDE_MD_SECTION_IDS
 from cc_session_tools.lib.hook_registry import HOOK_DESCRIPTIONS, HOOK_VERBS
 from cc_session_tools.lib.text_wrap import wrap_block
 
@@ -899,34 +901,34 @@ def _resolve_fragment_dirs(args: argparse.Namespace) -> list[Path] | None:
 
 
 def _cmd_claude_md_install(args: argparse.Namespace) -> int:
-    from cc_session_tools.lib.claude_md_install import (
-        MalformedBlockError,
-        install_claude_md,
-    )
+    from cc_session_tools.lib.claude_md_install import install_claude_md
     target = Path(args.target) if args.target else (Path.home() / ".claude" / "CLAUDE.md")
+    sections = getattr(args, "section", None)
     try:
-        result = install_claude_md(target, apply=args.apply)
-    except MalformedBlockError as exc:
+        results = install_claude_md(target, apply=args.apply, sections=sections)
+    except ValueError as exc:
+        # Covers both an unknown --section id and MalformedBlockError (a
+        # ValueError subclass) from a requested section's existing markers.
         print(f"error: {exc}", file=sys.stderr)
         return 1
-    print(f"  {result.path}: {result.message}")
+    for result in results:
+        print(f"  {result.path} [{result.section}]: {result.message}")
     if not args.apply:
         print("\nDry run — re-run with --apply to write changes")
     return 0
 
 
 def _cmd_claude_md_uninstall(args: argparse.Namespace) -> int:
-    from cc_session_tools.lib.claude_md_install import (
-        MalformedBlockError,
-        uninstall_claude_md,
-    )
+    from cc_session_tools.lib.claude_md_install import uninstall_claude_md
     target = Path(args.target) if args.target else (Path.home() / ".claude" / "CLAUDE.md")
+    sections = getattr(args, "section", None)
     try:
-        result = uninstall_claude_md(target, apply=args.apply)
-    except MalformedBlockError as exc:
+        results = uninstall_claude_md(target, apply=args.apply, sections=sections)
+    except ValueError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
-    print(f"  {result.path}: {result.message}")
+    for result in results:
+        print(f"  {result.path} [{result.section}]: {result.message}")
     if not args.apply:
         print("\nDry run — re-run with --apply to write changes")
     return 0
@@ -3527,16 +3529,24 @@ def _build_parser() -> argparse.ArgumentParser:
     )
 
     # ---- claude-md ----
-    cmd_parser = sub.add_parser("claude-md", help="Manage the global CLAUDE.md messaging block")
+    cmd_parser = sub.add_parser("claude-md", help="Manage the global CLAUDE.md's managed sections")
     cmd_sub = cmd_parser.add_subparsers(dest="verb", metavar="<verb>")
     cmd_sub.required = True
-    cmd_install = cmd_sub.add_parser("install", help="Add/update the messaging block (dry run by default)")
+    cmd_install = cmd_sub.add_parser("install", help="Add/update managed section(s) (dry run by default)")
     cmd_install.add_argument("--target", default=None, metavar="PATH",
                              help="CLAUDE.md path (default: ~/.claude/CLAUDE.md)")
+    cmd_install.add_argument(
+        "--section", action="append", choices=CLAUDE_MD_SECTION_IDS, metavar="ID",
+        help=f"Section to install, repeatable (default: all — {', '.join(CLAUDE_MD_SECTION_IDS)})",
+    )
     cmd_install.add_argument("--apply", action="store_true", help="Write changes (default: dry run)")
-    cmd_uninstall = cmd_sub.add_parser("uninstall", help="Remove the messaging block (dry run by default)")
+    cmd_uninstall = cmd_sub.add_parser("uninstall", help="Remove managed section(s) (dry run by default)")
     cmd_uninstall.add_argument("--target", default=None, metavar="PATH",
                                help="CLAUDE.md path (default: ~/.claude/CLAUDE.md)")
+    cmd_uninstall.add_argument(
+        "--section", action="append", choices=CLAUDE_MD_SECTION_IDS, metavar="ID",
+        help=f"Section to uninstall, repeatable (default: all — {', '.join(CLAUDE_MD_SECTION_IDS)})",
+    )
     cmd_uninstall.add_argument("--apply", action="store_true", help="Write changes (default: dry run)")
 
     # ---- install-everything ----

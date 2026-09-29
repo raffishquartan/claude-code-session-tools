@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.9.0] - 2026-09-29
+
+### Added
+
+- `ccst claude-md install`/`uninstall` now manage a registry of independently-installable
+  sections in the global `CLAUDE.md`, selected with a repeatable `--section {messaging,workflow,
+  agents,confirm-gate}` (omit for all four). `messaging` is the existing inter-session-messaging
+  block, unchanged. Three new sections: `workflow` (the `working/` -> `out/` draft-then-finalize
+  convention, keeping `working/WORKLOG.md` current for `worklog-guard`, and not discarding a
+  user's concurrent edits), `agents` (the `agents/<tag>--<slug>/` subagent working-folder
+  convention, the `<session-tag>: ` prompt prefix, and pointers to the `select-agent-model` and
+  `do-executor-critic-assessor-loop` skills), and `confirm-gate` (how the `confirm-8digit` hook
+  and `generate-8digit-code` skill work together, and that only a code the user types themselves
+  counts as confirmation).
+- README rewritten from scratch against a full source-code survey, with a quickstart, one section
+  per subsystem, and a sampling of real usage patterns.
+
+### Fixed
+
+- `do-executor-critic-assessor-loop`'s `SKILL.md` no longer points at `agent-usage.md` (a personal,
+  unshipped file) for the agent-folder contract - it now points at the shipped `agents` CLAUDE.md
+  section.
+- The `session-tag` hook's `SessionStart` message no longer tells the model to follow an undefined
+  "CLAUDE.md startup flow" or produce a "hooks report" - neither exists in this package.
+
 ## [3.8.0] - 2026-09-21
 
 ### Added
