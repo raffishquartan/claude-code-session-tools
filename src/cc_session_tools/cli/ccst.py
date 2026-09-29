@@ -2340,12 +2340,44 @@ _MIGRATE_ALL_BANNER = (
 )
 
 
+def _migrate_all_sessions_step(args: argparse.Namespace) -> int:
+    """The sessions step of `migrate all`: the legacy import writes uuid-keyed rows, so a
+    pre-uuid `sessions.db` is rebuilt first (`sessions migrate-uuid`, with its own backup and
+    concurrent-writer guard). A failed or refused rebuild skips the import."""
+    import sqlite3
+
+    from cc_session_tools.cli.migrate_sessions_db import migrate_uuid
+    from cc_session_tools.lib import sessions_db
+
+    db_path = sessions_db.default_db_path()
+    try:
+        pre_uuid = sessions_db.pre_uuid_sessions_table(db_path)
+    except sqlite3.DatabaseError as exc:
+        print(f"cannot read {db_path}: {exc} - not a valid sessions.db; nothing was changed",
+              file=sys.stderr)
+        return 1
+    if pre_uuid:
+        print(f"{db_path} is on the pre-3.0.0 schema - rebuilding it first "
+              "(`ccst sessions migrate-uuid`) so the legacy import can write to it.")
+        try:
+            rc = migrate_uuid(db_path=db_path, dry_run=args.dry_run)
+        except ValueError as exc:
+            print(str(exc), file=sys.stderr)
+            return 1
+        if rc != 0:
+            return rc
+        if args.dry_run:
+            print("The legacy import's own dry-run is skipped until the rebuild has run.")
+            return 0
+    return _cmd_sessions_migrate(argparse.Namespace(
+        dry_run=args.dry_run, sessions_db=None, tags_dir=None, mutes_file=None))
+
+
 def _cmd_migrate_all(args: argparse.Namespace) -> int:
     print(_MIGRATE_ALL_BANNER)
 
     steps: list[tuple[str, object]] = [
-        ("sessions", lambda: _cmd_sessions_migrate(argparse.Namespace(
-            dry_run=args.dry_run, sessions_db=None, tags_dir=None, mutes_file=None))),
+        ("sessions", lambda: _migrate_all_sessions_step(args)),
         ("ccmsg", lambda: _cmd_migrate_ccmsg(argparse.Namespace(
             old_root=None, backup_dir=None, dry_run=args.dry_run))),
         ("ccsched", lambda: _cmd_migrate_ccsched(argparse.Namespace(
@@ -2355,14 +2387,19 @@ def _cmd_migrate_all(args: argparse.Namespace) -> int:
     ]
 
     overall_rc = 0
+    failed: list[str] = []
     for name, step in steps:
         print(f"\n=== {name} ===")
         rc = step()  # type: ignore[operator]
         if rc != 0:
             overall_rc = rc
+            failed.append(name)
 
     print()
-    if args.dry_run:
+    if failed:
+        print(f"Steps that failed: {', '.join(failed)}. Review the ERROR/ABORT/refusal lines "
+              "above; a failed step leaves its own old files untouched and is safe to re-run.")
+    elif args.dry_run:
         print("Dry run complete — re-run without --dry-run once you're satisfied.")
     else:
         print("All migrations attempted. Review any ERROR/ABORT lines above; a "

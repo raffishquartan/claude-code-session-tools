@@ -153,7 +153,10 @@ ccst migrate all
 `ccst sessions migrate`, `ccst migrate telemetry`)
 
 Order doesn't matter between the four — each is independent, and each script's own dry-run/verify
-step is unaffected by whether the others have run yet. If any one reports a mismatch and aborts,
+step is unaffected by whether the others have run yet. (One exception on 3.0.0 or later: the
+sessions import needs the 3.0.0 uuid schema, so on a machine whose `sessions.db` predates 3.0.0,
+`ccst migrate all` runs `ccst sessions migrate-uuid` first; the standalone `ccst sessions migrate`
+refuses until you have run `ccst sessions migrate-uuid --write` yourself.) If any one reports a mismatch and aborts,
 **stop and read its stderr output before re-running.**
 
 All four are safely re-runnable. Their verify steps tolerate a destination DB that already holds

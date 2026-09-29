@@ -114,10 +114,15 @@ def _read_legacy_sessions_rows(conn: sqlite3.Connection) -> list[sqlite3.Row]:
     """Every row from the pre-3.0.0 (project_dir, basename) `sessions` table, via raw SQL -
     not sessions_db.list_sessions()/_row_to_session, which require the `uuid` column this
     migration is the one adding. Safe to call against either schema shape: only the columns
-    that exist pre-3.0.0 are selected."""
+    that exist pre-3.0.0 are selected; `updated_at` (absent from v1.0.0 through v2.12.x) is read
+    as NULL when the table has no such column."""
+    updated_at = (
+        "updated_at" if "updated_at" in sessions_db.sessions_column_names(conn)
+        else "NULL AS updated_at"
+    )
     return conn.execute(
         "SELECT project_dir, basename, start_date, last_opened, last_active, "
-        "discovered_at, updated_at FROM sessions"
+        f"discovered_at, {updated_at} FROM sessions"
     ).fetchall()
 
 
@@ -162,6 +167,26 @@ def print_uuid_migration_dry_run(plan: UuidMigrationPlan, *, db_path: Path) -> N
     print("backing up: this rebuilds the sessions table and is a one-way schema change.")
 
 
+def _record_uuid_marker_only(db_path: Path, *, dry_run: bool) -> int:
+    """`sessions` is already uuid-keyed, or there is no `sessions` table to rebuild: there is
+    nothing to rebuild, only the completion marker to record (creating the current schema first
+    if the table is missing)."""
+    if dry_run:
+        print(f"{db_path} needs no rebuild - only its 3.0.0 completion marker would be "
+              "recorded. Re-run with --write to record it.")
+        return 0
+    conn = sessions_db.connect(path=db_path)
+    try:
+        db.record_migration(
+            conn, sessions_db.SESSIONS_UUID_MIGRATION, applied_at=sessions_db._now_iso()
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    print(f"{db_path} needed no rebuild - recorded its 3.0.0 completion marker.")
+    return 0
+
+
 def migrate_uuid(*, db_path: Path, dry_run: bool, backup_dir: Path | None = None) -> int:
     """The 3.0.0 schema migration: rebuild `sessions` from the pre-3.0.0
     (project_dir, basename) primary key to (project_dir, basename, uuid), backfilling each
@@ -185,14 +210,34 @@ def migrate_uuid(*, db_path: Path, dry_run: bool, backup_dir: Path | None = None
     # be held by a live hook write, defeating the point of checking before touching anything.
     conn = db.connect(db_path)
     try:
-        if sessions_db.sessions_schema_is_uuid_keyed(conn) and db.migration_applied(
-            conn, sessions_db.SESSIONS_UUID_MIGRATION
-        ):
-            print(f"{db_path} is already migrated to the uuid-aware schema - nothing to do.")
-            return 0
-        legacy_rows = _read_legacy_sessions_rows(conn)
+        if not sessions_db.sessions_table_exists(conn):
+            marker_only = True
+            legacy_rows: list[sqlite3.Row] = []
+        else:
+            keyed = sessions_db.sessions_schema_is_uuid_keyed(conn)
+            recorded = sessions_db.migration_marker_recorded(
+                conn, sessions_db.SESSIONS_UUID_MIGRATION
+            )
+            if keyed and recorded:
+                print(f"{db_path} is already migrated to the uuid-aware schema - nothing to do.")
+                return 0
+            marker_only = keyed
+            if not keyed:
+                missing = sessions_db.missing_rebuild_columns(conn)
+                if missing:
+                    print(
+                        f"cannot migrate {db_path}: its `sessions` table is missing "
+                        f"column(s) the rebuild copies: {', '.join(missing)}. Nothing was "
+                        "changed; restore the file from a backup or repair it by hand.",
+                        file=sys.stderr,
+                    )
+                    return 1
+            legacy_rows = [] if keyed else _read_legacy_sessions_rows(conn)
     finally:
         conn.close()
+
+    if marker_only:
+        return _record_uuid_marker_only(db_path, dry_run=dry_run)
 
     plan = plan_uuid_migration(legacy_rows)
 
@@ -418,6 +463,30 @@ def _tar_backup(sources: list[Path], *, backup_dir: Path) -> Path | None:
     return dest
 
 
+def refuse_if_sessions_db_pre_uuid(db_path: Path) -> int | None:
+    """Pre-flight for the legacy import: it writes uuid-keyed rows, which a `sessions.db` still
+    on the pre-3.0.0 schema cannot accept. Returns a non-zero exit code (after printing the
+    fix) when the import must not run, else None. Read-only; must run before anything that could
+    connect-with-DDL, write, or back up."""
+    try:
+        pre_uuid = sessions_db.pre_uuid_sessions_table(db_path)
+    except sqlite3.DatabaseError as exc:
+        print(f"cannot read {db_path}: {exc} - not a valid sessions.db; nothing was changed",
+              file=sys.stderr)
+        return 1
+    if not pre_uuid:
+        return None
+    print(
+        f"cannot run the legacy flat-file import: {db_path} is still on the pre-3.0.0 schema "
+        "(no uuid column), which the import cannot write to. Nothing was changed. First run "
+        "`ccst sessions migrate-uuid --write` from a plain terminal with no other `claude` "
+        "session running (it takes a backup first), then re-run this - or run `ccst migrate "
+        "all`, which does both in order.",
+        file=sys.stderr,
+    )
+    return 1
+
+
 def run_migration(
     *,
     dry_run: bool,
@@ -427,6 +496,10 @@ def run_migration(
     roots: list[Path],
     backup_dir: Path,
 ) -> int:
+    refusal = refuse_if_sessions_db_pre_uuid(db_path)
+    if refusal is not None:
+        return refusal
+
     print(f"Sessions DB  : {db_path}")
     print(f"Tags source  : {tags_dir}")
     print(f"Mutes source : {mutes_file}")
