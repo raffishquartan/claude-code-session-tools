@@ -675,7 +675,26 @@ def _migration_recorded(db_path: Path, marker_name: str) -> bool:
         conn.close()
 
 
-def check_pending_data_store_migration(paths: LegacyMigrationPaths) -> list[CheckResult]:
+def _sessions_marker() -> str:
+    from cc_session_tools.lib.sessions_db import LEGACY_FLAT_FILE_MIGRATION
+
+    return LEGACY_FLAT_FILE_MIGRATION
+
+
+def _sessions_db_is_pre_uuid(db_path: Path) -> bool:
+    """`sessions_db.pre_uuid_sessions_table`, with an unreadable file counting as not pre-uuid
+    (other checks already report a database that fails to open)."""
+    from cc_session_tools.lib import sessions_db
+
+    try:
+        return sessions_db.pre_uuid_sessions_table(db_path)
+    except sqlite3.DatabaseError:
+        return False
+
+
+def check_pending_data_store_migration(
+    paths: LegacyMigrationPaths, *, sessions_db_path: Path | None = None,
+) -> list[CheckResult]:
     """Detect legacy flat-file data left over from a pre-1.0.0 install.
 
     :func:`check_data_stores` can't distinguish a fresh install (nothing to
@@ -696,6 +715,10 @@ def check_pending_data_store_migration(paths: LegacyMigrationPaths) -> list[Chec
     fills from the first hook fire after install, so counting rows reported "already
     migrated" for anyone who opened a session before migrating, and the FAIL that should
     have prompted them never fired.
+
+    `sessions_db_path` is the sessions.db the `sessions` finding reads; pass the same path the
+    3.0.0 uuid check uses so the two findings can never describe different files (defaults to
+    `paths.data_home / "sessions.db"`).
     """
     from cc_session_tools.lib.messaging.repository import (
         LEGACY_FLAT_FILE_MIGRATION as _CCMSG_MIGRATION,
@@ -724,7 +747,7 @@ def check_pending_data_store_migration(paths: LegacyMigrationPaths) -> list[Chec
         "sessions": (
             (paths.tags_dir, paths.mutes_file),
             _count_legacy_sessions(paths.tags_dir, paths.mutes_file),
-            paths.data_home / "sessions.db",
+            sessions_db_path if sessions_db_path is not None else paths.data_home / "sessions.db",
             _SESSIONS_MIGRATION,
         ),
         "telemetry": (
@@ -748,6 +771,13 @@ def check_pending_data_store_migration(paths: LegacyMigrationPaths) -> list[Chec
         already_migrated = _migration_recorded(new_db_path, marker_name)
         evidence = f"the import is recorded in {new_db_path.name}"
         if not already_migrated:
+            rebuild_note = ""
+            if store_name == "sessions" and _sessions_db_is_pre_uuid(new_db_path):
+                rebuild_note = (
+                    f" It will first rebuild {new_db_path.name} to the 3.0.0 uuid schema "
+                    "(taking a backup; close any running `claude` sessions first) - the "
+                    "import cannot write to the old schema."
+                )
             results.append(
                 CheckResult(
                     name=name,
@@ -756,7 +786,7 @@ def check_pending_data_store_migration(paths: LegacyMigrationPaths) -> list[Chec
                         f"{legacy_count} unmigrated item(s) at {existing}; run "
                         "`ccst migrate all` from a plain terminal (NOT inside a Claude Code "
                         "session — the delete step is blocked by bash-hard-deny) to migrate "
-                        f"into {new_db_path}"
+                        f"into {new_db_path}.{rebuild_note}"
                     ),
                 )
             )
@@ -942,7 +972,9 @@ def check_sessions_project_dir_absolute(sessions_db_path: Path) -> list[CheckRes
     )]
 
 
-def check_sessions_uuid_migration(sessions_db_path: Path) -> list[CheckResult]:
+def check_sessions_uuid_migration(
+    sessions_db_path: Path, *, legacy_sessions_pending: bool = False,
+) -> list[CheckResult]:
     """FAIL if sessions.db still has the pre-3.0.0 (project_dir, basename) primary key -
     forked sessions (Ctrl-L) silently clobber each other's activity rows until
     `ccst sessions migrate-uuid --write` runs. Distinguishes "never migrated" from
@@ -956,7 +988,10 @@ def check_sessions_uuid_migration(sessions_db_path: Path) -> list[CheckResult]:
     A sessions.db that doesn't exist yet reads OK: connect() records the migration
     marker at creation time for any brand-new file (sessions_db.py), so a genuinely
     fresh install is never in a pending state - there is simply nothing to check here
-    yet, and this check must not create the file itself just to inspect it."""
+    yet, and this check must not create the file itself just to inspect it.
+
+    `legacy_sessions_pending` says the 1.0.0 flat-file import is also still pending; the two FAIL
+    branches then note that `ccst migrate all` performs both, in the order that works."""
     import sqlite3
 
     from cc_session_tools.lib import db as db_lib
@@ -1000,6 +1035,11 @@ def check_sessions_uuid_migration(sessions_db_path: Path) -> list[CheckResult]:
         "run `ccst sessions migrate-uuid --write` from a plain terminal with no other "
         "`claude` session running (it takes a backup first; see --help)"
     )
+    if legacy_sessions_pending:
+        remediation += (
+            "; the legacy import is also pending, and `ccst migrate all` performs both in "
+            "the order that works"
+        )
     if not pk_is_uuid_keyed and not marker_present:
         return [CheckResult(
             name=name, status=Status.FAIL,
@@ -1158,7 +1198,8 @@ def run_all_checks(
 
     # Pending legacy-data migration
     if legacy_migration_paths is not None:
-        results.extend(check_pending_data_store_migration(legacy_migration_paths))
+        results.extend(check_pending_data_store_migration(
+            legacy_migration_paths, sessions_db_path=sessions_db_path))
 
     # Pending ccst pdata init cutover (spec §7.1 step 7)
     if projects_root is not None:
@@ -1172,7 +1213,15 @@ def run_all_checks(
     # since project-dir-absolute's own check degrades to a WARN pointing back at it when
     # the uuid migration hasn't run yet (a pre-migration schema can't be queried the same way).
     if sessions_db_path is not None:
-        results.extend(check_sessions_uuid_migration(sessions_db_path))
+        legacy_sessions_pending = (
+            legacy_migration_paths is not None
+            and _count_legacy_sessions(
+                legacy_migration_paths.tags_dir, legacy_migration_paths.mutes_file
+            ) > 0
+            and not _migration_recorded(sessions_db_path, _sessions_marker())
+        )
+        results.extend(check_sessions_uuid_migration(
+            sessions_db_path, legacy_sessions_pending=legacy_sessions_pending))
         results.extend(check_sessions_project_dir_absolute(sessions_db_path))
 
     # Optional dependencies for claude-code-usage's reconcile / ccusage blocks

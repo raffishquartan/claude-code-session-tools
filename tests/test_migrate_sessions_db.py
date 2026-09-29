@@ -249,9 +249,9 @@ def test_dry_run_does_not_record_marker(layout):
 # ---------------------------------------------------------------------------
 
 def _seed_old_schema_db(db_path: Path, rows: list[dict]) -> None:
-    """Build a realistic pre-3.0.0 sessions.db: 2-column PK, no uuid column, with the
-    `updated_at` column the live schema already has (the original spec's own DDL omitted
-    it - design.md Decision 4 - this fixture deliberately does not repeat that mistake)."""
+    """Build a pre-3.0.0 sessions.db in the v2.13-v2.14.x shape: 2-column PK, no uuid column,
+    with the `updated_at` column. Releases v1.0.0 through v2.12.x had no `updated_at`; both
+    shapes are covered in test_sessions_db_migration_chain.py."""
     import sqlite3
 
     conn = sqlite3.connect(str(db_path))
