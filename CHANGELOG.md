@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.9.1] - 2026-09-29
+
+### Fixed
+
+- `ccst pdata init --rehearse` no longer wrongly reports "adopt from dump" for a project that is
+  already migrated on this machine. The adopt-vs-classify decision now checks the real per-project
+  `.db` even during a rehearsal (a `cp -r` rehearsal copy never contains it, so the sandbox always
+  looked empty), so rehearsing an already-onboarded project produces a real classification report.
+
 ## [3.9.0] - 2026-09-29
 
 ### Added

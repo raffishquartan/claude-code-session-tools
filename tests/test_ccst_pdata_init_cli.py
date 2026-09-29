@@ -368,3 +368,58 @@ def test_pdata_init_write_still_adopts_after_an_earlier_dry_run(base_env, tmp_pa
     assert "Adopting existing pdata from sync dump" in r_write.stdout
     assert "macbook" in r_write.stdout
     assert "SUCCESS" in r_write.stdout
+
+
+def _publish_dump(base_env, project_dir, monkeypatch, *, with_record):
+    """Build a published dump for project `demo`; keep the live .db only if `with_record`."""
+    from cc_session_tools.lib.pdata import dump, repository, service, vector_clock_store
+
+    monkeypatch.setenv("CCST_PROJECT_DB_DIR", base_env["CCST_PROJECT_DB_DIR"])
+    con = repository.connect("demo")
+    with repository._immediate(con):
+        vector_clock_store.write_vector(con, {"macbook": 3}, updated_at=100)
+    dump.write_latest(con, project_root=project_dir, machine_id="macbook", vector={"macbook": 3})
+    con.close()
+    db_file = Path(base_env["CCST_PROJECT_DB_DIR"]) / "demo.db"
+    if with_record:
+        service.add_record(project="demo", record_group="notes", content="live content", file_path=None, fields={})
+    else:
+        db_file.unlink()
+    return db_file
+
+
+def test_pdata_init_rehearse_classifies_when_live_project_already_migrated(
+    base_env, tmp_path, monkeypatch,
+):
+    """A rehearsal copy is a plain `cp -r` of the project: it carries the published dump but not
+    the real .db. The adopt-vs-classify decision must still use the real .db, so a project that
+    already has local pdata content gets a classification report, not an adoption message."""
+    project_dir = tmp_path / "projects" / "demo"
+    project_dir.mkdir(parents=True)
+    (project_dir / "ideas.csv").write_text("idea\nfirst\n")
+    db_file = _publish_dump(base_env, project_dir, monkeypatch, with_record=True)
+    rehearsal_dir = tmp_path / "rehearsal-demo"
+    shutil.copytree(project_dir, rehearsal_dir)
+    before = db_file.read_bytes()
+
+    r = _run(base_env, "pdata", "init", "--project", "demo", "--rehearse", str(rehearsal_dir))
+
+    assert r.returncode == 0, r.stderr
+    assert "a published sync dump already exists" not in r.stdout
+    assert "ideas.csv" in r.stdout
+    assert db_file.read_bytes() == before
+
+
+def test_pdata_init_rehearse_still_reports_adoption_when_no_local_content(
+    base_env, tmp_path, monkeypatch,
+):
+    project_dir = tmp_path / "projects" / "demo"
+    project_dir.mkdir(parents=True)
+    _publish_dump(base_env, project_dir, monkeypatch, with_record=False)
+    rehearsal_dir = tmp_path / "rehearsal-demo"
+    shutil.copytree(project_dir, rehearsal_dir)
+
+    r = _run(base_env, "pdata", "init", "--project", "demo", "--rehearse", str(rehearsal_dir))
+
+    assert r.returncode == 0, r.stderr
+    assert "a published sync dump already exists" in r.stdout

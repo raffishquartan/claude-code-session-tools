@@ -324,7 +324,11 @@ def _pending_adoption(*, project: str, project_root: Path) -> dump.DumpInfo | No
             "project. Publish a fresh dump from a known-good machine (ccst pdata dump --force) "
             "or reconcile manually (ccst pdata resolve) once those commands exist."
         )
-    if _already_locally_migrated(project):
+    # The live .db, not a --rehearse sandbox's: a rehearsal copy never contains the real .db, so
+    # the sandbox would always look unmigrated and rehearsal would never reach classification.
+    with init_paths.live_project_db_dir():
+        already_migrated = _already_locally_migrated(project)
+    if already_migrated:
         return None
     return info
 
