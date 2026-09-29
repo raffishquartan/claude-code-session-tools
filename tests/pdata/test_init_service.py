@@ -851,3 +851,283 @@ def test_write_on_progress_defaults_to_silent(monkeypatch, tmp_path):
     init_service.dry_run(project="demo")
     result = init_service.write(project="demo")  # no on_progress kwarg
     assert result.failure is None
+
+
+def _prepared_docs_project(
+    monkeypatch, tmp_path, *, doc_path_value: str, extra_files: dict[str, str] | None = None,
+):
+    """A project with one db-owned CSV whose `doc_path` column is mapped as file_path_column."""
+    from cc_session_tools.lib.pdata import manifest
+
+    monkeypatch.setenv(init_paths.PROJECTS_ROOT_ENV, str(tmp_path / "projects"))
+    monkeypatch.setenv("CCST_PROJECT_DB_DIR", str(tmp_path / "dbs"))
+    monkeypatch.setenv("CCST_PDATA_BACKUP_DIR", str(tmp_path / "backups"))
+    project_dir = tmp_path / "projects" / "demo"
+    project_dir.mkdir(parents=True)
+    (project_dir / "docs.csv").write_text(f"doc_path,note\n{doc_path_value},x\n")
+    for name, text in (extra_files or {}).items():
+        (project_dir / name).write_text(text)
+    dry = init_service.dry_run(project="demo")
+    edited = manifest.load(dry.proposal_path)
+    edited.entries[0].file_path_column = "doc_path"
+    manifest.save(edited, dry.proposal_path)
+    return project_dir
+
+
+def _assert_nothing_cut_over(project_dir: Path) -> None:
+    from cc_session_tools.lib.pdata import manifest
+
+    assert (project_dir / "docs.csv").exists()
+    assert not (project_dir / init_paths.MIGRATED_ARCHIVE_DIRNAME).exists()
+    proposal = init_paths.resolve_proposal_path(project_dir)
+    assert [e.migrated_at for e in manifest.load(proposal).entries] == [None]
+
+
+def _live_rows(project: str = "demo"):
+    from cc_session_tools.lib.pdata import service
+
+    return service.list_records(project=project, record_group="docs")
+
+
+def test_write_verify_oserror_on_file_path_is_a_failure_reason_and_rolls_back(monkeypatch, tmp_path):
+    """A file_path string the OS rejects (e.g. `[Errno 63] File name too long`) makes
+    Path.exists() raise OSError rather than return False. It must be reported exactly like an
+    unresolved path - a WriteResult failure plus rollback - not escape write() with the
+    just-imported rows left live. Patched rather than relying on a real over-long name so the
+    test is portable across filesystems and Python versions (3.14's Path.exists swallows it)."""
+    project_dir = _prepared_docs_project(monkeypatch, tmp_path, doc_path_value="unresolvable-name.pdf")
+    real_exists = Path.exists
+
+    def exists(self, *args, **kwargs):
+        if self.name == "unresolvable-name.pdf":
+            raise OSError(63, "File name too long")
+        return real_exists(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "exists", exists)
+
+    result = init_service.write(project="demo")
+
+    assert result.failure is not None
+    assert any(
+        "cannot be checked" in reason and "record " in reason
+        and "unresolvable-name.pdf" in reason and "File name too long" in reason
+        for reason in result.failure.reasons
+    )
+    assert result.backup_path is None
+    assert not list((tmp_path / "backups").glob("*.tar.gz"))
+    assert _live_rows() == []
+    assert (project_dir / "docs.csv").exists()
+    assert not (project_dir / init_paths.MIGRATED_ARCHIVE_DIRNAME).exists()
+
+
+def test_write_unexpected_error_during_verification_rolls_back_then_propagates(monkeypatch, tmp_path):
+    import pytest
+
+    project_dir = _prepared_docs_project(monkeypatch, tmp_path, doc_path_value="docs.csv")
+
+    def boom(**_kwargs):
+        raise RuntimeError("verification exploded")
+
+    monkeypatch.setattr(init_service, "_verify", boom)
+
+    with pytest.raises(RuntimeError, match="verification exploded"):
+        init_service.write(project="demo")
+
+    assert _live_rows() == []
+    _assert_nothing_cut_over(project_dir)
+
+
+def test_write_unexpected_error_during_backup_rolls_back_then_propagates(monkeypatch, tmp_path):
+    import pytest
+
+    from cc_session_tools.lib.pdata import backup
+
+    project_dir = _prepared_docs_project(monkeypatch, tmp_path, doc_path_value="docs.csv")
+
+    def boom(**_kwargs):
+        raise RuntimeError("backup exploded")
+
+    monkeypatch.setattr(backup, "create_backup", boom)
+
+    with pytest.raises(RuntimeError, match="backup exploded"):
+        init_service.write(project="demo")
+
+    assert _live_rows() == []
+    _assert_nothing_cut_over(project_dir)
+
+
+def test_write_keyboard_interrupt_during_verification_rolls_back_then_propagates(monkeypatch, tmp_path):
+    import pytest
+
+    project_dir = _prepared_docs_project(monkeypatch, tmp_path, doc_path_value="docs.csv")
+
+    def interrupt(**_kwargs):
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(init_service, "_verify", interrupt)
+
+    with pytest.raises(KeyboardInterrupt):
+        init_service.write(project="demo")
+
+    assert _live_rows() == []
+    _assert_nothing_cut_over(project_dir)
+
+
+def test_write_error_inserting_a_later_row_rolls_back_earlier_rows(monkeypatch, tmp_path):
+    import sqlite3
+
+    import pytest
+
+    from cc_session_tools.lib.pdata import service
+
+    project_dir = _prepared_docs_project(monkeypatch, tmp_path, doc_path_value="docs.csv")
+    (project_dir / "docs.csv").write_text("doc_path,note\ndocs.csv,a\ndocs.csv,b\n")
+    real_add = service.add_record
+    calls = []
+
+    def flaky(**kwargs):
+        calls.append(1)
+        if len(calls) == 2:
+            raise sqlite3.OperationalError("database is locked")
+        return real_add(**kwargs)
+
+    monkeypatch.setattr(service, "add_record", flaky)
+
+    with pytest.raises(sqlite3.OperationalError):
+        init_service.write(project="demo")
+
+    assert _live_rows() == []
+    _assert_nothing_cut_over(project_dir)
+
+
+def test_write_failing_rollback_does_not_mask_the_original_error_and_names_ids(monkeypatch, tmp_path):
+    import sqlite3
+
+    import pytest
+
+    from cc_session_tools.lib.pdata import service
+
+    _prepared_docs_project(monkeypatch, tmp_path, doc_path_value="docs.csv")
+    monkeypatch.setattr(
+        init_service, "_verify",
+        lambda **_kw: (_ for _ in ()).throw(RuntimeError("orig")),
+    )
+
+    def locked(**_kwargs):
+        raise sqlite3.OperationalError("database is locked")
+
+    monkeypatch.setattr(service, "delete_record", locked)
+    progress: list[str] = []
+
+    with pytest.raises(RuntimeError, match="orig") as excinfo:
+        init_service.write(project="demo", on_progress=progress.append)
+
+    notes = "\n".join(excinfo.value.__notes__)
+    assert "rollback of 1 inserted row(s) aborted" in notes
+    assert "record ids: [1]" in notes
+    assert any("record ids: [1]" in line for line in progress)
+
+
+def test_write_reports_each_rollback_failure_by_record_id(monkeypatch, tmp_path):
+    import pytest
+
+    from cc_session_tools.lib.pdata import service
+
+    _prepared_docs_project(monkeypatch, tmp_path, doc_path_value="docs.csv")
+    monkeypatch.setattr(
+        init_service, "_verify",
+        lambda **_kw: (_ for _ in ()).throw(RuntimeError("orig")),
+    )
+
+    def missing(**kwargs):
+        raise service.RecordNotFoundError(f"no record {kwargs['record_id']}")
+
+    monkeypatch.setattr(service, "delete_record", missing)
+    progress: list[str] = []
+
+    with pytest.raises(RuntimeError, match="orig") as excinfo:
+        init_service.write(project="demo", on_progress=progress.append)
+
+    assert any("rolled back 0 of 1" in line for line in progress)
+    assert any("record 1: rollback failed" in line for line in progress)
+    assert "record 1: rollback failed" in "\n".join(excinfo.value.__notes__)
+
+
+def test_write_source_recount_error_is_a_failure_reason_not_a_crash(monkeypatch, tmp_path):
+    import csv
+
+    project_dir = _prepared_docs_project(monkeypatch, tmp_path, doc_path_value="docs.csv")
+
+    def bad_count(*_a, **_kw):
+        raise csv.Error("field larger than field limit")
+
+    monkeypatch.setattr(init_service, "count_source_rows", bad_count)
+
+    result = init_service.write(project="demo")
+
+    assert result.failure is not None
+    assert any("could not re-count" in r for r in result.failure.reasons)
+    assert _live_rows() == []
+    _assert_nothing_cut_over(project_dir)
+
+
+def test_write_cutover_failure_before_any_move_rolls_back_and_a_rerun_imports_once(monkeypatch, tmp_path):
+    import pytest
+
+    from cc_session_tools.lib.pdata import cutover
+
+    project_dir = _prepared_docs_project(monkeypatch, tmp_path, doc_path_value="docs.csv")
+
+    def disk_full(**_kwargs):
+        raise OSError(28, "No space left on device")
+
+    monkeypatch.setattr(cutover, "archive_entries", disk_full)
+
+    with pytest.raises(OSError, match="No space left"):
+        init_service.write(project="demo")
+
+    assert _live_rows() == []
+    _assert_nothing_cut_over(project_dir)
+    monkeypatch.undo()  # keep the env vars below; only the patch matters
+    monkeypatch.setenv(init_paths.PROJECTS_ROOT_ENV, str(tmp_path / "projects"))
+    monkeypatch.setenv("CCST_PROJECT_DB_DIR", str(tmp_path / "dbs"))
+    monkeypatch.setenv("CCST_PDATA_BACKUP_DIR", str(tmp_path / "backups"))
+
+    result = init_service.write(project="demo")
+
+    assert result.failure is None
+    assert len(_live_rows()) == 1  # imported once, not duplicated
+
+
+def test_write_cutover_failure_after_a_move_keeps_that_entry_and_rolls_back_the_rest(monkeypatch, tmp_path):
+    import pytest
+
+    from cc_session_tools.lib.pdata import manifest
+
+    _prepared_docs_project(
+        monkeypatch, tmp_path, doc_path_value="docs.csv",
+        extra_files={"notes.csv": "idea\nfirst\n"},
+    )
+    dry_proposal = init_paths.resolve_proposal_path(tmp_path / "projects" / "demo")
+    real_rename = Path.rename
+
+    def rename(self, target):
+        if self.name == "notes.csv":
+            raise OSError(5, "I/O error")
+        return real_rename(self, target)
+
+    monkeypatch.setattr(Path, "rename", rename)
+    assert len(manifest.load(dry_proposal).entries) == 2
+
+    with pytest.raises(OSError, match="I/O error"):
+        init_service.write(project="demo")
+
+    reloaded = manifest.load(dry_proposal)
+    by_path = {e.path: e for e in reloaded.entries}
+    moved_entry = by_path["docs.csv"]
+    assert moved_entry.migrated_at is not None
+    assert by_path["notes.csv"].migrated_at is None
+    assert len(_live_rows()) == 1  # the moved entry keeps its rows
+    from cc_session_tools.lib.pdata import service
+
+    assert service.list_records(project="demo", record_group="notes") == []
