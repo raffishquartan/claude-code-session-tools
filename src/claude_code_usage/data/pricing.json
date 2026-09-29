@@ -1,22 +1,85 @@
 {
-  "_source": "Hand-curated Anthropic API pricing as of 2026-05. Per-token USD.",
-  "_refreshed_at": "2026-05-09",
+  "_source": "Anthropic published first-party API pricing (https://platform.claude.com/docs/en/about-claude/pricing), hand-curated. Per-token USD. Rows for retired models not on that page keep their historical list price.",
+  "_refreshed_at": "2026-09-29",
   "models": {
+    "<synthetic>": {
+      "input": 0.0,
+      "output": 0.0,
+      "cache_creation_5m": 0.0,
+      "cache_creation_1h": 0.0,
+      "cache_read": 0.0
+    },
+    "claude-fable-5-1": {
+      "input": 0.00001,
+      "output": 0.00005,
+      "cache_creation_5m": 0.0000125,
+      "cache_creation_1h": 0.00002,
+      "cache_read": 0.00000025
+    },
+    "claude-mythos-5-1": {
+      "input": 0.00001,
+      "output": 0.00005,
+      "cache_creation_5m": 0.0000125,
+      "cache_creation_1h": 0.00002,
+      "cache_read": 0.00000025
+    },
+    "claude-fable-5": {
+      "input": 0.00001,
+      "output": 0.00005,
+      "cache_creation_5m": 0.0000125,
+      "cache_creation_1h": 0.00002,
+      "cache_read": 0.000001
+    },
+    "claude-mythos-5": {
+      "input": 0.00001,
+      "output": 0.00005,
+      "cache_creation_5m": 0.0000125,
+      "cache_creation_1h": 0.00002,
+      "cache_read": 0.000001
+    },
+    "claude-opus-5-5": {
+      "input": 0.000004,
+      "output": 0.00002,
+      "cache_creation_5m": 0.000005,
+      "cache_creation_1h": 0.000008,
+      "cache_read": 0.0000002
+    },
+    "claude-opus-5": {
+      "input": 0.000005,
+      "output": 0.000025,
+      "cache_creation_5m": 0.00000625,
+      "cache_creation_1h": 0.00001,
+      "cache_read": 0.0000005
+    },
+    "claude-opus-4-8": {
+      "input": 0.000005,
+      "output": 0.000025,
+      "cache_creation_5m": 0.00000625,
+      "cache_creation_1h": 0.00001,
+      "cache_read": 0.0000005
+    },
     "claude-opus-4-7": {
-      "input": 0.000015,
-      "output": 0.000075,
-      "cache_creation_5m": 0.00001875,
-      "cache_creation_1h": 0.00003,
-      "cache_read": 0.0000015
+      "input": 0.000005,
+      "output": 0.000025,
+      "cache_creation_5m": 0.00000625,
+      "cache_creation_1h": 0.00001,
+      "cache_read": 0.0000005
     },
     "claude-opus-4-6": {
-      "input": 0.000015,
-      "output": 0.000075,
-      "cache_creation_5m": 0.00001875,
-      "cache_creation_1h": 0.00003,
-      "cache_read": 0.0000015
+      "input": 0.000005,
+      "output": 0.000025,
+      "cache_creation_5m": 0.00000625,
+      "cache_creation_1h": 0.00001,
+      "cache_read": 0.0000005
     },
     "claude-opus-4-5": {
+      "input": 0.000005,
+      "output": 0.000025,
+      "cache_creation_5m": 0.00000625,
+      "cache_creation_1h": 0.00001,
+      "cache_read": 0.0000005
+    },
+    "claude-opus-4-1": {
       "input": 0.000015,
       "output": 0.000075,
       "cache_creation_5m": 0.00001875,
@@ -29,6 +92,20 @@
       "cache_creation_5m": 0.00001875,
       "cache_creation_1h": 0.00003,
       "cache_read": 0.0000015
+    },
+    "claude-sonnet-5-5": {
+      "input": 0.000002,
+      "output": 0.00001,
+      "cache_creation_5m": 0.0000025,
+      "cache_creation_1h": 0.000004,
+      "cache_read": 0.0000002
+    },
+    "claude-sonnet-5": {
+      "input": 0.000002,
+      "output": 0.00001,
+      "cache_creation_5m": 0.0000025,
+      "cache_creation_1h": 0.000004,
+      "cache_read": 0.0000002
     },
     "claude-sonnet-4-6": {
       "input": 0.000003,
@@ -52,11 +129,11 @@
       "cache_read": 0.0000003
     },
     "claude-haiku-4-5": {
-      "input": 0.0000008,
-      "output": 0.000004,
-      "cache_creation_5m": 0.000001,
-      "cache_creation_1h": 0.0000016,
-      "cache_read": 0.00000008
+      "input": 0.000001,
+      "output": 0.000005,
+      "cache_creation_5m": 0.00000125,
+      "cache_creation_1h": 0.000002,
+      "cache_read": 0.0000001
     },
     "claude-haiku-4": {
       "input": 0.0000008,
@@ -95,8 +172,10 @@
     }
   },
   "family_fallbacks": {
-    "opus": "claude-opus-4-7",
-    "sonnet": "claude-sonnet-4-6",
+    "fable": "claude-fable-5-1",
+    "mythos": "claude-mythos-5-1",
+    "opus": "claude-opus-5-5",
+    "sonnet": "claude-sonnet-5-5",
     "haiku": "claude-haiku-4-5"
   }
 }

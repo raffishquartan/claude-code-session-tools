@@ -41,10 +41,16 @@ class TranscriptError(Exception):
     not a single parseable JSON line."""
 
 
+SYNTHETIC_MODEL = "<synthetic>"
+
+
 def _current_context_tokens(transcript_path: Path) -> tuple[int, str]:
     """(token count, model id) from the last non-sidechain assistant message's
     usage. (0, "") for a fresh session with no assistant usage yet - that is a
-    legitimate state, not an error."""
+    legitimate state, not an error. Entries whose model is `<synthetic>` are
+    skipped: Claude Code writes them (with all-zero usage) for things that are
+    not API responses, such as a usage-limit notice, so they say nothing about
+    the context size."""
     if not transcript_path.is_file():
         raise TranscriptError(f"transcript not found: {transcript_path}")
 
@@ -68,9 +74,10 @@ def _current_context_tokens(transcript_path: Path) -> tuple[int, str]:
                     continue
                 message = obj.get("message") or {}
                 usage = message.get("usage")
-                if isinstance(usage, dict):
+                model = message.get("model") or ""
+                if isinstance(usage, dict) and model != SYNTHETIC_MODEL:
                     last_usage = usage
-                    last_model = message.get("model") or ""
+                    last_model = model
     except OSError as exc:
         raise TranscriptError(f"cannot read transcript: {exc}") from exc
 
@@ -102,19 +109,18 @@ def _window_label(window: int) -> str:
     return f"{(window + 500) // 1000}k"
 
 
-def _format_cost(*, tokens: int, price_per_mtok: float) -> str:
-    """Cache-read cost, ~0.1x the model's standard input price, truncated
-    (not rounded) to 2dp - matches `bc`'s `scale=2` semantics from the bash
-    original. Uses Decimal rather than native float arithmetic: a naive
-    math.floor(raw * 100) / 100 on a float hits representation error for
-    ordinary inputs (e.g. tokens=700_000, price=3.00 evaluates to
-    0.20999999999999996 in float, one cent short of the correct 0.21) -
-    caught by adversarial code review on this exact function, not
-    hypothetical. Decimal(str(price_per_mtok)) avoids reintroducing the same
+def _format_cost(*, tokens: int, cache_read_price_per_mtok: float) -> str:
+    """Cost of reading `tokens` from the prompt cache at the model's cache-read
+    price, truncated (not rounded) to 2dp - matches `bc`'s `scale=2`
+    semantics from the bash original. Uses Decimal rather than native float
+    arithmetic: a naive math.floor(raw * 100) / 100 on a float hits
+    representation error for ordinary inputs (e.g. tokens=350_000,
+    price=0.20 evaluates to 0.06999999999999999 in float, one cent short of
+    the correct 0.07). Decimal(str(price)) avoids reintroducing the same
     float-representation problem by round-tripping the price through its
     float form first.
     """
-    raw = Decimal(tokens) / Decimal(1_000_000) * Decimal(str(price_per_mtok)) * Decimal("0.1")
+    raw = Decimal(tokens) / Decimal(1_000_000) * Decimal(str(cache_read_price_per_mtok))
     return str(raw.quantize(Decimal("0.01"), rounding=ROUND_DOWN))
 
 
@@ -134,7 +140,7 @@ def _reason(*, tokens: int, window: int, price: float, name: str, now: str, red:
     k = _k_tokens(tokens)
     pct = _pct_of_window(tokens, window)
     label = _window_label(window)
-    cost = _format_cost(tokens=tokens, price_per_mtok=price)
+    cost = _format_cost(tokens=tokens, cache_read_price_per_mtok=price)
     emoji = "🔴" if red else "🟠"
     when = "when you get a natural break" if red else "whenever convenient"
     return (
@@ -176,7 +182,7 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     window = model_info.context_window(model_id)
-    price = model_info.input_price_per_mtok(model_id)
+    price = model_info.cache_read_price_per_mtok(model_id)
     name = model_info.display_name(model_id)
     now = datetime.datetime.now().strftime("%H:%M")
     red = tokens >= THRESHOLD_RED

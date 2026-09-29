@@ -56,27 +56,33 @@ def test_corrupt_transcript_raises(tmp_path: Path):
         cww._current_context_tokens(p)
 
 
-def test_golden_cost_case_matches_the_pasted_warning():
-    """tokens=155000, Sonnet 5 ($3.00/MTok) is the exact figure from the
-    context-warning message pasted at the top of the session that started
-    this migration: '~155k tokens ... ~$0.04/turn in cache reads'."""
-    assert cww._format_cost(tokens=155_000, price_per_mtok=3.00) == "0.04"
+def test_cost_is_tokens_times_cache_read_price():
+    """155k tokens at a $0.30/MTok cache-read price is $0.0465, shown as 0.04."""
+    assert cww._format_cost(tokens=155_000, cache_read_price_per_mtok=0.30) == "0.04"
+
+
+@pytest.mark.parametrize(
+    ("model_id", "tokens", "cost"),
+    [("claude-fable-5-1", 400_000, "0.10"), ("claude-sonnet-5-5", 500_000, "0.10")],
+)
+def test_cost_uses_the_models_published_cache_read_price(model_id, tokens, cost):
+    price = cww.model_info.cache_read_price_per_mtok(model_id)
+    assert cww._format_cost(tokens=tokens, cache_read_price_per_mtok=price) == cost
 
 
 def test_cost_truncates_not_rounds():
-    """tokens=199_000, price=3.00 -> 0.199*3.00*0.1 = 0.0597 -> bc truncates
+    """tokens=199_000, cache-read price 0.30 -> 0.199*0.30 = 0.0597 -> bc truncates
     to "0.05"; a naive f'{x:.2f}' would round to "0.06". Chosen specifically
     because truncation and rounding clearly disagree on this input."""
-    assert cww._format_cost(tokens=199_000, price_per_mtok=3.00) == "0.05"
+    assert cww._format_cost(tokens=199_000, cache_read_price_per_mtok=0.30) == "0.05"
 
 
 def test_cost_does_not_lose_a_cent_to_float_representation_error():
     """math.floor(raw * 100) / 100 on a native float loses a cent here:
-    700000/1e6 * 3.00 * 0.1 evaluates to 0.20999999999999996 in float, not
-    exactly 0.21, so a naive floor gives "0.20". Found by adversarial code
-    review - not a contrived edge case: 700k tokens is 70% of a Sonnet 5
-    1M-token window, an entirely ordinary state for this hook."""
-    assert cww._format_cost(tokens=700_000, price_per_mtok=3.00) == "0.21"
+    350000/1e6 * 0.20 evaluates to 0.06999999999999999 in float, not
+    exactly 0.07, so a naive floor gives "0.06". 350k tokens at the Sonnet 5.x
+    / Opus 5.5 cache-read price is an entirely ordinary state for this hook."""
+    assert cww._format_cost(tokens=350_000, cache_read_price_per_mtok=0.20) == "0.07"
 
 
 def test_k_and_pct_integer_arithmetic():
@@ -134,7 +140,7 @@ def test_orange_band_emits_block_decision(tmp_path, monkeypatch, capsys):
     assert payload["decision"] == "block"
     assert "🟠 CONTEXT" in payload["reason"]
     assert "~155k tokens" in payload["reason"]
-    assert "~$0.04/turn" in payload["reason"]
+    assert "~$0.03/turn" in payload["reason"]  # Sonnet 5 cache reads $0.20/MTok
 
 
 def test_red_band_emits_red_decision(tmp_path, monkeypatch, capsys):
@@ -185,9 +191,10 @@ def test_override_end_to_end_via_real_store(tmp_path, monkeypatch, capsys):
 @pytest.mark.parametrize(
     ("model_id", "name", "cost"),
     [
-        ("claude-sonnet-5-5", "Sonnet 5.5", "0.07"),
-        ("claude-opus-5-5", "Opus 5.5", "0.13"),
-        ("claude-fable-5-1", "Fable 5.1", "0.26"),
+        # 266k tokens x published cache-read price ($0.20, $0.20, $0.25 per MTok)
+        ("claude-sonnet-5-5", "Sonnet 5.5", "0.05"),
+        ("claude-opus-5-5", "Opus 5.5", "0.05"),
+        ("claude-fable-5-1", "Fable 5.1", "0.06"),
     ],
 )
 def test_new_5x_models_are_measured_against_their_one_million_token_window(
@@ -202,4 +209,44 @@ def test_new_5x_models_are_measured_against_their_one_million_token_window(
     assert "~27% of the 1M-token window" in reason
     assert name in reason
     assert f"~${cost}/turn" in reason
+    assert "unrecognized" not in reason
+
+
+def _synthetic_stub() -> dict:
+    """The shape Claude Code writes for a non-API assistant entry (e.g. a usage-limit notice)."""
+    return {"type": "assistant", "isApiErrorMessage": True, "message": {"model": "<synthetic>",
+        "stop_reason": "stop_sequence",
+        "usage": {"input_tokens": 0, "output_tokens": 0, "cache_creation_input_tokens": 0,
+                  "cache_read_input_tokens": 0}}}
+
+
+def test_trailing_synthetic_entry_does_not_reset_the_count(tmp_path: Path):
+    p = tmp_path / "t.jsonl"
+    _write_transcript(p, [
+        {"type": "assistant", "message": {"model": "claude-sonnet-5-5",
+            "usage": {"input_tokens": 500, "cache_creation_input_tokens": 1500, "cache_read_input_tokens": 178000}}},
+        _synthetic_stub(),
+    ])
+    assert cww._current_context_tokens(p) == (180000, "claude-sonnet-5-5")
+
+
+def test_only_synthetic_entries_behave_like_a_fresh_session(tmp_path: Path):
+    p = tmp_path / "t.jsonl"
+    _write_transcript(p, [{"type": "user", "message": {"content": "hi"}}, _synthetic_stub()])
+    assert cww._current_context_tokens(p) == (0, "")
+
+
+def test_warning_still_fires_after_a_trailing_synthetic_entry(tmp_path, monkeypatch, capsys):
+    p = tmp_path / "t.jsonl"
+    _write_transcript(p, [
+        {"type": "assistant", "message": {"model": "claude-sonnet-5-5",
+            "usage": {"input_tokens": 180000, "cache_creation_input_tokens": 0, "cache_read_input_tokens": 0}}},
+        _synthetic_stub(),
+    ])
+    monkeypatch.setattr(cww, "_is_overridden", lambda session_id: False)
+    rc, out = _run_main(monkeypatch, capsys, {"transcript_path": str(p), "session_id": "s1"})
+    assert rc == 0
+    reason = json.loads(out.out)["reason"]
+    assert "~180k tokens" in reason
+    assert "Sonnet 5.5" in reason
     assert "unrecognized" not in reason

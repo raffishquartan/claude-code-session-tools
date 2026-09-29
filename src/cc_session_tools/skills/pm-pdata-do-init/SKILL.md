@@ -141,6 +141,9 @@ relative to a subfolder rather than the project root (e.g. an index-of-a-subfold
 root) - `--write`'s file_path-resolution verification will fail with a bare "does not resolve
 under `<project_root>`" and no further guidance. Instead, map that column to a plain named field
 (e.g. `source_file_path`) and note in the field's `description` what path it's relative to.
+Likewise, a column documented to use multiple or shorthand path notations (e.g. brace expansion
+alongside plain paths) is unsafe to map to `file_path_column` at all - map it to a plain named TEXT
+field instead, exactly as for the subfolder-relative case.
 
 **`content_column: null` default caveat:** an entry with `content_column` left unset falls back to
 a raw `json.dumps(row)` dump as every record's content - rarely what you want for readable `ccst

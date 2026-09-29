@@ -48,10 +48,10 @@ def test_run_query_no_filters_no_groupby_returns_single_total_row() -> None:
     assert len(result) == 1
     assert result.iloc[0]["total_tokens"] == 4_000_000
     assert result.iloc[0]["message_count"] == 2
-    # Opus: 1M input ($15) + 1M output ($75) = $90
-    # Sonnet: 1M input ($3) + 1M output ($15) = $18
-    # Total: $108
-    assert result.iloc[0]["cost_usd"] == 108.0
+    # Opus 4.7: 1M input ($5) + 1M output ($25) = $30
+    # Sonnet 4.6: 1M input ($3) + 1M output ($15) = $18
+    # Total: $48
+    assert result.iloc[0]["cost_usd"] == pytest.approx(48.0)
 
 
 def test_filter_by_project_returns_only_matching_rows() -> None:

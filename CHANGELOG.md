@@ -7,6 +7,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.10.3] - 2026-09-29
+
+### Fixed
+
+- **`claude-code-usage` cost figures now use Anthropic's published prices.** The pricing table
+  priced Opus 4.5-4.7 at the old $15 input / $75 output rate, Haiku 4.5 at $0.80 instead of $1, and
+  had no Claude 5.x rows: Opus 5.x and Opus 4.8 fell back to that $15/$75 row, Sonnet 5 / 5.5 to
+  Sonnet 4.6's $3/$15, and Fable 5 / 5.1 and Mythos 5 were costed at $0. Every current model now
+  has its published input, output, 5-minute and 1-hour cache-write and cache-read rate (checked
+  against https://platform.claude.com/docs/en/about-claude/pricing on 2026-09-29), including Fable
+  5.1 / Mythos 5.1's $0.25 and Opus 5.5's $0.20 cache reads. Every requested model id was on that
+  page, so no price here is assumed. Existing reports' dollar figures change accordingly (Opus
+  4.5-4.8 and Sonnet 5.x down, Haiku 4.5 up, Fable/Mythos from $0); token totals and the ccusage
+  token reconciliation are unaffected.
+- A dated snapshot id (`<id>-YYYYMMDD`) is now priced as its undated model, so
+  `claude-opus-4-20250514` keeps the Opus 4 price.
+- An id with no row is priced as its family's newest model only when it looks like
+  `claude-<family>-...` (Fable, Mythos, Opus, Sonnet, Haiku), and each report now logs a warning
+  naming every model priced that way. Unlisted Claude 3 ids and non-Claude ids are reported as
+  unpriced (cost 0, with the existing warning) instead of getting a newer model's price.
+- `<synthetic>` entries (Claude Code's zero-usage stubs, e.g. a usage-limit notice) cost $0 and no
+  longer trigger the "no pricing for models" warning on every report.
+- **The context-window warning no longer goes silent after a `<synthetic>` entry.** When a
+  session's last assistant entry was a `<synthetic>` stub, the hook read its all-zero usage as the
+  context size and stayed quiet however large the context was. It now measures the last real
+  assistant response.
+- The warning's "~$/turn in cache reads" estimate now uses each model's published cache-read price
+  instead of 0.1x an input price, which was wrong for Sonnet 5 / 5.5 ($2 input, not $3), Opus 5.5
+  ($4, cache reads 0.05x) and Fable 5.1 (cache reads 0.025x). The warning also recognises
+  `claude-mythos-5-1` (1M-token window).
+
+### Changed
+
+- `pm-pdata-do-init`'s `file_path_column` pitfall now also says that a column documented to use
+  multiple or shorthand path notations is unsafe to map to `file_path_column` at all; map it to a
+  plain named TEXT field instead.
+
+### Known, not changed here
+
+- Cost reports do not model the 1.1x US-only inference multiplier, fast-mode pricing or batch
+  discounts.
+
 ## [3.10.2] - 2026-09-29
 
 ### Fixed
