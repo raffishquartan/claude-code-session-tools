@@ -1131,3 +1131,168 @@ def test_write_cutover_failure_after_a_move_keeps_that_entry_and_rolls_back_the_
     from cc_session_tools.lib.pdata import service
 
     assert service.list_records(project="demo", record_group="notes") == []
+
+
+# --- pointer-path collisions (specs pdata/init-pointer-files, init-classification-report) ---
+
+REAL_NARRATIVE = "REAL NARRATIVE - MUST SURVIVE\n"
+
+
+def _collision_project(monkeypatch, tmp_path, *, extra: dict[str, str] | None = None) -> Path:
+    monkeypatch.setenv(init_paths.PROJECTS_ROOT_ENV, str(tmp_path / "projects"))
+    monkeypatch.setenv("CCST_PROJECT_DB_DIR", str(tmp_path / "dbs"))
+    monkeypatch.setenv("CCST_PDATA_BACKUP_DIR", str(tmp_path / "backups"))
+    project_dir = tmp_path / "projects" / "demo"
+    (project_dir / "data").mkdir(parents=True)
+    (project_dir / "data/things.csv").write_text("idea\nfirst\nsecond\n")
+    (project_dir / "data/things.md").write_text(REAL_NARRATIVE)
+    for name, text in (extra or {}).items():
+        (project_dir / name).write_text(text)
+    return project_dir
+
+
+def _snapshot(root: Path) -> dict[str, bytes]:
+    return {str(p.relative_to(root)): p.read_bytes() for p in root.rglob("*") if p.is_file()}
+
+
+def test_dry_run_lists_a_pointer_collision_and_modifies_nothing(monkeypatch, tmp_path):
+    project_dir = _collision_project(monkeypatch, tmp_path)
+    init_service.dry_run(project="demo")
+    before = _snapshot(project_dir)
+
+    result = init_service.dry_run(project="demo")
+
+    assert "data/things.md" in result.report
+    assert "data/things.csv.pdata-pointer.md" in result.report
+    assert "--leave-no-pointer-files" in result.report
+    assert _snapshot(project_dir) == before
+
+
+def test_dry_run_has_no_pointer_lines_without_a_collision(monkeypatch, tmp_path):
+    project_dir = _collision_project(monkeypatch, tmp_path)
+    (project_dir / "data/things.md").unlink()
+
+    result = init_service.dry_run(project="demo")
+
+    assert "pointer" not in result.report
+
+
+def test_dry_run_reports_a_collision_between_two_entries(monkeypatch, tmp_path):
+    project_dir = _collision_project(
+        monkeypatch, tmp_path, extra={"data/things.json": '[{"idea": "x"}]'})
+    (project_dir / "data/things.md").unlink()
+
+    result = init_service.dry_run(project="demo")
+
+    assert "data/things.json.pdata-pointer.md" in result.report
+
+
+def test_dry_run_says_the_pointer_will_be_skipped_when_both_paths_are_occupied(
+    monkeypatch, tmp_path
+):
+    _collision_project(
+        monkeypatch, tmp_path, extra={"data/things.csv.pdata-pointer.md": "other\n"})
+
+    result = init_service.dry_run(project="demo")
+
+    assert "will be skipped" in result.report
+
+
+def test_dry_run_ignores_already_migrated_entries(monkeypatch, tmp_path):
+    from cc_session_tools.lib.pdata import manifest
+
+    _collision_project(monkeypatch, tmp_path)
+    dry = init_service.dry_run(project="demo")
+    m = manifest.load(dry.proposal_path)
+    for entry in m.entries:
+        if entry.classification == "db-owned":
+            entry.migrated_at = "2026-01-01T00:00:00Z"
+    manifest.save(m, dry.proposal_path)
+
+    result = init_service.dry_run(project="demo")
+
+    assert "pointer" not in result.report
+
+
+def test_write_keeps_the_real_md_reports_the_substitution_and_announces_it(
+    monkeypatch, tmp_path
+):
+    project_dir = _collision_project(monkeypatch, tmp_path)
+    init_service.dry_run(project="demo")
+    progress: list[str] = []
+
+    result = init_service.write(project="demo", on_progress=progress.append)
+
+    assert result.failure is None
+    assert (project_dir / "data/things.md").read_text() == REAL_NARRATIVE
+    pointer = project_dir / "data/things.csv.pdata-pointer.md"
+    assert "ccst pdata list --project demo --group things" in pointer.read_text()
+    assert "Pointer files" in result.report
+    assert "data/things.md" in result.report
+    assert any("data/things.md" in line and "untouched" in line for line in progress)
+
+
+def test_write_without_a_collision_has_no_pointer_report_section(monkeypatch, tmp_path):
+    project_dir = _collision_project(monkeypatch, tmp_path)
+    (project_dir / "data/things.md").unlink()
+    init_service.dry_run(project="demo")
+
+    result = init_service.write(project="demo")
+
+    assert "Pointer files" not in result.report
+    assert (project_dir / "data/things.md").read_text().startswith("# things.csv")
+
+
+def test_a_collision_created_between_dry_run_and_write_is_still_caught(monkeypatch, tmp_path):
+    project_dir = _collision_project(monkeypatch, tmp_path)
+    (project_dir / "data/things.md").unlink()
+    init_service.dry_run(project="demo")
+    (project_dir / "data/things.md").write_text(REAL_NARRATIVE)
+
+    init_service.write(project="demo")
+
+    assert (project_dir / "data/things.md").read_text() == REAL_NARRATIVE
+    assert (project_dir / "data/things.csv.pdata-pointer.md").exists()
+
+
+def test_a_second_write_after_success_leaves_everything_alone(monkeypatch, tmp_path):
+    """Regression guard: green before and after the fix (already-migrated entries are skipped)."""
+    project_dir = _collision_project(monkeypatch, tmp_path)
+    init_service.dry_run(project="demo")
+    init_service.write(project="demo")
+    before = _snapshot(project_dir)
+
+    init_service.write(project="demo")
+
+    assert _snapshot(project_dir) == before
+
+
+def test_recutting_an_entry_keeps_the_real_md_and_a_single_pointer(monkeypatch, tmp_path):
+    from cc_session_tools.lib.pdata import manifest
+
+    project_dir = _collision_project(monkeypatch, tmp_path)
+    dry = init_service.dry_run(project="demo")
+    init_service.write(project="demo")
+    (project_dir / "data/things.csv").write_text("idea\nthird\n")
+    m = manifest.load(dry.proposal_path)
+    for entry in m.entries:
+        entry.migrated_at = None
+    manifest.save(m, dry.proposal_path)
+
+    init_service.write(project="demo")
+
+    assert (project_dir / "data/things.md").read_text() == REAL_NARRATIVE
+    assert sorted(p.name for p in project_dir.rglob("*.pdata-pointer.md")) == [
+        "things.csv.pdata-pointer.md"]
+
+
+def test_leave_no_pointer_files_leaves_the_real_md_and_writes_nothing(monkeypatch, tmp_path):
+    project_dir = _collision_project(monkeypatch, tmp_path)
+    init_service.dry_run(project="demo")
+
+    result = init_service.write(project="demo", leave_no_pointer_files=True)
+
+    assert result.failure is None
+    assert (project_dir / "data/things.md").read_text() == REAL_NARRATIVE
+    assert list(project_dir.rglob("*.pdata-pointer.md")) == []
+    assert "Pointer files" not in result.report

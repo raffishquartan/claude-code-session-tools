@@ -93,7 +93,7 @@ def dry_run(*, project: str, rehearse: Path | None = None) -> DryRunResult:
         project_root, project, proposal_path,
         existing_record_groups=existing_record_groups,
     )
-    return DryRunResult(manifest=m, report=_render_report(m), proposal_path=proposal_path)
+    return DryRunResult(manifest=m, report=_render_report(m, project_root), proposal_path=proposal_path)
 
 
 # A field name proposed by _classify_csv is derived from a real CSV header cell (see
@@ -119,7 +119,7 @@ def _looks_like_garbled_header(field_names: list[str]) -> bool:
     return suspicious >= 2
 
 
-def _render_report(m: Manifest) -> str:
+def _render_report(m: Manifest, project_root: Path) -> str:
     if not m.entries:
         return f"ccst pdata init — {m.project}: no files found, empty base schema created."
     lines = [f"ccst pdata init — {m.project}: {len(m.entries)} file(s) classified"]
@@ -138,6 +138,21 @@ def _render_report(m: Manifest) -> str:
                     "fragments, not column names; this file's header may not be what it "
                     "looks like (see pm-pdata-do-init's garbled-CSV-header caveat)"
                 )
+    pending = [
+        e for e in m.entries if e.classification == "db-owned" and e.migrated_at is None
+    ]
+    for plan in cutover.plan_pointers(project_root, pending):
+        if plan.skipped:
+            lines.append(
+                f"  ⚠ pointer: {' and '.join(plan.occupied)} already exist(s); the pointer for "
+                f"{plan.entry_path} will be skipped (existing files are never overwritten)"
+            )
+        elif plan.substituted:
+            lines.append(
+                f"  ⚠ pointer: {', '.join(plan.occupied)} already exists; --write will put the "
+                f"pointer for {plan.entry_path} at {plan.pointer_path} instead (the existing file "
+                f"is never overwritten; no pointer is written if --leave-no-pointer-files is passed)"
+            )
     lines.append(
         "Review/override entries in the proposal file listed below before running --write."
     )
@@ -586,10 +601,17 @@ def write(
 
         _emit(on_progress, f"Cutting over {len(written_entries)} file(s)...")
         archived: list[ManifestEntry] = []
+        pointer_notes: list[cutover.PointerPlan] = []
+
+        def _announce_pointer(plan: cutover.PointerPlan) -> None:
+            pointer_notes.append(plan)
+            _emit(on_progress, _pointer_note(plan))
+
         try:
             cutover.archive_entries(
                 project_root=project_root, entries=written_entries, project=project,
                 write_pointer_files=not leave_no_pointer_files, on_archived=archived.append,
+                on_pointer=_announce_pointer,
             )
             # Mark every entry this run actually cut over as migrated, and persist that back to
             # the manifest — write() only ever `manifest.load`s otherwise, so without this a
@@ -612,7 +634,10 @@ def write(
             created_record_ids=created_ids,
             entries_written=[e.path for e in written_entries],
             backup_path=backup_path, failure=None,
-            report=_render_diff_report(written_entries=written_entries, entry_rows=entry_rows),
+            report=_render_diff_report(
+                written_entries=written_entries, entry_rows=entry_rows,
+                pointer_notes=pointer_notes,
+            ),
         )
 
 
@@ -669,9 +694,22 @@ def _verify(
     return reasons
 
 
+def _pointer_note(plan: cutover.PointerPlan) -> str:
+    if plan.skipped:
+        return (
+            f"WARNING: no pointer written for {plan.entry_path}: {' and '.join(plan.occupied)} "
+            f"already exist(s) and were left untouched"
+        )
+    return (
+        f"Pointer for {plan.entry_path} written to {plan.pointer_path}: "
+        f"{', '.join(plan.occupied)} already exists and was left untouched"
+    )
+
+
 def _render_diff_report(
     *, written_entries: list[ManifestEntry],
     entry_rows: dict[str, list[tuple[int, ImportRow]]],
+    pointer_notes: list[cutover.PointerPlan],
 ) -> str:
     """Spec §7.1 step 4's human-readable diff report — old content vs. what landed
     in the DB — for review. Printed by the CLI as part of a successful `--write`'s
@@ -691,4 +729,7 @@ def _render_diff_report(
             lines.append(f"    id={record_id} content={preview!r}")
         if len(rows) > 3:
             lines.append(f"    ... and {len(rows) - 3} more row(s)")
+    if pointer_notes:
+        lines.append("Pointer files (existing files were left untouched):")
+        lines.extend(f"  {_pointer_note(plan)}" for plan in pointer_notes)
     return "\n".join(lines)
