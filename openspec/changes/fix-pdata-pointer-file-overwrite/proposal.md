@@ -12,18 +12,23 @@ never destroy a file it was not asked to migrate.
 ## What Changes
 
 - Cutover never overwrites or deletes an existing file at the pointer path. If the primary pointer
-  path (`<stem>.md`) is occupied by anything other than this entry's own earlier pointer stub, the
-  pointer is written to `<stem>.pdata-pointer.md` instead and the substitution is reported.
+  path (`<stem>.md`) is occupied by anything other than this entry's own earlier pointer stub (a
+  real file, a directory, a symlink, an unreadable or binary file), the pointer is written to
+  `<original file name>.pdata-pointer.md` (for example `things.csv.pdata-pointer.md`) and the
+  substitution is reported. The substitute name includes the full original name so that entries
+  sharing a stem (`a.csv` and `a.json`) never collide on it.
 - If that substitute path is also occupied by something that is not this entry's own earlier
-  pointer, the pointer is skipped with a loud warning in the write report; the data is still
-  migrated and nothing is overwritten.
-- A file that is this entry's own earlier pointer stub (its first line is exactly this entry's
-  pointer heading) may be rewritten, so idempotent re-runs still work and never create duplicates.
-  Two entries sharing a stem (for example `a.csv` and `a.tsv`) have different headings, so neither
-  clobbers the other's pointer.
-- The dry-run report lists every pointer-path collision (and the path the pointer will go to
-  instead) before `--write` is run.
-- The write report and the archive `MANIFEST.md` log record each substitution or skip.
+  pointer, the pointer is skipped with a loud warning (printed as the cutover runs and repeated in
+  the write report); the data is still migrated and nothing is overwritten. A file that appears
+  between planning and writing degrades to a skip, never an overwrite or a crash.
+- A regular file that is this entry's own earlier pointer stub (heading, blank line, and the
+  "This file's data now lives in pdata record group" line, tolerant of a BOM and CRLF) may be
+  rewritten, so re-creating an entry and cutting it over again neither loses its pointer nor leaves
+  duplicates. A hand-extended file that no longer matches is preserved.
+- The dry-run report lists every pointer-path collision (including collisions between entries) and
+  the path the pointer will go to instead, before `--write` is run.
+- Each substitution or skip is announced as it happens, appears in the write report, and is
+  recorded in the archive `MANIFEST.md` line.
 - `--leave-no-pointer-files` is unchanged: no pointer is written and no existing file is touched.
 - `pm-pdata-do-init`'s skill text (Step 7) documents the collision behaviour.
 - Patch release 3.10.5 (data-loss bug fix; no flag or interface change).
@@ -44,6 +49,5 @@ never destroy a file it was not asked to migrate.
   outcomes), `src/cc_session_tools/lib/pdata/init_service.py` (dry-run report, write report),
   `src/cc_session_tools/skills/pm-pdata-do-init/SKILL.md`.
 - Tests: `tests/pdata/test_cutover.py`, `tests/pdata/test_init_service.py`.
-- CHANGELOG and patch bump to 3.10.5. This branch is stacked on the open
-  `fix-unknown-model-assumed-window-warning` branch (3.10.4), so it merges after that one.
+- CHANGELOG and patch bump to 3.10.5 (main is at 3.10.4 after the unknown-model-warning release).
 - Fixtures use fictional names (`data/things.csv`); no real project data is used.
