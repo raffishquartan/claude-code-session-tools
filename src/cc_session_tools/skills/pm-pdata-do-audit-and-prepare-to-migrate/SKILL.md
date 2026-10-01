@@ -36,11 +36,12 @@ approval.
 
 ## Phase 1: OneDrive sync-conflict cleanup
 
-Invoke `resolve-onedrive-conflicts` and run its scanner across the project tree; run it before
-anything else so stale device-suffixed copies do not pollute later phases. Treat a
-disproportionate `true_conflict` count as a scanner false-positive to investigate (the hyphen
-heuristic can match a project's own multi-hyphen naming) and filter to genuine device-suffix
-conflicts before trusting it. Split them into **central/index files** (a handful, reviewable
+Invoke `resolve-onedrive-conflicts` and run its scanner across the project tree with
+`--script-out`; run it before anything else so stale device-suffixed copies do not pollute later
+phases. The scanner marks pairs whose suffix does not look like a device label (no space or `(n)`)
+as `low_confidence` and keeps them out of its counts and delete script, because the hyphen
+heuristic can match a project's own multi-hyphen naming; confirm those by hand (or re-run with
+`--device-label <label>` for a known short label) before trusting them. Split them into **central/index files** (a handful, reviewable
 directly) and **bulk content files** (dozens or hundreds; give them their own agent with the
 file list).
 
@@ -90,8 +91,9 @@ slice (`--path`, `--findings-only`). Agents check, with concrete evidence for ev
 - **Key stability:** whether each unique column is really a stable key.
 
 Agents work read-only unless a fix is unambiguous and mechanical (merging two non-overlapping logs);
-anything needing editorial judgement is a recommendation. Use `resolve-onedrive-conflicts`'s
-`DELETE-SAFE` / `MERGE-NEEDED` / `RENAME` / `NO ACTION` verdicts for consistency.
+anything needing editorial judgement is a recommendation. Use the scanner's `action` field
+(`DELETE-SAFE` / `MERGE-NEEDED` / `NO ACTION`) for scanned pairs, and `RENAME` for a copy with no
+canonical sibling, for consistency.
 
 ## Phase 3: consolidated report + checkpoint table
 
@@ -104,9 +106,9 @@ the user a checkpoint table split into:
 - **Real gaps** found but not fixed (missing extractions, undersized indexes, structural drift):
   recommend a project TODO entry or a prompt file for a dedicated session.
 
-Hand back one reviewable delete script for every confirmed-safe deletion, exactly per
-`resolve-onedrive-conflicts` (comment header with each item's evidence, `set -e`, one `rm --` per
-line, told to the user as "review, then run yourself").
+Hand back one reviewable delete script for every confirmed-safe deletion, exactly in the
+format of the scanner's `--script-out` file (comment header with each item's evidence, `set -e`,
+one `rm --` per line, told to the user as "review, then run yourself").
 
 ## Phase 4: pdata-readiness pass
 
