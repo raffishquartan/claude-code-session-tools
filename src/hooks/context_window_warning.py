@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import datetime
 import json
+import re
 import sys
 from decimal import ROUND_DOWN, Decimal
 from pathlib import Path
@@ -155,6 +156,48 @@ def _reason(*, tokens: int, window: int, price: float, name: str, now: str, red:
     )
 
 
+REMEDIATION_HINT = (
+    "To fix: add the id to src/hooks/model_info.py in claude-code-session-tools; if ccst is just out "
+    "of date, run `uv tool upgrade cc-session-tools` (installed from PyPI with uv) or "
+    "`uv tool install --reinstall <path to your checkout>` (local checkout)."
+)
+
+_ID_DISALLOWED = re.compile(r"[^A-Za-z0-9._:<>\[\]-]")
+
+
+def _model_phrase(model_id: str) -> str:
+    """How the unknown model is named in the message. Characters outside the set real ids use are
+    replaced, so a corrupt or hostile transcript value cannot break the quoted lines the assistant
+    is told to echo."""
+    if not model_id:
+        return "an unknown model (no model id was recorded)"
+    return f"model `{_ID_DISALLOWED.sub('?', model_id)}`"
+
+
+def _reason_unknown(*, tokens: int, window: int, price: float, model_id: str, now: str, red: bool) -> str:
+    """Message for a model id missing from model_info's table: the window and price are
+    assumptions and the text says so, instead of presenting them as facts."""
+    k = _k_tokens(tokens)
+    pct = _pct_of_window(tokens, window)
+    label = _window_label(window)
+    cost = _format_cost(tokens=tokens, cache_read_price_per_mtok=price)
+    model = _model_phrase(model_id)
+    emoji = "🔴" if red else "🟠"
+    when = "when you get a natural break" if red else "whenever convenient"
+    return (
+        f"The context window has passed {k}k tokens. The session's {model} is not in ccst's model "
+        f"table, so the window size is ASSUMED to be {label} tokens; the real window may be much "
+        f"larger (1M for current models) and any percentage may be wrong. THIS IS A WARNING ONLY - "
+        f"output the two lines below at the start of your response, then end your turn as you "
+        f"normally would. Do not restart or repeat any work.\n"
+        f"'{emoji} CONTEXT ({now}): ~{k}k tokens used; window size ASSUMED ({label}) for {model} - "
+        f"the real window may be much larger, so ~{pct}% is unreliable. ~${cost}/turn assumes the "
+        f"default ${price:.2f}/MTok cache-read price. This is a nudge, not a limit - keep going; "
+        f"/compact {when}. {REMEDIATION_HINT}'\n"
+        f"'(To silence this warning for the rest of the session, run /context-override.)'"
+    )
+
+
 def main(argv: list[str] | None = None) -> int:
     try:
         stdin_obj = json.loads(sys.stdin.read() or "{}")
@@ -183,11 +226,18 @@ def main(argv: list[str] | None = None) -> int:
 
     window = model_info.context_window(model_id)
     price = model_info.cache_read_price_per_mtok(model_id)
-    name = model_info.display_name(model_id)
     now = datetime.datetime.now().strftime("%H:%M")
     red = tokens >= THRESHOLD_RED
 
-    reason = _reason(tokens=tokens, window=window, price=price, name=name, now=now, red=red)
+    if model_info.is_known(model_id):
+        reason = _reason(
+            tokens=tokens, window=window, price=price, name=model_info.display_name(model_id),
+            now=now, red=red,
+        )
+    else:
+        reason = _reason_unknown(
+            tokens=tokens, window=window, price=price, model_id=model_id, now=now, red=red,
+        )
     print(json.dumps({"decision": "block", "reason": reason}))
     return 0
 

@@ -13,11 +13,12 @@ They are not a fixed fraction of the input price: Fable 5.1 and Mythos 5.1 read 
 and Opus 5.5 at 0.05x, every other model here at 0.1x.
 
 Re-check this table whenever a new model ships. A model not matched by any
-case falls through to the default row (200000 tokens / $0.50 per MTok / "an
-unrecognized model") - deliberately the same window as every pre-Claude-5
-model, so an unrecognized model degrades to conservative,
+case (`is_known` is False) falls through to the default window and price
+(200000 tokens / $0.50 per MTok) - deliberately the same window as every
+pre-Claude-5 model, so an unknown model degrades to conservative,
 already-correct-for-most-history behaviour rather than going quiet or firing
-too early.
+too early. Those defaults are assumptions, and the warning says so; only
+`display_name` has no default (it raises KeyError for an unknown id).
 
 Deliberately not `claude_code_usage.pricing`: that module imports pandas, too
 heavy for a hook that runs on every Stop event. tests/test_pricing.py asserts
@@ -51,7 +52,6 @@ _NAME = {
 }
 _DEFAULT_WINDOW = 200_000
 _DEFAULT_CACHE_READ_PRICE = 0.50
-_DEFAULT_NAME = "an unrecognized model"
 
 
 _DATED_SNAPSHOT = re.compile(r"(.+)-\d{8}")
@@ -60,7 +60,7 @@ _DATED_SNAPSHOT = re.compile(r"(.+)-\d{8}")
 def _canonical(model_id: str) -> str:
     """A dated snapshot id (`<id>-YYYYMMDD`) resolves to its undated row. Applied once, and
     only for an exactly-eight-digit suffix: any other suffix (or a snapshot of an unknown id)
-    stays unrecognised. `[1m]`/`-latest` are not handled - transcripts' `message.model` never
+    stays unknown. `[1m]`/`-latest` are not handled - transcripts' `message.model` never
     carries them."""
     match = _DATED_SNAPSHOT.fullmatch(model_id)
     return match.group(1) if match else model_id
@@ -74,5 +74,10 @@ def cache_read_price_per_mtok(model_id: str) -> float:
     return _CACHE_READ_PRICE.get(_canonical(model_id), _DEFAULT_CACHE_READ_PRICE)
 
 
+def is_known(model_id: str) -> bool:
+    return _canonical(model_id) in _NAME
+
+
 def display_name(model_id: str) -> str:
-    return _NAME.get(_canonical(model_id), _DEFAULT_NAME)
+    """Raises KeyError for an unknown id: callers check `is_known` first."""
+    return _NAME[_canonical(model_id)]

@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.10.4] - 2026-10-01
+
+### Fixed
+
+- **The context-window warning no longer presents a guessed window as fact.** When the session's
+  model id is not in `model_info`'s table (an unknown id, a dated snapshot of an unknown id, or no
+  id at all), the message now says the window is ASSUMED to be 200k tokens and may be much larger,
+  quotes the exact id (or says none was recorded), marks the percentage unreliable, states that the
+  dollar estimate uses the assumed default $0.50/MTok cache-read price, and tells you to add the id to
+  `src/hooks/model_info.py` or refresh the installed ccst (`uv tool upgrade cc-session-tools` for a
+  PyPI install, `uv tool install --reinstall <checkout>` for a local one). The old "an unrecognized
+  model's 200k-token window" wording is gone; known models keep their message unchanged. The id is
+  shown with unusual characters replaced by `?` so a corrupt transcript value cannot break the
+  quoted lines.
+- A `claude-sonnet-5-5` session reported as "~81% of an unrecognized model's 200k-token window" came
+  from an installed ccst 3.9.1 that predates the 3.10.2 table update, not from a missing row:
+  upgrading the install is the fix for that case, and the new message says so.
+- `model_info.display_name` now raises `KeyError` for an unknown id instead of returning a made-up
+  name; use the new `model_info.is_known` first.
+
 ## [3.10.3] - 2026-09-29
 
 ### Fixed

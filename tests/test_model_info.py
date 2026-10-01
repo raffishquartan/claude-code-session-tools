@@ -1,3 +1,5 @@
+import pytest
+
 from hooks import model_info
 
 # (model id, context window, published cache-read price per MTok, display name)
@@ -28,11 +30,23 @@ def test_known_models():
 def test_unrecognized_model_falls_back():
     assert model_info.context_window("claude-nonexistent-9") == 200_000
     assert model_info.cache_read_price_per_mtok("claude-nonexistent-9") == 0.50
-    assert model_info.display_name("claude-nonexistent-9") == "an unrecognized model"
+    assert model_info.is_known("claude-nonexistent-9") is False
 
 
 def test_empty_model_id_falls_back():
     assert model_info.context_window("") == 200_000
+    assert model_info.is_known("") is False
+
+
+def test_known_and_dated_known_ids_are_known():
+    for model_id, *_ in CASES:
+        assert model_info.is_known(model_id) is True, model_id
+    assert model_info.is_known("claude-sonnet-5-5-20261001") is True
+
+
+def test_display_name_of_an_unknown_id_raises_rather_than_inventing_a_name():
+    with pytest.raises(KeyError):
+        model_info.display_name("claude-nonexistent-9")
 
 
 def test_dated_snapshot_ids_resolve_like_their_family_id():
@@ -59,11 +73,11 @@ def test_unknown_dated_and_decorated_ids_stay_unrecognised():
         "claude-haiku-4-5-garbage",
     ):
         assert model_info.context_window(model_id) == 200_000, model_id
-        assert model_info.display_name(model_id) == "an unrecognized model", model_id
+        assert model_info.is_known(model_id) is False, model_id
 
 
 def test_id_that_merely_starts_with_a_known_id_is_not_recognised():
     """Guards against a future lazy prefix implementation (already true before the fix):
     `claude-sonnet-5-9` must not inherit `claude-sonnet-5`'s row."""
     assert model_info.context_window("claude-sonnet-5-9") == 200_000
-    assert model_info.display_name("claude-sonnet-5-9") == "an unrecognized model"
+    assert model_info.is_known("claude-sonnet-5-9") is False

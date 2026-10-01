@@ -20,3 +20,11 @@ model `<synthetic>` SHALL be ignored regardless of their usage values.
 #### Scenario: Only synthetic entries
 - **WHEN** every assistant entry with a usage block is `<synthetic>`
 - **THEN** the warning treats the session as fresh (zero tokens, no model) and stays silent
+
+### Requirement: A real entry with no model id is measured, not skipped
+A non-sidechain entry with a usage block and an empty or missing model (not `<synthetic>`) SHALL
+still supply the token count, and the model id SHALL be treated as unknown for the warning's wording.
+
+#### Scenario: Usage without a model
+- **WHEN** the last real assistant entry has 180,000 context tokens and no model field
+- **THEN** the warning measures 180,000 tokens and uses the assumed-window wording
