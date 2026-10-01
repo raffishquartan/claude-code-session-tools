@@ -31,6 +31,9 @@ Three options exist for improving a candidate through iteration. Pick one:
    Use this when the loop is a handful of rounds against one candidate,
    not a fan-out across many independent attempts.
 
+Executing an OpenSpec change's `tasks.md` is `openspec-apply-change`'s job,
+not this loop's.
+
 The rest of this skill describes option 3.
 
 ## The four roles
