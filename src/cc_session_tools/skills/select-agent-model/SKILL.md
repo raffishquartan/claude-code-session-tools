@@ -17,6 +17,9 @@ in that family. "Use the newer version automatically when one ships" is
 already the tool's default behaviour - there is nothing to update when a new
 model ships within a family.
 
+This applies to every dispatch, including ones that another skill's
+instructions (e.g. a superpowers skill) tell you to make.
+
 ## Decision
 
 - **Default: Sonnet-tier** (`model: "sonnet"`). Use for anything clear,
@@ -28,6 +31,7 @@ model ships within a family.
     outcome.
   - The task involves writing or refactoring complex code in a tricky
     domain.
+- `fable` is also a valid family; do not use it unless the user asks.
 - The model of the dispatching session is independent of the model chosen
   for the agent - a Sonnet-tier session can dispatch an Opus-tier agent and
   vice versa.

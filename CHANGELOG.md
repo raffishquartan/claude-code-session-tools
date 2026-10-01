@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.10.6] - 2026-10-02
+
+### Changed
+
+- **Skill wording only, no code change.** `select-agent-model` now says it applies to every dispatch
+  including ones other skills instruct, and notes `fable` is a valid family not to be used unless
+  asked. `do-executor-critic-assessor-loop` says executing an OpenSpec `tasks.md` belongs to
+  `openspec-apply-change`. `pm-pdata-do-audit-and-prepare-to-migrate` uses the
+  `resolve-onedrive-conflicts` scanner's `action` field, `low_confidence` tier and `--script-out`
+  delete script. `pm-pdata-do-manual-migration`'s description is marked deprecated.
+
 ## [3.10.5] - 2026-10-01
 
 ### Fixed
