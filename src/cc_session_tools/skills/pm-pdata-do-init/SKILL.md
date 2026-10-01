@@ -213,6 +213,13 @@ Step 3's garbled-header recipe) - so anything else in the project citing the old
 a live signpost instead of a silent 404. Pass `--leave-no-pointer-files` if this run shouldn't
 leave one (e.g. a rehearsal, or a project convention against extra files at migrated paths).
 
+A pointer never overwrites an existing file. If a real `.md` already sits at the pointer path (for
+example narrative notes beside a migrated CSV of the same name), the pointer goes to
+`<original file name>.pdata-pointer.md` instead (`things.csv` -> `things.csv.pdata-pointer.md`); if
+that is occupied too, the pointer is skipped with a `WARNING:` line. The dry run lists every such
+collision before `--write`, and `--write` prints each substitution or skip and records it in
+`.pdata-migrated/MANIFEST.md`. Check the dry-run report for `pointer:` lines before running `--write`.
+
 ### Then run both post-migration skills
 
 After a successful `--write` (not after a dry-run or a rehearsal), update everything that still

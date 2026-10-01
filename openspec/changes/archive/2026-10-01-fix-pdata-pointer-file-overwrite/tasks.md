@@ -1,0 +1,14 @@
+## 1. Tests (red first)
+
+- [x] 1.1 `tests/pdata/test_cutover.py` (cutover level): real `.md` survives byte-for-byte and the pointer lands at `<name>.pdata-pointer.md` with schema table and example query; no-collision pointer equals the generator's exact output and the returned outcomes show no substitution; substitute occupied skips (outcome, `on_pointer` callback, MANIFEST line says skipped) with nothing overwritten and the source still archived; `a.csv` + `a.json` with and without a real `a.md`; `.json` entry; entry in a subdirectory; dotted stem and suffixless name; directory, live symlink, dangling symlink and non-UTF-8 occupants at the primary path; a file created between planning and writing degrades to a skip; own pointer (plain, CRLF, BOM) rewritten in place with no duplicate; hand-edited pointer preserved; entry whose source is itself a `.md`; `write_pointer_files=False` leaves the real `.md` untouched and plans nothing; a failing pointer write still leaves the MANIFEST line; case-insensitive name (`things.MD`) occupant untouched; verify they fail
+- [x] 1.2 `tests/pdata/test_init_service.py`: dry-run lists the collision, an inter-entry collision, a both-occupied skip, ignores already-migrated entries, mentions `--leave-no-pointer-files`, and leaves the project tree identical (before/after snapshot); end-to-end `write` keeps `REAL NARRATIVE - MUST SURVIVE` and reports the substitution via `on_progress` and the report; a collision created between `dry_run` and `write` is still caught; a second `write` after success is a regression guard (green before and after); recreating `things.csv` and clearing `migrated_at` then re-running keeps the real `.md` and leaves exactly one pointer; `leave_no_pointer_files=True` leaves it untouched; the CLI dry-run text and exit code for a collision; verify the new tests fail (except the labelled regression guard)
+
+## 2. Implementation
+
+- [x] 2.1 Add the shared heading/line helpers, `plan_pointers`/`PointerPlan`/`PointerOutcome`, safe occupancy checks and exclusive-create writing to `src/cc_session_tools/lib/pdata/cutover.py`; make `archive_entries` plan first, log the outcome in the MANIFEST line, take `on_pointer` and return outcomes; verify 1.1 passes
+- [x] 2.2 In `src/cc_session_tools/lib/pdata/init_service.py`: pass the project root into `_render_report` and add collision lines; wire `on_pointer` to progress output and collect outcomes for a "Pointer files" report section; verify 1.2 passes
+- [x] 2.3 Document the collision behaviour and the substitute name in `src/cc_session_tools/skills/pm-pdata-do-init/SKILL.md` Step 7
+
+## 3. Release
+
+- [x] 3.1 Add the CHANGELOG entry and bump to 3.10.5 in `pyproject.toml`, run `uv lock`; verify `uv run pytest -q`, mypy on the changed modules, and `openspec validate fix-pdata-pointer-file-overwrite --strict` all exit 0; with `CCST_NO_AUTO_SYNC=1 uv run`, repeat the temp-project repro by hand and confirm the narrative text survives

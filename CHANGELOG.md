@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.10.5] - 2026-10-01
+
+### Fixed
+
+- **`ccst pdata init --write` no longer overwrites an existing file with a pointer stub.** The
+  pointer written where a migrated CSV used to be (`<stem>.md`) silently truncated any real `.md` of
+  the same name beside it, losing narrative documents that lived only in the project tree. Cutover
+  now never overwrites, follows, moves or deletes anything at a pointer path: an occupied path (a
+  real file, a directory, a symlink, an unreadable file) sends the pointer to
+  `<original file name>.pdata-pointer.md` (for example `things.csv.pdata-pointer.md`, unique per
+  source file so `a.csv` and `a.json` never clash), and if that is occupied too the pointer is skipped
+  with a `WARNING:` while the data is still migrated. Only a regular file that is the entry's own
+  generated pointer (heading, blank line, body line; BOM and CRLF tolerated) is rewritten in place; a
+  hand-edited pointer is preserved.
+- The dry-run report lists every pointer-path collision, including collisions between entries that
+  share a stem, before `--write` is run. `--write` prints each substitution or skip as it happens,
+  lists them in its report, and records them in the `.pdata-migrated/MANIFEST.md` line. A skipped
+  pointer does not change the exit status. `--leave-no-pointer-files` is unchanged.
+- `cutover.archive_entries` now returns the per-entry pointer outcomes and takes an optional
+  `on_pointer` callback; `cutover.plan_pointers` computes them without touching the filesystem.
+
 ## [3.10.4] - 2026-10-01
 
 ### Fixed
