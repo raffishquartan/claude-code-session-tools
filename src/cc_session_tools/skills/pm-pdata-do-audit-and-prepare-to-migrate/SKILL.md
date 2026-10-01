@@ -41,7 +41,8 @@ Invoke `resolve-onedrive-conflicts` and run its scanner across the project tree 
 phases. The scanner marks pairs whose suffix does not look like a device label (no space or `(n)`)
 as `low_confidence` and keeps them out of its counts and delete script, because the hyphen
 heuristic can match a project's own multi-hyphen naming; confirm those by hand (or re-run with
-`--device-label <label>` for a known short label) before trusting them. Split them into **central/index files** (a handful, reviewable
+`--device-label <label>` for a known short label) before trusting them.
+Split the confirmed conflicts into **central/index files** (a handful, reviewable
 directly) and **bulk content files** (dozens or hundreds; give them their own agent with the
 file list).
 
