@@ -18,7 +18,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `resolve-onedrive-conflicts` scanner's `action` field, `low_confidence` tier and `--script-out`
   delete script. `pm-pdata-do-manual-migration`'s description is marked deprecated.
 
-||||||| 1a1f536
 ## [3.10.5] - 2026-10-01
 
 ### Fixed
