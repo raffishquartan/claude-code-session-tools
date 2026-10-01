@@ -429,3 +429,18 @@ def test_pdata_init_rehearse_still_reports_adoption_when_no_local_content(
 
     assert r.returncode == 0, r.stderr
     assert "a published sync dump already exists" in r.stdout
+
+
+def test_pdata_init_dry_run_warns_about_a_pointer_collision(base_env, tmp_path):
+    project_dir = tmp_path / "projects" / "demo"
+    (project_dir / "data").mkdir(parents=True)
+    (project_dir / "data" / "things.csv").write_text("idea\nfirst\n")
+    (project_dir / "data" / "things.md").write_text("REAL NARRATIVE - MUST SURVIVE\n")
+    env = {**base_env, "CCST_NO_AUTO_SYNC": "1"}
+
+    r = _run(env, "pdata", "init", "--project", "demo")
+
+    assert r.returncode == 0, r.stderr
+    assert "data/things.md" in r.stdout
+    assert "data/things.csv.pdata-pointer.md" in r.stdout
+    assert (project_dir / "data" / "things.md").read_text() == "REAL NARRATIVE - MUST SURVIVE\n"
