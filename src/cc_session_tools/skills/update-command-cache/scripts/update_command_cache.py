@@ -117,7 +117,7 @@ def cmd_list(args: argparse.Namespace) -> int:
     print(f"Found {len(candidates)} candidate sha(s) waiting for promotion:\n")
     for row in candidates:
         print(
-            f"  sha={row['sha'][:12]}...  fires={row['fire_count']}  "
+            f"  sha={str(row['sha'])[:12]}...  fires={row['fire_count']}  "
             f"last_seen={row['last_seen']}  session={row['sample_session']}"
         )
     print(

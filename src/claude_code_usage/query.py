@@ -17,7 +17,7 @@
 
 from __future__ import annotations
 
-from typing import Iterable, Mapping
+from typing import Any, Iterable, Mapping
 
 import pandas as pd
 
@@ -176,7 +176,7 @@ def _aggregate(df: pd.DataFrame, group_by: list[str]) -> pd.DataFrame:
             # parquet cache missing tool_calls, or empty input after filters).
             df["tool_call_count"] = 0
 
-    agg_spec = {
+    agg_spec: dict[str, Any] = {
         "input_tokens": "sum",
         "output_tokens": "sum",
         "cache_creation_5m": "sum",

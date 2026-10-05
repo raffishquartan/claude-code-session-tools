@@ -232,8 +232,8 @@ def main():
     print(f"Deleted {deleted} files.")
     if errors:
         print(f"  {len(errors)} errors:", file=sys.stderr)
-        for e in errors[:10]:
-            print(f"    {e}", file=sys.stderr)
+        for err_line in errors[:10]:
+            print(f"    {err_line}", file=sys.stderr)
 
     print()
     print(f"Backup preserved at: {archive_path}")

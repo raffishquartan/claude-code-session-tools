@@ -289,7 +289,7 @@ def is_hook_security_check(summary: dict) -> bool:
 
 def list_candidate_jsonls(src_key_dir: Path) -> list[dict]:
     """All non-hook-security-check jsonls in the src project key dir, with summaries."""
-    out = []
+    out: list[dict] = []
     if not src_key_dir.is_dir():
         return out
     for p in sorted(src_key_dir.glob("*.jsonl")):
