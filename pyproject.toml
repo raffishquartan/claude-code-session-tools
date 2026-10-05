@@ -91,6 +91,10 @@ dev = [
     "types-openpyxl>=3.1",
 ]
 
+[tool.mypy]
+# Bundled skills carry their own tests/conftest.py files; checking them together is a duplicate-module error.
+exclude = ["^src/cc_session_tools/skills/.*/tests/"]
+
 [[tool.mypy.overrides]]
 module = "tiktoken_tools.*"
 ignore_missing_imports = true

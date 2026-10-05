@@ -17,6 +17,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `CCST_API_KEYS_FILE`), format `label=key` per line, mode 0600 required, never echoed. A value-free
   template ships as `api-keys.example`.
 
+### Fixed
+
+- **`mypy src` no longer aborts on a duplicate `conftest` module** between two bundled skills'
+  `tests/` directories; `[tool.mypy] exclude` skips those test directories.
+
 ## [3.10.6] - 2026-10-02
 
 ### Changed
