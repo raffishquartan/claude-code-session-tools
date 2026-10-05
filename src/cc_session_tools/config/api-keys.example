@@ -1,0 +1,9 @@
+# Template for the ccdapi / ccrapi API keys file. Contains no real values.
+#
+# Copy to ~/.config/ccst/api-keys (or the path in CCST_API_KEYS_FILE) and chmod 600.
+# Do not put this file under ~/.claude and do not source it from a shell rc file:
+# ccdapi / ccrapi parse it themselves.
+#
+# Format: one "label=key" per line; blank lines and lines starting with # are ignored.
+#
+# work=sk-ant-api03-REPLACE-ME

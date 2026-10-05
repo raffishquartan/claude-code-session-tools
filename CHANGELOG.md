@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.11.0] - 2026-10-05
+
+### Added
+
+- **`ccdapi` and `ccrapi`**: like `ccd` and `ccr`, but the launched Claude Code session uses an
+  Anthropic API key instead of the subscription. `-k <label>` selects the key; without it a numbered
+  menu of labels is shown. Keys are read from `~/.config/ccst/api-keys` (override
+  `CCST_API_KEYS_FILE`), format `label=key` per line, mode 0600 required, never echoed. A value-free
+  template ships as `api-keys.example`.
+
 ## [3.10.6] - 2026-10-02
 
 ### Changed

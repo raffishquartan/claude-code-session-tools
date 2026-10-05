@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "cc-session-tools"
-version = "3.10.6"
+version = "3.11.0"
 description = "Claude Code session management CLI tools (ccd, ccr, ccs, claude-code-usage, ccst) and hook library (hooks package)"
 readme = "README.md"
 license = { file = "LICENSE" }
@@ -46,6 +46,8 @@ Issues = "https://github.com/raffishquartan/claude-code-session-tools/issues"
 [project.scripts]
 ccd = "cc_session_tools.cli.ccd:main"
 ccr = "cc_session_tools.cli.ccr:main"
+ccdapi = "cc_session_tools.cli.ccd:main_api"
+ccrapi = "cc_session_tools.cli.ccr:main_api"
 ccs = "cc_session_tools.cli.ccs:main"
 claude-code-usage = "claude_code_usage.cli:main"
 ccst = "cc_session_tools.cli.ccst:main"

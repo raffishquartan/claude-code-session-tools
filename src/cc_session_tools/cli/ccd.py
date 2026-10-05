@@ -8,7 +8,7 @@ from datetime import datetime
 from pathlib import Path
 
 from cc_session_tools import __version__
-from cc_session_tools.lib import prompts, rules
+from cc_session_tools.lib import api_keys, prompts, rules
 from cc_session_tools.lib.roots import (
     RootsConfigError,
     is_strict_root,
@@ -26,11 +26,16 @@ def launch_claude(cmd: list[str], env: dict[str, str]) -> None:
     os.execvpe(cmd[0], cmd, env)
 
 
-def _build_parser() -> argparse.ArgumentParser:
+def _build_parser(api_key: bool = False) -> argparse.ArgumentParser:
+    prog = "ccdapi" if api_key else "ccd"
     p = argparse.ArgumentParser(
-        prog="ccd",
-        description="Start a new Claude Code session with a pre-created cc-sessions/ dir.",
+        prog=prog,
+        description="Start a new Claude Code session with a pre-created cc-sessions/ dir"
+        + (", billed to a named API key." if api_key else "."),
     )
+    if api_key:
+        p.add_argument("-k", dest="key_label", metavar="LABEL",
+                       help="Label of the API key to use (default: pick from a menu).")
     p.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     p.add_argument("--dry-run", action="store_true",
                    help="Print what ccd would do without creating dirs or launching claude.")
@@ -73,6 +78,7 @@ def _print_dry_run_report(
     validation_ok: bool,
     validation_errors: list[str],
     cmd: list[str],
+    key_label: str | None = None,
 ) -> None:
     """Print the YAML-ish dry-run report to stdout."""
     root_desc = _describe_root(real_pwd)
@@ -100,11 +106,31 @@ def _print_dry_run_report(
         print("  validation:")
         for e in validation_errors:
             print(f"    - {e}")
+    if key_label is not None:
+        print(f"  api_key_label: {key_label}")
     print(f"  launch_command: {shlex.join(cmd)}")
 
 
-def main(argv: list[str] | None = None) -> int:
-    args = _build_parser().parse_args(argv)
+def main(argv: list[str] | None = None, *, api_key: bool = False) -> int:
+    args = _build_parser(api_key).parse_args(argv)
+    prog = "ccdapi" if api_key else "ccd"
+
+    key_label: str | None = None
+    key_value: str | None = None
+    if api_key:
+        try:
+            keys = api_keys.load_keys()
+            if args.key_label is not None:
+                api_keys.validate_label(keys, args.key_label)
+                key_label = args.key_label
+            else:
+                key_label = api_keys.choose_label(keys)
+        except api_keys.ApiKeysError as err:
+            print(f"{prog}: {err}", file=sys.stderr)
+            return 1
+        if key_label is None:
+            return 0
+        key_value = keys[key_label]
 
     if args.debug:
         os.environ["CCX_DEBUG"] = "1"
@@ -157,11 +183,12 @@ def main(argv: list[str] | None = None) -> int:
             validation_ok=ok,
             validation_errors=errors,
             cmd=cmd,
+            key_label=key_label,
         )
         return 0
 
     if not ok:
-        print("ccd: validation failed:", file=sys.stderr)
+        print(f"{prog}: validation failed:", file=sys.stderr)
         for e in errors:
             for line in e.splitlines():
                 print(f"  {line}", file=sys.stderr)
@@ -218,6 +245,8 @@ def main(argv: list[str] | None = None) -> int:
     # on Opus 4.8, Sonnet 5, Fable 5, Mythos 5+ unless this is set, regardless of
     # whether a task list ID resolves below.
     env["CLAUDE_CODE_ENABLE_TODO_TOOLS"] = "1"
+    if key_value is not None:
+        api_keys.with_api_key(env, key_value)
     try:
         task_list_id = id_for_project(real_pwd)
     except RootsConfigError:
@@ -232,6 +261,10 @@ def main(argv: list[str] | None = None) -> int:
     os.chdir(real_pwd)
     launch_claude(cmd, env)
     return 0
+
+
+def main_api(argv: list[str] | None = None) -> int:
+    return main(argv, api_key=True)
 
 
 if __name__ == "__main__":

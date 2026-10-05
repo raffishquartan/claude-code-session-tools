@@ -78,6 +78,22 @@ ccs "rate limit" --contents --global      # full-text search across working/ and
 ccs --order-by active --limit 5 --global  # your 5 most recently active sessions anywhere
 ```
 
+### Billing a session to an API key: `ccdapi`, `ccrapi`
+
+`ccdapi` and `ccrapi` behave exactly like `ccd` and `ccr`, but launch Claude Code with an
+Anthropic API key instead of your subscription. Pick the key with `-k <label>`, or omit `-k` to
+choose from a numbered menu of labels:
+
+```sh
+ccdapi -k work fix-login-bug
+ccrapi login-bug              # prompts for which key label to use
+```
+
+Keys live in `~/.config/ccst/api-keys` (override with `CCST_API_KEYS_FILE`), one `label=key` per
+line with `#` comments. The file must be `chmod 600`, is parsed rather than sourced, and should
+stay out of `~/.claude` and out of your shell rc files. Start from the value-free template
+`api-keys.example`, bundled in the package under `cc_session_tools/config/`.
+
 ### `working/` and `out/`: draft, then finalize
 
 The convention this repo's own sessions follow: intermediate versions accumulate in
