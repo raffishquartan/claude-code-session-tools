@@ -89,8 +89,15 @@ def test_choose_label_too_many(monkeypatch: pytest.MonkeyPatch) -> None:
         api_keys.choose_label({f"k{i}": "v" for i in range(11)})
 
 
-def test_with_api_key_sets_key_and_drops_oauth_token() -> None:
-    env = {"CLAUDE_CODE_OAUTH_TOKEN": "t", "X": "1"}
+def test_with_api_key_sets_key_and_drops_competing_auth() -> None:
+    env = {
+        "CLAUDE_CODE_OAUTH_TOKEN": "t",
+        "ANTHROPIC_AUTH_TOKEN": "t2",
+        "CLAUDE_CODE_USE_BEDROCK": "1",
+        "CLAUDE_CODE_USE_VERTEX": "1",
+        "CLAUDE_CODE_USE_FOUNDRY": "1",
+        "X": "1",
+    }
     api_keys.with_api_key(env, SECRET)
     assert env == {"ANTHROPIC_API_KEY": SECRET, "X": "1"}
 

@@ -9,7 +9,10 @@ than their subscription, with keys kept in one dedicated file outside the Claude
 ### Requirement: `ccdapi` and `ccrapi` launch with an API key
 `ccdapi` SHALL behave as `ccd` and `ccrapi` SHALL behave as `ccr` in every respect (arguments,
 validation, session directories, environment for hooks) except that the launched `claude`
-process receives the selected API key as `ANTHROPIC_API_KEY`. The key value SHALL NOT appear on
+process receives the selected API key as `ANTHROPIC_API_KEY`, and any ambient credential or
+provider switch that would override it (`CLAUDE_CODE_OAUTH_TOKEN`, `ANTHROPIC_AUTH_TOKEN`,
+`CLAUDE_CODE_USE_BEDROCK`, `CLAUDE_CODE_USE_VERTEX`, `CLAUDE_CODE_USE_FOUNDRY`) is removed from its
+environment. The key value SHALL NOT appear on
 the command line, in debug output or in `--dry-run` output.
 
 #### Scenario: New session with a named key

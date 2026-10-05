@@ -35,7 +35,8 @@ def _build_parser(api_key: bool = False) -> argparse.ArgumentParser:
     )
     if api_key:
         p.add_argument("-k", dest="key_label", metavar="LABEL",
-                       help="Label of the API key to use (default: pick from a menu).")
+                       help="Label of the API key to use (default: pick from a menu). "
+                       "Must come before the tag.")
     p.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     p.add_argument("--dry-run", action="store_true",
                    help="Print what ccd would do without creating dirs or launching claude.")
@@ -208,12 +209,13 @@ def main(argv: list[str] | None = None, *, api_key: bool = False) -> int:
     # since ccr cannot resume a transcript that was never created.
     if session_dir.exists() and not is_empty_session(session_name, real_pwd):
         print(
-            f"ccd: session '{session_name}' already started today in this directory.",
+            f"{prog}: session '{session_name}' already started today in this directory.",
             file=sys.stderr,
         )
-        print(f"ccd:   existing: {session_dir}", file=sys.stderr)
+        print(f"{prog}:   existing: {session_dir}", file=sys.stderr)
         print(
-            f"ccd: Use a different name tag, or 'ccr {tag}' to resume the existing one.",
+            f"{prog}: Use a different name tag, or '{prog.replace('ccd', 'ccr')} {tag}' to resume "
+            "the existing one.",
             file=sys.stderr,
         )
         return 1

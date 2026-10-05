@@ -139,3 +139,45 @@ def test_ccrapi_cancelled_menu(launched, monkeypatch, tmp_path):
     _tty(monkeypatch, "q")
     assert ccr.main(["foo-bar"], api_key=True) == 0
     assert launched == {}
+
+
+def test_ccrapi_no_tty_no_label(launched, monkeypatch, tmp_path, capsys):
+    _make_session(tmp_path, "20260504-foo-bar")
+    _tty(monkeypatch, None)
+    assert ccr.main(["foo-bar"], api_key=True) == 1
+    assert "no terminal" in capsys.readouterr().err
+    assert launched == {}
+
+
+def test_ccrapi_missing_file(launched, monkeypatch, tmp_path, capsys):
+    _make_session(tmp_path, "20260504-foo-bar")
+    monkeypatch.setenv("CCST_API_KEYS_FILE", str(tmp_path / "absent"))
+    assert ccr.main(["-k", "work", "foo-bar"], api_key=True) == 1
+    assert "not found" in capsys.readouterr().err
+    assert launched == {}
+
+
+def test_ccdapi_competing_auth_dropped_from_launch_env(launched, monkeypatch):
+    monkeypatch.setenv("ANTHROPIC_AUTH_TOKEN", "ambient")
+    assert ccd.main(["-k", "work", "mytag"], api_key=True) == 0
+    assert "ANTHROPIC_AUTH_TOKEN" not in launched["env"]
+
+
+def test_ccdapi_existing_session_hint_names_ccrapi(launched, capsys):
+    assert ccd.main(["-k", "work", "mytag"], api_key=True) == 0  # creates the session dir
+    import json
+    from datetime import datetime
+    from cc_session_tools.lib import sessions_db
+    from cc_session_tools.lib.sessions import transcript_dir_for_project
+    proj = Path.cwd()
+    basename = f"{datetime.now().strftime('%Y%m%d')}-mytag"
+    t_dir = transcript_dir_for_project(proj)
+    t_dir.mkdir(parents=True, exist_ok=True)
+    sessions_db.write_tag(f"uuid-{basename}", "mytag")
+    (t_dir / f"uuid-{basename}.jsonl").write_text(
+        json.dumps({"type": "user", "message": {"content": "hi"}}) + "\n"
+    )
+    assert ccd.main(["-k", "work", "mytag"], api_key=True) == 1
+    err = capsys.readouterr().err
+    assert "ccdapi: session" in err
+    assert "ccrapi mytag" in err
