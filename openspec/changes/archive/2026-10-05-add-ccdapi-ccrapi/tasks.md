@@ -11,6 +11,6 @@
 
 ## 3. Verification and docs
 
-- [ ] 3.1 Manually confirm with a real key that the launched `claude` bills the API key rather than the subscription; record any extra flag/env needed in design.md
+- [x] 3.1 Manually confirm with a real key that the launched `claude` bills the API key rather than the subscription; record any extra flag/env needed in design.md
 - [x] 3.2 Update README (commands table, keys-file setup, template), `CHANGELOG.md` (Added, 3.11.0) and bump `pyproject.toml` to 3.11.0 with `uv lock`; verify `uv run pytest -q`, lint and type-check all exit 0
 - [x] 3.3 Leave a handoff message for the `claude-code-config-sync` project (via `ccmsg`) describing the file path, format and template so cccs can manage the real file

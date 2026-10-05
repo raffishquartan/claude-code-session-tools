@@ -98,6 +98,23 @@ def test_ccdapi_missing_file(launched, monkeypatch, tmp_path, capsys):
     assert launched == {}
 
 
+def test_ccdapi_dry_run_without_k_does_not_prompt(launched, monkeypatch, capsys):
+    _tty(monkeypatch, None)  # a prompt would fail: no terminal
+    assert ccd.main(["--dry-run", "mytag"], api_key=True) == 0
+    assert "api_key_label: (chosen at launch)" in capsys.readouterr().out
+
+
+def test_ccdapi_validation_failure_does_not_prompt(launched, monkeypatch, capsys):
+    def boom(_keys):
+        raise AssertionError("menu must not be shown")
+
+    monkeypatch.setattr("cc_session_tools.lib.api_keys.choose_label", boom)
+    monkeypatch.chdir("/")  # outside every configured root
+    assert ccd.main(["mytag"], api_key=True) == 1
+    assert "validation failed" in capsys.readouterr().err
+    assert launched == {}
+
+
 def test_ccdapi_dry_run_hides_key(launched, capsys):
     assert ccd.main(["--dry-run", "-k", "work", "mytag"], api_key=True) == 0
     out = capsys.readouterr().out
