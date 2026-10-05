@@ -12,7 +12,7 @@ from __future__ import annotations
 import json
 import subprocess
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Mapping
 
 from cc_session_tools.lib import bun_tools
 
@@ -118,8 +118,8 @@ def parse_daily_output(payload: str) -> CcusageResult:
 
 
 def reconcile_totals(
-    ours: dict[str, float],
-    theirs: dict[str, float],
+    ours: Mapping[str, float],
+    theirs: Mapping[str, float],
     tolerance: float = 0.005,
 ) -> ReconcileDiff:
     """Return a diff record describing how our totals compare with ccusage's.

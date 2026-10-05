@@ -94,7 +94,7 @@ def resolve_parents(df: pd.DataFrame, name_map: dict[str, str]) -> pd.DataFrame:
         return None
 
     out = df.copy()
-    out["parent_session_id"] = out.apply(_infer, axis=1)
+    out["parent_session_id"] = [_infer(row) for _, row in out.iterrows()]
     return out
 
 

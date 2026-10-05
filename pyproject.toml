@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "cc-session-tools"
-version = "3.11.0"
+version = "3.11.1"
 description = "Claude Code session management CLI tools (ccd, ccr, ccs, claude-code-usage, ccst) and hook library (hooks package)"
 readme = "README.md"
 license = { file = "LICENSE" }
@@ -36,7 +36,7 @@ classifiers = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=7"]
+dev = ["pytest>=7", "mypy>=1.10", "pandas-stubs"]
 
 [project.urls]
 Homepage = "https://github.com/raffishquartan/claude-code-session-tools"

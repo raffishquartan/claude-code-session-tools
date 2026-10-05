@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.11.1] - 2026-10-05
+
+### Fixed
+
+- **`mypy src` now exits 0.** Fixed the 26 existing type errors it reported once the duplicate-`conftest`
+  abort was out of the way (shadowed `except` variables, `str | None` narrowing in `ccs`, pandas
+  typing, `Mapping` for read-only float dicts, a missing `TYPE_CHECKING` import). No behaviour
+  change; the `None` states mypy flagged now raise a clear `RuntimeError` instead of a `TypeError`.
+
+### Changed
+
+- `mypy` and `pandas-stubs` are declared in the `dev` extra so the type check is reproducible.
+
 ## [3.11.0] - 2026-10-05
 
 ### Added

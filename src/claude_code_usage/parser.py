@@ -86,6 +86,7 @@ def parse_session_metadata(path: str | Path) -> dict[str, Any]:
 def _extract_user_text(record: dict[str, Any]) -> str | None:
     """Return the first real user text from a user record, or None if harness-injected."""
     content = record.get("message", {}).get("content")
+    text: str | None
     if isinstance(content, str):
         text = content
     elif isinstance(content, list):

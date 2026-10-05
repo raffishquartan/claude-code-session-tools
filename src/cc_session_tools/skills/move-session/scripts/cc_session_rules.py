@@ -69,8 +69,8 @@ if __name__ == "__main__":
             if ok:
                 return 0
             print("ccd: validation failed:", file=sys.stderr)
-            for e in errors:
-                for line in e.splitlines():
+            for err_text in errors:
+                for line in err_text.splitlines():
                     print(f"  {line}", file=sys.stderr)
             if not args.force:
                 print("  (use --force to bypass root and strict-root checks)",

@@ -17,6 +17,7 @@ import argparse
 import logging
 import sys
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import platformdirs
 
@@ -29,6 +30,9 @@ from . import (
     report,
     session_names as _session_names,
 )
+
+if TYPE_CHECKING:
+    import pandas as pd
 
 
 DEFAULT_PROJECTS = Path.home() / ".claude" / "projects"
@@ -181,7 +185,6 @@ def _format_df(df, fmt: str) -> str:
 
 def _load_df_with_parents(args) -> "tuple[pd.DataFrame, dict[str, str]]":
     """Load the fact table and enrich it with parent_session_id."""
-    import pandas as pd  # local import keeps top-level clean
     df = _load_df(args)
     name_map = _session_names.update_persistent_cache(
         Path(args.cache_dir) / "session_names.json"

@@ -435,7 +435,7 @@ def _collect_session_rows(
         except RootsConfigError as e:
             print(str(e), file=sys.stderr)
             sys.exit(1)
-        if db_limit is None:
+        if db_limit is None or db_order_by is None:
             rows = sessions_db.list_sessions(order_by=db_order_by, limit=None)
             _warn_if_corrupted_rows_present(rows)
             return [r for r in rows if r.project_dir.parent in roots]
@@ -1206,11 +1206,15 @@ def main(argv: list[str] | None = None) -> int:
 
     if date_filter is not None:
         since_key, before_key = date_filter
-        sessions = [
-            (s, p) for s, p in sessions
-            if (since_key is None or session_start_date(s.name) >= since_key)
-            and (before_key is None or session_start_date(s.name) < before_key)
-        ]
+        def _in_date_range(name: str) -> bool:
+            start = session_start_date(name)
+            if start is None:
+                raise RuntimeError(f"session name '{name}' has no start date")
+            return (since_key is None or start >= since_key) and (
+                before_key is None or start < before_key
+            )
+
+        sessions = [(s, p) for s, p in sessions if _in_date_range(s.name)]
 
     # Count empty sessions BEFORE applying the emptiness filter (for the footer).
     # Use session_is_empty_safe: None (unknown — no JSONL found) is treated as non-empty.
@@ -1333,6 +1337,8 @@ def main(argv: list[str] | None = None) -> int:
     all_results: list[_Result] = []
 
     for scope, query in scope_queries.items():
+        if query is None:
+            raise RuntimeError(f"scope '{scope}' reached search mode without a query")
         if scope == "name":
             scope_results = _name_search(
                 sessions, query, effective_global,
@@ -1398,6 +1404,8 @@ def main(argv: list[str] | None = None) -> int:
         # Only show did-you-mean for pure name searches.
         if not multi_scope and "name" in scope_queries:
             query = scope_queries["name"]
+            if query is None:
+                raise RuntimeError("name scope reached did-you-mean without a query")
             all_basenames = [s.name for s, _ in sessions]
             suggestions = difflib.get_close_matches(query, all_basenames, n=3, cutoff=0.4)
             if suggestions:
