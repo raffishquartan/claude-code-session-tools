@@ -8,7 +8,7 @@ from datetime import datetime
 from pathlib import Path
 
 from cc_session_tools import __version__
-from cc_session_tools.lib import prompts, rules
+from cc_session_tools.lib import api_keys, prompts, rules
 from cc_session_tools.lib.roots import (
     RootsConfigError,
     is_strict_root,
@@ -26,11 +26,17 @@ def launch_claude(cmd: list[str], env: dict[str, str]) -> None:
     os.execvpe(cmd[0], cmd, env)
 
 
-def _build_parser() -> argparse.ArgumentParser:
+def _build_parser(api_key: bool = False) -> argparse.ArgumentParser:
+    prog = "ccdapi" if api_key else "ccd"
     p = argparse.ArgumentParser(
-        prog="ccd",
-        description="Start a new Claude Code session with a pre-created cc-sessions/ dir.",
+        prog=prog,
+        description="Start a new Claude Code session with a pre-created cc-sessions/ dir"
+        + (", billed to a named API key." if api_key else "."),
     )
+    if api_key:
+        p.add_argument("-k", dest="key_label", metavar="LABEL",
+                       help="Label of the API key to use (default: pick from a menu). "
+                       "Must come before the tag.")
     p.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     p.add_argument("--dry-run", action="store_true",
                    help="Print what ccd would do without creating dirs or launching claude.")
@@ -73,6 +79,8 @@ def _print_dry_run_report(
     validation_ok: bool,
     validation_errors: list[str],
     cmd: list[str],
+    key_label: str | None = None,
+    api_key_mode: bool = False,
 ) -> None:
     """Print the YAML-ish dry-run report to stdout."""
     root_desc = _describe_root(real_pwd)
@@ -100,11 +108,28 @@ def _print_dry_run_report(
         print("  validation:")
         for e in validation_errors:
             print(f"    - {e}")
+    if api_key_mode:
+        print(f"  api_key_label: {key_label or '(chosen at launch)'}")
     print(f"  launch_command: {shlex.join(cmd)}")
 
 
-def main(argv: list[str] | None = None) -> int:
-    args = _build_parser().parse_args(argv)
+def main(argv: list[str] | None = None, *, api_key: bool = False) -> int:
+    args = _build_parser(api_key).parse_args(argv)
+    prog = "ccdapi" if api_key else "ccd"
+
+    # With -k the label is validated up front; without it the menu waits until every other check
+    # has passed (see below), so a bad tag or a dry run never prompts for a key.
+    keys: dict[str, str] = {}
+    key_label: str | None = None
+    if api_key:
+        try:
+            keys = api_keys.load_keys()
+            if args.key_label is not None:
+                api_keys.validate_label(keys, args.key_label)
+                key_label = args.key_label
+        except api_keys.ApiKeysError as err:
+            print(f"{prog}: {err}", file=sys.stderr)
+            return 1
 
     if args.debug:
         os.environ["CCX_DEBUG"] = "1"
@@ -157,11 +182,13 @@ def main(argv: list[str] | None = None) -> int:
             validation_ok=ok,
             validation_errors=errors,
             cmd=cmd,
+            key_label=key_label,
+            api_key_mode=api_key,
         )
         return 0
 
     if not ok:
-        print("ccd: validation failed:", file=sys.stderr)
+        print(f"{prog}: validation failed:", file=sys.stderr)
         for e in errors:
             for line in e.splitlines():
                 print(f"  {line}", file=sys.stderr)
@@ -181,18 +208,28 @@ def main(argv: list[str] | None = None) -> int:
     # since ccr cannot resume a transcript that was never created.
     if session_dir.exists() and not is_empty_session(session_name, real_pwd):
         print(
-            f"ccd: session '{session_name}' already started today in this directory.",
+            f"{prog}: session '{session_name}' already started today in this directory.",
             file=sys.stderr,
         )
-        print(f"ccd:   existing: {session_dir}", file=sys.stderr)
+        print(f"{prog}:   existing: {session_dir}", file=sys.stderr)
         print(
-            f"ccd: Use a different name tag, or 'ccr {tag}' to resume the existing one.",
+            f"{prog}: Use a different name tag, or '{prog.replace('ccd', 'ccr')} {tag}' to resume "
+            "the existing one.",
             file=sys.stderr,
         )
         return 1
 
     if session_dir.exists():
         debug(f"reusing empty session dir: {session_dir}")
+
+    if api_key and key_label is None:
+        try:
+            key_label = api_keys.choose_label(keys)
+        except api_keys.ApiKeysError as err:
+            print(f"{prog}: {err}", file=sys.stderr)
+            return 1
+        if key_label is None:
+            return 0
 
     (session_dir / "working").mkdir(parents=True, exist_ok=True)
     (session_dir / "out").mkdir(parents=True, exist_ok=True)
@@ -218,6 +255,8 @@ def main(argv: list[str] | None = None) -> int:
     # on Opus 4.8, Sonnet 5, Fable 5, Mythos 5+ unless this is set, regardless of
     # whether a task list ID resolves below.
     env["CLAUDE_CODE_ENABLE_TODO_TOOLS"] = "1"
+    if key_label is not None:
+        api_keys.with_api_key(env, keys[key_label])
     try:
         task_list_id = id_for_project(real_pwd)
     except RootsConfigError:
@@ -232,6 +271,10 @@ def main(argv: list[str] | None = None) -> int:
     os.chdir(real_pwd)
     launch_claude(cmd, env)
     return 0
+
+
+def main_api(argv: list[str] | None = None) -> int:
+    return main(argv, api_key=True)
 
 
 if __name__ == "__main__":

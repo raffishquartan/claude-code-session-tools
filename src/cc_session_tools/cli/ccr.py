@@ -8,6 +8,7 @@ from datetime import datetime
 from pathlib import Path
 
 from cc_session_tools import __version__
+from cc_session_tools.lib import api_keys
 from cc_session_tools.lib.claude_flags import get_claude_flags
 from cc_session_tools.lib.roots import load_session_roots
 from cc_session_tools.lib.sessions import SESSION_FULL_RE, SessionMatch, find_all_jsonls_for_session, find_matching_sessions, find_orphan_transcripts, session_tag
@@ -85,11 +86,15 @@ def launch_claude_resume(cmd: list[str], env: dict[str, str], cwd: Path | None =
     os.execvpe(cmd[0], cmd, env)
 
 
-def _build_parser() -> argparse.ArgumentParser:
+def _build_parser(api_key: bool = False) -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
-        prog="ccr",
-        description="Resume a Claude Code session by name-tag fragment.",
+        prog="ccrapi" if api_key else "ccr",
+        description="Resume a Claude Code session by name-tag fragment"
+        + (", billed to a named API key." if api_key else "."),
     )
+    if api_key:
+        p.add_argument("-k", dest="key_label", metavar="LABEL",
+                       help="Label of the API key to use (default: pick from a menu).")
     p.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     p.add_argument("fragment", help="Substring to match against session basenames.")
     p.add_argument("--debug", action="store_true",
@@ -105,8 +110,18 @@ def _build_parser() -> argparse.ArgumentParser:
     return p
 
 
-def main(argv: list[str] | None = None) -> int:
-    args, remainder = _build_parser().parse_known_args(argv)
+def main(argv: list[str] | None = None, *, api_key: bool = False) -> int:
+    args, remainder = _build_parser(api_key).parse_known_args(argv)
+
+    keys: dict[str, str] = {}
+    if api_key:
+        try:
+            keys = api_keys.load_keys()
+            if args.key_label is not None:
+                api_keys.validate_label(keys, args.key_label)
+        except api_keys.ApiKeysError as e:
+            print(f"ccrapi: {e}", file=sys.stderr)
+            return 1
 
     if args.debug:
         os.environ["CCX_DEBUG"] = "1"
@@ -217,6 +232,15 @@ def main(argv: list[str] | None = None) -> int:
                     return 1
 
     env = os.environ.copy()
+    if api_key:
+        try:
+            key_label = args.key_label or api_keys.choose_label(keys)
+        except api_keys.ApiKeysError as e:
+            print(f"ccrapi: {e}", file=sys.stderr)
+            return 1
+        if key_label is None:
+            return 0
+        api_keys.with_api_key(env, keys[key_label])
     env.pop("CLAUDE_CODE_TASK_LIST_ID", None)
     env["CLD_SESSION_TAG"] = tag
     env["CLD_SESSION_DIR"] = str(m.session_dir)
@@ -255,6 +279,10 @@ def main(argv: list[str] | None = None) -> int:
     debug(f"resuming: {m.basename} in {m.project_dir}")
     launch_claude_resume(cmd, env, cwd=m.project_dir)
     return 0
+
+
+def main_api(argv: list[str] | None = None) -> int:
+    return main(argv, api_key=True)
 
 
 if __name__ == "__main__":
