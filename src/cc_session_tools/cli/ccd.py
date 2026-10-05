@@ -80,6 +80,7 @@ def _print_dry_run_report(
     validation_errors: list[str],
     cmd: list[str],
     key_label: str | None = None,
+    api_key_mode: bool = False,
 ) -> None:
     """Print the YAML-ish dry-run report to stdout."""
     root_desc = _describe_root(real_pwd)
@@ -107,8 +108,8 @@ def _print_dry_run_report(
         print("  validation:")
         for e in validation_errors:
             print(f"    - {e}")
-    if key_label is not None:
-        print(f"  api_key_label: {key_label}")
+    if api_key_mode:
+        print(f"  api_key_label: {key_label or '(chosen at launch)'}")
     print(f"  launch_command: {shlex.join(cmd)}")
 
 
@@ -116,22 +117,19 @@ def main(argv: list[str] | None = None, *, api_key: bool = False) -> int:
     args = _build_parser(api_key).parse_args(argv)
     prog = "ccdapi" if api_key else "ccd"
 
+    # With -k the label is validated up front; without it the menu waits until every other check
+    # has passed (see below), so a bad tag or a dry run never prompts for a key.
+    keys: dict[str, str] = {}
     key_label: str | None = None
-    key_value: str | None = None
     if api_key:
         try:
             keys = api_keys.load_keys()
             if args.key_label is not None:
                 api_keys.validate_label(keys, args.key_label)
                 key_label = args.key_label
-            else:
-                key_label = api_keys.choose_label(keys)
         except api_keys.ApiKeysError as err:
             print(f"{prog}: {err}", file=sys.stderr)
             return 1
-        if key_label is None:
-            return 0
-        key_value = keys[key_label]
 
     if args.debug:
         os.environ["CCX_DEBUG"] = "1"
@@ -185,6 +183,7 @@ def main(argv: list[str] | None = None, *, api_key: bool = False) -> int:
             validation_errors=errors,
             cmd=cmd,
             key_label=key_label,
+            api_key_mode=api_key,
         )
         return 0
 
@@ -223,6 +222,15 @@ def main(argv: list[str] | None = None, *, api_key: bool = False) -> int:
     if session_dir.exists():
         debug(f"reusing empty session dir: {session_dir}")
 
+    if api_key and key_label is None:
+        try:
+            key_label = api_keys.choose_label(keys)
+        except api_keys.ApiKeysError as err:
+            print(f"{prog}: {err}", file=sys.stderr)
+            return 1
+        if key_label is None:
+            return 0
+
     (session_dir / "working").mkdir(parents=True, exist_ok=True)
     (session_dir / "out").mkdir(parents=True, exist_ok=True)
 
@@ -247,8 +255,8 @@ def main(argv: list[str] | None = None, *, api_key: bool = False) -> int:
     # on Opus 4.8, Sonnet 5, Fable 5, Mythos 5+ unless this is set, regardless of
     # whether a task list ID resolves below.
     env["CLAUDE_CODE_ENABLE_TODO_TOOLS"] = "1"
-    if key_value is not None:
-        api_keys.with_api_key(env, key_value)
+    if key_label is not None:
+        api_keys.with_api_key(env, keys[key_label])
     try:
         task_list_id = id_for_project(real_pwd)
     except RootsConfigError:

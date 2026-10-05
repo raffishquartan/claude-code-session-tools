@@ -25,6 +25,14 @@ the command line, in debug output or in `--dry-run` output.
 - **THEN** `claude` is launched exactly as `ccr my-tag` would launch it, with `ANTHROPIC_API_KEY`
   set to the `work` entry's value
 
+#### Scenario: Dry run without a label does not prompt
+- **WHEN** the user runs `ccdapi --dry-run my-tag` without `-k`
+- **THEN** no menu is shown and the report shows the label as chosen at launch
+
+#### Scenario: Invalid launch does not prompt for a key
+- **WHEN** `ccdapi` is run without `-k` and its normal validation fails (for example the directory is outside every session root)
+- **THEN** it exits non-zero without showing the key menu
+
 #### Scenario: Dry run hides the key
 - **WHEN** the user runs `ccdapi --dry-run -k work my-tag`
 - **THEN** the report names the key label `work` and never prints the key value
