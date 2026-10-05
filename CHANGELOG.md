@@ -14,8 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`mypy src` now exits 0.** Fixed the 26 existing type errors it reported once the duplicate-`conftest`
   abort was out of the way (shadowed `except` variables, `str | None` narrowing in `ccs`, pandas
   typing, `Mapping` for read-only float dicts, a missing `TYPE_CHECKING` import). No behaviour
-  change, except that `ccs --since/--before` now excludes a session whose name has no parseable
-  start date instead of raising `TypeError`.
+  change; the `None` states mypy flagged now raise a clear `RuntimeError` instead of a `TypeError`.
 
 ### Changed
 

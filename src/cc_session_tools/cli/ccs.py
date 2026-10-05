@@ -1209,7 +1209,7 @@ def main(argv: list[str] | None = None) -> int:
         def _in_date_range(name: str) -> bool:
             start = session_start_date(name)
             if start is None:
-                return False
+                raise RuntimeError(f"session name '{name}' has no start date")
             return (since_key is None or start >= since_key) and (
                 before_key is None or start < before_key
             )
