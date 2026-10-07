@@ -75,7 +75,7 @@ Current subcommands:
                                  — the delete steps are blocked by bash-hard-deny.
   claude-md install [--section ID]  Add/update the managed section(s) in
                                  ~/.claude/CLAUDE.md (messaging, workflow, agents,
-                                 confirm-gate). Omit --section for all four.
+                                 confirm-gate, date-format). Omit --section for all five.
   claude-md uninstall [--section ID]  Remove the managed section(s) from CLAUDE.md.
   ccsched-jobs install           Register CCST's bundled ccsched jobs (see
                                  lib/scheduler/bundled_jobs.py) if not already present.
