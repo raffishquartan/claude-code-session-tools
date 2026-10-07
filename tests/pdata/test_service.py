@@ -615,3 +615,63 @@ def test_restore_record_does_not_bump_when_restore_returns_false(monkeypatch, tm
         assert vector_clock_store.read_vector(conn) == {"ltxy": 1}
     finally:
         conn.close()
+
+
+# ---------- date_field_warnings ----------
+
+def _date_group(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("CCST_PROJECT_DB_DIR", str(tmp_path))
+    for name, sql_type, description in (
+        ("event_date", "TEXT", None),
+        ("raised_at", "TEXT", None),
+        ("due", "TEXT", "Due date of the item"),
+        ("date_text", "TEXT", "Verbatim date as written"),
+        ("note", "TEXT", None),
+        ("sent_at", "INTEGER", None),
+    ):
+        service.schema_add_field(
+            project="p", record_group="g", field_name=name, sql_type=sql_type,
+            description=description, default=None,
+        )
+
+
+def _warn(**fields):
+    return service.date_field_warnings(project="p", record_group="g", fields=fields)
+
+
+def test_dotted_date_into_date_suffix_field_warns_naming_group_field_and_value(
+    monkeypatch, tmp_path,
+):
+    _date_group(monkeypatch, tmp_path)
+    (warning,) = _warn(event_date="2026.10.05")
+    assert "g.event_date" in warning and "'2026.10.05'" in warning
+
+
+def test_at_suffix_and_description_make_a_field_date_like(monkeypatch, tmp_path):
+    _date_group(monkeypatch, tmp_path)
+    assert len(_warn(raised_at="5 October 2026")) == 1
+    assert len(_warn(due="6 Sep 2024")) == 1
+
+
+@pytest.mark.parametrize("value", [
+    "2026-10-05", "2026-10-05 14:30", "2026-10-05T14:30:00Z", "2026-10-05T14:30:00+01:00",
+    "2026-10-05 14:30 UTC", "2026-10", "2026", "2026-01-01..2026-02-01",
+])
+def test_iso_forms_do_not_warn(monkeypatch, tmp_path, value):
+    _date_group(monkeypatch, tmp_path)
+    assert _warn(event_date=value) == []
+
+
+@pytest.mark.parametrize("value", ["20261005", "2026.10", "05/10/2026", "2026-10-05..5 Oct"])
+def test_other_forms_warn(monkeypatch, tmp_path, value):
+    _date_group(monkeypatch, tmp_path)
+    assert len(_warn(event_date=value)) == 1
+
+
+def test_text_suffix_non_date_numeric_empty_and_null_never_warn(monkeypatch, tmp_path):
+    _date_group(monkeypatch, tmp_path)
+    assert _warn(date_text="6th of September") == []
+    assert _warn(note="2026.10.05") == []
+    assert _warn(sent_at="1790000000") == []
+    assert _warn(event_date="") == []
+    assert _warn(event_date=None) == []

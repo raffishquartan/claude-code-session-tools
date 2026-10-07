@@ -70,7 +70,7 @@ places are already correct.
    writes nothing. The `add` and `update` handlers call it after a successful write and print the
    strings to stderr (update uses the record's group). It is a warning, not a validation error,
    because verbatim columns and legacy columns awaiting conversion legitimately hold other forms.
-   Date-like is decided by name suffix `_at`/`_date` or the word "date" in the description,
+   Only TEXT fields are checked (integer `_at` fields hold epochs). Date-like is decided by name suffix `_at`/`_date` or the word "date" in the description,
    excluding names ending `_text`; the ISO-form test is a small set of anchored patterns kept next
    to the check. CSV importers are not covered; `readiness-scan` serves that case.
 

@@ -240,7 +240,9 @@ ccst pdata sync-check --all-projects          # cross-machine sync, safe fast-fo
 Records support optional typed extension tables (`ccst pdata schema add-field`) alongside
 a generic content field, soft deletes, and optimistic-concurrency versioning. Multi-machine
 sync uses a vector clock per project: a genuine fork between two machines' edits is
-flagged for a manual choice, never silently merged.
+flagged for a manual choice, never silently merged. Date-like fields (name ending `_at` or
+`_date`, or "date" in the description) get a stderr warning when a non-ISO value is written, and
+`ccst pdata readiness-scan` flags dotted, compact, slash and long-form date columns.
 
 ### Usage and cost analytics
 

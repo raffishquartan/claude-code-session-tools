@@ -2,7 +2,8 @@
 
 ### Requirement: Non-ISO values written to date-like fields produce a warning
 When `ccst pdata add` or `ccst pdata update` writes a value to an extension field that is
-date-like, and the value is not an ISO date form, the command SHALL print a warning on stderr
+date-like (a TEXT field; numeric fields are never checked, because an integer `_at` field holds
+an epoch), and the value is not an ISO date form, the command SHALL print a warning on stderr
 naming the record group, the field and the offending value, and SHALL still perform the write and
 exit with the status it would have had without the warning. A field is date-like when its name
 ends `_at` or `_date`, or its description (from the record group's field registry) contains the
@@ -26,6 +27,10 @@ or a range `yyyy-MM-dd..yyyy-MM-dd`. An empty value and a `null` assignment SHAL
 
 #### Scenario: Verbatim text fields never warn
 - **WHEN** a field named `date_text` receives `6th of September`
+- **THEN** no warning is printed
+
+#### Scenario: Numeric fields never warn
+- **WHEN** an `INTEGER` field named `sent_at` receives `1790000000`
 - **THEN** no warning is printed
 
 #### Scenario: Non-date fields never warn
