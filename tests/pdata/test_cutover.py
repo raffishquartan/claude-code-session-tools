@@ -419,3 +419,16 @@ def test_a_differently_cased_md_is_never_overwritten(tmp_path):
     cutover.archive_entries(project_root=tmp_path, entries=[_entry("things.csv")], project="d")
 
     assert (tmp_path / "things.MD").read_text() == REAL
+
+
+def test_manifest_log_line_starts_with_text_form_utc_time(tmp_path):
+    import re
+
+    (tmp_path / "ideas.csv").write_text("idea\nfirst\n")
+    entry = ManifestEntry(path="ideas.csv", classification="db-owned",
+                          record_group="ideas", strategy="csv-rows")
+
+    cutover.archive_entries(project_root=tmp_path, entries=[entry], project="demo")
+
+    text = (tmp_path / MIGRATED_ARCHIVE_DIRNAME / MIGRATED_MANIFEST_FILENAME).read_text()
+    assert re.match(r"- \d{4}-\d{2}-\d{2} \d{2}:\d{2} UTC ", text), text

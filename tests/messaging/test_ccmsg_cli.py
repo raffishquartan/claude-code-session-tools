@@ -113,6 +113,26 @@ def test_read_happy_path(tmp_path: Path) -> None:
     assert "Hello body" in res.stdout
 
 
+def test_read_prints_sent_at_in_human_form_and_stored_value_stays_machine_form(
+    tmp_path: Path,
+) -> None:
+    import re
+
+    send = _run(
+        ["send", "--to-project", "alpha", "--subject", "S", "--body", "B",
+         "--from-project", "o", "--from-session", "s", "--from-uuid", "u",
+         "--from-partition", "projects/o", "--to-partition", "projects/alpha"],
+        tmp_path,
+    )
+    mid = send.stdout.strip()
+    res = _run(["read", mid], tmp_path)
+    line = next(ln for ln in res.stdout.splitlines() if ln.startswith("sent_at:"))
+    assert re.fullmatch(r"sent_at:  \d{4}-\d{2}-\d{2} \d{2}:\d{2} UTC", line), line
+    listing = _run(["list"], tmp_path)
+    assert listing.returncode == 0, listing.stderr
+    assert "just now" in listing.stdout  # relative_age still parses the stored T...Z value
+
+
 def test_read_missing_id_errors(tmp_path: Path) -> None:
     res = _run(["read", "does-not-exist"], tmp_path)
     assert res.returncode != 0

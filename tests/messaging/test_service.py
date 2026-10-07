@@ -246,3 +246,9 @@ def test_archive_blocked_while_claim_lock_held(
     with claim_lock(mid):
         with pytest.raises(AlreadyClaimedError):
             service.archive(mid, datetime(2026, 6, 20, tzinfo=timezone.utc))
+
+
+def test_format_sent_at_renders_utc_text_form() -> None:
+    from cc_session_tools.lib.messaging.service import format_sent_at
+
+    assert format_sent_at("2026-10-05T14:30:59Z") == "2026-10-05 14:30 UTC"

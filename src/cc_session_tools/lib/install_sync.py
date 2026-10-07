@@ -301,7 +301,7 @@ def ensure_synced(*, noun: str | None, verb: str | None, installed_version: str)
             )
         print(
             f"ccst: install config is out of sync (installed {installed_version}, {state}) "
-            f"and the last auto-sync failed at {last_failure.at.strftime(_TS_FORMAT)} — "
+            f"and the last auto-sync failed at {last_failure.at.strftime('%Y-%m-%d %H:%M UTC')} — "
             "run `ccst install-everything --apply` to see why.",
             file=sys.stderr,
         )

@@ -1,6 +1,8 @@
 """Tests for ccst doctor and cc_session_tools.lib.doctor."""
 from __future__ import annotations
 
+import re
+
 import json
 import os
 import shutil
@@ -497,7 +499,7 @@ def test_check_install_synced_fails_when_auto_apply_already_failed() -> None:
     )
     assert result.status == Status.FAIL
     assert "rc 1" in result.reason
-    assert "2026-08-15T09:12:04Z" in result.reason
+    assert "2026-08-15 09:12 UTC" in result.reason
 
 
 def test_check_install_synced_warns_when_the_failure_is_for_another_version() -> None:
@@ -1562,6 +1564,7 @@ def test_check_pdata_verify_ok_when_last_run_clean(monkeypatch, tmp_path):
 
     results = check_pdata_verify(["demo"])
     assert results[0].status == Status.OK
+    assert re.search(r"last run \d{4}-\d{2}-\d{2} \d{2}:\d{2} UTC, no issues", results[0].reason)
 
 
 def test_check_pdata_verify_fails_when_last_run_had_a_fail_issue(monkeypatch, tmp_path):
