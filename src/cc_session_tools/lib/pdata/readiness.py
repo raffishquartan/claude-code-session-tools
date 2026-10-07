@@ -21,7 +21,7 @@ from cc_session_tools.lib.pdata.init_paths import EXCLUDED_DIR_NAMES
 
 FINDING_KINDS: tuple[str, ...] = (
     "ragged-rows", "machine-paths", "null-strings", "duplicate-rows", "comment-rows",
-    "repeated-header", "mixed-date-formats", "mixed-separators", "bad-header",
+    "repeated-header", "mixed-date-formats", "non-iso-dates", "mixed-separators", "bad-header",
     "no-unique-column", "unreadable", "bom", "crlf",
 )
 
@@ -32,10 +32,12 @@ _MACHINE_PATH = re.compile(r"/Users/[^/\s]+|/home/[^/\s]+|/mnt/[a-z]/|[A-Za-z]:\
 _DATE_FORMATS: tuple[tuple[str, re.Pattern[str]], ...] = (
     ("iso-datetime", re.compile(r"^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}")),
     ("iso-date", re.compile(r"^\d{4}-\d{2}-\d{2}$")),
+    ("dotted", re.compile(r"^\d{4}\.\d{2}\.\d{2}$")),
     ("slash", re.compile(r"^\d{1,2}/\d{1,2}/\d{2,4}$")),
     ("d-month-yyyy", re.compile(r"^\d{1,2} [A-Za-z]{3,9} \d{4}$")),
     ("month-d-yyyy", re.compile(r"^[A-Za-z]{3,9} \d{1,2},? \d{4}$")),
 )
+_ISO_DATE_FORMATS = frozenset({"iso-datetime", "iso-date"})
 _BOM = b"\xef\xbb\xbf"
 
 
@@ -203,6 +205,10 @@ def _scan_file(rel: str, raw: bytes) -> tuple[FileReport | None, list[Finding]]:
         if len(dates[i]) >= 2:
             findings.append(Finding("mixed-date-formats", rel, name,
                                     detail=tuple(sorted(dates[i].items()))))
+        non_iso = {fmt: n for fmt, n in dates[i].items() if fmt not in _ISO_DATE_FORMATS}
+        if non_iso:
+            findings.append(Finding("non-iso-dates", rel, name,
+                                    detail=tuple(sorted(non_iso.items()))))
         if len(seps[i]) == 2:
             findings.append(Finding("mixed-separators", rel, name,
                                     detail=tuple(sorted(seps[i].items()))))
