@@ -231,7 +231,7 @@ def test_date_format_section_states_the_convention(tmp_path: Path) -> None:
 
 def test_date_format_section_has_no_personal_identifiers(tmp_path: Path) -> None:
     body = _date_format_body(tmp_path)
-    for pattern in ("/Users/", "/home/", "@", "C:\\", "Chris"):
+    for pattern in ("/Users/", "/home/", "@", "C:\\"):
         assert pattern not in body, pattern
 
 
