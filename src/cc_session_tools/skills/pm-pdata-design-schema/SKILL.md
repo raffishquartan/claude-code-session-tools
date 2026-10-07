@@ -92,6 +92,16 @@ Two ways to avoid the trap, not one - pick per record group:
 A `--field` value of the literal token `null` (unquoted) sets that column to real SQL `NULL` - it
 is not possible to write the four-character string `"null"` into a field via `--field`.
 
+## Date fields
+
+Store dates in extension fields as `yyyy-MM-dd` (time of day `yyyy-MM-dd HH:mm`, machine
+timestamps ISO 8601, partial `yyyy-MM` or `yyyy`), and never mix forms inside one field. A TEXT
+field is date-like when its name ends `_at` or `_date`, or its description contains the word
+"date" (a name ending `_text` is verbatim text and never is). `ccst pdata add` and `update`
+print a warning on stderr, and still write, when a value for such a field is not an ISO form -
+so put "date" in the description of any date field whose name does not end `_at`/`_date`.
+Numeric (`INTEGER`/`REAL`) fields are not checked.
+
 ## Quick reference
 
 | Question | Where the answer comes from |

@@ -480,7 +480,7 @@ def check_install_everything_synced(
             reason=(
                 f"installed {installed_version}, and the automatic install sync already "
                 f"failed for this version (rc {failed_attempt.rc} at "
-                f"{failed_attempt.at.strftime('%Y-%m-%dT%H:%M:%SZ')}) — "
+                f"{failed_attempt.at.strftime('%Y-%m-%d %H:%M UTC')}) — "
                 "run `ccst install-everything --apply` to see why"
             ),
         )
@@ -854,7 +854,7 @@ def check_pending_pdata_migration(projects_root: Path) -> list[CheckResult]:
 
 
 def _fmt_epoch(epoch: int) -> str:
-    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(epoch))
+    return time.strftime("%Y-%m-%d %H:%M UTC", time.gmtime(epoch))
 
 
 def check_pdata_verify(projects: list[str]) -> list[CheckResult]:

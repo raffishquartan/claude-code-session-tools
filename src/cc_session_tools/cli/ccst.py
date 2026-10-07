@@ -75,7 +75,7 @@ Current subcommands:
                                  — the delete steps are blocked by bash-hard-deny.
   claude-md install [--section ID]  Add/update the managed section(s) in
                                  ~/.claude/CLAUDE.md (messaging, workflow, agents,
-                                 confirm-gate). Omit --section for all four.
+                                 confirm-gate, date-format). Omit --section for all five.
   claude-md uninstall [--section ID]  Remove the managed section(s) from CLAUDE.md.
   ccsched-jobs install           Register CCST's bundled ccsched jobs (see
                                  lib/scheduler/bundled_jobs.py) if not already present.
@@ -1011,6 +1011,10 @@ def _cmd_pdata_add(args: argparse.Namespace) -> int:
     except ValueError as exc:
         print(f"ccst pdata: {exc}", file=sys.stderr)
         return 2
+    for warning in service.date_field_warnings(
+        project=args.project, record_group=args.group, fields=fields,
+    ):
+        print(f"ccst pdata: {warning}", file=sys.stderr)
     print(record.id)
     return 0
 
@@ -1148,6 +1152,10 @@ def _cmd_pdata_update(args: argparse.Namespace) -> int:
     except ValueError as exc:
         print(f"ccst pdata: {exc}", file=sys.stderr)
         return 2
+    for warning in service.date_field_warnings(
+        project=args.project, record_group=record.record_group, fields=fields,
+    ):
+        print(f"ccst pdata: {warning}", file=sys.stderr)
     print(f"updated record {record.id} (version {record.version})")
     return 0
 
