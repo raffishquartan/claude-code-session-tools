@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.12.1] - 2026-10-07
+
+### Fixed
+
+- **`ccmsg read` no longer fails on an unexpected `sent_at`.** A stored value not in the
+  `yyyy-MM-ddTHH:mm:ssZ` shape is printed as stored.
+- **The pdata date-field warning can no longer change a write's outcome.** If reading the schema
+  for the check errors after the record is written, no warning is printed and the command keeps
+  the write's status.
+
+### Changed
+
+- The `yyyy-MM-dd HH:mm UTC` rendering is defined once (`lib/timefmt.py`) and used by
+  `ccst doctor`, the auto-sync failure message, the pdata cutover log and `ccmsg read`. Output is
+  unchanged.
+
 ## [3.12.0] - 2026-10-07
 
 ### Added
