@@ -41,13 +41,13 @@
 
 ## 4b. pdata date-field warning (commit 4)
 
-- [ ] 4b.1 Add the date-field check to `lib/pdata/service.py` (pure, never raises, reads field
+- [x] 4b.1 Add the date-field check to `lib/pdata/service.py` (pure, never raises, reads field
       descriptions) and call it from the `add` and `update` handlers in `cli/ccst.py`, printing
       warnings to stderr after a successful write
-- [ ] 4b.2 Tests for every scenario in the spec: dotted into `_date`/`_at`, description-based match,
+- [x] 4b.2 Tests for every scenario in the spec: dotted into `_date`/`_at`, description-based match,
       each ISO form silent, `_text` silent, non-date field silent, null/empty silent, update path,
       write still succeeds with exit 0
-- [ ] 4b.3 Document the warning and its heuristic in the pdata docs and the
+- [x] 4b.3 Document the warning and its heuristic in the pdata docs and the
       `pm-pdata-design-schema` skill
 
 ## 5. Release prep (commit 5)
