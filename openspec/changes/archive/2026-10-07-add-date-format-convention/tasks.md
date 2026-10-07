@@ -52,10 +52,10 @@
 
 ## 5. Release prep (commit 5)
 
-- [ ] 5.1 CHANGELOG entry under a new `3.12.0` heading (Keep a Changelog headings stay ISO)
-- [ ] 5.2 Bump `pyproject.toml` to 3.12.0, run `uv lock`, commit `uv.lock` in the same commit
-- [ ] 5.3 Run the full check suite (build, mypy, lint, format, tests) and confirm every check exits 0
-- [ ] 5.4 `openspec-sync-specs` and archive the change before shipping
+- [x] 5.1 CHANGELOG entry under a new `3.12.0` heading (Keep a Changelog headings stay ISO)
+- [x] 5.2 Bump `pyproject.toml` to 3.12.0, run `uv lock`, commit `uv.lock` in the same commit
+- [x] 5.3 Run the full check suite (build, mypy, lint, format, tests) and confirm every check exits 0
+- [x] 5.4 `openspec-sync-specs` and archive the change before shipping
 
 ## 6. Ship and install
 
