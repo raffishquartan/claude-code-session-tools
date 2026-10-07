@@ -29,14 +29,14 @@
 
 ## 4. Readiness scan (commit 3)
 
-- [ ] 4.1 Add the dotted `yyyy.MM.dd` pattern to `_DATE_FORMATS` in `lib/pdata/readiness.py`
-- [ ] 4.2 Tests: ISO plus dotted, ISO plus compact, ISO plus `D Month YYYY`, ISO plus
+- [x] 4.1 Add the dotted `yyyy.MM.dd` pattern to `_DATE_FORMATS` in `lib/pdata/readiness.py`
+- [x] 4.2 Tests: ISO plus dotted, ISO plus compact, ISO plus `D Month YYYY`, ISO plus
       `Month D, YYYY` each raise `mixed-date-formats` with the right per-format counts; a column
       that is uniformly dotted does not
-- [ ] 4.3 Add `non-iso-dates` to `FINDING_KINDS` and emit it per the spec; tests: uniformly
+- [x] 4.3 Add `non-iso-dates` to `FINDING_KINDS` and emit it per the spec; tests: uniformly
       dotted, compact, slash and long-form columns, an ISO-only column (none), and a mixed
       column (both kinds, `non-iso-dates` counts non-ISO formats only)
-- [ ] 4.4 Update the `pm-pdata-do-audit-and-prepare-to-migrate` skill text and any docs listing the
+- [x] 4.4 Update the `pm-pdata-do-audit-and-prepare-to-migrate` skill text and any docs listing the
       finding kinds or recognised formats; describe `non-iso-dates` as advisory
 
 ## 4b. pdata date-field warning (commit 4)
