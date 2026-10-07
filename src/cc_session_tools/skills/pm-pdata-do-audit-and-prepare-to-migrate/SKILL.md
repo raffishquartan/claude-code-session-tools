@@ -57,7 +57,9 @@ ccst pdata readiness-scan --project <name> --path <domain-dir>/ --findings-only 
 ```
 
 It is read-only and deterministic. It reports, per CSV, `ragged-rows`, `bad-header`,
-`mixed-date-formats`, `mixed-separators` (`|` with `;` only), `machine-paths`, `null-strings`,
+`mixed-date-formats`, `non-iso-dates` (any dotted `yyyy.MM.dd`, compact `yyyyMMdd`, slash or
+long-form value, even when the whole column uses it; advisory, since an 8-digit identifier that
+is a real date is flagged too), `mixed-separators` (`|` with `;` only), `machine-paths`, `null-strings`,
 `duplicate-rows`, `comment-rows`, `repeated-header`, `no-unique-column`, `bom`, `crlf` and
 `unreadable`, plus row counts and unique columns. Treat findings as leads to verify, not facts to
 act on (a lone `-` may be a real dash). Its scanned set equals what `ccst pdata init` will

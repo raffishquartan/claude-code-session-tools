@@ -30,7 +30,7 @@ def _find(report: readiness.ReadinessReport, kind: str, file: str) -> readiness.
 def test_finding_kinds_constant_lists_every_kind() -> None:
     assert set(readiness.FINDING_KINDS) == {
         "ragged-rows", "machine-paths", "null-strings", "duplicate-rows", "comment-rows",
-        "repeated-header", "mixed-date-formats", "mixed-separators", "bad-header",
+        "repeated-header", "mixed-date-formats", "non-iso-dates", "mixed-separators", "bad-header",
         "no-unique-column", "unreadable", "bom", "crlf",
     }
 
@@ -110,6 +110,43 @@ def test_yyyymmdd_only_counts_when_a_real_date(tmp_path: Path) -> None:
     assert "mixed-date-formats" not in _kinds(readiness.scan_project(tmp_path))
     _w(tmp_path, "b.csv", "d\n20260319\n2026-03-19\n")
     assert "mixed-date-formats" in _kinds(readiness.scan_project(tmp_path), "b.csv")
+
+
+@pytest.mark.parametrize(("other", "fmt"), [
+    ("2026.03.19", "dotted"),
+    ("20260319", "yyyymmdd"),
+    ("19 March 2026", "d-month-yyyy"),
+    ("March 19, 2026", "month-d-yyyy"),
+    ("19/03/2026", "slash"),
+])
+def test_iso_mixed_with_other_format_raises_both_date_findings(
+    tmp_path: Path, other: str, fmt: str,
+) -> None:
+    _w(tmp_path, "m.csv", f'd\n2026-03-19\n"{other}"\n2026-03-21\n')
+    r = readiness.scan_project(tmp_path)
+    assert dict(_find(r, "mixed-date-formats", "m.csv").detail) == {"iso-date": 2, fmt: 1}
+    assert dict(_find(r, "non-iso-dates", "m.csv").detail) == {fmt: 1}
+
+
+@pytest.mark.parametrize(("value", "fmt"), [
+    ("2026.03.19", "dotted"),
+    ("20260319", "yyyymmdd"),
+    ("19 March 2026", "d-month-yyyy"),
+    ("March 19, 2026", "month-d-yyyy"),
+    ("19/03/2026", "slash"),
+])
+def test_uniformly_non_iso_column_raises_only_non_iso_dates(
+    tmp_path: Path, value: str, fmt: str,
+) -> None:
+    _w(tmp_path, "u.csv", f'd\n"{value}"\n"{value}"\n')
+    r = readiness.scan_project(tmp_path)
+    assert dict(_find(r, "non-iso-dates", "u.csv").detail) == {fmt: 2}
+    assert "mixed-date-formats" not in _kinds(r, "u.csv")
+
+
+def test_iso_only_column_has_no_non_iso_dates_finding(tmp_path: Path) -> None:
+    _w(tmp_path, "i.csv", "d\n2026-03-19\n2026-03-20 14:30\n2026-03-21T09:00:00Z\n")
+    assert "non-iso-dates" not in _kinds(readiness.scan_project(tmp_path), "i.csv")
 
 
 def test_mixed_separators_needs_both_pipe_and_semicolon(tmp_path: Path) -> None:

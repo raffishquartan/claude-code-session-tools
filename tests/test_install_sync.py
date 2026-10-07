@@ -1,6 +1,8 @@
 """Tests for cc_session_tools.lib.install_sync — the install-everything sync marker."""
 from __future__ import annotations
 
+import re
+
 import sqlite3
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -408,6 +410,7 @@ def test_backoff_prints_one_line_and_does_not_apply(
     assert captured.out == ""
     assert len([line for line in captured.err.splitlines() if line.strip()]) == 1
     assert "last auto-sync failed" in captured.err
+    assert re.search(r"failed at \d{4}-\d{2}-\d{2} \d{2}:\d{2} UTC", captured.err)
 
 
 def test_successful_apply_clears_a_stale_failure_record(

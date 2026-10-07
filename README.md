@@ -219,7 +219,8 @@ ccst claude-md uninstall --section agents --apply  # remove one section
 
 Current sections: `messaging` (how to use `ccmsg` proactively), `workflow` (the
 `working/`→`out/` convention above), `agents` (the agent-folder convention above), and
-`confirm-gate` (how the 8-digit confirmation gate works, for anyone who's turned it on).
+`confirm-gate` (how the 8-digit confirmation gate works, for anyone who's turned it on), and
+`date-format` (the date convention: `yyyy.MM.dd` in filenames, `yyyy-MM-dd` everywhere else).
 `install-everything` installs all of them; each is a plain, human-editable block you can
 read, remove, or override in your own CLAUDE.md at any time.
 
@@ -239,7 +240,9 @@ ccst pdata sync-check --all-projects          # cross-machine sync, safe fast-fo
 Records support optional typed extension tables (`ccst pdata schema add-field`) alongside
 a generic content field, soft deletes, and optimistic-concurrency versioning. Multi-machine
 sync uses a vector clock per project: a genuine fork between two machines' edits is
-flagged for a manual choice, never silently merged.
+flagged for a manual choice, never silently merged. Date-like fields (name ending `_at` or
+`_date`, or "date" in the description) get a stderr warning when a non-ISO value is written, and
+`ccst pdata readiness-scan` flags dotted, compact, slash and long-form date columns.
 
 ### Usage and cost analytics
 

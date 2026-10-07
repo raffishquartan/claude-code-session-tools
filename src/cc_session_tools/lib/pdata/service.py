@@ -480,6 +480,48 @@ def schema_list(*, project: str) -> list[dict[str, object]]:
         conn.close()
 
 
+_ISO_DATE_VALUE = _re.compile(
+    r"\d{4}(-\d{2}(-\d{2}([T ]\d{2}:\d{2}(:\d{2}(\.\d+)?)?(Z|[+-]\d{2}:?\d{2}| UTC)?)?)?)?"
+)
+_DATE_WORD = _re.compile(r"\bdate\b", _re.IGNORECASE)
+
+
+def _is_iso_date_value(value: str) -> bool:
+    """yyyy, yyyy-MM, yyyy-MM-dd, an ISO datetime, or a range of two ISO dates joined by '..'."""
+    return all(_ISO_DATE_VALUE.fullmatch(part) for part in value.strip().split(".."))
+
+
+def date_field_warnings(
+    *, project: str, record_group: str, fields: Mapping[str, str | None],
+) -> list[str]:
+    """One warning per value written to a date-like TEXT field that is not an ISO date form.
+
+    A field is date-like when its name ends `_at` or `_date`, or its description contains the
+    word "date"; a name ending `_text` (verbatim text) never is. Numeric fields are skipped
+    (an integer `_at` field holds an epoch, not a date string), as are empty and null values.
+    Advisory only: this reads the schema and writes nothing."""
+    columns = {
+        str(c["name"]): c for c in schema_show(project=project, record_group=record_group)
+        if c["source"] == "extension"
+    }
+    warnings: list[str] = []
+    for name, value in fields.items():
+        column = columns.get(name)
+        if column is None or value is None or not value.strip():
+            continue
+        if str(column["type"]).upper() != "TEXT" or name.endswith("_text"):
+            continue
+        description = str(column["description"] or "")
+        if not (name.endswith(("_at", "_date")) or _DATE_WORD.search(description)):
+            continue
+        if not _is_iso_date_value(value):
+            warnings.append(
+                f"warning: {record_group}.{name} is a date field but {value!r} is not an ISO "
+                "date (yyyy-MM-dd, yyyy-MM-dd HH:mm, or an ISO 8601 timestamp)"
+            )
+    return warnings
+
+
 def schema_show(*, project: str, record_group: str) -> list[dict[str, object]]:
     naming.validate_record_group(record_group)
     conn = repository.connect(project)

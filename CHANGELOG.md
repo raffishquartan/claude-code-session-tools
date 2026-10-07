@@ -7,6 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.12.0] - 2026-10-07
+
+### Added
+
+- **`date-format` managed CLAUDE.md section.** `ccst claude-md install` (and so `install-everything`
+  and the automatic sync) now also writes a `CCST:date-format` block stating the date convention:
+  `yyyy.MM.dd` in filenames and folder names, long form only in a formal letter header,
+  `yyyy-MM-dd` (and `yyyy-MM-dd HH:mm`) everywhere else, machine timestamps as ISO 8601, no mixed
+  formats in one column, and the exemptions.
+- **`ccst pdata readiness-scan` flags non-ISO date columns.** Dotted `yyyy.MM.dd` is now a
+  recognised date format, so a column mixing it with ISO values raises `mixed-date-formats`. A new
+  `non-iso-dates` finding kind reports any column holding a dotted, compact (`yyyyMMdd`),
+  slash-separated or long-form value, including a column that uses one of them throughout. It is
+  advisory: an 8-digit identifier that is a real date is flagged too.
+- **`ccst pdata add` and `update` warn on non-ISO dates.** Writing a value that is not an ISO date
+  form to a TEXT field whose name ends `_at` or `_date`, or whose description contains "date",
+  prints a warning on stderr; the write still succeeds. Names ending `_text` and numeric fields
+  are never checked.
+
+### Changed
+
+- **Times printed for people use `yyyy-MM-dd HH:mm`.** `ccst doctor` reasons, the auto-sync
+  failure message and the pdata cutover log now print `yyyy-MM-dd HH:mm UTC` instead of
+  `yyyy-MM-ddTHH:mm:ssZ`; the `clean-hook-sessions` table prints `yyyy-MM-dd HH:mm`; and
+  `ccmsg read` prints `sent_at` as `yyyy-MM-dd HH:mm UTC`. Stored and exchanged timestamps are
+  unchanged.
+
 ## [3.11.1] - 2026-10-05
 
 ### Fixed

@@ -192,7 +192,7 @@ def _cmd_read(args: argparse.Namespace) -> int:
     print(f"to:       {message.to_kind}={message.to_value}")
     print(f"subject:  {message.subject}")
     print(f"status:   {message.status}")
-    print(f"sent_at:  {message.sent_at}")
+    print(f"sent_at:  {service.format_sent_at(message.sent_at)}")
     if message.attachments:
         print("attach:   " + ", ".join(message.attachments))
     print()

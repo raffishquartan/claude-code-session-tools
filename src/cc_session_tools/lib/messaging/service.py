@@ -135,6 +135,12 @@ def list_messages(
     ]
 
 
+def format_sent_at(sent_at: str) -> str:
+    """Render a stored `sent_at` machine timestamp as `yyyy-MM-dd HH:mm UTC` for a human."""
+    sent = datetime.strptime(sent_at, "%Y-%m-%dT%H:%M:%SZ")
+    return sent.strftime("%Y-%m-%d %H:%M UTC")
+
+
 def relative_age(sent_at: str, now: datetime) -> str:
     """Public: used by both this module's own digest formatting and ccmsg.py's `list`
     output - a genuine cross-module utility, not internal-only."""

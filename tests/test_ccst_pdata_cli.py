@@ -316,3 +316,36 @@ def test_pdata_query_include_deleted(base_env):
     r_included = _run(base_env, "pdata", "query", "--project", "testproj", "--group", "notes",
                         "--where", "content = gone", "--include-deleted", "--format", "json")
     assert [row["content"] for row in json.loads(r_included.stdout)] == ["gone"]
+
+
+def _date_field(base_env):
+    _run(base_env, "pdata", "schema", "add-field", "--project", "testproj",
+         "--group", "key-events", "--field", "event_date:TEXT")
+
+
+def test_pdata_add_warns_on_non_iso_date_but_still_writes(base_env):
+    _date_field(base_env)
+    r = _run(base_env, "pdata", "add", "--project", "testproj", "--group", "key-events",
+             "--content", "an event", "--field", "event_date=2026.10.05")
+    assert r.returncode == 0, r.stderr
+    assert "key-events.event_date" in r.stderr and "2026.10.05" in r.stderr
+    assert r.stdout.strip() == "1"
+
+
+def test_pdata_add_iso_date_prints_no_warning(base_env):
+    _date_field(base_env)
+    r = _run(base_env, "pdata", "add", "--project", "testproj", "--group", "key-events",
+             "--content", "an event", "--field", "event_date=2026-10-05")
+    assert r.returncode == 0, r.stderr
+    assert r.stderr == ""
+
+
+def test_pdata_update_warns_on_non_iso_date_but_still_writes(base_env):
+    _date_field(base_env)
+    _run(base_env, "pdata", "add", "--project", "testproj", "--group", "key-events",
+         "--content", "an event")
+    r = _run(base_env, "pdata", "update", "--project", "testproj", "--id", "1",
+             "--version", "1", "--field", "event_date=5 October 2026")
+    assert r.returncode == 0, r.stderr
+    assert "key-events.event_date" in r.stderr and "5 October 2026" in r.stderr
+    assert "updated record 1" in r.stdout
