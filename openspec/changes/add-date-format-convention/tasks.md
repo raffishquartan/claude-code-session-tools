@@ -1,30 +1,30 @@
 ## 1. Branch and baseline
 
-- [ ] 1.1 Create a worktree and branch `f/20261007-date-format-convention` from `main`, move this
+- [x] 1.1 Create a worktree and branch `f/20261007-date-format-convention` from `main`, move this
       change directory into it, `uv sync --extra dev`, and confirm the full check suite exits 0
       before any edit (use `CCST_NO_AUTO_SYNC=1` for every `uv run` command)
 
 ## 2. `date-format` managed section (commit 1)
 
-- [ ] 2.1 Add the `date-format` body to `_SECTION_BODIES` and the id to `SECTION_IDS` (appended
+- [x] 2.1 Add the `date-format` body to `_SECTION_BODIES` and the id to `SECTION_IDS` (appended
       last) in `lib/claude_md_install.py`, with no personal identifiers
-- [ ] 2.2 Extend `tests/test_claude_md_install.py`: section appears in an all-sections install,
+- [x] 2.2 Extend `tests/test_claude_md_install.py`: section appears in an all-sections install,
       installs and uninstalls alone, is idempotent, leaves other sections byte-identical, and the
       body contains the three clauses, the time-of-day rule, the no-mixing rule and the exemptions
       and none of a fixed list of personal-identifier patterns
-- [ ] 2.3 Update docs that enumerate the managed sections (README, `docs/`)
+- [x] 2.3 Update docs that enumerate the managed sections (README, `docs/`)
 
 ## 3. Human-facing date output (commit 2)
 
-- [ ] 3.1 Re-check each row of the earlier writer sweep and the second sweep against the final
+- [x] 3.1 Re-check each row of the earlier writer sweep and the second sweep against the final
       rule; record any additional hit found in the PR description
-- [ ] 3.2 `lib/doctor.py`: render the pdata-verify run time and the failed-sync time as
+- [x] 3.2 `lib/doctor.py`: render the pdata-verify run time and the failed-sync time as
       `yyyy-MM-dd HH:mm UTC`; `lib/install_sync.py`: same for the auto-sync failure message
-- [ ] 3.3 `lib/pdata/cutover.py`: log line time as `yyyy-MM-dd HH:mm UTC`
-- [ ] 3.4 `skills/clean-hook-sessions/scripts/clean-hook-sessions.py`: `human_time` returns
+- [x] 3.3 `lib/pdata/cutover.py`: log line time as `yyyy-MM-dd HH:mm UTC`
+- [x] 3.4 `skills/clean-hook-sessions/scripts/clean-hook-sessions.py`: `human_time` returns
       `yyyy-MM-dd HH:mm`
-- [ ] 3.5 `cli/ccmsg.py` `read`: render `sent_at` as `yyyy-MM-dd HH:mm UTC` (stored value unchanged)
-- [ ] 3.6 Update the existing tests that assert the old text and add one test per changed output;
+- [x] 3.5 `cli/ccmsg.py` `read`: render `sent_at` as `yyyy-MM-dd HH:mm UTC` (stored value unchanged)
+- [x] 3.6 Update the existing tests that assert the old text and add one test per changed output;
       add a test that stored machine timestamps (message, scheduler, telemetry) are unchanged
 
 ## 4. Readiness scan (commit 3)

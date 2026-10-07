@@ -99,7 +99,7 @@ def human_size(n):
 
 
 def human_time(ts):
-    return datetime.fromtimestamp(ts).isoformat(timespec="seconds")
+    return datetime.fromtimestamp(ts).strftime("%Y-%m-%d %H:%M")
 
 
 def make_archive(files, archive_path):

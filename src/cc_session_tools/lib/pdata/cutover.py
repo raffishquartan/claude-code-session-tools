@@ -190,7 +190,7 @@ def archive_entries(
     archive_root = project_root / MIGRATED_ARCHIVE_DIRNAME
     archive_root.mkdir(parents=True, exist_ok=True)
     manifest_path = archive_root / MIGRATED_MANIFEST_FILENAME
-    now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    now = time.strftime("%Y-%m-%d %H:%M UTC", time.gmtime())
     outcomes: list[PointerPlan] = []
     with manifest_path.open("a", encoding="utf-8") as log:
         for index, entry in enumerate(entries):
