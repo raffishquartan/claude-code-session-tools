@@ -14,7 +14,6 @@ import os
 import shutil
 import sqlite3
 import subprocess
-import time
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
@@ -29,6 +28,7 @@ from cc_session_tools.lib.pdata.init_paths import (
     MIGRATED_MANIFEST_FILENAME,
 )
 from cc_session_tools.lib.text_wrap import wrap_block
+from cc_session_tools.lib.timefmt import format_utc, format_utc_epoch
 
 if TYPE_CHECKING:
     from cc_session_tools.lib.install_sync import FailedAttempt
@@ -480,7 +480,7 @@ def check_install_everything_synced(
             reason=(
                 f"installed {installed_version}, and the automatic install sync already "
                 f"failed for this version (rc {failed_attempt.rc} at "
-                f"{failed_attempt.at.strftime('%Y-%m-%d %H:%M UTC')}) — "
+                f"{format_utc(failed_attempt.at)}) — "
                 "run `ccst install-everything --apply` to see why"
             ),
         )
@@ -854,7 +854,7 @@ def check_pending_pdata_migration(projects_root: Path) -> list[CheckResult]:
 
 
 def _fmt_epoch(epoch: int) -> str:
-    return time.strftime("%Y-%m-%d %H:%M UTC", time.gmtime(epoch))
+    return format_utc_epoch(epoch)
 
 
 def check_pdata_verify(projects: list[str]) -> list[CheckResult]:

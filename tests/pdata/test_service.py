@@ -675,3 +675,15 @@ def test_text_suffix_non_date_numeric_empty_and_null_never_warn(monkeypatch, tmp
     assert _warn(sent_at="1790000000") == []
     assert _warn(event_date="") == []
     assert _warn(event_date=None) == []
+
+
+def test_date_field_warnings_returns_nothing_when_the_schema_read_fails(monkeypatch, tmp_path):
+    import sqlite3
+
+    _date_group(monkeypatch, tmp_path)
+
+    def boom(**kwargs):
+        raise sqlite3.OperationalError("database is locked")
+
+    monkeypatch.setattr(service, "schema_show", boom)
+    assert _warn(event_date="2026.10.05") == []

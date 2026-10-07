@@ -8,6 +8,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Literal
 
+from cc_session_tools.lib.timefmt import format_utc
 from cc_session_tools.lib.messaging import cursor as cursor_mod
 from cc_session_tools.lib.messaging import repository
 from cc_session_tools.lib.messaging import retention
@@ -136,9 +137,13 @@ def list_messages(
 
 
 def format_sent_at(sent_at: str) -> str:
-    """Render a stored `sent_at` machine timestamp as `yyyy-MM-dd HH:mm UTC` for a human."""
-    sent = datetime.strptime(sent_at, "%Y-%m-%dT%H:%M:%SZ")
-    return sent.strftime("%Y-%m-%d %H:%M UTC")
+    """Render a stored `sent_at` machine timestamp as `yyyy-MM-dd HH:mm UTC` for a human; a value
+    not in the writer's shape is returned as stored so the message stays readable."""
+    try:
+        sent = datetime.strptime(sent_at, "%Y-%m-%dT%H:%M:%SZ")
+    except ValueError:
+        return sent_at
+    return format_utc(sent)
 
 
 def relative_age(sent_at: str, now: datetime) -> str:

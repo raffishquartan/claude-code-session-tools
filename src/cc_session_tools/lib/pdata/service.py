@@ -499,11 +499,13 @@ def date_field_warnings(
     A field is date-like when its name ends `_at` or `_date`, or its description contains the
     word "date"; a name ending `_text` (verbatim text) never is. Numeric fields are skipped
     (an integer `_at` field holds an epoch, not a date string), as are empty and null values.
-    Advisory only: this reads the schema and writes nothing."""
-    columns = {
-        str(c["name"]): c for c in schema_show(project=project, record_group=record_group)
-        if c["source"] == "extension"
-    }
+    Advisory only: this reads the schema and writes nothing, and returns no warnings if the schema
+    cannot be read, so it can never change the outcome of the write it follows."""
+    try:
+        schema = schema_show(project=project, record_group=record_group)
+    except (sqlite3.Error, ValueError):
+        return []  # advisory check; the write it follows has already committed
+    columns = {str(c["name"]): c for c in schema if c["source"] == "extension"}
     warnings: list[str] = []
     for name, value in fields.items():
         column = columns.get(name)
