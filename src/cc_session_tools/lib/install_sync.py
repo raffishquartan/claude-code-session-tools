@@ -24,6 +24,7 @@ from enum import Enum
 from pathlib import Path
 
 from cc_session_tools.lib import sessions_db
+from cc_session_tools.lib.timefmt import format_utc
 
 _SYNCED_VERSION_KEY = "synced_version"
 
@@ -301,7 +302,7 @@ def ensure_synced(*, noun: str | None, verb: str | None, installed_version: str)
             )
         print(
             f"ccst: install config is out of sync (installed {installed_version}, {state}) "
-            f"and the last auto-sync failed at {last_failure.at.strftime('%Y-%m-%d %H:%M UTC')} — "
+            f"and the last auto-sync failed at {format_utc(last_failure.at)} — "
             "run `ccst install-everything --apply` to see why.",
             file=sys.stderr,
         )

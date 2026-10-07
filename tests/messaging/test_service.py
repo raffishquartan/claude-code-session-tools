@@ -252,3 +252,10 @@ def test_format_sent_at_renders_utc_text_form() -> None:
     from cc_session_tools.lib.messaging.service import format_sent_at
 
     assert format_sent_at("2026-10-05T14:30:59Z") == "2026-10-05 14:30 UTC"
+
+
+@pytest.mark.parametrize("stored", ["2026-10-05T14:30:00.123+00:00", "not a time", ""])
+def test_format_sent_at_returns_an_unparseable_value_as_stored(stored: str) -> None:
+    from cc_session_tools.lib.messaging.service import format_sent_at
+
+    assert format_sent_at(stored) == stored

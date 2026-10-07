@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import os
-import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -12,6 +11,7 @@ from cc_session_tools.lib.pdata.init_paths import (
     MIGRATED_MANIFEST_FILENAME,
 )
 from cc_session_tools.lib.pdata.manifest import ManifestEntry
+from cc_session_tools.lib.timefmt import format_utc_epoch
 
 
 _POINTER_BODY_PREFIX = "This file's data now lives in pdata record group"
@@ -190,7 +190,7 @@ def archive_entries(
     archive_root = project_root / MIGRATED_ARCHIVE_DIRNAME
     archive_root.mkdir(parents=True, exist_ok=True)
     manifest_path = archive_root / MIGRATED_MANIFEST_FILENAME
-    now = time.strftime("%Y-%m-%d %H:%M UTC", time.gmtime())
+    now = format_utc_epoch()
     outcomes: list[PointerPlan] = []
     with manifest_path.open("a", encoding="utf-8") as log:
         for index, entry in enumerate(entries):
