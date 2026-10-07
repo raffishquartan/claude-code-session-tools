@@ -219,7 +219,8 @@ ccst claude-md uninstall --section agents --apply  # remove one section
 
 Current sections: `messaging` (how to use `ccmsg` proactively), `workflow` (the
 `working/`→`out/` convention above), `agents` (the agent-folder convention above), and
-`confirm-gate` (how the 8-digit confirmation gate works, for anyone who's turned it on).
+`confirm-gate` (how the 8-digit confirmation gate works, for anyone who's turned it on), and
+`date-format` (the date convention: `yyyy.MM.dd` in filenames, `yyyy-MM-dd` everywhere else).
 `install-everything` installs all of them; each is a plain, human-editable block you can
 read, remove, or override in your own CLAUDE.md at any time.
 
