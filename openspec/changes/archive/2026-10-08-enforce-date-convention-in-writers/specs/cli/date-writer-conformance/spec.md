@@ -26,18 +26,3 @@ on the list SHALL NOT appear in `src/`.
 - **WHEN** an exemption-list entry no longer matches any format string in `src/`
 - **THEN** the conformance test fails until the entry is deleted
 
-### Requirement: Bundled skill text states filename dates in the convention form
-Where a bundled skill's text names a filename or folder pattern that contains a date, it SHALL
-write the date part as `yyyy.MM.dd`, with a time as `yyyy.MM.dd-HHmm`, and SHALL use the same
-pattern as every other bundled skill that names that kind of file. A skill's example dates in
-prose or tables SHALL be ISO `yyyy-MM-dd`.
-
-#### Scenario: Correspondence filename pattern
-- **WHEN** `pm-update-central-files` describes how to match archived correspondence files
-- **THEN** it gives the pattern `<yyyy.MM.dd>-<HHmm>--<sender>-to-<recipient>--<channel>...`
-  consistent with `pm-project-layout-reference`, and no space-separated `<yyyy.MM.dd> <HHmm> -`
-  pattern remains in either skill
-
-#### Scenario: Meetings filename pattern
-- **WHEN** `pm-project-layout-reference` describes `meetings-and-calls/` filenames
-- **THEN** the date part is `<yyyy.MM.dd>-<HHmm>`

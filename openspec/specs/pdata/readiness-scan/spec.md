@@ -83,10 +83,11 @@ Findings SHALL be one of these kinds, each with the file and, where it applies, 
   (identical to an earlier row), `comment-rows` (first field begins with `#`), `repeated-header`
   (a data row equal to the header row).
 - Column-level, with per-format or per-separator counts and no row numbers: `mixed-date-formats`
-  (two or more of ISO date, ISO datetime, dotted `yyyy.MM.dd`, `YYYYMMDD` as a real date,
-  slash-separated, `D Month YYYY`, `Month D, YYYY`), `non-iso-dates` (at least one value in a
-  recognised non-ISO date format: dotted, `YYYYMMDD`, slash-separated, `D Month YYYY` or
-  `Month D, YYYY`) and `mixed-separators` (both `|` and `;` appear inside values).
+  (two or more of ISO date, ISO datetime, dotted `yyyy.MM.dd`, `YYYYMMDD` as a real date, compact
+  timestamp `yyyyMMddTHHmm[ss][Z]`, slash-separated, `D Month YYYY`, `Month D, YYYY`),
+  `non-iso-dates` (at least one value in a recognised non-ISO date format: dotted, `YYYYMMDD`,
+  compact timestamp, slash-separated, `D Month YYYY` or `Month D, YYYY`) and `mixed-separators`
+  (both `|` and `;` appear inside values).
 - File-level, with no counts: `bad-header` (an empty or duplicate header name), `no-unique-column`
   (at least two data rows and no column that is non-empty and distinct on every row),
   `unreadable`, `bom` (a UTF-8 byte-order mark) and `crlf` (CRLF line endings).
@@ -114,6 +115,21 @@ The set of kinds SHALL be defined once in the scanning module so callers and tes
 - **WHEN** every date in a column is dotted `yyyy.MM.dd` (or compact, slash-separated or long form)
 - **THEN** a `non-iso-dates` finding names that column and reports the format with its count, and
   no `mixed-date-formats` finding is emitted
+
+#### Scenario: Compact timestamp column
+- **WHEN** every value in a column is a compact timestamp such as `20261008T1057`,
+  `20261008T105743` or `20261008T105743Z`
+- **THEN** a `non-iso-dates` finding names that column and reports the `compact-datetime` format
+  with its count, and no `mixed-date-formats` finding is emitted
+
+#### Scenario: Compact timestamps mixed with ISO datetimes
+- **WHEN** a column holds both `2026-10-08 10:57` and `20261008T1057`
+- **THEN** it has a `mixed-date-formats` finding and a `non-iso-dates` finding, and the
+  `non-iso-dates` counts cover only the compact timestamps
+
+#### Scenario: A value that is not a real compact timestamp
+- **WHEN** a column holds `20261308T2561` (month 13, minute 61) or `ABC20261008T1057`
+- **THEN** the value is not counted as a compact timestamp
 
 #### Scenario: Mixed column reports both kinds
 - **WHEN** a column holds both `2026-03-19` and `2026.03.19`

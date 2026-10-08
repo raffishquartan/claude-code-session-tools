@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.12.2] - 2026-10-08
+
+### Fixed
+
+- **`ccst pdata readiness-scan` recognises compact timestamps** (`yyyyMMddTHHmm`,
+  `yyyyMMddTHHmmss`, with an optional trailing `Z`). A column of them now raises `non-iso-dates`,
+  and `mixed-date-formats` when mixed with ISO values; before, it raised nothing.
+
+### Added
+
+- A test pins every date format string under `src/` against an allowlist with a reason per entry
+  (machine ISO 8601, identifier, backup stamp, human-facing ISO), so a new non-convention format
+  fails the build.
+
 ## [3.12.1] - 2026-10-07
 
 ### Fixed

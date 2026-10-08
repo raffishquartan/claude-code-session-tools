@@ -89,10 +89,26 @@ def _is_real_yyyymmdd(value: str) -> bool:
     return 1900 <= parsed.year <= 2100
 
 
+_COMPACT_DATETIME = re.compile(r"(\d{8})T(\d{2})(\d{2})(\d{2})?Z?")
+
+
+def _is_compact_datetime(value: str) -> bool:
+    match = _COMPACT_DATETIME.fullmatch(value)
+    if match is None:
+        return False
+    date_part, hour, minute, second = match.groups()
+    return (
+        _is_real_yyyymmdd(date_part)
+        and int(hour) <= 23 and int(minute) <= 59 and int(second or 0) <= 59
+    )
+
+
 def _date_format(value: str) -> str | None:
     for name, pattern in _DATE_FORMATS:
         if pattern.match(value):
             return name
+    if _is_compact_datetime(value):
+        return "compact-datetime"
     return "yyyymmdd" if _is_real_yyyymmdd(value) else None
 
 

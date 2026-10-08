@@ -25,7 +25,7 @@ Every date-format string under `src/` was classified against the convention on 2
 
 Nothing in `src/` writes `yyyyMMddTHHmm`, dotted dates outside filenames, slash or long-form
 dates. The maxella request to update "writers and parsers" of that form therefore has no code to
-change; the gaps are in detection and skill text, below.
+change; the gaps are in detection and enforcement, below.
 
 ## Decisions
 
@@ -52,20 +52,12 @@ considered: a ruff custom rule (no such facility for string contents), and grepp
 distinguish SQL text from prose). Pairs rather than line numbers, so unrelated edits do not churn
 the list.
 
-### Skill text: one filename pattern
-
-`pm-update-central-files` Step 1b gives `<yyyy.MM.dd> <HHmm> - <sender> <channel> to
-<recipient>.<ext>`, while `pm-project-layout-reference` section 6 and the convention give
-`<yyyy.MM.dd>-<HHmm>--<participants>--...`. Both skills are changed to the convention's pattern.
-The correspondence-archiving skill that names the files is outside this repo; the implementer
-SHALL read its current naming rule before editing and use that rule, not the example in the
-convention document, if the two differ.
-
 ## Risks and open points
 
-- The correspondence pattern in the skill text may not match what the external archiving skill
-  produces. Mitigation: verify against it first (task 3.1); stop and ask if it differs from the
-  convention.
+- The filename pattern in `pm-update-central-files` was audited and left unchanged: it matches the
+  external `archive-correspondence` skill's output, and `pm-project-layout-reference` section 6
+  describes a different folder (`meetings-and-calls/`). Aligning the separator style with the
+  convention document's example is a decision for the archiving skill's owner.
 - The guard test fails on the first unlisted format added by any future change. This is the
   intended cost; the failure message states how to add an entry.
 - Version: patch bump, because the readiness scan only gains a recognised format and a finding on
