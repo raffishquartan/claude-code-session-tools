@@ -144,6 +144,34 @@ def test_uniformly_non_iso_column_raises_only_non_iso_dates(
     assert "mixed-date-formats" not in _kinds(r, "u.csv")
 
 
+@pytest.mark.parametrize("value", ["20261008T1057", "20261008T105743", "20261008T105743Z"])
+def test_compact_timestamp_column_raises_only_non_iso_dates(tmp_path: Path, value: str) -> None:
+    _w(tmp_path, "c.csv", f"t\n{value}\n{value}\n")
+    r = readiness.scan_project(tmp_path)
+    assert dict(_find(r, "non-iso-dates", "c.csv").detail) == {"compact-datetime": 2}
+    assert "mixed-date-formats" not in _kinds(r, "c.csv")
+
+
+def test_compact_timestamp_mixed_with_iso_datetime_raises_both(tmp_path: Path) -> None:
+    _w(tmp_path, "m.csv", "t\n2026-10-08 10:57\n20261008T1057\n2026-10-09 08:00\n")
+    r = readiness.scan_project(tmp_path)
+    assert dict(_find(r, "mixed-date-formats", "m.csv").detail) == {
+        "compact-datetime": 1, "iso-datetime": 2,
+    }
+    assert dict(_find(r, "non-iso-dates", "m.csv").detail) == {"compact-datetime": 1}
+
+
+@pytest.mark.parametrize("value", [
+    "20261308T1057", "20261008T2561", "20261008T2459", "ABC20261008T1057", "20261008T10",
+    "20261008T105743ZZ",
+])
+def test_value_that_is_not_a_real_compact_timestamp_is_not_counted(
+    tmp_path: Path, value: str,
+) -> None:
+    _w(tmp_path, "n.csv", f"t\n{value}\n2026-10-08 10:57\n")
+    assert "non-iso-dates" not in _kinds(readiness.scan_project(tmp_path), "n.csv")
+
+
 def test_iso_only_column_has_no_non_iso_dates_finding(tmp_path: Path) -> None:
     _w(tmp_path, "i.csv", "d\n2026-03-19\n2026-03-20 14:30\n2026-03-21T09:00:00Z\n")
     assert "non-iso-dates" not in _kinds(readiness.scan_project(tmp_path), "i.csv")
