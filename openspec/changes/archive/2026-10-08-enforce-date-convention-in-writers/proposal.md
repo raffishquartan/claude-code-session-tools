@@ -4,7 +4,7 @@ Projects now convert their stored data to the shared date convention (filenames 
 everything else ISO, time of day `yyyy-MM-dd HH:mm`, machine timestamps ISO 8601). Release 3.12
 made CCST print human-facing times in that form and added date checks to the pdata write path and
 readiness scan, but nothing guarantees that every other date CCST writes follows the rule, and a project that converted a column to
-`yyyy-MM-dd HH:mm` (maxella) asked that all writers be checked. An audit of `src/` against the
+`yyyy-MM-dd HH:mm` asked that all writers be checked. An audit of `src/` against the
 convention found the code writers compliant or exempt, plus two real gaps:
 
 - `ccst pdata readiness-scan` does not recognise compact timestamps (`20261008T1057`,
@@ -27,7 +27,7 @@ convention found the code writers compliant or exempt, plus two real gaps:
 
 Out of scope, and why:
 
-- The convention document under the `claude` project's sessions (its section 4 maxella row says
+- The convention document under the `claude` project's sessions (its section 4 row for that project says
   "leave stored values", contradicting its sections 1 and 5). It is not in this repo; the owner of
   that file should update it.
 - Skills that live outside this repo (for example `archive-correspondence`, `gmail-compose`).

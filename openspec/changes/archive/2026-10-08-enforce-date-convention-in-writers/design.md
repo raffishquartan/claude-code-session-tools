@@ -24,7 +24,7 @@ Every date-format string under `src/` was classified against the convention on 2
 | `extracted_at: datetime.now(UTC).isoformat()` | `extract-to-text` | exempt: machine ISO 8601 with offset |
 
 Nothing in `src/` writes `yyyyMMddTHHmm`, dotted dates outside filenames, slash or long-form
-dates. The maxella request to update "writers and parsers" of that form therefore has no code to
+dates. A project's request to update "writers and parsers" of that form therefore has no code to
 change; the gaps are in detection and enforcement, below.
 
 ## Decisions
