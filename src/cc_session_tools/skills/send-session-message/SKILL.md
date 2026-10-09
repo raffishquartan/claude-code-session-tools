@@ -21,7 +21,15 @@ Do not send for things the user can see in this session, or to talk to yourself.
 Decide which of three addressing modes fits, and **confirm with the user when it
 is ambiguous**:
 
-1. `--to-session <uuid>` - a specific known session (you have its uuid).
+1. `--to-session <ref>` - a specific known session. `<ref>` is a full uuid, a session name
+   (the `cc-sessions/` directory name, `YYYYMMDD-<tag>`) or a uuid prefix of at least 8 hex
+   characters, for example the leading characters shown in a received message's sender field. A
+   name or prefix is resolved in the sessions store and the message is stored for the full uuid.
+   It exits 2 and stores nothing when nothing matches or when it matches several sessions (a
+   forked session): the error lists the candidates, so retry with a full uuid. The store knows
+   only sessions opened with `ccd`/`ccr`; for any other session pass the full uuid. `ccmsg read`
+   prints the sender's full uuid on its `from_uuid:` line, so you can reply to a session you know
+   only from a message.
 2. `--to-project <name>` - any session in a named project.
 3. `--to-description "<text>"` - "whoever is working on X". Surfaced to candidate
    sessions; one claims it.

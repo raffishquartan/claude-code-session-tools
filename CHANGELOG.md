@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.13.0] - 2026-10-09
+
+### Added
+
+- **`ccmsg send --to-session` accepts a session name or a uuid prefix.** A session name
+  (`YYYYMMDD-<tag>`) or a uuid prefix of at least 8 hex characters is resolved in the sessions
+  store and the message is stored for the full uuid. A reference that matches no session, or
+  several (a forked session lists its candidates), exits 2 and stores nothing.
+- **`ccmsg read` prints the sender's full session uuid** on a new `from_uuid:` line.
+
+### Changed
+
+- A `--to-session` value that is neither a canonical uuid nor resolvable is now an error. Before,
+  it was stored unchecked and could never be delivered.
+
 ## [3.12.2] - 2026-10-08
 
 ### Fixed

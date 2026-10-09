@@ -626,6 +626,24 @@ def find_exact(basename: str, *, path: Path | None = None) -> list[SessionRow]:
         conn.close()
 
 
+def find_by_uuid_prefix(prefix: str, *, path: Path | None = None) -> list[SessionRow]:
+    """Every row whose uuid starts with `prefix`. `prefix` must hold only hex digits and
+    dashes (the caller validates), so it contains no LIKE wildcard."""
+    try:
+        conn = connect(path=path, readonly=True)
+    except sqlite3.OperationalError:
+        return []
+    try:
+        rows = conn.execute(
+            "SELECT project_dir, basename, uuid, start_date, last_opened, last_active "
+            "FROM sessions WHERE uuid LIKE ?",
+            (prefix + "%",),
+        ).fetchall()
+        return [_row_to_session(r) for r in rows]
+    finally:
+        conn.close()
+
+
 # ---------------------------------------------------------------------------
 # sessions_migration_ambiguous
 # ---------------------------------------------------------------------------

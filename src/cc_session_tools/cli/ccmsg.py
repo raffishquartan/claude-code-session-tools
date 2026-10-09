@@ -14,10 +14,12 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from cc_session_tools import __version__
+from cc_session_tools.lib import sessions_db
 from cc_session_tools.lib.messaging import service, store
 from cc_session_tools.lib.messaging.addressing import SessionContext
 from cc_session_tools.lib.messaging.lock import AlreadyClaimedError
 from cc_session_tools.lib.messaging.message import ToKind
+from cc_session_tools.lib.messaging.session_ref import resolve_session_ref
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -30,7 +32,11 @@ def _build_parser() -> argparse.ArgumentParser:
 
     send_p = sub.add_parser("send", help="Compose and route a message.")
     rcpt = send_p.add_argument_group("recipient (exactly one)")
-    rcpt.add_argument("--to-session", metavar="UUID")
+    rcpt.add_argument(
+        "--to-session", metavar="UUID|NAME|PREFIX",
+        help="a session uuid, a session name (YYYYMMDD-<tag>) or a uuid prefix of 8+ hex "
+             "characters; names and prefixes are resolved in the sessions store",
+    )
     rcpt.add_argument("--to-project", metavar="NAME")
     rcpt.add_argument("--to-description", metavar="TEXT")
     send_p.add_argument("--subject", required=True)
@@ -94,6 +100,11 @@ def _resolve_recipient(args: argparse.Namespace) -> tuple[ToKind, str]:
         )
     kind, val = chosen[0]
     assert val is not None  # the filter above guarantees this; narrows for mypy
+    if kind == "session":
+        val = resolve_session_ref(
+            val, find_by_name=sessions_db.find_exact,
+            find_by_prefix=sessions_db.find_by_uuid_prefix,
+        )
     return kind, val
 
 
@@ -189,6 +200,7 @@ def _cmd_read(args: argparse.Namespace) -> int:
         return 1
     print(f"id:       {message.id}")
     print(f"from:     {message.from_session} ({message.from_project})")
+    print(f"from_uuid: {message.from_uuid}")
     print(f"to:       {message.to_kind}={message.to_value}")
     print(f"subject:  {message.subject}")
     print(f"status:   {message.status}")
