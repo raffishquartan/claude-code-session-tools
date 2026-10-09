@@ -22,12 +22,15 @@ stored with every message and only `read` omits it.
 1. A canonical uuid (`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`,
    case-insensitive) is used as given. Sessions are recorded in the store only when opened through
    `ccd`/`ccr`, so a valid uuid of a session the store has not seen must still be accepted.
-2. Otherwise an exact name match via `sessions_db.find_exact(basename)`.
-3. Otherwise a prefix: `^[0-9a-f]{8}` followed by hex and dashes, matched with
-   `uuid LIKE '<prefix>%'` (prefix escaped), against distinct uuids.
+2. Otherwise, if the value looks like a session name (`^\d{8}-\S+$`), an exact name match via
+   `sessions_db.find_exact(basename)`.
+3. Otherwise, if the value looks like a prefix (`^[0-9a-f]{8}[0-9a-f-]*$`, so 8+ hex characters),
+   `uuid LIKE '<prefix>%'`. Both name and prefix are tried when the value fits both shapes and the
+   name finds nothing.
 4. Exactly one distinct uuid across matches resolves; zero or several is an error. Several rows
    with one uuid (the same session recorded under two project directories) count once.
-5. Anything else is an error naming the accepted forms.
+5. A value of neither shape is an error naming the accepted forms; a value of a valid shape that
+   matches nothing is a "no session matches" error.
 
 Name before prefix, because a date-prefixed name such as `20261005-fade` is also valid hex
 characters; an exact name is the more specific claim.

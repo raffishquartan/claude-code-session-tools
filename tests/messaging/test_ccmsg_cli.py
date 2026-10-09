@@ -10,6 +10,9 @@ from pathlib import Path
 import pytest
 
 
+TARGET_UUID = "0c1d2e3f-1111-4222-8333-666666666666"
+
+
 def _run(args: list[str], env_root: Path, extra_env: dict[str, str] | None = None):
     import os
 
@@ -47,7 +50,7 @@ def test_send_rejects_no_recipient(tmp_path: Path) -> None:
 
 
 def test_send_rejects_two_recipients(tmp_path: Path) -> None:
-    res = _run(["send", "--to-project", "a", "--to-session", "u2",
+    res = _run(["send", "--to-project", "a", "--to-session", "11111111-2222-4333-8444-555555555555",
                 "--subject", "Hi", "--body", "B",
                 "--from-project", "o", "--from-session", "s", "--from-uuid", "u",
                 "--from-partition", "projects/o", "--to-partition", "projects/a"],
@@ -208,7 +211,7 @@ def test_send_derives_uuid_from_env_and_routes_session_to_global(tmp_path: Path)
     env = _send_env(tmp_path, CLAUDE_CODE_SESSION_ID="env-sender-uuid")
     res = subprocess.run(
         [sys.executable, "-m", "cc_session_tools.cli.ccmsg", "send",
-         "--to-session", "target-uuid", "--subject", "Hi", "--body", "Body"],
+         "--to-session", TARGET_UUID, "--subject", "Hi", "--body", "Body"],
         capture_output=True, text=True, env=env, cwd=str(tmp_path),
     )
     assert res.returncode == 0, res.stderr
@@ -222,7 +225,7 @@ def test_send_derives_uuid_from_env_and_routes_session_to_global(tmp_path: Path)
     # Routed to the _global partition (session-addressed), taken there by uuid.
     glob_rows = _list("--partition", "_global").stdout.strip().splitlines()
     assert len(glob_rows) == 1
-    assert "session=target-uuid" in glob_rows[0]
+    assert f"session={TARGET_UUID}" in glob_rows[0]
     # from_uuid derived from $CLAUDE_CODE_SESSION_ID.
     assert len(_list("--from-uuid", "env-sender-uuid").stdout.strip().splitlines()) == 1
 
@@ -257,3 +260,59 @@ def test_send_errors_without_session_uuid(tmp_path: Path) -> None:
     )
     assert res.returncode == 2
     assert "session uuid" in (res.stderr + res.stdout).lower()
+
+
+def _send_session(tmp_path: Path, ref: str, sessions_dir: Path) -> subprocess.CompletedProcess[str]:
+    env = _send_env(tmp_path / "store", CLAUDE_CODE_SESSION_ID="s", CCST_SESSIONS_DIR=str(sessions_dir))
+    return subprocess.run(
+        [sys.executable, "-m", "cc_session_tools.cli.ccmsg", "send",
+         "--to-session", ref, "--subject", "Hi", "--body", "B"],
+        capture_output=True, text=True, env=env, cwd=str(tmp_path),
+    )
+
+
+def _list_rows(tmp_path: Path) -> list[str]:
+    env = _send_env(tmp_path / "store")
+    out = subprocess.run(
+        [sys.executable, "-m", "cc_session_tools.cli.ccmsg", "list"],
+        capture_output=True, text=True, env=env, cwd=str(tmp_path),
+    ).stdout
+    return out.strip().splitlines()
+
+
+def test_send_to_session_by_name_stores_the_full_uuid(tmp_path: Path) -> None:
+    from cc_session_tools.lib import sessions_db
+
+    sessions_dir = tmp_path / "sessions"
+    sessions_dir.mkdir()
+    sessions_db.ensure_session_row(
+        Path("/repos/p"), "20261005-example-tag", uuid=TARGET_UUID,
+        path=sessions_dir / "sessions.db",
+    )
+    res = _send_session(tmp_path, "20261005-example-tag", sessions_dir)
+    assert res.returncode == 0, res.stderr
+    rows = _list_rows(tmp_path)
+    assert len(rows) == 1 and f"session={TARGET_UUID}" in rows[0]
+
+
+@pytest.mark.parametrize("ref", ["20260101-no-such-session", "a80f", "target-uuid"])
+def test_send_to_unresolvable_session_exits_2_and_stores_nothing(tmp_path: Path, ref: str) -> None:
+    sessions_dir = tmp_path / "sessions"
+    sessions_dir.mkdir()
+    res = _send_session(tmp_path, ref, sessions_dir)
+    assert res.returncode == 2
+    assert "ccmsg:" in res.stderr
+    assert _list_rows(tmp_path) == []
+
+
+def test_read_prints_sender_uuid_after_from_line(tmp_path: Path) -> None:
+    sender = "a80f8695-1111-4222-8333-444444444444"
+    res = _run(
+        ["send", "--to-project", "alpha", "--subject", "Hi", "--body", "Body",
+         "--from-project", "oneshot", "--from-session", "tag", "--from-uuid", sender,
+         "--from-partition", "projects/oneshot", "--to-partition", "projects/alpha"],
+        tmp_path,
+    )
+    lines = _run(["read", res.stdout.strip()], tmp_path).stdout.splitlines()
+    from_index = next(i for i, line in enumerate(lines) if line.startswith("from:"))
+    assert lines[from_index + 1] == f"from_uuid: {sender}"
