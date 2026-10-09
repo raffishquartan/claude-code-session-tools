@@ -48,7 +48,7 @@ def dry_run(*, project: str, rehearse: Path | None = None) -> DryRunResult:
     is_new_project = not init_paths.project_root_exists_already(project, rehearse=rehearse)
     project_root = init_paths.resolve_project_root(project, rehearse=rehearse)
     if is_new_project:
-        init_paths.scaffold_new_project_dirs(project_root)
+        init_paths.scaffold_new_project(project_root, project)
     proposal_path = init_paths.resolve_proposal_path(project_root)
     with init_paths.project_db_dir_override(rehearse):
         # Checked before anything below opens/creates this project's .db (repository.connect()'s
