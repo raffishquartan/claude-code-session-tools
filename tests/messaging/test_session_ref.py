@@ -105,3 +105,13 @@ def test_find_by_uuid_prefix_returns_every_matching_row(db_path: Path) -> None:
 
 def test_find_by_uuid_prefix_on_nonexistent_db_returns_empty(tmp_path: Path) -> None:
     assert sessions_db.find_by_uuid_prefix("a80f8695", path=tmp_path / "absent.db") == []
+
+
+def test_session_name_with_uppercase_is_matched_as_written(tmp_path: Path) -> None:
+    path = tmp_path / "sessions.db"
+    sessions_db.ensure_session_row(Path("/repos/p"), "20261005-Mixed-Case", uuid=UUID_C, path=path)
+    assert _resolve("20261005-Mixed-Case", path) == UUID_C
+
+
+def test_uppercase_uuid_prefix_is_matched_case_insensitively(db_path: Path) -> None:
+    assert _resolve("0C1D2E3F", db_path) == UUID_C

@@ -30,18 +30,18 @@ def resolve_session_ref(
     A canonical uuid is returned as given: the sessions store only records sessions opened
     through ccd/ccr, so a valid uuid it has not seen must still be addressable. A session name is
     tried before a uuid prefix because a date-prefixed name can also read as hex."""
-    ref = ref.strip().lower()
-    if _UUID.fullmatch(ref):
-        return ref
+    ref = ref.strip()
+    if _UUID.fullmatch(ref.lower()):
+        return ref.lower()
 
     is_name = _SESSION_NAME.fullmatch(ref) is not None
-    is_prefix = _UUID_PREFIX.fullmatch(ref) is not None
+    is_prefix = _UUID_PREFIX.fullmatch(ref.lower()) is not None
     if not is_name and not is_prefix:
         raise SessionRefError(f"{ref!r} is not {_FORMS}")
 
     rows = find_by_name(ref) if is_name else []
     if not rows and is_prefix:
-        rows = find_by_prefix(ref)
+        rows = find_by_prefix(ref.lower())
     if not rows:
         raise SessionRefError(
             f"no session matches {ref!r}; the sessions store only knows sessions opened with "
