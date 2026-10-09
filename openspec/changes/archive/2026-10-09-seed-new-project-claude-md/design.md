@@ -36,6 +36,13 @@ project.
 - Second run after deletion: not recreated; after edit: kept.
 - Rehearsal target: untouched.
 
+## Consequence for the dry-run report
+
+The seeded file exists before the classifier runs, so a new project's first dry-run report lists
+`CLAUDE.md` as a `folder-owned` entry (no migration action) instead of "no files found". The
+existing test for an empty project is changed to start from an existing empty root, which is the
+case it meant to cover.
+
 ## Risks
 
 - The seeded wording duplicates part of the managed `date-format` section. If the convention

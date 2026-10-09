@@ -38,5 +38,4 @@ on 2026-10-09 and asked that every new project start with them (ccmsg
   seed text, `src/cc_session_tools/lib/pdata/init_service.py` (call site, unchanged condition).
 - `tests/pdata/test_init_paths.py` and the init-service tests for scaffolding.
 - `CHANGELOG.md`, `pyproject.toml`, `uv.lock` (minor bump: new generated file).
-- Stacked on `f/20261009-ccmsg-session-ref` (PR 170): the version bump follows that branch's
-  3.13.0.
+- The version bump follows 3.13.0 (the ccmsg session-reference release, already on `main`).

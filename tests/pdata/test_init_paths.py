@@ -135,17 +135,31 @@ def test_project_root_exists_already_true_for_a_rehearsal(monkeypatch, tmp_path)
     assert init_paths.project_root_exists_already("demo", rehearse=tmp_path / "rehearsal") is True
 
 
-def test_scaffold_new_project_dirs_creates_the_three_starting_folders(tmp_path):
-    init_paths.scaffold_new_project_dirs(tmp_path)
+def test_scaffold_new_project_creates_the_three_starting_folders(tmp_path):
+    init_paths.scaffold_new_project(tmp_path, "demo")
     assert (tmp_path / "correspondence").is_dir()
     assert (tmp_path / "meetings-and-calls").is_dir()
     assert (tmp_path / "workstreams").is_dir()
 
 
-def test_scaffold_new_project_dirs_is_idempotent(tmp_path):
-    init_paths.scaffold_new_project_dirs(tmp_path)
-    init_paths.scaffold_new_project_dirs(tmp_path)  # must not raise
+def test_scaffold_new_project_writes_the_seed_claude_md_with_lf_endings(tmp_path):
+    init_paths.scaffold_new_project(tmp_path, "demo")
+    data = (tmp_path / "CLAUDE.md").read_bytes()
+    assert data.startswith(b"# demo\n\n## Date format\n")
+    assert b"## Line endings" in data
+    assert b"\r" not in data
+
+
+def test_scaffold_new_project_is_idempotent(tmp_path):
+    init_paths.scaffold_new_project(tmp_path, "demo")
+    init_paths.scaffold_new_project(tmp_path, "demo")  # must not raise
     assert (tmp_path / "correspondence").is_dir()
+
+
+def test_scaffold_new_project_never_overwrites_an_existing_claude_md(tmp_path):
+    (tmp_path / "CLAUDE.md").write_bytes(b"# mine\n")
+    init_paths.scaffold_new_project(tmp_path, "demo")
+    assert (tmp_path / "CLAUDE.md").read_bytes() == b"# mine\n"
 
 
 def test_excluded_dir_names_includes_rehearsal_backup_dirname():

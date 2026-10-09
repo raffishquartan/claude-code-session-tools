@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.14.0] - 2026-10-09
+
+### Added
+
+- **A new project starts with a `CLAUDE.md`.** The first `ccst pdata init` run for a genuinely new
+  project (same trigger as the starter folders) writes `CLAUDE.md` with a `# <project>` heading
+  and two sections: `Date format` (the date convention) and `Line endings` (LF, not CRLF, and the
+  Python `csv` defaults to override). An existing project's `CLAUDE.md` is never created,
+  overwritten or edited.
+
+### Changed
+
+- The first dry-run report for a new project now lists the seeded `CLAUDE.md` as `folder-owned`
+  instead of "no files found".
+
 ## [3.13.0] - 2026-10-09
 
 ### Added

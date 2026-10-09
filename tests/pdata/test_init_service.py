@@ -8,6 +8,7 @@ from cc_session_tools.lib.pdata import init_paths, init_service
 def test_dry_run_empty_project_reports_no_files_and_creates_db(monkeypatch, tmp_path):
     monkeypatch.setenv(init_paths.PROJECTS_ROOT_ENV, str(tmp_path / "projects"))
     monkeypatch.setenv("CCST_PROJECT_DB_DIR", str(tmp_path / "dbs"))
+    (tmp_path / "projects" / "biz").mkdir(parents=True)  # an existing, empty project root
 
     result = init_service.dry_run(project="biz")
 
@@ -26,6 +27,68 @@ def test_dry_run_scaffolds_starting_folders_for_a_genuinely_new_project(monkeypa
     assert (project_dir / "correspondence").is_dir()
     assert (project_dir / "meetings-and-calls").is_dir()
     assert (project_dir / "workstreams").is_dir()
+
+
+def test_dry_run_seeds_claude_md_for_a_genuinely_new_project(monkeypatch, tmp_path):
+    monkeypatch.setenv(init_paths.PROJECTS_ROOT_ENV, str(tmp_path / "projects"))
+    monkeypatch.setenv("CCST_PROJECT_DB_DIR", str(tmp_path / "dbs"))
+
+    init_service.dry_run(project="demo")
+
+    text = (tmp_path / "projects" / "demo" / "CLAUDE.md").read_bytes().decode()
+    assert text.startswith("# demo\n\n## Date format\n")
+    assert "## Line endings" in text
+
+
+def test_dry_run_does_not_seed_claude_md_for_an_existing_project(monkeypatch, tmp_path):
+    monkeypatch.setenv(init_paths.PROJECTS_ROOT_ENV, str(tmp_path / "projects"))
+    monkeypatch.setenv("CCST_PROJECT_DB_DIR", str(tmp_path / "dbs"))
+    project_dir = tmp_path / "projects" / "demo"
+    project_dir.mkdir(parents=True)
+
+    init_service.dry_run(project="demo")
+
+    assert not (project_dir / "CLAUDE.md").exists()
+
+
+def test_dry_run_leaves_an_existing_claude_md_byte_for_byte(monkeypatch, tmp_path):
+    monkeypatch.setenv(init_paths.PROJECTS_ROOT_ENV, str(tmp_path / "projects"))
+    monkeypatch.setenv("CCST_PROJECT_DB_DIR", str(tmp_path / "dbs"))
+    project_dir = tmp_path / "projects" / "demo"
+    project_dir.mkdir(parents=True)
+    (project_dir / "CLAUDE.md").write_bytes(b"# demo\r\nmine\r\n")
+
+    init_service.dry_run(project="demo")
+
+    assert (project_dir / "CLAUDE.md").read_bytes() == b"# demo\r\nmine\r\n"
+
+
+def test_dry_run_second_call_keeps_an_edited_and_does_not_recreate_a_deleted_claude_md(
+    monkeypatch, tmp_path,
+):
+    monkeypatch.setenv(init_paths.PROJECTS_ROOT_ENV, str(tmp_path / "projects"))
+    monkeypatch.setenv("CCST_PROJECT_DB_DIR", str(tmp_path / "dbs"))
+    claude_md = tmp_path / "projects" / "demo" / "CLAUDE.md"
+
+    init_service.dry_run(project="demo")
+    claude_md.write_bytes(b"# demo\nedited\n")
+    init_service.dry_run(project="demo")
+    assert claude_md.read_bytes() == b"# demo\nedited\n"
+
+    claude_md.rename(claude_md.with_name("CLAUDE.md.removed"))  # the user removed the file
+    init_service.dry_run(project="demo")
+    assert not claude_md.exists()
+
+
+def test_rehearsal_target_gets_no_seed_claude_md(monkeypatch, tmp_path):
+    monkeypatch.setenv(init_paths.PROJECTS_ROOT_ENV, str(tmp_path / "projects"))
+    monkeypatch.setenv("CCST_PROJECT_DB_DIR", str(tmp_path / "dbs"))
+    sandbox = tmp_path / "sandbox"
+    sandbox.mkdir()
+
+    init_service.dry_run(project="demo", rehearse=sandbox)
+
+    assert not (sandbox / "CLAUDE.md").exists()
 
 
 def test_dry_run_does_not_scaffold_an_already_existing_project(monkeypatch, tmp_path):

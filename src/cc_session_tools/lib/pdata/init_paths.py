@@ -10,7 +10,7 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
 
-from cc_session_tools.lib.pdata import backup, store
+from cc_session_tools.lib.pdata import backup, project_claude_md, store
 
 PROJECTS_ROOT_ENV = "CCST_PROJECTS_ROOT"
 # Permanent tool state, not a draft - a project's pdata classification/migration record. Named
@@ -77,13 +77,17 @@ def project_root_exists_already(project: str, *, rehearse: Path | None) -> bool:
     return (default_projects_root() / project).exists()
 
 
-def scaffold_new_project_dirs(project_root: Path) -> None:
-    """Create NEW_PROJECT_SCAFFOLD_DIRNAMES under project_root. Idempotent (mkdir(exist_ok=True)
-    per folder) - safe to call even if some or all already exist, though callers should gate
+def scaffold_new_project(project_root: Path, project: str) -> None:
+    """Create NEW_PROJECT_SCAFFOLD_DIRNAMES under project_root and, if absent, its starting
+    CLAUDE.md. Idempotent (mkdir(exist_ok=True) per folder; an existing CLAUDE.md is never
+    overwritten) - safe to call even if some or all already exist, though callers should gate
     this to a genuinely new project (see project_root_exists_already) so an existing project
-    that deliberately doesn't use these folders is never given them back after deletion."""
+    that deliberately doesn't use these folders or has its own CLAUDE.md is never changed."""
     for name in NEW_PROJECT_SCAFFOLD_DIRNAMES:
         (project_root / name).mkdir(parents=True, exist_ok=True)
+    claude_md = project_root / "CLAUDE.md"
+    if not claude_md.exists():
+        claude_md.write_bytes(project_claude_md.seed_text(project).encode("utf-8"))
 
 
 def resolve_project_root(project: str, *, rehearse: Path | None) -> Path:
