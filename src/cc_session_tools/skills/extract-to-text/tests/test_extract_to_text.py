@@ -7,6 +7,7 @@ formats (pandoc, pdftotext) skip gracefully when the binary isn't on PATH, match
 """
 from __future__ import annotations
 
+import datetime
 import shutil
 import subprocess
 import sys
@@ -242,6 +243,17 @@ class ExtractToTextCli(unittest.TestCase):
         self.assertIn("extraction_status: FAILED", text)
         self.assertNotIn("textutil failed", text)
 
+    def test_doc_that_is_binary_garbage_is_not_reported_ok(self) -> None:
+        if not HAS_TEXTUTIL:
+            self.skipTest("textutil not on PATH (macOS only)")
+        src = self.tmp / "garbage.doc"
+        src.write_bytes(b"\x00\x01\x02 not a word document \x00" * 20)
+        out_dir = self.tmp / "out"
+        result = _run(str(src), "--out-dir", str(out_dir))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        text = _out_md_for(out_dir, src).read_text()
+        self.assertIn("extraction_status: FAILED", text)
+
     def test_doc_without_textutil_fails_loudly(self) -> None:
         src = self.tmp / "legacy.doc"
         src.write_bytes(OLE_MAGIC + b"\x00" * 512)
@@ -264,6 +276,8 @@ class ExtractToTextCli(unittest.TestCase):
         ws.write(0, 1, "Revenue")
         ws.write(1, 0, "EMEA")
         ws.write(1, 1, 42)
+        ws.write(2, 0, datetime.date(2026, 10, 11), xlwt.easyxf(num_format_str="YYYY-MM-DD"))
+        ws.write(2, 1, True)
         wb.add_sheet("Notes").write(0, 0, "second sheet")
         wb.save(str(path))
 
@@ -277,6 +291,7 @@ class ExtractToTextCli(unittest.TestCase):
         self.assertIn("## Sheet: Sales", text)
         self.assertIn("Region | Revenue", text)
         self.assertIn("EMEA | 42", text)
+        self.assertIn("2026-10-11T00:00:00 | True", text)
         self.assertIn("## Sheet: Notes", text)
         self.assertIn("second sheet", text)
         self.assertIn("extraction_method: xlrd", text)

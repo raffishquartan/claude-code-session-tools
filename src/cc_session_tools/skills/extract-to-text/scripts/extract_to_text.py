@@ -241,7 +241,7 @@ def _sheet_markdown(sheets) -> str:
     for title, rows in sheets:
         out.append(f"## Sheet: {title}\n")
         for row in rows:
-            vals = [str(v) for v in row if v is not None and v != ""]
+            vals = [str(v) for v in row if v is not None]
             if vals:
                 out.append(" | ".join(vals))
     return "\n".join(out)
@@ -275,11 +275,22 @@ def extract_xls_body(p: Path) -> tuple[str, str]:
         ) from e
     wb = xlrd.open_workbook(str(p), on_demand=True)
     try:
-        def _cell(v):
-            # xlrd returns every number as a float; render whole numbers as ints like openpyxl.
-            return int(v) if isinstance(v, float) and v.is_integer() else v
+        def _cell(c):
+            # xlrd returns numbers as floats, dates as serial floats, booleans as 0/1 and errors
+            # as codes; render each as openpyxl would, and drop empty cells like openpyxl's None.
+            if c.ctype in (xlrd.XL_CELL_EMPTY, xlrd.XL_CELL_BLANK) or c.value == "":
+                return None
+            if c.ctype == xlrd.XL_CELL_DATE:
+                return xlrd.xldate.xldate_as_datetime(c.value, wb.datemode).isoformat()
+            if c.ctype == xlrd.XL_CELL_BOOLEAN:
+                return bool(c.value)
+            if c.ctype == xlrd.XL_CELL_ERROR:
+                return xlrd.error_text_from_code.get(c.value, f"#ERR{c.value}")
+            if isinstance(c.value, float) and c.value.is_integer():
+                return int(c.value)
+            return c.value
 
-        sheets = ((sh.name, ([_cell(v) for v in sh.row_values(i)] for i in range(sh.nrows)))
+        sheets = ((sh.name, ([_cell(c) for c in sh.row(i)] for i in range(sh.nrows)))
                   for sh in (wb.sheet_by_index(n) for n in range(wb.nsheets)))
         return _sheet_markdown(sheets), "xlrd"
     finally:
@@ -306,6 +317,10 @@ def extract_doc_body(p: Path) -> tuple[str, str]:
                 return extract_msg_body(p), "extract-msg (sniffed: .msg mislabeled as .doc)"
         if r.returncode != 0:
             raise RuntimeError(f"textutil failed: {r.stderr.strip()[:300]}")
+        raise RuntimeError(
+            f"textutil returned binary garbage for '{p.name}', so it is not a readable Word "
+            "document (corrupt, or not a .doc)."
+        )
     return r.stdout, "textutil -convert txt"
 
 
