@@ -1,6 +1,6 @@
 ---
 name: extract-to-text
-description: Use when a document needs to be converted to markdown text - .docx/.doc/.rtf/.odt, .pptx/.pptm, .eml/.msg, .pdf, .xlsx, or plain text. Triggers on "extract this document", "convert to markdown", "read this file's text", empty/failed extraction mirrors in a text-extraction pipeline, or any document-to-markdown task. Do NOT use python-docx's `.paragraphs` for Word documents - it never descends into tables and can silently produce an empty result for a table-only document. Do NOT use pandoc for .pptx - pandoc has no pptx reader; this skill delegates that case to the extract-pptx skill.
+description: Use when a document needs to be converted to markdown text - .docx/.doc/.rtf/.odt, .pptx/.pptm, .eml/.msg, .pdf (including scanned), .xlsx/.xls, or plain text. Triggers on "extract this document", "convert to markdown", "read this file's text", empty/failed extraction mirrors in a text-extraction pipeline, or any document-to-markdown task. Do NOT use python-docx's `.paragraphs` for Word documents - it never descends into tables and can silently produce an empty result for a table-only document. Do NOT use pandoc for .pptx - pandoc has no pptx reader; this skill delegates that case to the extract-pptx skill.
 ---
 
 # Extract to text
@@ -36,20 +36,25 @@ to investigate, never a quiet success.
 
 | Format | Method | Notes |
 |---|---|---|
-| `.docx` / `.doc` / `.rtf` / `.odt` | `pandoc -t markdown` | Preserves tables - never `python-docx .paragraphs`. Requires `pandoc` on `PATH`. |
+| `.docx` / `.rtf` / `.odt` | `pandoc -t markdown` | Preserves tables - never `python-docx .paragraphs`. Requires `pandoc` on `PATH`. |
+| `.doc` (legacy binary Word) | macOS `textutil -convert txt` | **macOS only** - `textutil` is built in, nothing to install. Plain text, tables flattened. Elsewhere it fails with a message suggesting conversion to `.docx` first. |
 | `.pptx` / `.pptm` | Delegates to the `extract-pptx` skill's script | Pandoc has no pptx reader. Pass `--ocr` to also OCR image text (off by default here; see `extract-pptx`'s own SKILL.md for OCR/embeds/PDF-render options beyond this skill's scope). |
 | `.eml` | stdlib `email` module | No extra dependency. `text/html`-only messages are stripped to text with stdlib `html.parser`. |
 | `.msg` | `extract-msg` package | Outlook's binary format has no stdlib reader. `pip install --user extract-msg`. |
-| `.pdf` | `pdftotext -layout` | Requires the `poppler` package's `pdftotext` binary on `PATH`. |
+| `.pdf` | `pdftotext -layout`, then `ocrmypdf` if there is no text layer | Requires the `poppler` package's `pdftotext` binary on `PATH`. A scanned PDF (blank `pdftotext` output) is OCR'd with `ocrmypdf --skip-text --sidecar`; that needs `brew install ocrmypdf` (uses `tesseract`) and is only checked when OCR is actually needed. |
 | `.xlsx` | `openpyxl` | `pip install --user openpyxl`. One `## Sheet: <name>` section per worksheet, rows rendered as `cell | cell | ...`. |
+| `.xls` | `xlrd` | `pip install --user xlrd`. Legacy binary workbook; same output shape as `.xlsx`. |
 | `.txt` / `.md` / `.html` / `.htm` / `.csv` / `.json` | Raw passthrough | Read as text with a UTF-8 / UTF-16 / Latin-1 fallback ladder. |
 
-**Signature sniffing:** before routing a `.docx`/`.doc`/`.rtf`/`.odt`-extensioned file to
+**Signature sniffing:** before routing a `.docx`/`.rtf`/`.odt`-extensioned file to
 pandoc, the actual file signature is checked. A real Outlook `.msg` (OLE2/CFBF
 signature) or a Windows Internet Shortcut (`[InternetShortcut]` signature)
 mislabeled with one of those extensions is routed correctly (or reported as a
 shortcut, naming its link target) instead of failing with an opaque pandoc
-container error.
+container error. A legacy `.doc` is itself OLE2, like `.msg`, so it goes to `textutil` first; only
+if `textutil` fails (or returns NUL-ridden garbage) and the head is the OLE2 signature is it
+processed as a mislabeled `.msg`. A `.xls` that starts with the ZIP signature is really an OOXML
+workbook and is extracted by the `.xlsx` path.
 
 **Empty output is never `ok`.** If extraction completes without error but
 produces only whitespace, the status is `empty-output-CHECK-THIS`, not `ok` -
@@ -69,6 +74,14 @@ Verify the output: open the written `.md` file(s) and confirm
 `ok` names the problem in the frontmatter and in a warning banner at the top
 of the file - investigate the source directly rather than trusting the mirror.
 
+## Dependencies at a glance
+
+Per-format, installed on demand and named in the failure message when missing: `pandoc`
+(`.docx`/`.rtf`/`.odt`), `poppler` (`.pdf`), `ocrmypdf` + `tesseract` (scanned `.pdf` only),
+`openpyxl` (`.xlsx`), `xlrd` (`.xls`), `extract-msg` (`.msg`), `python-pptx` (`.pptx`/`.pptm`, via
+`extract-pptx`), and macOS's built-in `textutil` (`.doc`, macOS only). None is a hard dependency of
+the package; install only what the formats you extract need.
+
 ## Refusing fallbacks
 
 Do not silently substitute a partial result when a format's dependency is
@@ -86,6 +99,7 @@ specifics tracked in more detail by the sibling `extract-pptx` skill):
 - Slide/presentation comments.
 - Hyperlink targets (only a run's display text is extracted, not the URL).
 - Text baked into a slide layout/master background (letterhead, watermark).
+- Tables in a legacy `.doc` (`textutil` emits plain text).
 - Legacy binary `.ppt` (pre-2007 OLE2 format, not the OOXML zip `python-pptx`
   reads) and password-protected/encrypted files of any format.
 
@@ -106,6 +120,9 @@ regardless of how the rest is adapted.
 |---|---|---|
 | `requires pandoc, which is not on PATH` | pandoc not installed | `brew install pandoc` / `winget install --id JohnMacFarlane.Pandoc` |
 | `requires pdftotext (poppler)` | poppler not installed | `brew install poppler` / `winget install --id oschwartz10612.Poppler` |
+| `legacy .doc, which is only supported where macOS textutil` | Not on macOS | Convert the file to `.docx` (for example with LibreOffice) and extract that |
+| `requires the xlrd package` | xlrd not installed | `pip install --user xlrd` |
+| `OCR requires ocrmypdf` | Scanned PDF, ocrmypdf not installed | `brew install ocrmypdf` |
 | `requires the openpyxl package` | openpyxl not installed | `pip install --user openpyxl` |
 | `extract-msg package is not installed` | extract-msg not installed | `pip install --user extract-msg` |
 | `extract-pptx skill script not found` | extract-pptx skill not installed alongside this one | Install the `extract-pptx` skill too - this skill delegates pptx handling to it |
