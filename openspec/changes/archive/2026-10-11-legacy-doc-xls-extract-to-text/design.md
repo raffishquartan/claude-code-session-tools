@@ -26,7 +26,7 @@ not copied, so no `master_copy:` provenance is needed.
 - **Non-macOS `.doc` fails with a clear message** suggesting conversion to `.docx`, rather than
   guessing at an optional converter. Revisit if a non-macOS user needs it.
 - **`.msg` fallback only after `textutil` fails and the head is OLE2.** Real `.doc` files are also
-  OLE2, so the magic alone cannot identify a `.msg`; trying `textutil` first avoids misrouting.
+  OLE2, so the magic alone cannot identify a `.msg`; trying `textutil` first avoids misrouting. `textutil` reads unrecognised input as plain text, so it can exit 0 with NUL-ridden garbage for a non-Word OLE2 file; "cannot read" therefore means a non-zero exit or NUL characters in the output.
 - **`.xls` via `xlrd` with `on_demand=True`**, rendering shared with the `.xlsx` code path where
   practical so the two output shapes cannot drift. ZIP-signature sniff routes OOXML-named-`.xls`
   to openpyxl via a file object, because openpyxl rejects the `.xls` extension by name.

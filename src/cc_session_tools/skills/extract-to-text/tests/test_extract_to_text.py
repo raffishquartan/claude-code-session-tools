@@ -18,17 +18,37 @@ SCRIPT = Path(__file__).resolve().parent.parent / "scripts" / "extract_to_text.p
 
 HAS_PANDOC = bool(shutil.which("pandoc"))
 HAS_PDFTOTEXT = bool(shutil.which("pdftotext"))
+HAS_TEXTUTIL = bool(shutil.which("textutil"))
+HAS_OCRMYPDF = bool(shutil.which("ocrmypdf")) and bool(shutil.which("tesseract"))
 
 OLE_MAGIC = b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1"
 
 
-def _run(*args: str, timeout: float = 60) -> subprocess.CompletedProcess:
+def _run(*args: str, timeout: float = 60, env: dict[str, str] | None = None) -> subprocess.CompletedProcess:
     return subprocess.run(
         [sys.executable, str(SCRIPT), *args],
         capture_output=True,
         text=True,
         timeout=timeout,
+        env=env,
     )
+
+
+def _env_without(*binaries: str, tmp: Path) -> dict[str, str]:
+    """Environment whose PATH hides the named binaries: a directory of symlinks to everything
+    on the real PATH except those names (the interpreter itself is invoked by absolute path)."""
+    import os
+
+    bin_dir = tmp / "path-without"
+    bin_dir.mkdir()
+    for d in os.environ["PATH"].split(os.pathsep):
+        if not os.path.isdir(d):
+            continue
+        for name in os.listdir(d):
+            if name in binaries or (bin_dir / name).exists():
+                continue
+            (bin_dir / name).symlink_to(os.path.join(d, name))
+    return {**os.environ, "PATH": str(bin_dir)}
 
 
 def _out_md_for(out_dir: Path, src: Path) -> Path:
@@ -185,6 +205,171 @@ class ExtractToTextCli(unittest.TestCase):
         self.assertIn("Region | Revenue", text)
         self.assertIn("EMEA | 42", text)
         self.assertIn("extraction_method: openpyxl", text)
+
+
+    # ---------- legacy .doc ----------
+
+    def test_doc_extracts_via_textutil(self) -> None:
+        if not HAS_TEXTUTIL:
+            self.skipTest("textutil not on PATH (macOS only)")
+        # textutil sniffs content, not extension: an RTF body named .doc is read by the same
+        # code path, and no legacy-.doc writer exists to build a binary fixture here.
+        src = self.tmp / "legacy.doc"
+        src.write_text(r"{\rtf1\ansi Hello from a legacy doc.\par}")
+        out_dir = self.tmp / "out"
+        result = _run(str(src), "--out-dir", str(out_dir))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        text = _out_md_for(out_dir, src).read_text()
+        self.assertIn("Hello from a legacy doc.", text)
+        self.assertIn("extraction_method: textutil -convert txt", text)
+        self.assertIn("extraction_status: ok", text)
+
+    def test_doc_that_is_really_msg_falls_back_to_msg_handler(self) -> None:
+        if not HAS_TEXTUTIL:
+            self.skipTest("textutil not on PATH (macOS only)")
+        try:
+            import extract_msg  # noqa: F401
+        except ImportError:
+            self.skipTest("extract-msg package not installed")
+        # OLE2 magic with no valid structure: textutil fails, so routing falls to the .msg
+        # handler, which then fails to parse it - what matters is the handler that was tried.
+        src = self.tmp / "mislabeled.doc"
+        src.write_bytes(OLE_MAGIC + b"\x00" * 512)
+        out_dir = self.tmp / "out"
+        result = _run(str(src), "--out-dir", str(out_dir))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        text = _out_md_for(out_dir, src).read_text()
+        self.assertIn("extraction_status: FAILED", text)
+        self.assertNotIn("textutil failed", text)
+
+    def test_doc_without_textutil_fails_loudly(self) -> None:
+        src = self.tmp / "legacy.doc"
+        src.write_bytes(OLE_MAGIC + b"\x00" * 512)
+        out_dir = self.tmp / "out"
+        result = _run(str(src), "--out-dir", str(out_dir), env=_env_without("textutil", tmp=self.tmp))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        text = _out_md_for(out_dir, src).read_text()
+        self.assertIn("extraction_status: FAILED", text)
+        self.assertIn("textutil", text)
+        self.assertIn("macOS", text)
+
+    # ---------- legacy .xls ----------
+
+    def _build_xls(self, path: Path) -> None:
+        import xlwt
+
+        wb = xlwt.Workbook()
+        ws = wb.add_sheet("Sales")
+        ws.write(0, 0, "Region")
+        ws.write(0, 1, "Revenue")
+        ws.write(1, 0, "EMEA")
+        ws.write(1, 1, 42)
+        wb.add_sheet("Notes").write(0, 0, "second sheet")
+        wb.save(str(path))
+
+    def test_xls_extracts_each_sheet_via_xlrd(self) -> None:
+        src = self.tmp / "legacy.xls"
+        self._build_xls(src)
+        out_dir = self.tmp / "out"
+        result = _run(str(src), "--out-dir", str(out_dir))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        text = _out_md_for(out_dir, src).read_text()
+        self.assertIn("## Sheet: Sales", text)
+        self.assertIn("Region | Revenue", text)
+        self.assertIn("EMEA | 42", text)
+        self.assertIn("## Sheet: Notes", text)
+        self.assertIn("second sheet", text)
+        self.assertIn("extraction_method: xlrd", text)
+        self.assertIn("extraction_status: ok", text)
+
+    def test_xlsx_content_named_xls_routes_to_openpyxl(self) -> None:
+        import openpyxl
+
+        src = self.tmp / "mislabeled.xls"
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.title = "Sheet1"
+        ws.append(["Region", "Revenue"])
+        ws.append(["EMEA", 42])
+        wb.save(str(src))
+        out_dir = self.tmp / "out"
+        result = _run(str(src), "--out-dir", str(out_dir))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        text = _out_md_for(out_dir, src).read_text()
+        self.assertIn("EMEA | 42", text)
+        self.assertIn("extraction_method: openpyxl", text)
+        self.assertIn("extraction_status: ok", text)
+
+    def test_xls_without_xlrd_names_the_package(self) -> None:
+        src = self.tmp / "legacy.xls"
+        self._build_xls(src)
+        out_dir = self.tmp / "out"
+        # An empty xlrd.py first on the import path shadows the real package with one that
+        # raises ImportError, simulating "not installed" without touching the venv.
+        shadow = self.tmp / "shadow"
+        shadow.mkdir()
+        (shadow / "xlrd.py").write_text("raise ImportError('simulated: xlrd not installed')\n")
+        import os
+
+        env = {**os.environ, "PYTHONPATH": str(shadow)}
+        result = _run(str(src), "--out-dir", str(out_dir), env=env)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        text = _out_md_for(out_dir, src).read_text()
+        self.assertIn("extraction_status: FAILED", text)
+        self.assertIn("xlrd", text)
+        self.assertIn("pip install --user xlrd", text)
+
+    # ---------- scanned PDF OCR ----------
+
+    def _build_image_only_pdf(self, path: Path) -> None:
+        """A PDF whose page is a raster image of text (no text layer), built via Pillow."""
+        from PIL import Image, ImageDraw, ImageFont
+
+        img = Image.new("RGB", (900, 200), "white")
+        try:
+            font = ImageFont.load_default(size=64)
+        except TypeError:
+            font = ImageFont.load_default()
+        ImageDraw.Draw(img).text((20, 60), "SCANNED INVOICE", fill="black", font=font)
+        img.save(str(path), "PDF", resolution=150.0)
+
+    def test_scanned_pdf_is_ocrd(self) -> None:
+        if not (HAS_PDFTOTEXT and HAS_OCRMYPDF):
+            self.skipTest("pdftotext/ocrmypdf/tesseract not on PATH")
+        src = self.tmp / "scan.pdf"
+        self._build_image_only_pdf(src)
+        out_dir = self.tmp / "out"
+        result = _run(str(src), "--out-dir", str(out_dir), timeout=300)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        text = _out_md_for(out_dir, src).read_text()
+        self.assertIn("SCANNED", text.upper())
+        self.assertIn("extraction_method: ocrmypdf", text)
+        self.assertIn("extraction_status: ok", text)
+
+    def test_text_pdf_is_not_ocrd(self) -> None:
+        if not HAS_PDFTOTEXT:
+            self.skipTest("pdftotext not on PATH")
+        src = self.tmp / "doc.pdf"
+        _write_minimal_pdf(src, "Has a text layer.")
+        out_dir = self.tmp / "out"
+        result = _run(str(src), "--out-dir", str(out_dir), env=_env_without("ocrmypdf", tmp=self.tmp))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        text = _out_md_for(out_dir, src).read_text()
+        self.assertIn("extraction_method: pdftotext -layout", text)
+        self.assertIn("extraction_status: ok", text)
+
+    def test_scanned_pdf_without_ocrmypdf_names_the_tool(self) -> None:
+        if not HAS_PDFTOTEXT:
+            self.skipTest("pdftotext not on PATH")
+        src = self.tmp / "scan.pdf"
+        self._build_image_only_pdf(src)
+        out_dir = self.tmp / "out"
+        result = _run(str(src), "--out-dir", str(out_dir), env=_env_without("ocrmypdf", tmp=self.tmp))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        text = _out_md_for(out_dir, src).read_text()
+        self.assertIn("extraction_status: FAILED", text)
+        self.assertIn("ocrmypdf", text)
+        self.assertIn("brew install ocrmypdf", text)
 
     # ---------- plain text passthrough ----------
 

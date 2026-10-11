@@ -8,7 +8,7 @@ top-level body paragraphs and never descends into tables - a table-only document
 empty mirror recorded as a clean success, silently losing all its content.
 
 Two rules follow, and both are enforced below:
-  1. `.docx`/`.doc`/`.rtf`/`.odt` go through `pandoc -t markdown`, which preserves tables.
+  1. `.docx`/`.rtf`/`.odt` go through `pandoc -t markdown`, which preserves tables.
      Never python-docx `.paragraphs`.
   2. An empty body is a FAILURE, not a success. Status becomes `empty-output-CHECK-THIS`,
      never `ok`. A loud wrong answer beats a quiet one.
@@ -33,7 +33,11 @@ DEPENDENCIES
   pandoc       - macOS: `brew install pandoc`   Windows: `winget install --id JohnMacFarlane.Pandoc`
   poppler      - macOS: `brew install poppler`  Windows: `winget install --id oschwartz10612.Poppler`
                  (provides pdftotext; only needed for .pdf)
+  textutil     - macOS built-in, nothing to install (only needed for legacy .doc; macOS only)
   openpyxl     - `pip install --user openpyxl`     (only needed for .xlsx)
+  xlrd         - `pip install --user xlrd`         (only needed for legacy .xls)
+  ocrmypdf     - macOS: `brew install ocrmypdf`    (only needed for scanned PDFs with no text
+                 layer; uses tesseract)
   extract-msg  - `pip install --user extract-msg`  (only needed for .msg)
   python-pptx  - `pip install --user python-pptx`  (only needed for .pptx/.pptm, via the
                  sibling extract-pptx skill's script)
@@ -53,11 +57,14 @@ from __future__ import annotations
 import argparse
 import subprocess
 import sys
+import tempfile
 from datetime import datetime, timezone
 from html.parser import HTMLParser
 from pathlib import Path
 
-PANDOC_EXTS = {".docx", ".doc", ".rtf", ".odt"}
+PANDOC_EXTS = {".docx", ".rtf", ".odt"}
+DOC_EXT = ".doc"  # legacy binary Word: pandoc cannot read it, macOS textutil can
+ZIP_MAGIC = b"PK\x03\x04"  # OOXML containers; a ".xls" that starts with this is really an .xlsx
 PPTX_EXTS = {".pptx", ".pptm"}  # .pptm (macro-enabled) is the same OOXML format as .pptx
 TEXT_EXTS = {".txt", ".md", ".html", ".htm", ".csv", ".json"}
 OLE_MAGIC = b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1"  # CDFV2 compound file - real format of Outlook .msg
@@ -227,6 +234,110 @@ def extract_msg_body(p: Path) -> str:
         m.close()
 
 
+def _sheet_markdown(sheets) -> str:
+    """Render (title, rows) pairs in the shared .xlsx/.xls shape: one `## Sheet: <name>` section
+    per sheet, rows as `cell | cell | ...`, empty cells dropped."""
+    out: list[str] = []
+    for title, rows in sheets:
+        out.append(f"## Sheet: {title}\n")
+        for row in rows:
+            vals = [str(v) for v in row if v is not None and v != ""]
+            if vals:
+                out.append(" | ".join(vals))
+    return "\n".join(out)
+
+
+def extract_xlsx_body(path_or_file, name: str) -> str:
+    try:
+        import openpyxl
+    except ImportError as e:
+        raise RuntimeError(
+            f"'{name}' requires the openpyxl package, which is not installed ({e}). "
+            "Install it with: pip install --user openpyxl"
+        ) from e
+    wb = openpyxl.load_workbook(path_or_file, read_only=True, data_only=True)
+    return _sheet_markdown((ws.title, ws.iter_rows(values_only=True)) for ws in wb.worksheets)
+
+
+def extract_xls_body(p: Path) -> tuple[str, str]:
+    """Legacy binary .xls via xlrd. Returns (body, method)."""
+    with p.open("rb") as fh:
+        if fh.read(4) == ZIP_MAGIC:
+            # openpyxl rejects the .xls name, so hand it an open file object instead of the path.
+            with p.open("rb") as xf:
+                return extract_xlsx_body(xf, p.name), "openpyxl (sniffed: .xlsx mislabeled as .xls)"
+    try:
+        import xlrd
+    except ImportError as e:
+        raise RuntimeError(
+            f"'{p.name}' requires the xlrd package, which is not installed ({e}). "
+            "Install it with: pip install --user xlrd"
+        ) from e
+    wb = xlrd.open_workbook(str(p), on_demand=True)
+    try:
+        def _cell(v):
+            # xlrd returns every number as a float; render whole numbers as ints like openpyxl.
+            return int(v) if isinstance(v, float) and v.is_integer() else v
+
+        sheets = ((sh.name, ([_cell(v) for v in sh.row_values(i)] for i in range(sh.nrows)))
+                  for sh in (wb.sheet_by_index(n) for n in range(wb.nsheets)))
+        return _sheet_markdown(sheets), "xlrd"
+    finally:
+        wb.release_resources()
+
+
+def extract_doc_body(p: Path) -> tuple[str, str]:
+    """Legacy binary .doc via macOS textutil (plain text, tables flattened). A file textutil
+    cannot read whose head is the OLE2 magic is a mislabeled Outlook .msg."""
+    if not _which("textutil"):
+        raise RuntimeError(
+            f"'{p.name}' is a legacy .doc, which is only supported where macOS `textutil` is "
+            "available, and it is not on PATH. Convert the file to .docx first (for example "
+            "with LibreOffice) and extract that."
+        )
+    r = subprocess.run(["textutil", "-convert", "txt", "-stdout", str(p)],
+                        capture_output=True, text=True, timeout=180)
+    # textutil falls back to reading unrecognised input as plain text, so a non-Word OLE2 file
+    # (an Outlook .msg) can "succeed" with NUL-ridden garbage rather than fail: treat both as
+    # unreadable.
+    if r.returncode != 0 or "\x00" in r.stdout:
+        with p.open("rb") as fh:
+            if fh.read(8) == OLE_MAGIC:
+                return extract_msg_body(p), "extract-msg (sniffed: .msg mislabeled as .doc)"
+        if r.returncode != 0:
+            raise RuntimeError(f"textutil failed: {r.stderr.strip()[:300]}")
+    return r.stdout, "textutil -convert txt"
+
+
+def extract_pdf_body(p: Path) -> tuple[str, str]:
+    if not _which("pdftotext"):
+        raise RuntimeError(
+            f"'{p.name}' requires pdftotext (poppler), which is not on PATH. Install it: "
+            "macOS `brew install poppler`, Windows "
+            "`winget install --id oschwartz10612.Poppler`."
+        )
+    r = subprocess.run(["pdftotext", "-layout", str(p), "-"],
+                        capture_output=True, text=True, timeout=180)
+    if r.returncode != 0:
+        raise RuntimeError(f"pdftotext failed: {r.stderr.strip()[:300]}")
+    if r.stdout.strip():
+        return r.stdout, "pdftotext -layout"
+    # No text layer: a scanned PDF. OCR it; --skip-text leaves any pages that do have text alone.
+    if not _which("ocrmypdf"):
+        raise RuntimeError(
+            f"'{p.name}' has no text layer and OCR requires ocrmypdf, which is not on PATH. "
+            "Install it: macOS `brew install ocrmypdf`."
+        )
+    with tempfile.TemporaryDirectory(prefix="extract_to_text_ocr_") as td:
+        sidecar = Path(td) / "ocr.txt"
+        r = subprocess.run(
+            ["ocrmypdf", "--skip-text", "--sidecar", str(sidecar), str(p), str(Path(td) / "ocr.pdf")],
+            capture_output=True, text=True, timeout=1800)
+        if r.returncode != 0:
+            raise RuntimeError(f"ocrmypdf failed: {r.stderr.strip()[:300]}")
+        return sidecar.read_text(encoding="utf-8", errors="replace"), "ocrmypdf --skip-text --sidecar"
+
+
 def extract(p: Path, *, ocr: bool = False):
     """Return (body_text, method). Raises RuntimeError on tool/dependency failure."""
     ext = p.suffix.lower()
@@ -239,6 +350,9 @@ def extract(p: Path, *, ocr: bool = False):
 
     if ext == ".msg":
         return extract_msg_body(p), "extract-msg"
+
+    if ext == DOC_EXT:
+        return extract_doc_body(p)
 
     if ext in PANDOC_EXTS:
         # Trust the file's actual signature over its extension - a real Outlook .msg or a
@@ -266,35 +380,13 @@ def extract(p: Path, *, ocr: bool = False):
         return r.stdout, "pandoc -t markdown"
 
     if ext == ".pdf":
-        if not _which("pdftotext"):
-            raise RuntimeError(
-                f"'{p.name}' requires pdftotext (poppler), which is not on PATH. Install it: "
-                "macOS `brew install poppler`, Windows "
-                "`winget install --id oschwartz10612.Poppler`."
-            )
-        r = subprocess.run(["pdftotext", "-layout", str(p), "-"],
-                            capture_output=True, text=True, timeout=180)
-        if r.returncode != 0:
-            raise RuntimeError(f"pdftotext failed: {r.stderr.strip()[:300]}")
-        return r.stdout, "pdftotext -layout"
+        return extract_pdf_body(p)
 
     if ext == ".xlsx":
-        try:
-            import openpyxl
-        except ImportError as e:
-            raise RuntimeError(
-                f"'{p.name}' requires the openpyxl package, which is not installed ({e}). "
-                "Install it with: pip install --user openpyxl"
-            ) from e
-        wb = openpyxl.load_workbook(str(p), read_only=True, data_only=True)
-        out = []
-        for ws in wb.worksheets:
-            out.append(f"## Sheet: {ws.title}\n")
-            for row in ws.iter_rows(values_only=True):
-                vals = [str(v) for v in row if v is not None]
-                if vals:
-                    out.append(" | ".join(vals))
-        return "\n".join(out), "openpyxl"
+        return extract_xlsx_body(str(p), p.name), "openpyxl"
+
+    if ext == ".xls":
+        return extract_xls_body(p)
 
     if ext in TEXT_EXTS:
         return read_text_file(p), "raw-text"

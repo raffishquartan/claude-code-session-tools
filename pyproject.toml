@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "cc-session-tools"
-version = "3.14.0"
+version = "3.15.0"
 description = "Claude Code session management CLI tools (ccd, ccr, ccs, claude-code-usage, ccst) and hook library (hooks package)"
 readme = "README.md"
 license = { file = "LICENSE" }
@@ -89,6 +89,9 @@ dev = [
     "pillow>=10.0",
     "pytesseract>=0.3",
     "types-openpyxl>=3.1",
+    "xlrd>=2.0",
+    "types-xlrd",
+    "xlwt>=1.3",
 ]
 
 [tool.mypy]

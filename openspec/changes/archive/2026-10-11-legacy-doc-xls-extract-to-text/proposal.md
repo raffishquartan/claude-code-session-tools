@@ -28,9 +28,6 @@ in every project that uses the skill, not only via one project's private extract
 - Tests: `.doc` via textutil (skipped off macOS), `.doc` that is really `.msg`, `.xls` via xlrd,
   `.xlsx`-content `.xls`, missing-`xlrd` message, scanned-PDF OCR (mocked `ocrmypdf`), missing-`ocrmypdf` message, `.doc` on a platform without `textutil`.
 - CHANGELOG entry and minor version bump (3.14.0 to 3.15.0, backwards-compatible feature).
-- Follow-up after shipping (not part of the code change): `ccmsg` to project `deauppet` so it can
-  drop its private extractor; a `ccmsg` to `claude-code-config-sync` is optional because its wiring
-  does not depend on the new version.
 
 ## Capabilities
 

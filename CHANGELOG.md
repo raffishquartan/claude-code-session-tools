@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.15.0] - 2026-10-11
+
+### Added
+
+- **`extract-to-text` reads legacy `.doc` and `.xls`.** `.doc` goes through macOS `textutil` (plain
+  text; an OLE2 file `textutil` cannot read is processed as a mislabeled `.msg`; elsewhere it fails
+  with a clear macOS-only message). `.xls` goes through `xlrd` in the same shape as `.xlsx`, and an
+  OOXML workbook named `.xls` is routed to the `.xlsx` path.
+- **`extract-to-text` OCRs scanned PDFs.** When `pdftotext` finds no text, the PDF is run through
+  `ocrmypdf`; a missing `ocrmypdf` fails with an install hint.
+
+### Changed
+
+- `.doc` is no longer routed to pandoc, which cannot read the legacy binary format.
+
 ## [3.14.0] - 2026-10-09
 
 ### Added
