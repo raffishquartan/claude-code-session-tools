@@ -78,8 +78,11 @@ can open it directly. This does not apply to one-shot answers, explanations, or 
 confirmations that don't need iteration - and if the user asks for the content inline
 instead, do that for that turn.
 
-Keep `working/WORKLOG.md` updated as you go - the `worklog-guard` hook blocks a manual
-`/compact` when it is stale.
+Every `ccd`/`ccr` session, including trivial ones, MUST have a `working/WORKLOG.md`.
+Create it as the first action of the session, before any other work, and append to it
+incrementally as the session progresses - not only when a compact is attempted or when
+asked. Add one entry per meaningful step or decision, each headed with `yyyy-MM-dd HH:mm`.
+The `worklog-guard` hook blocks a manual `/compact` when the file is stale.
 
 The user may be editing the same file at the same time, in their own editor. Re-read it
 before making further edits if there's any chance it changed since you last saw it, and
