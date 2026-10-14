@@ -215,3 +215,128 @@ def test_cli_backups_show_unknown_id_fails_naming_the_id() -> None:
     result = _run("claude-md", "backups", "show", "424242")
     assert result.returncode == 1
     assert "424242" in result.stderr
+
+
+def test_hash_recording_failure_after_the_write_does_not_crash_or_hide_the_backup(
+    md: Path, db_path: Path, mocker: MockerFixture
+) -> None:
+    install_claude_md(md, apply=True, db_path=db_path)
+    _hand_edit(md, "workflow")
+    mocker.patch.object(
+        claude_md_store, "record_hashes", side_effect=sqlite3.OperationalError("database is locked")
+    )
+
+    results = install_claude_md(md, apply=True, db_path=db_path)
+
+    workflow = next(r for r in results if r.section == "workflow")
+    assert workflow.backup_id is not None and workflow.backup_error is None
+    assert "HAND EDIT" not in md.read_text()
+
+
+def test_unusable_data_directory_does_not_block_install_or_uninstall(
+    tmp_path: Path, md: Path
+) -> None:
+    install_claude_md(md, apply=True, db_path=tmp_path / "sessions.db")
+    _hand_edit(md, "workflow")
+    blocked = tmp_path / "a-file"
+    blocked.write_text("not a directory")
+    bad_db = blocked / "sessions.db"
+
+    installed = install_claude_md(md, apply=True, sections=["workflow"], db_path=bad_db)
+    assert next(r for r in installed if r.section == "workflow").backup_error
+    assert "HAND EDIT" not in md.read_text()
+
+    removed = uninstall_claude_md(md, apply=True, sections=["workflow"], db_path=bad_db)
+    assert removed[0].action is MarkdownAction.REMOVED
+    assert "CCST:workflow" not in md.read_text()
+
+
+def test_uninstall_backs_up_a_hand_edited_block(md: Path, db_path: Path) -> None:
+    install_claude_md(md, apply=True, db_path=db_path)
+    _hand_edit(md, "workflow")
+
+    results = uninstall_claude_md(md, apply=True, sections=["workflow"], db_path=db_path)
+
+    assert results[0].drifted and results[0].backup_id is not None
+    backup = claude_md_store.get_backup(results[0].backup_id, db_path=db_path)
+    assert backup is not None and "HAND EDIT" in backup.text
+    assert "CCST:workflow" not in md.read_text()
+
+
+def test_uninstall_of_an_untouched_block_takes_no_backup(md: Path, db_path: Path) -> None:
+    install_claude_md(md, apply=True, db_path=db_path)
+    results = uninstall_claude_md(md, apply=True, sections=["workflow"], db_path=db_path)
+    assert not results[0].drifted
+    assert claude_md_store.list_backups(db_path=db_path) == []
+
+
+def test_uninstall_with_nothing_removed_does_not_create_the_store(md: Path, db_path: Path) -> None:
+    md.write_text("# no managed blocks\n")
+    uninstall_claude_md(md, apply=True, db_path=db_path)
+    assert not db_path.exists()
+
+
+def test_uninstall_survives_a_corrupt_store(md: Path, db_path: Path) -> None:
+    install_claude_md(md, apply=True, db_path=db_path)
+    db_path.write_bytes(b"not a sqlite database file")
+    results = uninstall_claude_md(md, apply=True, sections=["workflow"], db_path=db_path)
+    assert results[0].action is MarkdownAction.REMOVED
+    assert "CCST:workflow" not in md.read_text()
+
+
+def test_listing_or_reading_backups_from_a_corrupt_store_raises_not_empty(db_path: Path) -> None:
+    db_path.write_bytes(b"not a sqlite database file")
+    with pytest.raises(sqlite3.DatabaseError):
+        claude_md_store.list_backups(db_path=db_path)
+    with pytest.raises(sqlite3.DatabaseError):
+        claude_md_store.get_backup(1, db_path=db_path)
+
+
+def test_get_backup_returns_only_the_requested_row(md: Path, db_path: Path) -> None:
+    install_claude_md(md, apply=True, db_path=db_path)
+    _hand_edit(md, "workflow", "FIRST")
+    first = next(r for r in install_claude_md(md, apply=True, db_path=db_path) if r.drifted)
+    _hand_edit(md, "agents", "SECOND")
+    second = next(r for r in install_claude_md(md, apply=True, db_path=db_path) if r.drifted)
+    got = claude_md_store.get_backup(second.backup_id or 0, db_path=db_path)
+    assert got is not None and got.section == "agents" and "SECOND" in got.text
+    assert first.backup_id != second.backup_id
+
+
+def test_doctor_check_warns_on_an_unreadable_claude_md(tmp_path: Path, db_path: Path) -> None:
+    md = tmp_path / "CLAUDE.md"
+    md.write_bytes(b"\xff\xfe not utf-8 \x80")
+    assert check_claude_md_drift(md, db_path).status is Status.WARN
+    assert check_claude_md_drift(tmp_path, db_path).status is Status.WARN  # a directory
+
+
+def test_cli_backups_on_a_corrupt_store_reports_the_error(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    data_home = tmp_path / "data-home"
+    data_home.mkdir()
+    (data_home / "sessions.db").write_bytes(b"not a sqlite database file")
+    monkeypatch.setenv("CCST_DATA_HOME", str(data_home))
+    result = _run("claude-md", "backups", "list")
+    assert result.returncode == 1
+    assert "ccst repair sessions" in result.stderr
+
+
+def test_drift_warning_text_when_the_backup_could_not_be_saved() -> None:
+    from cc_session_tools.cli.ccst import _claude_md_drift_warning
+
+    result = claude_md_install.MarkdownResult(
+        Path("/x/CLAUDE.md"), "workflow", MarkdownAction.REPLACED, "replaced", drifted=True,
+        backup_error="database is locked",
+    )
+    text = _claude_md_drift_warning(result, apply=True)
+    assert claude_md_install.DRIFT_WARNING_MARKER in text
+    assert "could NOT be saved" in text and "database is locked" in text
+
+
+def test_cli_uninstall_warns_and_names_the_backup(tmp_path: Path) -> None:
+    md = tmp_path / "CLAUDE.md"
+    _run("claude-md", "install", "--target", str(md), "--apply")
+    _hand_edit(md, "workflow")
+    out = _run("claude-md", "uninstall", "--target", str(md), "--section", "workflow", "--apply")
+    assert out.returncode == 0
+    assert claude_md_install.DRIFT_WARNING_MARKER in out.stdout
+    assert "removed, previous text saved as backup 1" in out.stdout

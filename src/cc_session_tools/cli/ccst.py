@@ -115,7 +115,7 @@ from cc_session_tools.hooks_install import (
 )
 from cc_session_tools.lib import machine_identity
 from cc_session_tools.lib.claude_md_install import SECTION_IDS as CLAUDE_MD_SECTION_IDS
-from cc_session_tools.lib.claude_md_install import MarkdownResult
+from cc_session_tools.lib.claude_md_install import DRIFT_WARNING_MARKER, MarkdownAction, MarkdownResult
 from cc_session_tools.lib.hook_registry import HOOK_DESCRIPTIONS, HOOK_VERBS
 from cc_session_tools.lib.text_wrap import wrap_block
 
@@ -894,28 +894,39 @@ def _cmd_claude_md_install(args: argparse.Namespace) -> int:
 
 
 def _claude_md_drift_warning(result: MarkdownResult, *, apply: bool) -> str:
-    from cc_session_tools.lib.claude_md_install import DRIFT_WARNING_MARKER
+    gone = "removed" if result.action is MarkdownAction.REMOVED else "overwritten"
     head = f"{DRIFT_WARNING_MARKER} [{result.section}] block in {result.path} was hand-edited"
     if not apply:
-        return f"{head} (or not recorded); --apply will save its text as a backup and overwrite it"
+        verb = "remove" if result.action is MarkdownAction.REMOVED else "overwrite"
+        return f"{head} (or not recorded); --apply will save its text as a backup and {verb} it"
     if result.backup_error is not None:
         return (
-            f"{head} and was overwritten, but its text could NOT be saved "
+            f"{head} and was {gone}, but its text could NOT be saved "
             f"({result.backup_error}); run `ccst repair sessions` to investigate"
         )
     return (
-        f"{head}; overwritten, previous text saved as backup {result.backup_id} - "
+        f"{head}; {gone}, previous text saved as backup {result.backup_id} - "
         f"read it with `ccst claude-md backups show {result.backup_id}`"
     )
 
 
 def _cmd_claude_md_backups(args: argparse.Namespace) -> int:
+    import sqlite3
+
     from cc_session_tools.lib import claude_md_store
-    if args.backups_verb == "list":
-        for backup in claude_md_store.list_backups():
-            print(f"{backup.id}\t{backup.taken_at}\t{backup.path}\t{backup.section}")
-        return 0
-    found = claude_md_store.get_backup(args.id)
+    try:
+        if args.backups_verb == "list":
+            for backup in claude_md_store.list_backups():
+                print(f"{backup.id}\t{backup.taken_at}\t{backup.path}\t{backup.section}")
+            return 0
+        found = claude_md_store.get_backup(args.id)
+    except (sqlite3.DatabaseError, OSError) as exc:
+        print(
+            f"error: cannot read the claude-md backups ({exc}) - sessions.db may be corrupt; "
+            "run `ccst repair sessions` to investigate",
+            file=sys.stderr,
+        )
+        return 1
     if found is None:
         print(f"error: no claude-md backup with id {args.id}", file=sys.stderr)
         return 1
@@ -934,6 +945,8 @@ def _cmd_claude_md_uninstall(args: argparse.Namespace) -> int:
         return 1
     for result in results:
         print(f"  {result.path} [{result.section}]: {result.message}")
+        if result.drifted:
+            print(f"  {_claude_md_drift_warning(result, apply=args.apply)}")
     if not args.apply:
         print("\nDry run — re-run with --apply to write changes")
     return 0

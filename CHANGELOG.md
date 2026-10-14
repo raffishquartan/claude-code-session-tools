@@ -16,7 +16,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   writes. When it is about to replace a block that is neither the current template nor what ccst
   last wrote, it first saves the block's text as a backup and prints a warning naming the section
   and backup id (stderr only during the automatic sync). If `sessions.db` is unusable the block is
-  still replaced and the warning says the text could not be saved.
+  still replaced and the warning says the text could not be saved. `ccst claude-md uninstall`
+  backs up a hand-edited block the same way before removing it.
 - `ccst claude-md backups list` and `ccst claude-md backups show <id>` read the saved blocks.
 - `ccst doctor` check `install:claude-md-drift` WARNs while a managed block is hand-edited, before
   the next install overwrites it.

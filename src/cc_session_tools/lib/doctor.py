@@ -514,7 +514,7 @@ def check_claude_md_drift(claude_md_path: Path, sessions_db_path: Path | None) -
     name = "install:claude-md-drift"
     try:
         edited = find_hand_edited_sections(claude_md_path, db_path=sessions_db_path)
-    except MalformedBlockError as exc:
+    except (MalformedBlockError, OSError, UnicodeDecodeError) as exc:
         return CheckResult(name=name, status=Status.WARN, reason=f"cannot check {claude_md_path}: {exc}")
     if not edited:
         return CheckResult(name=name, status=Status.OK, reason="no hand-edited managed blocks")

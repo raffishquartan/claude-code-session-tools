@@ -343,30 +343,58 @@ def install_claude_md(
     if not apply:
         return results
 
-    backup_ids: dict[str, int] = {}
-    store_error: str | None = None
-    try:
-        conn = sessions_db.connect(path=db_path)
-        try:
-            backup_ids = {
-                section_id: claude_md_store.add_backup(conn, path, section_id, text)
-                for section_id, text in backups.items()
-            }
-            # Commit the backups before the file write: if the write fails, the text it would
-            # have replaced is still recoverable.
-            conn.commit()
-        finally:
-            conn.close()
-    except sqlite3.DatabaseError as exc:
-        # A corrupt or unwritable sessions.db must not block the install (see
-        # run_install_everything); the failure is carried on the results instead.
-        store_error = str(exc)
+    backup_ids, store_error = _save_backups(path, backups, db_path)
 
     if new_content != content:
         path.parent.mkdir(parents=True, exist_ok=True)
         _write_text_atomic(path, new_content)
 
     if store_error is None:
+        _record_block_hashes(path, section_ids, db_path)
+    return [
+        replace(
+            result,
+            backup_id=backup_ids.get(result.section),
+            backup_error=None if result.section in backup_ids else store_error,
+        )
+        if result.drifted else result
+        for result in results
+    ]
+
+
+def _save_backups(
+    path: Path, backups: dict[str, str], db_path: Path | None,
+) -> tuple[dict[str, int], str | None]:
+    """Save ``backups`` (section id -> block text) and return their ids plus an error message
+    if the store could not be used.
+
+    A corrupt, locked or unwritable sessions.db (``sqlite3.DatabaseError``, or ``OSError``
+    from creating its directory) must not block an install or uninstall - see
+    run_install_everything - so the failure is returned for the caller to carry on its results.
+    The backups are committed before the caller touches the file: if the write fails, the text
+    it would have replaced is still recoverable."""
+    if not backups:
+        return {}, None
+    try:
+        conn = sessions_db.connect(path=db_path)
+        try:
+            ids = {
+                section_id: claude_md_store.add_backup(conn, path, section_id, text)
+                for section_id, text in backups.items()
+            }
+            conn.commit()
+        finally:
+            conn.close()
+    except (sqlite3.DatabaseError, OSError) as exc:
+        return {}, str(exc)
+    return ids, None
+
+
+def _record_block_hashes(path: Path, section_ids: Sequence[str], db_path: Path | None) -> None:
+    """Record the hash of each block just written. A failure here is not reported: the
+    install itself succeeded, and a missing record only makes the next install treat a
+    differing block as unrecorded, which backs it up - the safe direction."""
+    try:
         conn = sessions_db.connect(path=db_path)
         try:
             claude_md_store.record_hashes(
@@ -379,11 +407,8 @@ def install_claude_md(
             conn.commit()
         finally:
             conn.close()
-    return [
-        replace(result, backup_id=backup_ids.get(result.section), backup_error=store_error)
-        if result.drifted else result
-        for result in results
-    ]
+    except (sqlite3.DatabaseError, OSError):
+        pass
 
 
 def uninstall_claude_md(
@@ -413,34 +438,57 @@ def uninstall_claude_md(
     for section_id in section_ids:
         _validate_sentinels(lines, section_id)
 
+    recorded = claude_md_store.read_recorded_hashes(path, db_path=db_path)
     results: list[MarkdownResult] = []
+    backups: dict[str, str] = {}
     for section_id in section_ids:
         span = _find_block(lines, section_id)
         if span is None:
             results.append(MarkdownResult(path, section_id, MarkdownAction.NOT_PRESENT, "block not found"))
             continue
         start, end = span
+        existing = "".join(lines[start : end + 1])
+        drifted = is_hand_edited(existing, section_id, recorded)
+        if drifted:
+            backups[section_id] = existing
         lines = lines[:start] + lines[end + 1 :]
         results.append(
             MarkdownResult(
                 path, section_id, MarkdownAction.REMOVED, f"{'removed' if apply else 'would remove'} block",
+                drifted=drifted,
             )
         )
 
+    if not apply:
+        return results
+
+    backup_ids, store_error = _save_backups(path, backups, db_path)
     new_content = "".join(lines)
-    if apply and new_content != content:
+    if new_content != content:
         _write_text_atomic(path, new_content)
-    if apply:
-        removed = [r.section for r in results if r.action is MarkdownAction.REMOVED]
+    removed = [r.section for r in results if r.action is MarkdownAction.REMOVED]
+    if removed:
+        _delete_block_hashes(path, removed, db_path)
+    return [
+        replace(
+            result,
+            backup_id=backup_ids.get(result.section),
+            backup_error=None if result.section in backup_ids else store_error,
+        )
+        if result.drifted else result
+        for result in results
+    ]
+
+
+def _delete_block_hashes(path: Path, sections: list[str], db_path: Path | None) -> None:
+    """Drop the records of removed sections. A leftover record is harmless: a later install
+    finds the section absent, adds it, and overwrites the record."""
+    try:
+        conn = sessions_db.connect(path=db_path)
         try:
-            conn = sessions_db.connect(path=db_path)
-            try:
-                claude_md_store.delete_hashes(conn, path, removed)
-                conn.commit()
-            finally:
-                conn.close()
-        except sqlite3.DatabaseError:
-            # A leftover record is harmless: a later install finds the section absent, adds
-            # it, and overwrites the record. A corrupt store must not block the uninstall.
-            pass
-    return results
+            claude_md_store.delete_hashes(conn, path, sections)
+            conn.commit()
+        finally:
+            conn.close()
+    except (sqlite3.DatabaseError, OSError):
+        pass

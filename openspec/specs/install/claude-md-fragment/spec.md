@@ -171,7 +171,7 @@ When `install_claude_md` writes a managed section block, it SHALL record a hash 
 - **THEN** its recorded hash is removed
 
 ### Requirement: Hand-edited blocks are backed up before overwrite
-Before replacing an existing managed block with different text, install SHALL compare the existing block with the recorded hash. When the block does not match the recorded hash (including when no hash is recorded), install SHALL save the existing block text as a backup, retrievable by id, before overwriting it. A block that matches the recorded hash is an out-of-date template, not a customisation, and SHALL be replaced without a backup. A dry run SHALL report that a backup would be taken and SHALL NOT write one.
+Before replacing an existing managed block with different text, or removing it on uninstall, install and uninstall SHALL compare the existing block with the recorded hash. When the block does not match the recorded hash (including when no hash is recorded), install SHALL save the existing block text as a backup, retrievable by id, before overwriting it. A block that matches the recorded hash is an out-of-date template, not a customisation, and SHALL be replaced without a backup. A dry run SHALL report that a backup would be taken and SHALL NOT write one. If the sessions store cannot be used (corrupt, locked or unwritable), the install or uninstall SHALL still proceed and the result SHALL carry the reason the text could not be saved.
 
 #### Scenario: Hand-edited block is backed up
 - **WHEN** a managed block was edited by hand after ccst wrote it and install replaces it with `--apply`
@@ -188,6 +188,14 @@ Before replacing an existing managed block with different text, install SHALL co
 #### Scenario: Dry run
 - **WHEN** install runs without `--apply` against a hand-edited block
 - **THEN** the result says a backup would be taken and no backup or file change is made
+
+#### Scenario: Uninstall of a hand-edited block
+- **WHEN** uninstall with `--apply` removes a hand-edited block
+- **THEN** its text is backed up first and the removal is reported with the backup id
+
+#### Scenario: Unusable store
+- **WHEN** the sessions store cannot be opened or written during an apply
+- **THEN** the CLAUDE.md change still happens and the warning says the previous text could not be saved
 
 ### Requirement: Overwrites of hand-edited blocks are reported
 Each overwrite that took a backup SHALL appear in the install result with the section id and backup id. The claude-md step of `ccst install-everything` SHALL print a warning line for each, and the automatic post-upgrade sync SHALL print the same information to stderr, never stdout.
@@ -212,7 +220,7 @@ Each overwrite that took a backup SHALL appear in the install result with the se
 - **THEN** the doctor check is OK
 
 ### Requirement: Backed-up blocks can be listed and read
-`ccst claude-md backups list` SHALL list stored backups (id, timestamp, file, section). `ccst claude-md backups show <id>` SHALL print the stored block text, and SHALL fail with a clear message for an unknown id.
+`ccst claude-md backups list` SHALL list stored backups (id, timestamp, file, section). `ccst claude-md backups show <id>` SHALL print the stored block text, and SHALL fail with a clear message for an unknown id. Both SHALL fail with a message pointing to `ccst repair sessions` when the store is corrupt, rather than reporting no backups.
 
 #### Scenario: List and show
 - **WHEN** a backup exists and the user runs `list` then `show <id>`

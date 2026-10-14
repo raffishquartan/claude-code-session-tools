@@ -39,7 +39,7 @@ def read_recorded_hashes(path: Path, *, db_path: Path | None = None) -> dict[str
     not create the store)."""
     try:
         conn = sessions_db.connect(path=db_path, readonly=True)
-    except sqlite3.OperationalError:
+    except (sqlite3.OperationalError, OSError):  # no store yet, or its directory is unusable
         return {}
     try:
         rows = conn.execute(
@@ -87,23 +87,33 @@ def add_backup(conn: sqlite3.Connection, path: Path, section: str, text: str) ->
 
 
 def list_backups(*, db_path: Path | None = None) -> list[BlockBackup]:
+    """All saved backups, oldest first. A store or table that does not exist yet means no
+    backups; any other database error (a corrupt file) propagates so callers can report it."""
     try:
         conn = sessions_db.connect(path=db_path, readonly=True)
+        try:
+            rows = conn.execute(
+                "SELECT id, taken_at, path, section, text FROM claude_md_backups ORDER BY id"
+            ).fetchall()
+        finally:
+            conn.close()
     except sqlite3.OperationalError:
         return []
-    try:
-        rows = conn.execute(
-            "SELECT id, taken_at, path, section, text FROM claude_md_backups ORDER BY id"
-        ).fetchall()
-        return [BlockBackup(r["id"], r["taken_at"], r["path"], r["section"], r["text"]) for r in rows]
-    except sqlite3.DatabaseError:
-        return []
-    finally:
-        conn.close()
+    return [BlockBackup(r["id"], r["taken_at"], r["path"], r["section"], r["text"]) for r in rows]
 
 
 def get_backup(backup_id: int, *, db_path: Path | None = None) -> BlockBackup | None:
-    for backup in list_backups(db_path=db_path):
-        if backup.id == backup_id:
-            return backup
-    return None
+    try:
+        conn = sessions_db.connect(path=db_path, readonly=True)
+        try:
+            row = conn.execute(
+                "SELECT id, taken_at, path, section, text FROM claude_md_backups WHERE id = ?",
+                (backup_id,),
+            ).fetchone()
+        finally:
+            conn.close()
+    except sqlite3.OperationalError:
+        return None
+    return None if row is None else BlockBackup(
+        row["id"], row["taken_at"], row["path"], row["section"], row["text"],
+    )
