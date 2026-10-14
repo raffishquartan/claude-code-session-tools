@@ -18,7 +18,7 @@ def tmp_hooks_dir(tmp_path: Path) -> Path:
 
 
 @pytest.fixture(autouse=True)
-def _clean_session_root_env(monkeypatch):
+def _clean_session_root_env(monkeypatch, tmp_path_factory):
     """Make sure no inherited env vars from the developer's shell leak into
     tests. Tests that need roots set must do so explicitly.
 
@@ -36,6 +36,10 @@ def _clean_session_root_env(monkeypatch):
     monkeypatch.delenv("CLAUDE_SESSION_TOOLS_PROJ_ROOT", raising=False)
     monkeypatch.delenv("CCX_DEBUG", raising=False)
     monkeypatch.setenv("CCST_NO_AUTO_SYNC", "1")
+    # install-everything / claude-md install write block hashes and backups to sessions.db;
+    # point the data home at a throwaway directory so no test reaches the real store. Tests that care
+    # about the location override this themselves.
+    monkeypatch.setenv("CCST_DATA_HOME", str(tmp_path_factory.mktemp("data-home")))
     # Never let a test reach the real Telegram API. `notify.send_telegram`'s
     # `post` parameter defaults to a live HTTPS POST, and both it and every
     # `notify_push`/`notify_suspended` caller default to the real

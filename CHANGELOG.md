@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.16.0] - 2026-10-14
+
+### Added
+
+- **Hand-edited managed `CLAUDE.md` blocks are no longer overwritten silently.** `ccst claude-md
+  install` (and the post-upgrade sync that runs it) now records a hash of each managed block it
+  writes. When it is about to replace a block that is neither the current template nor what ccst
+  last wrote, it first saves the block's text as a backup and prints a warning naming the section
+  and backup id (stderr only during the automatic sync). If `sessions.db` is unusable the block is
+  still replaced and the warning says the text could not be saved.
+- `ccst claude-md backups list` and `ccst claude-md backups show <id>` read the saved blocks.
+- `ccst doctor` check `install:claude-md-drift` WARNs while a managed block is hand-edited, before
+  the next install overwrites it.
+
+### Notes
+
+- The first install after upgrading has no recorded hashes, so every managed block that differs
+  from the template is backed up once, including blocks that were merely out of date.
+
 ## [3.15.1] - 2026-10-14
 
 ### Changed
