@@ -209,6 +209,18 @@ def test_messaging_block_is_byte_for_byte_pinned(tmp_path: Path) -> None:
     assert text == "# My instructions\n" + _MESSAGING_BLOCK
 
 
+def test_workflow_section_makes_worklog_mandatory(tmp_path: Path) -> None:
+    md = tmp_path / "CLAUDE.md"
+    install_claude_md(md, apply=True, sections=["workflow"])
+    assert (
+        "Every `ccd`/`ccr` session, including trivial ones, MUST have a `working/WORKLOG.md`.\n"
+        "Create it as the first action of the session, before any other work, and append to it\n"
+        "incrementally as the session progresses - not only when a compact is attempted or when\n"
+        "asked. Add one entry per meaningful step or decision, each headed with `yyyy-MM-dd HH:mm`.\n"
+        "The `worklog-guard` hook blocks a manual `/compact` when the file is stale.\n"
+    ) in md.read_text()
+
+
 def _date_format_body(tmp_path: Path) -> str:
     md = tmp_path / "CLAUDE.md"
     install_claude_md(md, apply=True, sections=["date-format"])

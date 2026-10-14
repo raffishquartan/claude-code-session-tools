@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.15.1] - 2026-10-14
+
+### Changed
+
+- The managed `workflow` section of `CLAUDE.md` now says every `ccd`/`ccr` session MUST have a
+  `working/WORKLOG.md`, created as the first action and appended to incrementally with
+  `yyyy-MM-dd HH:mm` entries, instead of only "keep it updated". A hand-edited copy of this
+  paragraph was otherwise reverted by every upgrade.
+
 ## [3.15.0] - 2026-10-11
 
 ### Added
