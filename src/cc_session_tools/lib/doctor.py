@@ -20,6 +20,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from cc_session_tools.lib import bun_tools
+from cc_session_tools.lib.claude_md_install import MalformedBlockError, find_hand_edited_sections
 from cc_session_tools.lib.db import connect as _db_connect
 from cc_session_tools.lib.db import migration_applied as _migration_applied
 from cc_session_tools.lib.hook_registry import HOOK_VERBS, hook_name_from_command
@@ -499,6 +500,30 @@ def check_install_everything_synced(
             f"installed {installed_version}, install-everything last synced at "
             f"{synced_version} — it will be applied automatically on the next `ccst` "
             "command; run `ccst install-everything --apply` to do it now"
+        ),
+    )
+
+
+def check_claude_md_drift(claude_md_path: Path, sessions_db_path: Path | None) -> CheckResult:
+    """OK when every managed CLAUDE.md block matches the template or the text ccst last wrote.
+
+    WARN when a block was hand-edited (it matches neither): the next install saves it as a
+    backup and overwrites it with the template, so this is the last chance to move the edit
+    into the template instead. WARN, not FAIL: nothing is broken, and the text is kept.
+    """
+    name = "install:claude-md-drift"
+    try:
+        edited = find_hand_edited_sections(claude_md_path, db_path=sessions_db_path)
+    except (MalformedBlockError, OSError, UnicodeDecodeError) as exc:
+        return CheckResult(name=name, status=Status.WARN, reason=f"cannot check {claude_md_path}: {exc}")
+    if not edited:
+        return CheckResult(name=name, status=Status.OK, reason="no hand-edited managed blocks")
+    return CheckResult(
+        name=name, status=Status.WARN,
+        reason=(
+            f"hand-edited managed block(s) in {claude_md_path}: {', '.join(edited)} - the next "
+            "`ccst claude-md install` saves each as a backup (`ccst claude-md backups list`) "
+            "and overwrites it with the template"
         ),
     )
 
@@ -1088,6 +1113,7 @@ def run_all_checks(
     sessions_db_path: Path | None = None,
     synced_version: str | None = None,
     failed_attempt: FailedAttempt | None = None,
+    claude_md_path: Path | None = None,
 ) -> list[CheckResult]:
     """Run the full doctor suite and return results.
 
@@ -1130,6 +1156,9 @@ def run_all_checks(
     failed_attempt:
         The most recently recorded auto-apply failure, or None if the last
         attempt succeeded (or none has been recorded).
+    claude_md_path:
+        The global CLAUDE.md to check for hand-edited managed blocks; when None, that check
+        is skipped.
     """
     results: list[CheckResult] = []
 
@@ -1236,6 +1265,8 @@ def run_all_checks(
     results.append(
         check_install_everything_synced(installed_version, synced_version, failed_attempt)
     )
+    if claude_md_path is not None:
+        results.append(check_claude_md_drift(claude_md_path, sessions_db_path))
 
     return results
 

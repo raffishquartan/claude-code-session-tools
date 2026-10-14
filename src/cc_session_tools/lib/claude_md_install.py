@@ -13,10 +13,13 @@ independently of one another - mirroring how ``ccst hooks install --hook NAME``
 targets a single hook within its bundle."""
 from __future__ import annotations
 
+import sqlite3
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from enum import Enum
 from pathlib import Path
+
+from cc_session_tools.lib import claude_md_store, sessions_db
 
 
 def _write_text_atomic(path: Path, text: str) -> None:
@@ -191,6 +194,13 @@ class MarkdownResult:
     section: str
     action: MarkdownAction
     message: str
+    # True when an existing block differed from what ccst last wrote (a hand edit, or no
+    # record yet) and is being replaced; backup_id is set once that text has been saved.
+    drifted: bool = False
+    backup_id: int | None = None
+    # Why a drifted block's text could not be saved (sessions.db unusable); the block is
+    # still replaced, because a corrupt store must not block the install.
+    backup_error: str | None = None
 
 
 class MalformedBlockError(ValueError):
@@ -236,8 +246,41 @@ def _validate_sentinels(lines: list[str], section_id: str) -> None:
     )
 
 
+# Marks the warning line printed for every overwritten hand-edited block, so the automatic
+# post-upgrade sync (which discards the rest of the install output) can forward just these.
+DRIFT_WARNING_MARKER = "warning (claude-md drift):"
+
+
+def is_hand_edited(existing_block: str, section_id: str, recorded: dict[str, str]) -> bool:
+    """True when ``existing_block`` is neither the current template nor the text ccst last
+    wrote for this section - i.e. someone changed it, or nothing is recorded yet."""
+    if existing_block.rstrip("\n") == _block_text(section_id).rstrip("\n"):
+        return False
+    return recorded.get(section_id) != claude_md_store.block_sha256(existing_block)
+
+
+def find_hand_edited_sections(path: Path, *, db_path: Path | None = None) -> list[str]:
+    """Installed managed sections in ``path`` that the next install would back up and
+    overwrite. Read-only."""
+    if not path.exists():
+        return []
+    lines = path.read_text(encoding="utf-8").splitlines(keepends=True)
+    recorded = claude_md_store.read_recorded_hashes(path, db_path=db_path)
+    edited: list[str] = []
+    for section_id in SECTION_IDS:
+        _validate_sentinels(lines, section_id)
+        span = _find_block(lines, section_id)
+        if span is None:
+            continue
+        existing = "".join(lines[span[0] : span[1] + 1])
+        if is_hand_edited(existing, section_id, recorded):
+            edited.append(section_id)
+    return edited
+
+
 def install_claude_md(
     path: Path, *, apply: bool = False, sections: Sequence[str] | None = None,
+    db_path: Path | None = None,
 ) -> list[MarkdownResult]:
     """Insert or update the managed section block(s) in ``path``.
 
@@ -248,14 +291,22 @@ def install_claude_md(
     registered section. Does exactly one atomic file write covering every
     processed section. Raises ``ValueError`` immediately for an unknown
     section id, and ``MalformedBlockError`` if a requested section's existing
-    markers are unbalanced."""
+    markers are unbalanced.
+
+    A block that differs from the template is replaced silently only when it equals the text
+    ccst last wrote (the template is just out of date). Otherwise it was hand-edited, or
+    nothing is recorded, and its text is saved as a backup in sessions.db (``db_path``
+    overrides the location) before being replaced; the result carries ``drifted`` and,
+    when applied, ``backup_id``. Each processed block's hash is recorded on apply."""
     section_ids = _resolve_sections(sections)
     content = path.read_text(encoding="utf-8") if path.exists() else ""
     lines = content.splitlines(keepends=True)
     for section_id in section_ids:
         _validate_sentinels(lines, section_id)
 
+    recorded = claude_md_store.read_recorded_hashes(path, db_path=db_path)
     results: list[MarkdownResult] = []
+    backups: dict[str, str] = {}
     for section_id in section_ids:
         block = _block_text(section_id)
         span = _find_block(lines, section_id)
@@ -267,11 +318,15 @@ def install_claude_md(
                     MarkdownResult(path, section_id, MarkdownAction.ALREADY_PRESENT, "block already up to date")
                 )
                 continue
+            drifted = is_hand_edited(existing, section_id, recorded)
+            if drifted:
+                backups[section_id] = existing
             lines = lines[:start] + [block] + lines[end + 1 :]
             results.append(
                 MarkdownResult(
                     path, section_id, MarkdownAction.REPLACED,
                     f"{'replaced' if apply else 'would replace'} existing block",
+                    drifted=drifted,
                 )
             )
         else:
@@ -285,14 +340,80 @@ def install_claude_md(
             )
 
     new_content = "".join(lines)
-    if apply and new_content != content:
+    if not apply:
+        return results
+
+    backup_ids, store_error = _save_backups(path, backups, db_path)
+
+    if new_content != content:
         path.parent.mkdir(parents=True, exist_ok=True)
         _write_text_atomic(path, new_content)
-    return results
+
+    if store_error is None:
+        _record_block_hashes(path, section_ids, db_path)
+    return [
+        replace(
+            result,
+            backup_id=backup_ids.get(result.section),
+            backup_error=None if result.section in backup_ids else store_error,
+        )
+        if result.drifted else result
+        for result in results
+    ]
+
+
+def _save_backups(
+    path: Path, backups: dict[str, str], db_path: Path | None,
+) -> tuple[dict[str, int], str | None]:
+    """Save ``backups`` (section id -> block text) and return their ids plus an error message
+    if the store could not be used.
+
+    A corrupt, locked or unwritable sessions.db (``sqlite3.DatabaseError``, or ``OSError``
+    from creating its directory) must not block an install or uninstall - see
+    run_install_everything - so the failure is returned for the caller to carry on its results.
+    The backups are committed before the caller touches the file: if the write fails, the text
+    it would have replaced is still recoverable."""
+    if not backups:
+        return {}, None
+    try:
+        conn = sessions_db.connect(path=db_path)
+        try:
+            ids = {
+                section_id: claude_md_store.add_backup(conn, path, section_id, text)
+                for section_id, text in backups.items()
+            }
+            conn.commit()
+        finally:
+            conn.close()
+    except (sqlite3.DatabaseError, OSError) as exc:
+        return {}, str(exc)
+    return ids, None
+
+
+def _record_block_hashes(path: Path, section_ids: Sequence[str], db_path: Path | None) -> None:
+    """Record the hash of each block just written. A failure here is not reported: the
+    install itself succeeded, and a missing record only makes the next install treat a
+    differing block as unrecorded, which backs it up - the safe direction."""
+    try:
+        conn = sessions_db.connect(path=db_path)
+        try:
+            claude_md_store.record_hashes(
+                conn, path,
+                {
+                    section_id: claude_md_store.block_sha256(_block_text(section_id))
+                    for section_id in section_ids
+                },
+            )
+            conn.commit()
+        finally:
+            conn.close()
+    except (sqlite3.DatabaseError, OSError):
+        pass
 
 
 def uninstall_claude_md(
     path: Path, *, apply: bool = False, sections: Sequence[str] | None = None,
+    db_path: Path | None = None,
 ) -> list[MarkdownResult]:
     """Remove the managed section block(s) from ``path``, preserving all other
     text and every section not requested for removal. A section is reported
@@ -317,21 +438,57 @@ def uninstall_claude_md(
     for section_id in section_ids:
         _validate_sentinels(lines, section_id)
 
+    recorded = claude_md_store.read_recorded_hashes(path, db_path=db_path)
     results: list[MarkdownResult] = []
+    backups: dict[str, str] = {}
     for section_id in section_ids:
         span = _find_block(lines, section_id)
         if span is None:
             results.append(MarkdownResult(path, section_id, MarkdownAction.NOT_PRESENT, "block not found"))
             continue
         start, end = span
+        existing = "".join(lines[start : end + 1])
+        drifted = is_hand_edited(existing, section_id, recorded)
+        if drifted:
+            backups[section_id] = existing
         lines = lines[:start] + lines[end + 1 :]
         results.append(
             MarkdownResult(
                 path, section_id, MarkdownAction.REMOVED, f"{'removed' if apply else 'would remove'} block",
+                drifted=drifted,
             )
         )
 
+    if not apply:
+        return results
+
+    backup_ids, store_error = _save_backups(path, backups, db_path)
     new_content = "".join(lines)
-    if apply and new_content != content:
+    if new_content != content:
         _write_text_atomic(path, new_content)
-    return results
+    removed = [r.section for r in results if r.action is MarkdownAction.REMOVED]
+    if removed:
+        _delete_block_hashes(path, removed, db_path)
+    return [
+        replace(
+            result,
+            backup_id=backup_ids.get(result.section),
+            backup_error=None if result.section in backup_ids else store_error,
+        )
+        if result.drifted else result
+        for result in results
+    ]
+
+
+def _delete_block_hashes(path: Path, sections: list[str], db_path: Path | None) -> None:
+    """Drop the records of removed sections. A leftover record is harmless: a later install
+    finds the section absent, adds it, and overwrites the record."""
+    try:
+        conn = sessions_db.connect(path=db_path)
+        try:
+            claude_md_store.delete_hashes(conn, path, sections)
+            conn.commit()
+        finally:
+            conn.close()
+    except (sqlite3.DatabaseError, OSError):
+        pass

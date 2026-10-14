@@ -545,3 +545,25 @@ def test_never_raises_when_the_lock_itself_raises_os_error(
     captured = capsys.readouterr()
     assert captured.out == ""
     assert "install-everything --apply" in captured.err
+
+
+def test_auto_sync_forwards_drift_warnings_to_stderr_only(
+    auto_sync_env: Path, mocker: MockerFixture, capsys
+) -> None:
+    from cc_session_tools.cli import ccst
+    from cc_session_tools.lib.claude_md_install import DRIFT_WARNING_MARKER
+
+    def fake_run(**kwargs: object) -> int:
+        stream = kwargs["stream"]
+        stream.write("=== 4/5  Global CLAUDE.md ===\n")  # type: ignore[attr-defined]
+        stream.write(f"  {DRIFT_WARNING_MARKER} [workflow] block was hand-edited; backup 3\n")  # type: ignore[attr-defined]
+        return 0
+
+    mocker.patch.object(ccst, "run_install_everything", side_effect=fake_run)
+
+    install_sync.ensure_synced(noun="pdata", verb="list", installed_version="2.5.0")
+
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert f"ccst: {DRIFT_WARNING_MARKER} [workflow]" in captured.err
+    assert "Global CLAUDE.md" not in captured.err

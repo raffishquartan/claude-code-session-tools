@@ -24,6 +24,7 @@ from enum import Enum
 from pathlib import Path
 
 from cc_session_tools.lib import sessions_db
+from cc_session_tools.lib.claude_md_install import DRIFT_WARNING_MARKER
 from cc_session_tools.lib.timefmt import format_utc
 
 _SYNCED_VERSION_KEY = "synced_version"
@@ -333,6 +334,11 @@ def ensure_synced(*, noun: str | None, verb: str | None, installed_version: str)
 
         if rc == 0:
             print(f"ccst: install config synced to {installed_version}.", file=sys.stderr)
+            # The step output is otherwise discarded; a hand-edited CLAUDE.md block that was
+            # just overwritten must still be visible.
+            for line in buffer.getvalue().splitlines():
+                if DRIFT_WARNING_MARKER in line:
+                    print(f"ccst: {line.strip()}", file=sys.stderr)
             return
 
         # Failure: the buffered per-step detail is the only place the reason

@@ -94,6 +94,24 @@ CREATE TABLE IF NOT EXISTS context_overrides (
     updated_at TEXT NOT NULL,
     created_at TEXT
 );
+
+CREATE TABLE IF NOT EXISTS claude_md_blocks (
+    path       TEXT NOT NULL,
+    section    TEXT NOT NULL,
+    sha256     TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    created_at TEXT,
+    PRIMARY KEY (path, section)
+);
+
+CREATE TABLE IF NOT EXISTS claude_md_backups (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    taken_at   TEXT NOT NULL,
+    path       TEXT NOT NULL,
+    section    TEXT NOT NULL,
+    text       TEXT NOT NULL,
+    created_at TEXT
+);
 """ + db.MIGRATIONS_DDL
 
 # Marker name recorded in the migrations table by cli.migrate_sessions_db once the legacy flat

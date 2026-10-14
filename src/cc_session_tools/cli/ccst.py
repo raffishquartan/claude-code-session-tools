@@ -77,6 +77,8 @@ Current subcommands:
                                  ~/.claude/CLAUDE.md (messaging, workflow, agents,
                                  confirm-gate, date-format). Omit --section for all five.
   claude-md uninstall [--section ID]  Remove the managed section(s) from CLAUDE.md.
+  claude-md backups list|show ID  List or print blocks saved before a hand-edited
+                                 managed section was overwritten by an install.
   ccsched-jobs install           Register CCST's bundled ccsched jobs (see
                                  lib/scheduler/bundled_jobs.py) if not already present.
                                  Dry run by default; pass --apply to register. An
@@ -113,6 +115,7 @@ from cc_session_tools.hooks_install import (
 )
 from cc_session_tools.lib import machine_identity
 from cc_session_tools.lib.claude_md_install import SECTION_IDS as CLAUDE_MD_SECTION_IDS
+from cc_session_tools.lib.claude_md_install import DRIFT_WARNING_MARKER, MarkdownAction, MarkdownResult
 from cc_session_tools.lib.hook_registry import HOOK_DESCRIPTIONS, HOOK_VERBS
 from cc_session_tools.lib.text_wrap import wrap_block
 
@@ -796,6 +799,7 @@ def _cmd_doctor(args: argparse.Namespace) -> int:
         sessions_db_path=store_paths["sessions"],
         synced_version=install_sync.get_synced_version(),
         failed_attempt=install_sync.get_failed_attempt(),
+        claude_md_path=Path.home() / ".claude" / "CLAUDE.md",
     )
 
     if args.drift or getattr(args, "mode", None) == "drift":
@@ -882,8 +886,51 @@ def _cmd_claude_md_install(args: argparse.Namespace) -> int:
         return 1
     for result in results:
         print(f"  {result.path} [{result.section}]: {result.message}")
+        if result.drifted:
+            print(f"  {_claude_md_drift_warning(result, apply=args.apply)}")
     if not args.apply:
         print("\nDry run — re-run with --apply to write changes")
+    return 0
+
+
+def _claude_md_drift_warning(result: MarkdownResult, *, apply: bool) -> str:
+    gone = "removed" if result.action is MarkdownAction.REMOVED else "overwritten"
+    head = f"{DRIFT_WARNING_MARKER} [{result.section}] block in {result.path} was hand-edited"
+    if not apply:
+        verb = "remove" if result.action is MarkdownAction.REMOVED else "overwrite"
+        return f"{head} (or not recorded); --apply will save its text as a backup and {verb} it"
+    if result.backup_error is not None:
+        return (
+            f"{head} and was {gone}, but its text could NOT be saved "
+            f"({result.backup_error}); run `ccst repair sessions` to investigate"
+        )
+    return (
+        f"{head}; {gone}, previous text saved as backup {result.backup_id} - "
+        f"read it with `ccst claude-md backups show {result.backup_id}`"
+    )
+
+
+def _cmd_claude_md_backups(args: argparse.Namespace) -> int:
+    import sqlite3
+
+    from cc_session_tools.lib import claude_md_store
+    try:
+        if args.backups_verb == "list":
+            for backup in claude_md_store.list_backups():
+                print(f"{backup.id}\t{backup.taken_at}\t{backup.path}\t{backup.section}")
+            return 0
+        found = claude_md_store.get_backup(args.id)
+    except (sqlite3.DatabaseError, OSError) as exc:
+        print(
+            f"error: cannot read the claude-md backups ({exc}) - sessions.db may be corrupt; "
+            "run `ccst repair sessions` to investigate",
+            file=sys.stderr,
+        )
+        return 1
+    if found is None:
+        print(f"error: no claude-md backup with id {args.id}", file=sys.stderr)
+        return 1
+    sys.stdout.write(found.text)
     return 0
 
 
@@ -898,6 +945,8 @@ def _cmd_claude_md_uninstall(args: argparse.Namespace) -> int:
         return 1
     for result in results:
         print(f"  {result.path} [{result.section}]: {result.message}")
+        if result.drifted:
+            print(f"  {_claude_md_drift_warning(result, apply=args.apply)}")
     if not args.apply:
         print("\nDry run — re-run with --apply to write changes")
     return 0
@@ -3562,6 +3611,14 @@ def _build_parser() -> argparse.ArgumentParser:
         help=f"Section to uninstall, repeatable (default: all — {', '.join(CLAUDE_MD_SECTION_IDS)})",
     )
     cmd_uninstall.add_argument("--apply", action="store_true", help="Write changes (default: dry run)")
+    cmd_backups = cmd_sub.add_parser(
+        "backups", help="List or read blocks saved before a hand-edited section was overwritten",
+    )
+    backups_sub = cmd_backups.add_subparsers(dest="backups_verb", metavar="<verb>")
+    backups_sub.required = True
+    backups_sub.add_parser("list", help="List saved blocks: id, time, file, section")
+    backups_show = backups_sub.add_parser("show", help="Print a saved block's text")
+    backups_show.add_argument("id", type=int, help="Backup id from `backups list`")
 
     # ---- install-everything ----
     ie_parser = sub.add_parser(
@@ -3771,6 +3828,8 @@ def main() -> None:
             sys.exit(_cmd_claude_md_install(args))
         if args.verb == "uninstall":
             sys.exit(_cmd_claude_md_uninstall(args))
+        if args.verb == "backups":
+            sys.exit(_cmd_claude_md_backups(args))
 
     if args.noun == "install-everything":
         sys.exit(_cmd_install_everything(args))
