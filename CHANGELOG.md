@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **README rewritten.** It now opens with the problems CCST solves, adds the required
+  `CLAUDE_SESSION_TOOLS_REPO_ROOT` / `CLAUDE_SESSION_TOOLS_PROJ_ROOT` setup step and shell-function
+  loading to the install instructions, and covers features it had omitted: `ccdapi`/`ccrapi`,
+  every hook, multi-machine `pdata` sync, the session-name form of `ccmsg --to-session`, hand-edit
+  backups for managed `CLAUDE.md` sections, configuration variables, upgrading and uninstalling.
+  The bundled skill count is corrected to 26.
+
+### Fixed
+
+- The compare links at the foot of this file stopped at 2.1.0, so every later version heading was
+  an unlinked reference and `[Unreleased]` compared against `v2.1.0`. They now cover every tagged
+  version and `[Unreleased]` compares against the latest release.
+
 ## [3.16.0] - 2026-10-14
 
 ### Added
@@ -2450,9 +2465,73 @@ integration (push notifications when 8-digit confirmation gates fire).
 - `--version` flag on all three CLIs.
 - `.gitignore` entry for `.worktrees/`.
 
-[Unreleased]: https://github.com/raffishquartan/claude-code-session-tools/compare/v2.1.0...HEAD
+[Unreleased]: https://github.com/raffishquartan/claude-code-session-tools/compare/v3.16.0...HEAD
+[3.16.0]: https://github.com/raffishquartan/claude-code-session-tools/compare/v3.15.1...v3.16.0
+[3.15.1]: https://github.com/raffishquartan/claude-code-session-tools/compare/v3.15.0...v3.15.1
+[3.15.0]: https://github.com/raffishquartan/claude-code-session-tools/compare/v3.14.0...v3.15.0
+[3.14.0]: https://github.com/raffishquartan/claude-code-session-tools/compare/v3.13.0...v3.14.0
+[3.13.0]: https://github.com/raffishquartan/claude-code-session-tools/compare/v3.12.2...v3.13.0
+[3.12.2]: https://github.com/raffishquartan/claude-code-session-tools/compare/v3.12.1...v3.12.2
+[3.12.1]: https://github.com/raffishquartan/claude-code-session-tools/compare/v3.12.0...v3.12.1
+[3.12.0]: https://github.com/raffishquartan/claude-code-session-tools/compare/v3.11.1...v3.12.0
+[3.11.1]: https://github.com/raffishquartan/claude-code-session-tools/compare/v3.11.0...v3.11.1
+[3.11.0]: https://github.com/raffishquartan/claude-code-session-tools/compare/v3.10.6...v3.11.0
+[3.10.6]: https://github.com/raffishquartan/claude-code-session-tools/compare/v3.10.5...v3.10.6
+[3.10.5]: https://github.com/raffishquartan/claude-code-session-tools/compare/v3.10.4...v3.10.5
+[3.10.4]: https://github.com/raffishquartan/claude-code-session-tools/compare/v3.10.3...v3.10.4
+[3.10.3]: https://github.com/raffishquartan/claude-code-session-tools/compare/v3.10.2...v3.10.3
+[3.10.2]: https://github.com/raffishquartan/claude-code-session-tools/compare/v3.10.1...v3.10.2
+[3.10.1]: https://github.com/raffishquartan/claude-code-session-tools/compare/v3.10.0...v3.10.1
+[3.10.0]: https://github.com/raffishquartan/claude-code-session-tools/compare/v3.9.2...v3.10.0
+[3.9.2]: https://github.com/raffishquartan/claude-code-session-tools/compare/v3.9.1...v3.9.2
+[3.9.1]: https://github.com/raffishquartan/claude-code-session-tools/compare/v3.9.0...v3.9.1
+[3.9.0]: https://github.com/raffishquartan/claude-code-session-tools/compare/v3.8.0...v3.9.0
+[3.8.0]: https://github.com/raffishquartan/claude-code-session-tools/compare/v3.7.1...v3.8.0
+[3.7.1]: https://github.com/raffishquartan/claude-code-session-tools/compare/v3.7.0...v3.7.1
+[3.7.0]: https://github.com/raffishquartan/claude-code-session-tools/compare/v3.6.1...v3.7.0
+[3.6.1]: https://github.com/raffishquartan/claude-code-session-tools/compare/v3.5.3...v3.6.1
+[3.5.3]: https://github.com/raffishquartan/claude-code-session-tools/compare/v3.5.2...v3.5.3
+[3.5.2]: https://github.com/raffishquartan/claude-code-session-tools/compare/v3.5.1...v3.5.2
+[3.5.1]: https://github.com/raffishquartan/claude-code-session-tools/compare/v3.5.0...v3.5.1
+[3.5.0]: https://github.com/raffishquartan/claude-code-session-tools/compare/v3.4.0...v3.5.0
+[3.4.0]: https://github.com/raffishquartan/claude-code-session-tools/compare/v3.3.3...v3.4.0
+[3.3.3]: https://github.com/raffishquartan/claude-code-session-tools/compare/v3.3.2...v3.3.3
+[3.3.2]: https://github.com/raffishquartan/claude-code-session-tools/compare/v3.3.1...v3.3.2
+[3.3.1]: https://github.com/raffishquartan/claude-code-session-tools/compare/v3.3.0...v3.3.1
+[3.3.0]: https://github.com/raffishquartan/claude-code-session-tools/compare/v3.2.1...v3.3.0
+[3.2.1]: https://github.com/raffishquartan/claude-code-session-tools/compare/v3.2.0...v3.2.1
+[3.2.0]: https://github.com/raffishquartan/claude-code-session-tools/compare/v3.1.0...v3.2.0
+[3.1.0]: https://github.com/raffishquartan/claude-code-session-tools/compare/v3.0.0...v3.1.0
+[3.0.0]: https://github.com/raffishquartan/claude-code-session-tools/compare/v2.14.0...v3.0.0
+[2.14.0]: https://github.com/raffishquartan/claude-code-session-tools/compare/v2.13.0...v2.14.0
+[2.13.0]: https://github.com/raffishquartan/claude-code-session-tools/compare/v2.12.5...v2.13.0
+[2.12.5]: https://github.com/raffishquartan/claude-code-session-tools/compare/v2.12.4...v2.12.5
+[2.12.4]: https://github.com/raffishquartan/claude-code-session-tools/compare/v2.12.3...v2.12.4
+[2.12.3]: https://github.com/raffishquartan/claude-code-session-tools/compare/v2.12.2...v2.12.3
+[2.12.2]: https://github.com/raffishquartan/claude-code-session-tools/compare/v2.12.1...v2.12.2
+[2.12.1]: https://github.com/raffishquartan/claude-code-session-tools/compare/v2.12.0...v2.12.1
+[2.12.0]: https://github.com/raffishquartan/claude-code-session-tools/compare/v2.11.2...v2.12.0
+[2.11.2]: https://github.com/raffishquartan/claude-code-session-tools/compare/v2.11.1...v2.11.2
+[2.11.1]: https://github.com/raffishquartan/claude-code-session-tools/compare/v2.11.0...v2.11.1
+[2.11.0]: https://github.com/raffishquartan/claude-code-session-tools/compare/v2.10.1...v2.11.0
+[2.10.1]: https://github.com/raffishquartan/claude-code-session-tools/compare/v2.10.0...v2.10.1
+[2.10.0]: https://github.com/raffishquartan/claude-code-session-tools/compare/v2.9.0...v2.10.0
+[2.9.0]: https://github.com/raffishquartan/claude-code-session-tools/compare/v2.8.2...v2.9.0
+[2.8.2]: https://github.com/raffishquartan/claude-code-session-tools/compare/v2.8.1...v2.8.2
+[2.8.1]: https://github.com/raffishquartan/claude-code-session-tools/compare/v2.8.0...v2.8.1
+[2.8.0]: https://github.com/raffishquartan/claude-code-session-tools/compare/v2.7.2...v2.8.0
+[2.7.2]: https://github.com/raffishquartan/claude-code-session-tools/compare/v2.7.1...v2.7.2
+[2.7.1]: https://github.com/raffishquartan/claude-code-session-tools/compare/v2.7.0...v2.7.1
+[2.7.0]: https://github.com/raffishquartan/claude-code-session-tools/compare/v2.6.0...v2.7.0
+[2.6.0]: https://github.com/raffishquartan/claude-code-session-tools/compare/v2.5.0...v2.6.0
+[2.5.0]: https://github.com/raffishquartan/claude-code-session-tools/compare/v2.4.0...v2.5.0
+[2.4.0]: https://github.com/raffishquartan/claude-code-session-tools/compare/v2.3.0...v2.4.0
+[2.3.0]: https://github.com/raffishquartan/claude-code-session-tools/compare/v2.2.0...v2.3.0
+[2.2.0]: https://github.com/raffishquartan/claude-code-session-tools/compare/v2.1.1...v2.2.0
+[2.1.1]: https://github.com/raffishquartan/claude-code-session-tools/compare/v2.1.0...v2.1.1
 [2.1.0]: https://github.com/raffishquartan/claude-code-session-tools/compare/v2.0.0...v2.1.0
-[2.0.0]: https://github.com/raffishquartan/claude-code-session-tools/compare/v1.3.1...v2.0.0
+[2.0.0]: https://github.com/raffishquartan/claude-code-session-tools/compare/v1.4.1...v2.0.0
+[1.4.1]: https://github.com/raffishquartan/claude-code-session-tools/compare/v1.3.1...v1.4.1
 [1.3.1]: https://github.com/raffishquartan/claude-code-session-tools/compare/v1.3.0...v1.3.1
 [1.3.0]: https://github.com/raffishquartan/claude-code-session-tools/compare/v1.2.0...v1.3.0
 [1.2.0]: https://github.com/raffishquartan/claude-code-session-tools/compare/v1.1.0...v1.2.0
