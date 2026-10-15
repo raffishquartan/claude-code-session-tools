@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.16.1] - 2026-10-15
+
 ### Changed
 
 - **README rewritten.** It now opens with the problems CCST solves, adds the required
@@ -2465,7 +2467,8 @@ integration (push notifications when 8-digit confirmation gates fire).
 - `--version` flag on all three CLIs.
 - `.gitignore` entry for `.worktrees/`.
 
-[Unreleased]: https://github.com/raffishquartan/claude-code-session-tools/compare/v3.16.0...HEAD
+[Unreleased]: https://github.com/raffishquartan/claude-code-session-tools/compare/v3.16.1...HEAD
+[3.16.1]: https://github.com/raffishquartan/claude-code-session-tools/compare/v3.16.0...v3.16.1
 [3.16.0]: https://github.com/raffishquartan/claude-code-session-tools/compare/v3.15.1...v3.16.0
 [3.15.1]: https://github.com/raffishquartan/claude-code-session-tools/compare/v3.15.0...v3.15.1
 [3.15.0]: https://github.com/raffishquartan/claude-code-session-tools/compare/v3.14.0...v3.15.0
