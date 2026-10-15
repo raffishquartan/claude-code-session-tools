@@ -4,29 +4,34 @@
 [![Python](https://img.shields.io/pypi/pyversions/cc-session-tools.svg)](https://pypi.org/project/cc-session-tools/)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-**Infrastructure for running Claude Code as your default way of working, not just an
-occasional tool.**
+**Tools for running Claude Code at scale as your default way of working, not just a
+sometimes tool.**
 
 Claude Code on its own is a great single conversation. It is much less good at the things
 that appear once you use it all day, across many projects, for weeks:
 
-- *"Which session was that in?"* - sessions are anonymous UUIDs in a transcript folder.
-- *"Where did that draft go?"* - files end up wherever the conversation left them.
-- *"I need to tell the other session about this."* - sessions cannot talk to each other.
-- *"This should just run every week."* - nothing runs while Claude Code is closed.
-- *"Did that command it just ran do something bad?"* - you either approve everything by
-  hand or approve nothing.
-- *"My CSV of records has drifted out of sync with my notes again."* - ad hoc files do not
+- _"Which session was that in?"_ - sessions are anonymous UUIDs in a transcript folder.
+- _"Where did that draft go?"_ - files end up wherever the conversation left them.
+- _"I need to tell the other session about this."_ - sessions cannot talk to each other.
+- _"This should just run every week."_ - nothing runs while Claude Code is closed.
+- _"Did that command it just ran do something bad?"_ - you either approve everything by hand
+  or approve nothing.
+- _"My CSV of records has drifted out of sync with my notes again."_ - ad hoc files do not
   scale.
+- _"I'm working with GB of unstructured data, and I need multiple sessions to work on the
+  files simultaneously"_ - race conditions anyone?
+- _"I can't give Claude Code all this power"_ - and you definitely don't want to trust the
+  LLM to enforce its own guardrails
 
 CCST fixes each of those with small, boring, local tools. Everything is a command line
 program plus a handful of Claude Code hooks and skills. There is no server, no account and
-no network service (the only optional outbound call is a Telegram notification you opt into).
-All state is SQLite under `~/.local/share/claude/`.
+no network service (the only optional outbound call is a Telegram notification you opt
+into). All state is SQLite under `~/.local/share/claude/`.
 
-If you open Claude Code a few times a week for one-off questions, you do not need this. If
-you run several named sessions a day, want to resume one from three weeks ago, want sessions
-to leave each other notes, and want housekeeping to just happen, CCST is the layer that makes
+If you run Claude Code only a few times a week for one-off questions or just 1 or 2 coding
+sessions on different code bases at the same time then you do not need this. If you run
+several named sessions a day, want to resume one from three weeks ago, want sessions to
+leave each other notes, and want housekeeping to just happen, CCST is the layer that makes
 that sustainable.
 
 ## Contents
@@ -50,25 +55,25 @@ that sustainable.
 
 ## What you get
 
-| You want to...                                     | CCST gives you                                                                                      |
-| -------------------------------------------------- | --------------------------------------------------------------------------------------------------- |
-| Find and resume past work                          | `ccd` starts a session under a name you choose, `ccr` resumes it by name fragment, `ccs` searches names, files and transcripts |
-| Keep drafts and deliverables together              | A `working/` and `out/` directory per session, created for you                                      |
-| Hand work between sessions                         | `ccmsg`: durable messages addressed to a session, a project, or "whoever picks this up"            |
-| Run things on a schedule without a daemon          | `ccsched`: recurring jobs, caught up the next time you open Claude Code                            |
-| Stop destructive commands                          | A hard-deny hook plus a tiered (allowlist, heuristics, LLM) review of every shell command          |
-| Gate high-stakes actions                           | An 8-digit confirmation code you must type back before gated tools run                             |
-| Track structured records per project               | `pdata`: one SQLite database per project, with typed fields, versioning and multi-machine sync     |
-| See what Claude Code costs you                     | `claude-code-usage`: tokens and dollars by project, session, model, tool, MCP server, plugin       |
-| Avoid context bloat                                | A warning hook when the context window gets large, plus `/compact-smart` and `/context-override`  |
-| Get Claude to follow these conventions unprompted  | Managed, human-editable sections installed into your global `CLAUDE.md`                            |
-| Start from sensible workflows                      | 26 bundled skills (session hygiene, `pdata` workflows, document extraction, agent patterns)        |
-| Know it all still works                            | `ccst doctor`, a single health check across every subsystem, also run weekly by a bundled job     |
+| You want to...                                    | CCST gives you                                                                                                                 |
+| ------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
+| Find and resume past work                         | `ccd` starts a session under a name you choose, `ccr` resumes it by name fragment, `ccs` searches names, files and transcripts |
+| Keep drafts and deliverables together             | A `working/` and `out/` directory per session, created for you                                                                 |
+| Hand work between sessions                        | `ccmsg`: durable messages addressed to a session, a project, or "whoever picks this up"                                        |
+| Run things on a schedule without a daemon         | `ccsched`: recurring jobs, caught up the next time you open Claude Code                                                        |
+| Stop destructive commands                         | A hard-deny hook plus a cached, tiered (allowlist, heuristics, LLM) review of every shell command                              |
+| Gate high-stakes actions                          | An 8-digit confirmation code you must type back before gated tools run                                                         |
+| Track structured records per project              | `pdata`: one SQLite database per project, with typed fields, versioning and multi-machine sync                                 |
+| See what Claude Code costs you                    | `claude-code-usage`: tokens and dollars by project, session, model, tool, MCP server, plugin                                   |
+| Avoid context bloat                               | A warning hook when the context window gets large, plus `/compact-smart` and `/context-override`                               |
+| Get Claude to follow these conventions unprompted | Managed, human-editable sections installed into your global `CLAUDE.md`                                                        |
+| Start from sensible workflows                     | 26 bundled skills (session hygiene, `pdata` workflows, document extraction, agent patterns)                                    |
+| Know it all still works                           | `ccst doctor`, a single health check across every subsystem, also run weekly by a bundled job                                  |
 
 ## Install
 
-Requires Python 3.11 or newer, [Claude Code](https://docs.claude.com/en/docs/claude-code) and
-a POSIX shell (macOS or Linux; Windows via WSL).
+Requires Python 3.11 or newer, [Claude Code](https://docs.claude.com/en/docs/claude-code)
+and a POSIX shell (macOS or Linux; Windows via WSL).
 
 ### 1. Install the package
 
@@ -89,14 +94,14 @@ outside a configured root. Set one or both of these in your shell profile (for e
 projects:
 
 ```sh
-export CLAUDE_SESSION_TOOLS_REPO_ROOT="$HOME/repos"   # loose: any tag name without spaces
-export CLAUDE_SESSION_TOOLS_PROJ_ROOT="$HOME/cc"      # strict: tags must be <project>-<label>
+export CLAUDE_SESSION_TOOLS_REPO_ROOT="$HOME/repos"   # loose: any session name tags must not have spaces in them
+export CLAUDE_SESSION_TOOLS_PROJ_ROOT="$HOME/cc"      # strict: session name tags must be <project folder name>-<label>
 ```
 
 - Use `REPO_ROOT` for code repositories. Any tag works (`ccd fix-login-bug`).
 - Use `PROJ_ROOT` for non-code "project" folders, where you want tags namespaced as
-  `<project>-<label>` (project names are lowercase letters and digits only). `pdata`
-  (below) lives under this root.
+  `<project>-<label>` (project names are lowercase letters and digits only). `pdata` (below)
+  lives under this root.
 
 ### 3. Wire CCST into Claude Code
 
@@ -109,7 +114,8 @@ ccst doctor                        # health check; prints only problems (add --a
 `install-everything` installs, into `~/.claude`:
 
 1. the bundled **skills** (symlinked into `~/.claude/skills/`)
-2. the **hooks** (merged into `~/.claude/settings.json`; existing entries you wrote are left alone)
+2. the **hooks** (merged into `~/.claude/settings.json`; existing entries you wrote are left
+   alone)
 3. the **`ccl` shell function**, written as `~/.shellrc.d/ccl.sh`
 4. the managed **`CLAUDE.md` sections**, delimited blocks in `~/.claude/CLAUDE.md`
 5. the standard **scheduled jobs**
@@ -118,8 +124,8 @@ then runs `ccst doctor`. It is idempotent, so it is safe to re-run.
 
 ### 4. Load the shell functions
 
-`ccst` does not edit your `~/.zshrc` or `~/.bashrc`. Make sure your shell sources the fragment
-directory (add this once if it does not already):
+`ccst` does not edit your `~/.zshrc` or `~/.bashrc`. Make sure your shell sources the
+fragment directory (add this once if it does not already):
 
 ```sh
 for f in ~/.shellrc.d/*.sh; do [ -r "$f" ] && . "$f"; done
@@ -132,7 +138,8 @@ Open a new terminal, `cd` into a project under one of your roots, and you are re
 These are not needed to get started; see [Configuration](#configuration) for details.
 
 - `CCST_CONFIRM_8DIGIT_GATED_TOOLS` - which tools require the 8-digit confirmation code.
-- `TELEGRAM_BOT_TOKEN` / `TELEGRAM_CHAT_ID` - push scheduled-job outcomes to Telegram.
+- `TELEGRAM_BOT_TOKEN` / `TELEGRAM_CHAT_ID` - push scheduled-job outcomes or other messages
+  via Telegram.
 - `CCST_SCREENSHOT_DIR` - where the `>lss` prompt token looks for your latest screenshot.
 - `~/.config/ccst/api-keys` - Anthropic API keys for `ccdapi`/`ccrapi`.
 
@@ -149,19 +156,20 @@ ccs "rate limit" --contents --global   # search inside working/ and out/ of all 
 ccst doctor              # is everything healthy?
 ```
 
-Then, from inside any session, just ask Claude in plain language: *"leave a note for the
-next session in this project saying the config file was renamed"*, or *"run `ccst doctor
---drift` every Monday morning"*. The installed skills and `CLAUDE.md` sections teach Claude
-how to use `ccmsg` and `ccsched` for you.
+Then, from inside any session, just ask Claude in plain language: _"leave a note for the
+next session in this project saying the config file was renamed"_, or _"run
+`ccst doctor --drift` every Monday morning"_, or _"send a message to
+~/repos/my-other-project about ..."_. The installed skills and `CLAUDE.md` sections teach
+Claude how to use `ccmsg` and `ccsched` for you.
 
 ## Sessions: `ccd`, `ccr`, `ccs`
 
-Three commands cover almost everything you do day to day. Run them from inside a project
-directory under one of your configured roots.
+Three commands cover starting, resuming and finding your sessions. Run them from
+inside a project directory under one of your configured roots.
 
-**`ccd <tag>`** starts a new session and scaffolds `cc-sessions/<yyyyMMdd>-<tag>/` with empty
-`working/` and `out/` subdirectories. Tags use letters, digits and dashes. `--dry-run` shows
-what it would do; extra arguments are passed through to `claude`.
+**`ccd <tag>`** starts a new session and scaffolds `cc-sessions/<yyyyMMdd>-<tag>/` with
+empty `working/` and `out/` subdirectories. Tags use letters, digits and dashes. `--dry-run`
+shows what it would do; extra arguments are passed through to `claude`.
 
 ```sh
 ccd fix-login-bug
@@ -203,10 +211,10 @@ cc-sessions/20261015-fix-login-bug/
 ```
 
 Drafts and iterations accumulate in `working/`; only the finished deliverable goes in
-`out/`. Nothing on disk enforces this, but the managed `workflow` `CLAUDE.md` section teaches
-Claude to do it, and `ccs --contents` and `pdata reconcile-session-output` rely on it. The
-same section asks Claude to keep a `working/WORKLOG.md` (timestamped entries), and the
-`worklog-guard` hook blocks a manual `/compact` while that log is stale, so a compaction
+`out/`. Nothing on disk enforces this, but the managed `workflow` `CLAUDE.md` section
+teaches Claude to do it, and `ccs --contents` and `pdata reconcile-session-output` rely on
+it. The same section asks Claude to keep a `working/WORKLOG.md` (timestamped entries), and
+the `worklog-guard` hook blocks a manual `/compact` while that log is stale, so a compaction
 cannot silently lose your session history.
 
 ### Where subagents write
@@ -238,17 +246,17 @@ ccdapi -k work fix-login-bug
 ccrapi login-bug              # prompts for which key label to use
 ```
 
-Keys live in `~/.config/ccst/api-keys` (override with `CCST_API_KEYS_FILE`), one
-`label=key` per line, `#` comments allowed. The file must be `chmod 600` and is parsed, not
-sourced. Keep it out of `~/.claude` and your shell rc files. Start from the value-free
-template `api-keys.example`, bundled under `cc_session_tools/config/`.
+Keys live in `~/.config/ccst/api-keys` (override with `CCST_API_KEYS_FILE`), one `label=key`
+per line, `#` comments allowed. The file must be `chmod 600` and is parsed, not sourced.
+Keep it out of `~/.claude` and your shell rc files. Start from the value-free template
+`api-keys.example`, bundled under `cc_session_tools/config/`.
 
 ### Session housekeeping
 
 - `ccst sessions list` shows what `sessions.db` knows.
 - `ccst repair sessions` fixes rows that `ccl`/`ccs --global` cannot see.
-- `ccst gc report` finds orphaned data left behind by deleted sessions; `ccst gc prune
-  --execute` removes it. A bundled job runs the report weekly.
+- `ccst gc report` finds orphaned data left behind by deleted sessions;
+  `ccst gc prune --execute` removes it. A bundled job runs the report weekly.
 - Skills (below) cover deleting empty sessions, moving or renaming a session, and archiving
   hook-review sessions.
 
@@ -279,8 +287,11 @@ Three ways to address a message:
 - `--to-description "whoever is working on the billing migration"` - a free-text proposal
   that the first interested session claims.
 
-You rarely type any of this. Tell your session *"send a message to the myproject session
-about X"* and the installed `send-session-message` skill does the rest.
+You rarely type any of this. Tell your session _"send a message to the myproject session
+about X"_ and the installed `send-session-message` skill does the rest.
+
+If you send a message to a session that is open the hooks will flag its appearance to it
+(and you) at the beginning of its next response to you.
 
 ## Scheduled jobs: `ccsched`
 
@@ -310,7 +321,7 @@ ccsched sweep          # reconcile, run anything due, surface results (also auto
   fortnightly reminder to curate the command-review cache, and a weekly sweep of hook-review
   sessions.
 
-You can also just ask Claude: *"run this every weekday at 09:00 and tell me if it fails"* -
+You can also just ask Claude: _"run this every weekday at 09:00 and tell me if it fails"_ -
 the `manage-recurring-cc-jobs-using-ccsched` skill translates that into a `ccsched add`.
 
 ## Safety hooks
@@ -319,10 +330,10 @@ CCST installs hooks that sit in front of what Claude does. They are on by defaul
 `install-everything`.
 
 - **`bash-hard-deny`** - every shell command passes a deny list first, with no bypass:
-  deletes (`rm` and friends, including inside inline scripts), delete-by-move into temp
-  or trash locations, force-deleting git branches, deleting remote branches, mutating `gh`
-  and `curl` calls, `sudo`, and similar. Everything else is auto-approved so routine
-  compound commands do not stall on prompts.
+  deletes (`rm` and friends, including inside inline scripts), delete-by-move into temp or
+  trash locations, force-deleting git branches, deleting remote branches, mutating `gh` and
+  `curl` calls, `sudo`, and similar. Everything else is auto-approved so routine compound
+  commands do not stall on prompts.
 - **`bash-security-review`** - a tiered review of shell commands: a fast allowlist and
   command cache, read-only pre-filters and heuristics, and an LLM-backed review only for
   anything unusual. Results are cached so the common case stays fast. Use
@@ -330,8 +341,9 @@ CCST installs hooks that sit in front of what Claude does. They are on by defaul
   skill to curate the cache.
 - **`confirm-8digit`** - for tools you choose to gate, Claude must show you a fresh random
   8-digit code and you type it back in your own message before the call runs. Gate tools
-  with `CCST_CONFIRM_8DIGIT_GATED_TOOLS="tool_a,tool_b"` (none are gated by default). A
-  code that came from another agent or a file never counts.
+  with `CCST_CONFIRM_8DIGIT_GATED_TOOLS="tool_a,tool_b"` (none are gated by default). A code
+  that came from another agent or a file never counts. The author uses this to stop Claude
+  Code from merging PR's without consent.
 - **`context-window-warning`** - a non-blocking nudge toward `/compact` at 150k and 200k
   tokens. Silence it for a session with `/context-override`.
 - **`worklog-guard`** - blocks a manual `/compact` when the session's `WORKLOG.md` is stale.
@@ -361,7 +373,8 @@ These keep the rest of CCST working without any action from you:
 
 Projects accumulate CSVs, JSON files and markdown logs that drift out of sync and cannot be
 queried. `pdata` gives each project one SQLite database instead, while deliberately leaving
-prose and free-form notes as ordinary files. It lives under your `CLAUDE_SESSION_TOOLS_PROJ_ROOT`.
+prose and free-form notes as ordinary files. It lives under your
+`CLAUDE_SESSION_TOOLS_PROJ_ROOT`.
 
 ```sh
 ccst pdata readiness-scan --project myproject   # read-only: what would block a migration?
@@ -379,15 +392,16 @@ ccst pdata schema list --project myproject
   `delete` exits non-zero rather than clobbering), and `ccst pdata verify` as an integrity
   backstop (also run daily by a bundled job).
 - **Multi-machine sync** - each project's database is published as a deterministic SQL dump
-  inside the project folder, so any folder-sync service carries it between your machines.
-  A vector clock per project means a genuine fork (two machines both edited) is flagged for
-  your choice with `ccst pdata resolve`, never silently merged. Each machine has a
-  confirmed identity (`ccst machine-identity show|confirm`).
+  inside the project folder, so any folder-sync service carries it between your machines. A
+  vector clock per project means a genuine fork (two machines both edited) is flagged for
+  your choice with `ccst pdata resolve`, never silently merged. Each machine has a confirmed
+  identity (`ccst machine-identity show|confirm`).
 - **New projects start well** - the first `pdata init` for a new project seeds starter
   folders and a `CLAUDE.md` with date-format and line-ending conventions. An existing
   `CLAUDE.md` is never touched.
 - **Date hygiene** - writing a non-ISO date into a date-like field prints a warning, and
-  `readiness-scan` flags dotted, compact, slash and long-form date columns before you migrate.
+  `readiness-scan` flags dotted, compact, slash and long-form date columns before you
+  migrate.
 - **Session-output index** - `ccst pdata reconcile-session-output` indexes every session's
   `out/` deliverables across projects (a bundled job runs it weekly).
 
@@ -407,7 +421,7 @@ claude-code-usage reconcile               # cross-check totals against the indep
 Groups by project, session, model, MCP server, plugin, tool or time period, in tokens and
 dollars (using Anthropic's published prices). It separates subagent cost, already counted in
 the parent session, from hook-review cost, billed separately, so totals are never
-double-counted. Ask Claude *"analyse my Claude Code usage this month"* and the
+double-counted. Ask Claude _"analyse my Claude Code usage this month"_ and the
 `analyse-cc-usage` skill runs these for you. `cccs-stats` reports the efficiency of the
 command-review cache.
 
@@ -424,10 +438,12 @@ Each lives in `src/cc_session_tools/skills/<name>/SKILL.md`.
 - **Context and cost**: `compact-smart` (drafts the `/compact` instruction that preserves
   what matters), `context-override`, `reduce-persistent-context` (measures and trims the
   fixed per-session context footprint), `analyse-cc-usage`
-- **Per-project data (`pdata`)**: `pm-pdata-do-init`, `pm-pdata-do-audit-and-prepare-to-migrate`,
-  `pm-pdata-design-schema`, `pm-pdata-resolve-conflicts`, `pm-pdata-do-update-consuming-skills`,
-  `pm-pdata-do-update-project-docs`, `pm-project-layout-reference`, `pm-update-central-files`
-  (end-of-session wrap-up), and the deprecated fallback `pm-pdata-do-manual-migration`
+- **Per-project data (`pdata`)**: `pm-pdata-do-init`,
+  `pm-pdata-do-audit-and-prepare-to-migrate`, `pm-pdata-design-schema`,
+  `pm-pdata-resolve-conflicts`, `pm-pdata-do-update-consuming-skills`,
+  `pm-pdata-do-update-project-docs`, `pm-project-layout-reference`,
+  `pm-update-central-files` (end-of-session wrap-up), and the deprecated fallback
+  `pm-pdata-do-manual-migration`
 - **Multi-agent patterns**: `select-agent-model` (which model tier for a subagent),
   `do-executor-critic-assessor-loop` (an iterate-and-critique quality loop)
 - **Document extraction**: `extract-to-text` (docx, doc, rtf, odt, pptx, eml, msg, pdf
@@ -439,9 +455,9 @@ subset.
 
 ## Teaching Claude the conventions: `claude-md`
 
-The conventions above are not magic; they are taught. `ccst claude-md install` inserts small,
-sentinel-delimited sections into your global `~/.claude/CLAUDE.md`, each independently
-installable:
+The conventions above are not magic; they are taught. `ccst claude-md install` inserts
+small, sentinel-delimited sections into your global `~/.claude/CLAUDE.md`, each
+independently installable:
 
 ```sh
 ccst claude-md install --apply                      # every section
@@ -450,39 +466,40 @@ ccst claude-md uninstall --section agents --apply   # remove one
 ccst claude-md backups list                         # saved copies of hand-edited sections
 ```
 
-| Section        | Teaches Claude                                                                  |
-| -------------- | ------------------------------------------------------------------------------- |
-| `messaging`    | to use `ccmsg` proactively to leave notes for other sessions                    |
-| `workflow`     | the `working/` to `out/` convention and a mandatory `WORKLOG.md`                |
-| `agents`       | the per-subagent `agents/<tag>--<slug>/` folder convention                      |
-| `confirm-gate` | how the 8-digit confirmation gate works                                         |
-| `date-format`  | `yyyy.MM.dd` in filenames, `yyyy-MM-dd` everywhere else                         |
+| Section        | Teaches Claude                                                   |
+| -------------- | ---------------------------------------------------------------- |
+| `messaging`    | to use `ccmsg` proactively to leave notes for other sessions     |
+| `workflow`     | the `working/` to `out/` convention and a mandatory `WORKLOG.md` |
+| `agents`       | the per-subagent `agents/<tag>--<slug>/` folder convention       |
+| `confirm-gate` | how the 8-digit confirmation gate works                          |
+| `date-format`  | `yyyy.MM.dd` in filenames, `yyyy-MM-dd` everywhere else          |
 
 Each is a plain block you can read, edit or override. If you hand-edit a managed block, the
-next install saves your version first (`ccst claude-md backups show <id>`), and `ccst
-doctor` warns you before that happens.
+next install saves your version first (`ccst claude-md backups show <id>`), and
+`ccst doctor` warns you before that happens.
 
 ## Command reference
 
-`ccst <noun> <verb>` is the administrative umbrella. Run `ccst <noun> --help` for every flag.
+`ccst <noun> <verb>` is the administrative umbrella. Run `ccst <noun> --help` for every
+flag.
 
-| Noun                 | What it is for                                                                    |
-| -------------------- | --------------------------------------------------------------------------------- |
-| `install-everything` | run every install step, then a health check (dry run unless `--apply`)           |
-| `doctor`             | health check; `--all`, `--drift`, `--mute NAME`, `--list-mutes`                  |
-| `hooks`              | install/uninstall hooks, manage the review allowlist, `run <name>` a hook        |
-| `skills`             | install/uninstall the bundled skills                                              |
-| `claude-md`          | install/uninstall the managed `CLAUDE.md` sections, list/show backups            |
-| `shell`              | install/uninstall the `ccl` shell function                                        |
-| `ccsched-jobs`       | install the bundled scheduled jobs                                                |
-| `pdata`              | the per-project data store (see above)                                            |
-| `machine-identity`   | show/confirm this machine's identity for `pdata` sync                             |
-| `sessions`           | inspect `sessions.db`; one-shot schema migrations                                 |
-| `repair`             | repair known `sessions.db` corruption                                             |
-| `gc`                 | `report` and `prune` orphaned per-session data                                    |
-| `telemetry`          | `query` and `trim` the hook-invocation log                                        |
-| `migrate`            | one-shot migrations from legacy flat-file stores to SQLite                        |
-| `context-override`   | toggle the context-window warning for the current session                         |
+| Noun                 | What it is for                                                            |
+| -------------------- | ------------------------------------------------------------------------- |
+| `install-everything` | run every install step, then a health check (dry run unless `--apply`)    |
+| `doctor`             | health check; `--all`, `--drift`, `--mute NAME`, `--list-mutes`           |
+| `hooks`              | install/uninstall hooks, manage the review allowlist, `run <name>` a hook |
+| `skills`             | install/uninstall the bundled skills                                      |
+| `claude-md`          | install/uninstall the managed `CLAUDE.md` sections, list/show backups     |
+| `shell`              | install/uninstall the `ccl` shell function                                |
+| `ccsched-jobs`       | install the bundled scheduled jobs                                        |
+| `pdata`              | the per-project data store (see above)                                    |
+| `machine-identity`   | show/confirm this machine's identity for `pdata` sync                     |
+| `sessions`           | inspect `sessions.db`; one-shot schema migrations                         |
+| `repair`             | repair known `sessions.db` corruption                                     |
+| `gc`                 | `report` and `prune` orphaned per-session data                            |
+| `telemetry`          | `query` and `trim` the hook-invocation log                                |
+| `migrate`            | one-shot migrations from legacy flat-file stores to SQLite                |
+| `context-override`   | toggle the context-window warning for the current session                 |
 
 Other commands: `ccd`, `ccr`, `ccs`/`ccl`, `ccdapi`, `ccrapi`, `ccmsg`, `ccsched`,
 `claude-code-usage`, `cccs-stats`. Every command has `--help` and `--version`.
@@ -491,24 +508,24 @@ Other commands: `ccd`, `ccr`, `ccs`/`ccl`, `ccdapi`, `ccrapi`, `ccmsg`, `ccsched
 
 Nothing here is required beyond the two root variables in [Install](#install).
 
-| Setting                                 | Purpose                                                                           |
-| --------------------------------------- | --------------------------------------------------------------------------------- |
-| `CLAUDE_SESSION_TOOLS_REPO_ROOT`        | loose session root (code repositories)                                            |
-| `CLAUDE_SESSION_TOOLS_PROJ_ROOT`        | strict `<project>-<label>` session root; also where `pdata` projects live         |
-| `CCST_CONFIRM_8DIGIT_GATED_TOOLS`       | comma-separated tool names that require the 8-digit code (none by default)        |
-| `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`| Telegram push for scheduled-job outcomes (also read from `~/.creds`)              |
-| `CCST_SCREENSHOT_DIR`                   | directory (or `:`-separated list) searched by the `>lss` token                    |
-| `CCST_API_KEYS_FILE`                    | alternative path for the `ccdapi`/`ccrapi` key file                               |
-| `CCST_MACHINE_NAME`                     | explicit machine identity for `pdata` multi-machine sync                          |
-| `CCS_DEFAULT_GLOBAL=1`                  | make `ccs`/`ccl` search globally by default                                       |
-| `CCST_NO_AUTO_SYNC=1`                   | disable the automatic post-upgrade install sync (CI, bisecting, development)      |
+| Setting                                  | Purpose                                                                      |
+| ---------------------------------------- | ---------------------------------------------------------------------------- |
+| `CLAUDE_SESSION_TOOLS_REPO_ROOT`         | loose session root (code repositories)                                       |
+| `CLAUDE_SESSION_TOOLS_PROJ_ROOT`         | strict `<project>-<label>` session root; also where `pdata` projects live    |
+| `CCST_CONFIRM_8DIGIT_GATED_TOOLS`        | comma-separated tool names that require the 8-digit code (none by default)   |
+| `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID` | Telegram push for scheduled-job outcomes (also read from `~/.creds`)         |
+| `CCST_SCREENSHOT_DIR`                    | directory (or `:`-separated list) searched by the `>lss` token               |
+| `CCST_API_KEYS_FILE`                     | alternative path for the `ccdapi`/`ccrapi` key file                          |
+| `CCST_MACHINE_NAME`                      | explicit machine identity for `pdata` multi-machine sync                     |
+| `CCS_DEFAULT_GLOBAL=1`                   | make `ccs`/`ccl` search globally by default                                  |
+| `CCST_NO_AUTO_SYNC=1`                    | disable the automatic post-upgrade install sync (CI, bisecting, development) |
 
 ## Health checks, upgrades and uninstalling
 
 - **`ccst doctor`** checks PATH, environment, `settings.json`, hooks, skills, data stores,
   version drift against PyPI, and whether the install is in sync. By default it prints only
-  problems. Mute a known, accepted warning with `ccst doctor --mute <check>`. A bundled
-  job runs `ccst doctor --drift` weekly so problems reach you without you asking.
+  problems. Mute a known, accepted warning with `ccst doctor --mute <check>`. A bundled job
+  runs `ccst doctor --drift` weekly so problems reach you without you asking.
 - **Upgrading**: `uv tool upgrade cc-session-tools` (or `pip install -U cc-session-tools`).
   The next `ccst` command notices the new version and re-runs the install itself. Run
   `ccst install-everything` (dry run) any time to preview what it would change.
@@ -517,8 +534,9 @@ Nothing here is required beyond the two root variables in [Install](#install).
   [CHANGELOG.md](CHANGELOG.md) before a major upgrade.
 - **Uninstalling**: `ccst hooks uninstall --apply`, `ccst skills uninstall --apply`,
   `ccst claude-md uninstall --apply` and `ccst shell uninstall --apply` remove what CCST
-  added (everything is dry run until you pass `--apply`), then `uv tool uninstall
-  cc-session-tools`. Your session directories and data stores are left in place.
+  added (everything is dry run until you pass `--apply`), then
+  `uv tool uninstall cc-session-tools`. Your session directories and data stores are left in
+  place.
 
 ## How it fits together
 
@@ -532,8 +550,8 @@ command that checks all of it at once. Run it any time something feels off.
 ## Contributing
 
 Development uses git worktrees and `uv`; see `.claude/CLAUDE.md` in this repo for the
-workflow, versioning policy and release process. Changes follow an OpenSpec proposal
-process under `openspec/`. Release history is in [CHANGELOG.md](CHANGELOG.md).
+workflow, versioning policy and release process. Changes follow an OpenSpec proposal process
+under `openspec/`. Release history is in [CHANGELOG.md](CHANGELOG.md).
 
 ## License
 
