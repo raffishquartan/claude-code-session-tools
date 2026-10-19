@@ -26,7 +26,19 @@ safeguard.
 ## What to draft
 
 Review the conversation so far (you already have it loaded - no need to re-read the
-transcript file from disk) and produce a paragraph covering, in this order:
+transcript file from disk) and produce **one paragraph**.
+
+**Format - this is a hard requirement, not a style preference.** `/compact` takes a single
+string, and the user pastes the result straight into the prompt, so the paragraph must be:
+
+- one line of plain prose with **no line breaks of any kind** - no blank lines, no second
+  paragraph, no newline anywhere inside it;
+- free of bullets, numbered lists, headings, bold/italics and other markdown - join the points
+  with sentences and semicolons instead, and write "(1) ... (2) ..." inline only if a sequence
+  genuinely needs numbering.
+
+The paragraph covers the following, in this order, each as one or more sentences that run
+on into the next (the numbering below is for you, not for the output):
 
 1. **Decisions and their rationale** - especially any point where the initial plan or
    approach was found wrong and corrected mid-session. State the corrected approach and WHY
@@ -40,7 +52,8 @@ transcript file from disk) and produce a paragraph covering, in this order:
 4. **Outstanding tasks, split into two distinct groups**: what you (Claude) will do next,
    and - separately and explicitly labeled - anything that is the *user's own* action to
    take (e.g. "you still need to delete branch X yourself", "review the PR before merging").
-   Do not fold these two categories together.
+   Do not fold these two categories together; keep them apart with inline labels such as
+   "Claude's next steps: ..." and "User's own actions: ...", not with a list or a line break.
 5. **An explicit "what happens next" statement.** Never leave this implicit.
 
 Keep it dense and concrete - file paths and specific facts, not vague summary language.
@@ -61,7 +74,9 @@ Check whether the current session has one: `$CLD_SESSION_DIR/working/WORKLOG.md`
 
 ## Confirmation step
 
-Show the drafted paragraph to the user before finalizing anything. Do not skip this even if
+Show the drafted command to the user before finalizing anything, as the literal
+`/compact <paragraph>` on a single line inside a code block, so what they review is exactly
+what they will paste (see "Final output"). Do not skip this even if
 the draft feels obviously complete - the point is to catch a miss before compaction discards
 the detail, not after. Accept:
 
@@ -73,14 +88,17 @@ the detail, not after. Accept:
 
 This is a single review-and-edit round, not a multi-question interview - draft first, then
 let the user correct it in one pass. Asking a series of clarifying questions before drafting
-anything reintroduces exactly the friction this skill exists to remove.
+anything reintroduces exactly the friction this skill exists to remove. Any edit keeps the
+paragraph a single line.
 
 ## Final output
 
-Once confirmed, present the exact command on its own line, ready to copy or type verbatim:
+Once confirmed, present the exact command on its own line, ready to copy or type verbatim.
+The paragraph after `/compact ` stays a single line with no line breaks - if the code block
+contains more than one line, it is wrong:
 
 ```
-/compact <finalized paragraph>
+/compact <finalized paragraph, one line>
 ```
 
 Do not summarize what you're about to do instead of showing the literal command - the

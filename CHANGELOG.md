@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.16.2] - 2026-10-19
+
+### Fixed
+
+- **`compact-smart` now returns a single-line paragraph.** `/compact` takes one string, but the skill
+  often produced several paragraphs or a nested bullet list in long sessions. Its wording now requires
+  one line of plain prose with no line breaks or list markup, and the draft is shown for review as the
+  literal `/compact <paragraph>` command.
+
 ## [3.16.1] - 2026-10-15
 
 ### Changed
@@ -2467,7 +2476,8 @@ integration (push notifications when 8-digit confirmation gates fire).
 - `--version` flag on all three CLIs.
 - `.gitignore` entry for `.worktrees/`.
 
-[Unreleased]: https://github.com/raffishquartan/claude-code-session-tools/compare/v3.16.1...HEAD
+[Unreleased]: https://github.com/raffishquartan/claude-code-session-tools/compare/v3.16.2...HEAD
+[3.16.2]: https://github.com/raffishquartan/claude-code-session-tools/compare/v3.16.1...v3.16.2
 [3.16.1]: https://github.com/raffishquartan/claude-code-session-tools/compare/v3.16.0...v3.16.1
 [3.16.0]: https://github.com/raffishquartan/claude-code-session-tools/compare/v3.15.1...v3.16.0
 [3.15.1]: https://github.com/raffishquartan/claude-code-session-tools/compare/v3.15.0...v3.15.1
