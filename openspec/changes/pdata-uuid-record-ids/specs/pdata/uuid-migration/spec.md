@@ -99,13 +99,14 @@ those changes must be re-entered after adopting the format 4 dump, and leave the
 ### Requirement: `ccst doctor` and the pending-migration hook report unmigrated projects
 `ccst doctor` SHALL produce a `migration-to-4.0.0:pdata-uuid` result per project: OK when the
 project has no database or is format 4 with the marker recorded, FAIL when the database is format 3
-(naming `ccst pdata migrate-uuid --write` to be run from a plain terminal), FAIL when the format and
-the marker disagree. The `pending-migration` hook SHALL surface an unmigrated project in its
+(naming `ccst pdata migrate-uuid --write` to be run from a plain terminal, and the runbook's
+location: its absolute path when ccst runs from a source checkout, otherwise its repository URL),
+FAIL when the format and the marker disagree. The `pending-migration` hook SHALL surface an unmigrated project in its
 session-start context, subject to the existing doctor mute list.
 
 #### Scenario: An unmigrated project
 - **WHEN** `ccst doctor` runs and project p is format 3
-- **THEN** `migration-to-4.0.0:pdata-uuid` for p is FAIL and names the command
+- **THEN** `migration-to-4.0.0:pdata-uuid` for p is FAIL and names the command and the runbook location
 
 #### Scenario: A migrated project
 - **WHEN** project p is format 4 with the marker recorded
