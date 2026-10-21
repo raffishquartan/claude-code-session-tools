@@ -100,7 +100,7 @@ those changes must be re-entered after adopting the format 4 dump, and leave the
 `ccst doctor` SHALL produce a `migration-to-4.0.0:pdata-uuid` result per project: OK when the
 project has no database or is format 4 with the marker recorded, FAIL when the database is format 3
 (naming `ccst pdata migrate-uuid --write` to be run from a plain terminal, and the runbook's
-location: its absolute path when ccst runs from a source checkout, otherwise its repository URL),
+location: its path relative to the repository root, `docs/pdata-uuid-migration-runbook.md`),
 FAIL when the format and the marker disagree. The `pending-migration` hook SHALL surface an unmigrated project in its
 session-start context, subject to the existing doctor mute list.
 
