@@ -139,6 +139,17 @@ format 3 write happens in between.
 - **WHEN** machine B, whose scheduled pdata jobs were disabled, runs `migrate-uuid --write` three days after machine A
 - **THEN** the migration succeeds and B ends with the format 4 dump's data
 
+### Requirement: A committed terminal-only runbook accompanies the migration
+The repository SHALL contain `docs/pdata-uuid-migration-runbook.md`, a step-by-step checklist with
+exact shell commands, expected outputs and a troubleshooting section, written to be followed from a
+plain terminal on each machine after ccst is upgraded and before its databases are migrated, with
+no `claude` session. Every command in it SHALL be runnable on an unmigrated database (the
+exempt verbs and `ccsched`), and the install banner SHALL name its path.
+
+#### Scenario: Following the runbook with no claude session
+- **WHEN** a user on an upgraded but unmigrated machine follows the runbook from a plain terminal
+- **THEN** every command in it runs without error on the unmigrated databases, and the machine ends migrated with `ccst doctor` reporting OK for `migration-to-4.0.0:pdata-uuid`
+
 ### Requirement: Rollback is available from the backup and the untouched format 3 dump
 The migration SHALL NOT delete or modify format 3 dump files or archives. Documentation SHALL state
 how to roll back one machine (install 3.x, restore the named backup over the project database) and

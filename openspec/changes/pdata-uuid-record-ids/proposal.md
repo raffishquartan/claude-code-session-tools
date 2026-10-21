@@ -35,6 +35,7 @@ The failure is structural: it recurs whenever any machine writes before it has r
 - Rows ordered by id are ordered by `created_at` then `id`.
 - `ccst doctor` gains `migration-to-4.0.0:pdata-uuid` (one result per project) and the
   `pending-migration` hook reports unmigrated projects.
+- A committed, terminal-only runbook, `docs/pdata-uuid-migration-runbook.md`: exact commands and expected output for each computer, usable when ccst is upgraded but the databases are not and no `claude` session can run.
 - Skills and docs that describe integer ids and the id-collision case are rewritten; a migration
   runbook for the multi-machine sequence is added.
 - Version 4.0.0 (major), CHANGELOG entry.

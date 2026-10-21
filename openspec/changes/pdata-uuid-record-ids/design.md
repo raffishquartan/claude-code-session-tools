@@ -119,6 +119,14 @@ SessionStart hook injects the message into the next session; (4) `ccst doctor` s
 `migration-to-4.0.0:pdata-uuid` per project. There is no automatic migration, because it needs
 every machine converged first (D4).
 
+### D6b. The runbook is a deliverable, written for a terminal
+The migration happens in the window where ccst is upgraded but the databases are not, so no
+`claude` session can run on that machine. The runbook (`docs/pdata-uuid-migration-runbook.md`,
+committed with the change) is therefore a plain-terminal, copy-paste checklist the user repeats once
+per computer, with a first-machine section and a later-machine section, expected output per step and
+a troubleshooting table. Its commands are limited to the verbs the format gate exempts (D7) plus
+`ccsched`, and the install banner (D6a) names its path.
+
 ### D7. Unmigrated databases fail closed
 A format check on every record-touching verb (mirrors `refuse_if_sessions_db_pre_uuid`). Allowed on
 format 3: `migrate-uuid`, `sync-check` (status only), `verify`, `doctor`.
