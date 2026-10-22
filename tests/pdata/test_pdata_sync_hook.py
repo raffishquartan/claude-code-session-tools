@@ -86,7 +86,7 @@ def _build_local(project: str, *, content: str, vector: dict[str, int]) -> None:
 def _publish_dump(
     project: str, *, content: str, vector: dict[str, int], machine_id: str,
 ) -> None:
-    """Publish a dump into <project_root>/.pdata-db-dump/latest.sql from a throwaway "remote"
+    """Publish a dump into <project_root>/.pdata-db-dump/v4/latest.sql from a throwaway "remote"
     project db, simulating another machine - same approach as test_rehydrate.py."""
     conn = repository.connect(f"{project}-remote")
     try:
@@ -235,7 +235,7 @@ def test_session_start_fast_forward_falls_back_to_mtime_when_dumped_at_is_absent
 
     _build_local("proj", content="local-content", vector={MACHINE: 1})
     _publish_dump("proj", content="remote-content", vector={MACHINE: 1, "mbp": 5}, machine_id="mbp")
-    latest = store.project_root("proj") / ".pdata-db-dump" / "latest.sql"
+    latest = dump.latest_path(store.project_root("proj"))
     stripped = "\n".join(
         line for line in latest.read_text().splitlines() if not line.startswith("-- dumped_at=")
     ) + "\n"
@@ -314,7 +314,7 @@ def test_session_start_checksum_invalid_notifies_and_tells_the_session(
 ) -> None:
     _build_local("proj", content="local-content", vector={MACHINE: 1})
     _publish_dump("proj", content="remote-content", vector={MACHINE: 1, "mbp": 5}, machine_id="mbp")
-    latest = store.project_root("proj") / ".pdata-db-dump" / "latest.sql"
+    latest = dump.latest_path(store.project_root("proj"))
     latest.write_text(latest.read_text() + "\n-- corrupted after checksumming\n")
 
     message = pdata_sync.on_session_start(_cwd_for("proj"), session_pid=1234)
@@ -398,11 +398,11 @@ def test_session_end_refuses_to_publish_over_a_fork_and_notifies(
     session left to print a systemMessage to."""
     _build_local("proj", content="local-content", vector={MACHINE: 2, "mbp": 1})
     _publish_dump("proj", content="remote", vector={MACHINE: 1, "mbp": 2}, machine_id="mbp")
-    before = (store.project_root("proj") / ".pdata-db-dump" / "latest.sql").read_text()
+    before = dump.latest_path(store.project_root("proj")).read_text()
 
     pdata_sync.on_session_end(_cwd_for("proj"))
 
-    assert (store.project_root("proj") / ".pdata-db-dump" / "latest.sql").read_text() == before
+    assert dump.latest_path(store.project_root("proj")).read_text() == before
     assert len(notified) == 1
     project, outcome, detail = notified[0]
     assert (project, outcome) == ("proj", "fork")

@@ -176,7 +176,7 @@ def test_read_latest_detects_a_corrupted_dump(tmp_path):
     con = _build_db(tmp_path / "a.db", field_order=["owner"], row_order=[1])
     project_root = tmp_path / "proj"
     dump.write_latest(con, project_root=project_root, machine_id="ltxy", vector={"ltxy": 1})
-    (project_root / ".pdata-db-dump" / "latest.sql").write_text("TRUNCATED")
+    dump.latest_path(project_root).write_text("TRUNCATED")
     result = dump.read_latest(project_root)
     assert result.checksum_valid is False
     # ...and says a dump IS there, so a caller can tell corruption from "never dumped".
@@ -199,7 +199,7 @@ def test_read_latest_treats_a_missing_checksum_file_as_a_present_untrustworthy_d
     con = _build_db(tmp_path / "a.db", field_order=["owner"], row_order=[1])
     project_root = tmp_path / "proj"
     dump.write_latest(con, project_root=project_root, machine_id="ltxy", vector={"ltxy": 1})
-    (project_root / ".pdata-db-dump" / "latest.sha256").unlink()
+    (dump.dump_dir(project_root) / "latest.sha256").unlink()
     result = dump.read_latest(project_root)
     assert result.checksum_valid is False
     assert result.present is True
@@ -210,7 +210,7 @@ def test_archive_keeps_only_24_most_recent(tmp_path):
     project_root = tmp_path / "proj"
     for i in range(30):
         dump.write_latest(con, project_root=project_root, machine_id="ltxy", vector={"ltxy": i})
-    archived = list((project_root / ".pdata-db-dump" / "archive").glob("*.sql"))
+    archived = list((dump.dump_dir(project_root) / "archive").glob("*.sql"))
     assert len(archived) == 24
 
 
@@ -226,7 +226,7 @@ def test_archive_retention_keeps_the_newest_ones_not_a_mix(tmp_path):
     project_root = tmp_path / "proj"
     for i in range(30):
         dump.write_latest(con, project_root=project_root, machine_id="ltxy", vector={"ltxy": i})
-    archive_dir = project_root / ".pdata-db-dump" / "archive"
+    archive_dir = dump.dump_dir(project_root) / "archive"
     surviving_vectors = set()
     for archived_file in archive_dir.glob("*.sql"):
         for line in archived_file.read_text().splitlines():
@@ -333,3 +333,124 @@ def test_format_dumped_at_renders_the_shared_human_format() -> None:
 
     stamp = int(datetime(2026, 8, 29, 14, 5).timestamp())
     assert dump.format_dumped_at(stamp) == "2026-08-29 14:05"
+
+
+# ---------- dump format header and location (format 4 publishes to v4/) ----------
+
+
+def _format4_db(tmp_path: Path, monkeypatch, project: str = "fmt") -> sqlite3.Connection:
+    monkeypatch.setenv(store.PROJECT_DB_DIR_ENV, str(tmp_path / "dbs"))
+    conn = repository.connect(project)
+    with repository._immediate(conn):
+        repository.insert_base_record(
+            conn, record_group="g", content="x", file_path=None, created_at=1, updated_at=1,
+        )
+    return conn
+
+
+def test_write_latest_publishes_under_v4_with_a_format_header(tmp_path, monkeypatch):
+    conn = _format4_db(tmp_path, monkeypatch)
+    project_root = tmp_path / "proj"
+    dump.write_latest(conn, project_root=project_root, machine_id="ltxy", vector={"ltxy": 1})
+
+    v4 = project_root / ".pdata-db-dump" / "v4"
+    assert dump.dump_dir(project_root) == v4
+    assert dump.latest_path(project_root) == v4 / "latest.sql"
+    assert (v4 / "latest.sha256").exists()
+    assert not (project_root / ".pdata-db-dump" / "latest.sql").exists()
+    assert (v4 / "latest.sql").read_text().splitlines()[0] == "-- pdata_format=4"
+    info = dump.read_latest(project_root)
+    assert info.checksum_valid is True
+    assert info.pdata_format == 4
+
+
+def test_publishing_format4_leaves_the_format3_dump_byte_identical(tmp_path, monkeypatch):
+    from .legacy_fixture import make_format3_db, snapshot_dir, write_format3_dump
+
+    project_root = tmp_path / "proj"
+    legacy_db = make_format3_db(tmp_path / "legacy" / "fmt.db")
+    legacy_dir = write_format3_dump(
+        legacy_db, project_root, machine_id="machine-a", vector={"machine-a": 3},
+    )
+    (legacy_dir / "archive").mkdir()
+    (legacy_dir / "archive" / "00000000000000000001.sql").write_text("-- old archive\n")
+    before = {k: v for k, v in snapshot_dir(legacy_dir).items() if not k.startswith("v4")}
+
+    conn = _format4_db(tmp_path, monkeypatch)
+    for revision in range(1, 4):  # the second and third publishes archive into v4/archive
+        dump.write_latest(
+            conn, project_root=project_root, machine_id="ltxy", vector={"ltxy": revision},
+        )
+
+    after = {k: v for k, v in snapshot_dir(legacy_dir).items() if not k.startswith("v4")}
+    assert after == before
+    assert len(list((dump.dump_dir(project_root) / "archive").glob("*.sql"))) == 2
+
+
+def test_read_latest_treats_a_dump_without_a_format_header_as_format3(tmp_path):
+    from .legacy_fixture import make_format3_db, write_format3_dump
+
+    project_root = tmp_path / "proj"
+    legacy_db = make_format3_db(tmp_path / "legacy" / "fmt.db")
+    write_format3_dump(legacy_db, project_root, machine_id="machine-a", vector={"machine-a": 3})
+
+    info = dump.read_latest(project_root, pdata_format=3)
+    assert info.checksum_valid is True
+    assert info.pdata_format == 3
+    assert info.machine_id == "machine-a"
+    assert info.vector == {"machine-a": 3}
+    # The format 4 location is separate: nothing has been published there.
+    assert dump.read_latest(project_root).present is False
+
+
+def test_read_latest_refuses_an_unknown_format_header(tmp_path, monkeypatch):
+    import hashlib
+
+    import pytest
+
+    from cc_session_tools.lib.pdata import formats
+
+    conn = _format4_db(tmp_path, monkeypatch)
+    project_root = tmp_path / "proj"
+    dump.write_latest(conn, project_root=project_root, machine_id="ltxy", vector={"ltxy": 1})
+    latest = dump.latest_path(project_root)
+    text = latest.read_text().replace("-- pdata_format=4", "-- pdata_format=9", 1)
+    latest.write_text(text)
+    (latest.parent / "latest.sha256").write_text(hashlib.sha256(text.encode()).hexdigest())
+
+    with pytest.raises(formats.UnknownPdataFormatError, match="pdata_format=9"):
+        dump.read_latest(project_root)
+
+
+def test_the_migrated_from_format3_vector_round_trips(tmp_path, monkeypatch):
+    conn = _format4_db(tmp_path, monkeypatch)
+    project_root = tmp_path / "proj"
+    dump.write_latest(
+        conn, project_root=project_root, machine_id="ltxy", vector={"ltxy": 1},
+        migrated_from_format3_vector={"machine-a": 3, "machine-b": 7},
+    )
+    text = dump.latest_path(project_root).read_text()
+    assert "-- migrated_from_format3_vector:machine-a=3\n" in text
+    info = dump.read_latest(project_root)
+    assert info.migrated_from_format3_vector == {"machine-a": 3, "machine-b": 7}
+    assert info.vector == {"ltxy": 1}
+
+
+def test_a_dump_not_migrated_from_format3_has_no_recorded_vector(tmp_path, monkeypatch):
+    conn = _format4_db(tmp_path, monkeypatch)
+    project_root = tmp_path / "proj"
+    dump.write_latest(conn, project_root=project_root, machine_id="ltxy", vector={"ltxy": 1})
+    assert dump.read_latest(project_root).migrated_from_format3_vector is None
+
+
+def test_write_latest_refuses_a_format3_database_and_writes_nothing(tmp_path):
+    import pytest
+
+    from .legacy_fixture import make_format3_db
+
+    conn = sqlite3.connect(str(make_format3_db(tmp_path / "legacy" / "fmt.db")))
+    conn.row_factory = sqlite3.Row
+    project_root = tmp_path / "proj"
+    with pytest.raises(ValueError, match="format 3"):
+        dump.write_latest(conn, project_root=project_root, machine_id="ltxy", vector={})
+    assert not (project_root / ".pdata-db-dump").exists()

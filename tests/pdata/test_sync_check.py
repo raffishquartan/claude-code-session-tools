@@ -100,7 +100,7 @@ def test_dump_dominates_fast_forwards_and_skips_the_dump_check(notified):
         project_root, remote_project="proj-remote", content="from-remote",
         vector={"mbp": 3}, machine_id="mbp",
     )
-    before = (project_root / ".pdata-db-dump" / "latest.sql").read_text()
+    before = dump.latest_path(project_root).read_text()
 
     result = sync_check.check_project("proj")
 
@@ -109,7 +109,7 @@ def test_dump_dominates_fast_forwards_and_skips_the_dump_check(notified):
     assert notified == []
     # A fast-forward makes local's vector exactly equal to the published one, so a dump-check
     # here could only ever re-discover "nothing new" - it must not rewrite latest.sql.
-    assert (project_root / ".pdata-db-dump" / "latest.sql").read_text() == before
+    assert dump.latest_path(project_root).read_text() == before
 
 
 def test_fork_is_reported_as_a_conflict_and_never_dump_checked(notified):
@@ -119,7 +119,7 @@ def test_fork_is_reported_as_a_conflict_and_never_dump_checked(notified):
         project_root, remote_project="proj-remote", content="remote",
         vector={"mbp": 1}, machine_id="mbp",
     )
-    before = (project_root / ".pdata-db-dump" / "latest.sql").read_text()
+    before = dump.latest_path(project_root).read_text()
 
     result = sync_check.check_project("proj")
 
@@ -128,7 +128,7 @@ def test_fork_is_reported_as_a_conflict_and_never_dump_checked(notified):
     assert "ccst pdata resolve --project proj" in (result.detail or "")
     assert [c[0] for c in notified] == ["proj"]
     assert notified[0][1] == "fork"
-    assert (project_root / ".pdata-db-dump" / "latest.sql").read_text() == before
+    assert dump.latest_path(project_root).read_text() == before
 
 
 def test_a_corrupt_published_dump_is_reported_as_a_conflict(notified):
@@ -139,7 +139,7 @@ def test_a_corrupt_published_dump_is_reported_as_a_conflict(notified):
         vector={"mbp": 1}, machine_id="mbp",
     )
     # Corrupt the published dump so its recorded sha256 no longer matches.
-    latest = project_root / ".pdata-db-dump" / "latest.sql"
+    latest = dump.latest_path(project_root)
     latest.write_text(latest.read_text() + "\n-- tampered\n")
 
     result = sync_check.check_project("proj")
@@ -165,7 +165,7 @@ def test_an_occupied_project_with_a_corrupt_dump_is_skipped_not_reported(monkeyp
         project_root, remote_project="proj-remote", content="remote",
         vector={"mbp": 1}, machine_id="mbp",
     )
-    latest = project_root / ".pdata-db-dump" / "latest.sql"
+    latest = dump.latest_path(project_root)
     latest.write_text(latest.read_text() + "\n-- tampered\n")
     monkeypatch.setattr(
         sync_check.occupancy, "is_occupied", lambda root, *, exclude_pid=None: True
@@ -217,7 +217,7 @@ def test_an_occupied_project_is_skipped_entirely(monkeypatch, notified):
     monkeypatch.setattr(
         sync_check.occupancy, "is_occupied", lambda root, *, exclude_pid=None: True
     )
-    before = (project_root / ".pdata-db-dump" / "latest.sql").read_text()
+    before = dump.latest_path(project_root).read_text()
 
     result = sync_check.check_project("proj")
 
@@ -232,7 +232,7 @@ def test_an_occupied_project_is_skipped_entirely(monkeypatch, notified):
         assert [r["content"] for r in rows] == ["local"]
     finally:
         conn.close()
-    assert (project_root / ".pdata-db-dump" / "latest.sql").read_text() == before
+    assert dump.latest_path(project_root).read_text() == before
 
 
 def test_the_occupancy_gate_is_checked_against_the_project_root(monkeypatch):
@@ -289,10 +289,10 @@ def test_an_unchanged_project_is_not_republished(notified):
         )
     finally:
         conn.close()
-    latest = project_root / ".pdata-db-dump" / "latest.sql"
+    latest = dump.latest_path(project_root)
     before_text = latest.read_text()
     before_mtime = latest.stat().st_mtime_ns
-    archive_before = len(list((project_root / ".pdata-db-dump" / "archive").glob("*.sql")))
+    archive_before = len(list((dump.dump_dir(project_root) / "archive").glob("*.sql")))
 
     result = sync_check.check_project("proj")
 
@@ -300,7 +300,7 @@ def test_an_unchanged_project_is_not_republished(notified):
     assert notified == []
     assert latest.read_text() == before_text
     assert latest.stat().st_mtime_ns == before_mtime
-    assert len(list((project_root / ".pdata-db-dump" / "archive").glob("*.sql"))) == archive_before
+    assert len(list((dump.dump_dir(project_root) / "archive").glob("*.sql"))) == archive_before
 
 
 def test_a_project_with_no_published_dump_yet_publishes_its_first_dump(notified):
@@ -310,7 +310,7 @@ def test_a_project_with_no_published_dump_yet_publishes_its_first_dump(notified)
     only problem is that nobody has dumped it yet."""
     _build_local("proj", content="local", vector={MACHINE: 1})
     project_root = store.project_root("proj")
-    assert not (project_root / ".pdata-db-dump" / "latest.sql").exists()
+    assert not dump.latest_path(project_root).exists()
 
     result = sync_check.check_project("proj")
 
@@ -354,7 +354,7 @@ def test_a_dump_check_refusal_is_reported_as_a_conflict(monkeypatch, notified):
         sync_check.dump, "decide_publish",
         lambda *, local_vector, existing: vector_clock.Comparison.FORK,
     )
-    before = (project_root / ".pdata-db-dump" / "latest.sql").read_text()
+    before = dump.latest_path(project_root).read_text()
 
     result = sync_check.check_project("proj")
 
@@ -362,7 +362,7 @@ def test_a_dump_check_refusal_is_reported_as_a_conflict(monkeypatch, notified):
     assert result.conflict_outcome == "fork"
     assert "refusing to publish" in (result.detail or "")
     assert notified[0][1] == "fork"
-    assert (project_root / ".pdata-db-dump" / "latest.sql").read_text() == before
+    assert dump.latest_path(project_root).read_text() == before
 
 
 def test_check_project_rejects_a_bad_project_name():

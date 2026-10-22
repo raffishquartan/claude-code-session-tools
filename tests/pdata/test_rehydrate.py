@@ -33,7 +33,7 @@ def _publish_dump(
     project_root, *, remote_project: str, content: str, vector: dict[str, int], machine_id: str,
 ) -> None:
     """Build a throwaway "remote" project db (its own .db file, under the same PROJECT_DB_DIR)
-    and dump it to project_root/.pdata-db-dump/latest.sql — simulating a dump published by
+    and dump it to project_root/.pdata-db-dump/v4/latest.sql — simulating a dump published by
     another machine, without needing two real machines to exercise rehydrate() against."""
     conn = repository.connect(remote_project)
     try:
@@ -184,7 +184,7 @@ def test_checksum_invalid_is_refused_and_leaves_local_untouched(monkeypatch, tmp
         project_root, remote_project="proj-remote", content="remote-content",
         vector={"ltxy": 1, "mbp": 5}, machine_id="mbp",
     )
-    (project_root / ".pdata-db-dump" / "latest.sql").write_text("TRUNCATED")
+    dump.latest_path(project_root).write_text("TRUNCATED")
     db_path = store.db_path("proj")
     before = db_path.read_bytes()
 

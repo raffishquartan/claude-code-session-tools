@@ -11,16 +11,36 @@ import hashlib
 import shutil
 import sqlite3
 import time
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
+from typing import Final
 
-from cc_session_tools.lib.pdata import vector_clock
+from cc_session_tools.lib.pdata import formats, vector_clock
 
 _ARCHIVE_KEEP = 24
 
+# The project-relative directory every pdata dump lives under. Format 3 (ccst 3.x) dumps sit
+# directly in it; each later format publishes to its own subdirectory, so a ccst release that
+# does not understand a format never finds that format's dump where it looks (design D5).
+DUMP_ROOT_DIR_NAME: Final = ".pdata-db-dump"
+_FORMAT_SUBDIR: Final[Mapping[int, str | None]] = {
+    formats.PDATA_FORMAT_INTEGER_IDS: None,
+    formats.PDATA_FORMAT_UUID_IDS: "v4",
+}
+
+# Header line prefixes. A dump with no `-- pdata_format=` line is format 3: ccst 3.x wrote none.
+_FORMAT_PREFIX: Final = "-- pdata_format="
+_MACHINE_PREFIX: Final = "-- machine_id="
+_DUMPED_AT_PREFIX: Final = "-- dumped_at="
+_VECTOR_PREFIX: Final = "-- vector:"
+# The format 3 vector clock a migrated database had when `ccst pdata migrate-uuid` converted
+# it, so a machine migrating later can check its own format 3 state is the same lineage.
+_MIGRATED_FROM_PREFIX: Final = "-- migrated_from_format3_vector:"
+
 # serialize()'s output always starts with this exact line - the single source of truth for where
-# write_latest()'s header block (machine_id/dumped_at/vector comment lines) ends and the real SQL
+# write_latest()'s header block (the `-- ` comment lines) ends and the real SQL
 # body begins. Used by both read_latest() below and sql_body() (called from rehydrate.py) -
 # previously each independently re-derived the same boundary with its own copy of this string,
 # which is exactly the kind of drift this repo's coding standards call out: one source of truth
@@ -85,10 +105,38 @@ class DumpInfo:
     # this field it would push a "published dump fails its checksum check" notification every
     # hour, forever, for every not-yet-dumped project.
     present: bool = False
+    # The dump's format from its `-- pdata_format=` header line (format 3 when the line is
+    # absent). None when the dump is absent or fails its checksum, since nothing in an
+    # untrusted file is read.
+    pdata_format: int | None = None
+    # The `-- migrated_from_format3_vector:` lines, or None when the dump has none (it was not
+    # published by a migration).
+    migrated_from_format3_vector: dict[str, int] | None = None
 
 
-def _dump_dir(project_root: Path) -> Path:
-    return project_root / ".pdata-db-dump"
+def dump_dir(
+    project_root: Path, *, pdata_format: int = formats.CURRENT_PDATA_FORMAT,
+) -> Path:
+    """Where dumps of `pdata_format` live for the project at `project_root`."""
+    subdir = _FORMAT_SUBDIR[pdata_format]
+    root = project_root / DUMP_ROOT_DIR_NAME
+    return root if subdir is None else root / subdir
+
+
+def latest_path(
+    project_root: Path, *, pdata_format: int = formats.CURRENT_PDATA_FORMAT,
+) -> Path:
+    """The published `latest.sql` of `pdata_format` for the project at `project_root`."""
+    return dump_dir(project_root, pdata_format=pdata_format) / "latest.sql"
+
+
+def mismatched_dump_format(existing: DumpInfo, *, local_format: int) -> int | None:
+    """The published dump's format when it is a trustworthy dump of a format other than
+    `local_format`, else None. A mismatched dump is never loaded or published over: the
+    project is waiting for `ccst pdata migrate-uuid`."""
+    if existing.checksum_valid and existing.pdata_format != local_format:
+        return existing.pdata_format
+    return None
 
 
 def _unique_archive_path(archive_dir: Path) -> Path:
@@ -129,18 +177,38 @@ def _unique_archive_path(archive_dir: Path) -> Path:
 
 def write_latest(
     conn: sqlite3.Connection, *, project_root: Path, machine_id: str, vector: dict[str, int],
+    migrated_from_format3_vector: Mapping[str, int] | None = None,
 ) -> None:
+    """Publish `conn`'s database as the project's current-format `latest.sql`, archiving the
+    previous one. Only a current-format database is ever published: format 3 dumps belong to
+    ccst 3.x and this code never writes them. `migrated_from_format3_vector`, when given, is
+    recorded in the header (see `_MIGRATED_FROM_PREFIX`)."""
+    local_format = formats.pdata_format(conn)
+    if local_format != formats.CURRENT_PDATA_FORMAT:
+        raise ValueError(
+            f"refusing to publish a format {local_format} database: this ccst only publishes "
+            f"format {formats.CURRENT_PDATA_FORMAT} dumps"
+        )
     text = serialize(conn)
-    header = f"-- machine_id={machine_id}\n-- dumped_at={int(time.time())}\n"
-    header += "\n".join(f"-- vector:{k}={v}" for k, v in sorted(vector.items())) + "\n"
-    full_text = header + text
+    header_lines = [
+        f"{_FORMAT_PREFIX}{local_format}",
+        f"{_MACHINE_PREFIX}{machine_id}",
+        f"{_DUMPED_AT_PREFIX}{int(time.time())}",
+        *(f"{_VECTOR_PREFIX}{k}={v}" for k, v in sorted(vector.items())),
+    ]
+    if migrated_from_format3_vector is not None:
+        header_lines.extend(
+            f"{_MIGRATED_FROM_PREFIX}{k}={v}"
+            for k, v in sorted(migrated_from_format3_vector.items())
+        )
+    full_text = "\n".join(header_lines) + "\n" + text
     checksum = hashlib.sha256(full_text.encode()).hexdigest()
 
-    dump_dir = _dump_dir(project_root)
-    archive_dir = dump_dir / "archive"
+    directory = dump_dir(project_root, pdata_format=local_format)
+    archive_dir = directory / "archive"
     archive_dir.mkdir(parents=True, exist_ok=True)
 
-    latest = dump_dir / "latest.sql"
+    latest = directory / "latest.sql"
     if latest.exists():
         shutil.copy2(latest, _unique_archive_path(archive_dir))
         _prune_archive(archive_dir)
@@ -150,7 +218,7 @@ def write_latest(
     # (or a stale) checksum file - read_latest() then correctly reports checksum_valid=False
     # rather than trusting a half-written dump.
     latest.write_text(full_text)
-    (dump_dir / "latest.sha256").write_text(checksum)
+    (directory / "latest.sha256").write_text(checksum)
 
 
 def _prune_archive(archive_dir: Path) -> None:
@@ -159,10 +227,14 @@ def _prune_archive(archive_dir: Path) -> None:
         stale.unlink()
 
 
-def read_latest(project_root: Path) -> DumpInfo:
-    dump_dir = _dump_dir(project_root)
-    latest = dump_dir / "latest.sql"
-    checksum_file = dump_dir / "latest.sha256"
+def read_latest(
+    project_root: Path, *, pdata_format: int = formats.CURRENT_PDATA_FORMAT,
+) -> DumpInfo:
+    """The published dump at `pdata_format`'s location. Raises UnknownPdataFormatError when a
+    trustworthy dump's `-- pdata_format=` line names a format no ccst release writes."""
+    directory = dump_dir(project_root, pdata_format=pdata_format)
+    latest = directory / "latest.sql"
+    checksum_file = directory / "latest.sha256"
     if not latest.exists() or not checksum_file.exists():
         # `present` keys off latest.sql alone, not the pair: a latest.sql with a missing
         # latest.sha256 is exactly write_latest()'s documented interrupted-publish case - a dump
@@ -177,7 +249,9 @@ def read_latest(project_root: Path) -> DumpInfo:
         return DumpInfo(checksum_valid=False, machine_id=None, vector={}, present=True)
     machine_id = None
     dumped_at = None
+    dump_format = formats.PDATA_FORMAT_INTEGER_IDS
     vector: dict[str, int] = {}
+    migrated_from: dict[str, int] | None = None
     for line in text.splitlines():
         # Stop at the header/body boundary - serialize()'s output always starts with this exact
         # line, so everything from here on is dumped row data, not metadata. Scanning the whole
@@ -188,17 +262,32 @@ def read_latest(project_root: Path) -> DumpInfo:
         # design's fork/fast-forward decision depends on.
         if line == _BODY_SENTINEL:
             break
-        if line.startswith("-- machine_id="):
-            machine_id = line.removeprefix("-- machine_id=")
-        elif line.startswith("-- dumped_at="):
-            dumped_at = int(line.removeprefix("-- dumped_at="))
-        elif line.startswith("-- vector:"):
-            rest = line.removeprefix("-- vector:")
-            k, _, v = rest.partition("=")
+        if line.startswith(_FORMAT_PREFIX):
+            dump_format = _parse_format(line, latest)
+        elif line.startswith(_MACHINE_PREFIX):
+            machine_id = line.removeprefix(_MACHINE_PREFIX)
+        elif line.startswith(_DUMPED_AT_PREFIX):
+            dumped_at = int(line.removeprefix(_DUMPED_AT_PREFIX))
+        elif line.startswith(_VECTOR_PREFIX):
+            k, _, v = line.removeprefix(_VECTOR_PREFIX).partition("=")
             vector[k] = int(v)
+        elif line.startswith(_MIGRATED_FROM_PREFIX):
+            k, _, v = line.removeprefix(_MIGRATED_FROM_PREFIX).partition("=")
+            migrated_from = {} if migrated_from is None else migrated_from
+            migrated_from[k] = int(v)
     return DumpInfo(
         checksum_valid=True, machine_id=machine_id, vector=vector, dumped_at=dumped_at,
-        present=True,
+        present=True, pdata_format=dump_format, migrated_from_format3_vector=migrated_from,
+    )
+
+
+def _parse_format(line: str, latest: Path) -> int:
+    raw = line.removeprefix(_FORMAT_PREFIX)
+    if raw.isdigit() and int(raw) in _FORMAT_SUBDIR:
+        return int(raw)
+    raise formats.UnknownPdataFormatError(
+        f"{latest}: header line {line!r} names a dump format this ccst does not know "
+        f"(known: {', '.join(str(f) for f in sorted(_FORMAT_SUBDIR))})"
     )
 
 
@@ -271,7 +360,7 @@ def format_dumped_at(dumped_at: int) -> str:
 
 
 def sql_body(text: str) -> str:
-    """Strip write_latest()'s header block (machine_id/dumped_at/vector comment lines) from a
+    """Strip write_latest()'s header block (the `-- ` comment lines) from a
     dump, leaving just the executable SQL - for rehydrate.py's executescript() call. Shares
     _BODY_SENTINEL with serialize()/read_latest() above rather than re-deriving the header/body
     boundary a second time (a prior version of this logic lived duplicated in rehydrate.py; a

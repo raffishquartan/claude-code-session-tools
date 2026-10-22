@@ -3,6 +3,7 @@ that need an unmigrated project. Written with plain sqlite3 and the 3.x DDL verb
 fixture does not depend on any 4.x code path."""
 from __future__ import annotations
 
+import hashlib
 import sqlite3
 from pathlib import Path
 
@@ -67,3 +68,29 @@ def snapshot_dir(directory: Path) -> dict[str, bytes]:
         str(p.relative_to(directory)): p.read_bytes()
         for p in sorted(directory.rglob("*")) if p.is_file()
     }
+
+
+def write_format3_dump(
+    db_path: Path, project_root: Path, *, machine_id: str, vector: dict[str, int],
+    dumped_at: int = 1700000000,
+) -> Path:
+    """Publish `db_path` to `project_root/.pdata-db-dump/latest.sql` the way ccst 3.x did: no
+    `-- pdata_format=` line, the machine_id/dumped_at/vector header, then the serialised body,
+    with `latest.sha256` beside it. The body uses `dump.serialize`, whose output 3.x shared.
+    Returns the dump directory."""
+    from cc_session_tools.lib.pdata import dump
+
+    conn = sqlite3.connect(str(db_path))
+    conn.row_factory = sqlite3.Row
+    try:
+        body = dump.serialize(conn)
+    finally:
+        conn.close()
+    header = f"-- machine_id={machine_id}\n-- dumped_at={dumped_at}\n"
+    header += "\n".join(f"-- vector:{k}={v}" for k, v in sorted(vector.items())) + "\n"
+    text = header + body
+    dump_dir = project_root / ".pdata-db-dump"
+    dump_dir.mkdir(parents=True, exist_ok=True)
+    (dump_dir / "latest.sql").write_text(text)
+    (dump_dir / "latest.sha256").write_text(hashlib.sha256(text.encode()).hexdigest())
+    return dump_dir

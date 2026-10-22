@@ -58,7 +58,7 @@ def dry_run(*, project: str, rehearse: Path | None = None) -> DryRunResult:
         # function's docstring for the real incident.
         pending = _pending_adoption(project=project, project_root=project_root)
         if pending is not None:
-            latest_path = project_root / ".pdata-db-dump" / "latest.sql"
+            latest_path = dump.latest_path(project_root)
             published_at = _format_published_at(pending, latest_path)
             report = (
                 f"ccst pdata init --project {project}: a published sync dump already exists "
@@ -390,7 +390,7 @@ def _pending_adoption(*, project: str, project_root: Path) -> dump.DumpInfo | No
     corrupt, and those two cases must not be treated the same - the first is the ordinary
     first-ever migration, the second is a real problem that must be surfaced, never silently
     papered over by falling through to classification."""
-    latest_path = project_root / ".pdata-db-dump" / "latest.sql"
+    latest_path = dump.latest_path(project_root)
     if not latest_path.exists():
         return None
     info = dump.read_latest(project_root)
@@ -415,7 +415,7 @@ def _adopt_from_dump(
     *, project: str, project_root: Path, on_progress: Callable[[str], None] | None,
 ) -> WriteResult | None:
     """Spec "ccst pdata init on a second machine (adopt-from-dump)": a project already migrated
-    to pdata on another machine publishes a dump into <project_root>/.pdata-db-dump/latest.sql —
+    to pdata on another machine publishes a dump into <project_root>/.pdata-db-dump/v4/latest.sql —
     a machine with no local pdata content for this project yet must adopt that dump directly
     (same mechanism as the ongoing rehydrate trigger) rather than classifying/importing this
     machine's current flat files as if this were a first-ever migration, which would produce a DB
@@ -425,7 +425,7 @@ def _adopt_from_dump(
     info = _pending_adoption(project=project, project_root=project_root)
     if info is None:
         return None
-    latest_path = project_root / ".pdata-db-dump" / "latest.sql"
+    latest_path = dump.latest_path(project_root)
     published_at = _format_published_at(info, latest_path)
     message = (
         f"Adopting existing pdata from sync dump (published by {info.machine_id}, "

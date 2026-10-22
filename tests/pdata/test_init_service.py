@@ -789,7 +789,7 @@ def test_write_forwards_on_progress_into_backup_retry_attempts(monkeypatch, tmp_
 
 def test_init_adopts_from_an_existing_valid_dump_instead_of_classifying(monkeypatch, tmp_path):
     """Spec 'ccst pdata init on a second machine (adopt-from-dump)': a project migrated to pdata
-    elsewhere has published a dump into .pdata-db-dump/latest.sql, but this machine has no local
+    elsewhere has published a dump into .pdata-db-dump/v4/latest.sql, but this machine has no local
     .db for the project yet. write() must adopt that dump directly — via the same rehydrate
     mechanism as the ongoing sync trigger — rather than treating this as a first-ever migration
     and classifying/importing the project's current flat files (which would produce a DB
@@ -841,7 +841,7 @@ def test_init_refuses_to_classify_when_the_existing_dump_fails_its_checksum(monk
     dump.write_latest(con, project_root=project_root, machine_id="macbook", vector={"macbook": 3})
     con.close()
     (tmp_path / "dbs" / "proj.db").unlink()
-    (project_root / ".pdata-db-dump" / "latest.sha256").write_text("0" * 64)  # corrupt it
+    (dump.dump_dir(project_root) / "latest.sha256").write_text("0" * 64)  # corrupt it
 
     with pytest.raises(ValueError, match="checksum"):
         init_service.write(project="proj", rehearse=None)

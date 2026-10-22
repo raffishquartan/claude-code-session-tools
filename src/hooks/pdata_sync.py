@@ -3,7 +3,7 @@
 One module registered under two events, branching on `hook_event_name` inside `main()` - the
 same shape `catchup.py` uses for its own SessionStart/UserPromptSubmit pair.
 
-- **SessionStart** rehydrates this project from `.pdata-db-dump/latest.sql` if the dump dominates
+- **SessionStart** rehydrates this project from `.pdata-db-dump/v4/latest.sql` if the dump dominates
   local, after the spec's occupancy gate ("Process safety"): if another live `claude` session is
   already working in this project - excluding this hook's own launching process, resolved via
   `occupancy.launching_claude_pid` (not bare `os.getppid()`, which is an `sh -c` wrapper rather
@@ -143,7 +143,7 @@ def on_session_start(cwd: str, *, session_pid: int | None) -> str | None:
             # formatters should render it the same way rather than diverge on a case neither can
             # actually hit yet). mtime reflects local sync-settle time, not the source machine's
             # actual publish time, but it beats an unhelpful "unknown" for a cosmetic detail.
-            latest_path = project_root / ".pdata-db-dump" / "latest.sql"
+            latest_path = dump.latest_path(project_root)
             when = dump.format_dumped_at(int(latest_path.stat().st_mtime))
         # The design's required content is "machine + timestamp it rehydrated from"; this exact
         # wording is the plan's own quoted deliverable, so it is reproduced verbatim rather than

@@ -97,7 +97,7 @@ def rehydrate(project: str, *, force: bool = False) -> RehydrateResult:
     if sync_lock.is_locked(db_path):
         return RehydrateResult(outcome=RehydrateOutcome.DEFERRED)
 
-    latest = project_root / ".pdata-db-dump" / "latest.sql"
+    latest = dump.latest_path(project_root)
     tmp_path = _build_replacement(db_path.parent, dump.sql_body(latest.read_text()))
     try:
         tmp_path.replace(db_path)  # atomic directory-entry swap on the same filesystem

@@ -48,7 +48,7 @@ Current subcommands:
                                  resolution, suspicious double-updates) for --project NAME or
                                  --all-projects and persist the result for ccst doctor.
   pdata dump                     Publish the current local DB state to
-                                 .pdata-db-dump/latest.sql for --project NAME or
+                                 .pdata-db-dump/v4/latest.sql for --project NAME or
                                  --all-projects. Refuses (unless --force) to overwrite an
                                  unresolved cross-machine fork.
   pdata rehydrate                Fast-forward the local DB from the published dump for
@@ -3409,7 +3409,7 @@ def _build_parser() -> argparse.ArgumentParser:
     )
 
     pdata_dump_parser = pdata_sub.add_parser(
-        "dump", help="Publish the current local DB state to .pdata-db-dump/latest.sql"
+        "dump", help="Publish the current local DB state to .pdata-db-dump/v4/latest.sql"
     )
     dump_target = pdata_dump_parser.add_mutually_exclusive_group(required=True)
     dump_target.add_argument("--project", metavar="NAME")

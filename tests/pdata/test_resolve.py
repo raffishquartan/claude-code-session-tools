@@ -21,7 +21,7 @@ def _setup_env(monkeypatch, tmp_path):
 
 def _publish_remote_dump(project_root, *, remote_project, machine_id, vector, build):
     """Builds a throwaway "remote" project db (its own .db file) via `build(conn)` and dumps it
-    to project_root/.pdata-db-dump/latest.sql — simulating a dump published by another machine,
+    to project_root/.pdata-db-dump/v4/latest.sql — simulating a dump published by another machine,
     without needing two real machines to exercise resolve.py against (same pattern as
     test_rehydrate.py's `_publish_dump`)."""
     conn = repository.connect(remote_project)
@@ -810,7 +810,7 @@ def test_diff_against_dump_rejects_a_checksum_invalid_dump(monkeypatch, tmp_path
         project_root, remote_project="proj-remote", machine_id="mbp",
         vector={"ltxy": 1, "mbp": 1}, build=build,
     )
-    (project_root / ".pdata-db-dump" / "latest.sql").write_text("TRUNCATED")
+    dump.latest_path(project_root).write_text("TRUNCATED")
 
     with pytest.raises(ValueError, match="checksum"):
         resolve.diff_against_dump("proj")

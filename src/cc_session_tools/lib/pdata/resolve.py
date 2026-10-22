@@ -440,7 +440,7 @@ def _open_dump(project_root: Path) -> sqlite3.Connection:
     diff/snapshot/apply code below reads both sides through the same `row["col"]` access pattern,
     which a bare `sqlite3.connect()`'s default tuple rows would break silently (wrong-looking but
     still-truthy values from positional access, not a clean AttributeError)."""
-    latest = project_root / ".pdata-db-dump" / "latest.sql"
+    latest = dump.latest_path(project_root)
     conn = sqlite3.connect(":memory:")
     conn.row_factory = sqlite3.Row
     conn.executescript(dump.sql_body(latest.read_text()))

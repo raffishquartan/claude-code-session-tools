@@ -92,7 +92,7 @@ def _publish_remote_dump(
     project_root: Path, *, remote_project: str, content: str, vector: dict[str, int],
     machine_id: str,
 ) -> None:
-    """Build a throwaway "remote" project db and dump it to project_root/.pdata-db-dump/latest.sql
+    """Build a throwaway "remote" project db and dump it to project_root/.pdata-db-dump/v4/latest.sql
     - simulating a dump published by another machine, without needing two real machines
     (same pattern as test_rehydrate.py's/test_resolve.py's _publish_remote_dump).
 
@@ -632,7 +632,7 @@ def test_sync_check_fast_forwards_when_the_dump_is_ahead(base_env):
         project_root, remote_project="proj-remote", content="from-remote",
         vector={"mbp": 1}, machine_id="mbp",
     )
-    before = (project_root / ".pdata-db-dump" / "latest.sql").read_text()
+    before = dump.latest_path(project_root).read_text()
 
     r = _run(base_env, "pdata", "sync-check", "--project", "proj")
 
@@ -647,7 +647,7 @@ def test_sync_check_fast_forwards_when_the_dump_is_ahead(base_env):
     finally:
         conn.close()
     # A fast-forward is terminal - no dump-check, so latest.sql is untouched.
-    assert (project_root / ".pdata-db-dump" / "latest.sql").read_text() == before
+    assert dump.latest_path(project_root).read_text() == before
 
 
 def test_sync_check_publishes_when_local_is_ahead(base_env):
@@ -674,7 +674,7 @@ def test_sync_check_skips_an_unchanged_republish(base_env):
     first = _run(base_env, "pdata", "sync-check", "--project", "proj")
     assert first.returncode == 0, first.stderr
     assert "published" in first.stdout
-    latest = store.project_root("proj") / ".pdata-db-dump" / "latest.sql"
+    latest = dump.latest_path(store.project_root("proj"))
     before_text = latest.read_text()
     before_mtime = latest.stat().st_mtime_ns
     time.sleep(0.01)
@@ -713,7 +713,7 @@ def test_sync_check_reports_a_corrupt_dump_as_a_conflict(base_env):
         project_root, remote_project="proj-remote", content="remote",
         vector={"mbp": 1}, machine_id="mbp",
     )
-    latest = project_root / ".pdata-db-dump" / "latest.sql"
+    latest = dump.latest_path(project_root)
     latest.write_text(latest.read_text() + "\n-- tampered\n")
 
     r = _run(base_env, "pdata", "sync-check", "--project", "proj")
@@ -726,7 +726,7 @@ def test_sync_check_publishes_a_first_dump_instead_of_calling_it_corrupt(base_en
     """A project that has never been dumped is the normal state right after `ccst pdata init`.
     It must publish, not report a checksum conflict every hour forever."""
     _build_local("proj", vector={"ltxy": 1})
-    assert not (store.project_root("proj") / ".pdata-db-dump" / "latest.sql").exists()
+    assert not dump.latest_path(store.project_root("proj")).exists()
 
     r = _run(base_env, "pdata", "sync-check", "--project", "proj")
 
