@@ -1882,15 +1882,6 @@ def _cmd_pdata_resolve(args: argparse.Namespace) -> int:
             f"field(s) to resolve"
         )
         for rd in diff.records:
-            if rd.id_collision:
-                print(
-                    f"  record {rd.record_id} (group={rd.record_group}): id collision - "
-                    f"this id was independently assigned to two unrelated records on "
-                    f"different machines, not a genuine edit conflict; `ccst pdata resolve` "
-                    f"cannot apply a local/dump choice to this one, it needs manual, "
-                    f"out-of-band reconciliation"
-                )
-                continue
             if rd.group_mismatch:
                 # Both sides' own group names, not rd.record_group: that field carries whichever
                 # side happened to be available, and RecordDiff's docstring says so - printing it
@@ -1898,11 +1889,10 @@ def _cmd_pdata_resolve(args: argparse.Namespace) -> int:
                 # the reader neither which side they are seeing nor what the other side's is.
                 print(
                     f"  record {rd.record_id} (local group={rd.local_record_group}, "
-                    f"dump group={rd.dump_record_group}): group mismatch - same id and "
-                    f"created_at, but local and dump disagree on record_group; compare "
-                    f"content/file_path on each side before assuming this is a safe "
-                    f"`ccst pdata rename-group` rather than a same-second id collision - "
-                    f"`ccst pdata resolve` cannot apply a local/dump choice to this one"
+                    f"dump group={rd.dump_record_group}): group mismatch - the same record, "
+                    f"but local and dump disagree on record_group; run `ccst pdata "
+                    f"rename-group` on one side so both agree - `ccst pdata resolve` cannot "
+                    f"apply a local/dump choice to this one"
                 )
                 continue
             if rd.is_delete_vs_update:

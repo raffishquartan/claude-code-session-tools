@@ -464,7 +464,7 @@ def test_resolve_diagnostic_mode_reports_outstanding_records_and_schema_fields(b
     def build(remote_conn):
         remote_conn.execute(
             "INSERT INTO records (id, record_group, content, file_path, created_at, "
-            "updated_at) VALUES (999, 'g', 'dump-content', NULL, 5, 5)"
+            f"updated_at) VALUES ('{_ABSENT_RECORD_ID}', 'g', 'dump-content', NULL, 5, 5)"
         )
         repository.add_extension_column(remote_conn, "g", "priority", "INTEGER", default=None)
         # _diff_schema_fields reads record_group_fields, not the ext table's own columns - a
@@ -488,8 +488,36 @@ def test_resolve_diagnostic_mode_reports_outstanding_records_and_schema_fields(b
     assert r.returncode == 1, r.stdout
     assert "2 record(s) + 1 schema field(s) to resolve" in r.stdout
     assert "local-only" in r.stdout  # the real local record, absent from the fake remote dump
-    assert "dump-only" in r.stdout  # record 999, present only in the dump
+    assert f"record {_ABSENT_RECORD_ID} (group=g): dump-only" in r.stdout
     assert "schema field g.priority: dump only" in r.stdout
+
+
+def test_resolve_diagnostic_mode_reports_a_group_mismatch_without_calling_it_a_collision(
+    base_env,
+):
+    _build_local("proj", content="same", vector={"ltxy": 1})
+    project_root = store.project_root("proj")
+    conn = repository.connect("proj-remote")
+    try:
+        with repository._immediate(conn):
+            repository.insert_base_record(
+                conn, record_group="renamed", content="same", file_path=None,
+                created_at=1, updated_at=1, record_id=_SHARED_RECORD_ID,
+            )
+            vector_clock_store.write_vector(conn, {"mbp": 1}, updated_at=1)
+        dump.write_latest(conn, project_root=project_root, machine_id="mbp", vector={"mbp": 1})
+    finally:
+        conn.close()
+
+    r = _run(base_env, "pdata", "resolve", "--project", "proj")
+
+    assert r.returncode == 1, r.stdout
+    assert (
+        f"record {_SHARED_RECORD_ID} (local group=g, dump group=renamed): group mismatch - "
+        f"the same record"
+    ) in r.stdout
+    assert "ccst pdata rename-group" in r.stdout
+    assert "collision" not in r.stdout
 
 
 def test_resolve_diagnostic_reports_checksum_invalid_error(base_env):
