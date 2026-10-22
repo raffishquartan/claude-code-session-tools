@@ -113,9 +113,12 @@ under their deterministic ids.
 
 ### D6c. Lineage vector storage, and the unpublished-changes dead end
 The format 3 vector clock that a format 4 database was migrated from is stored in the database
-(table `pdata_migration_origin`, one row per machine), so it replicates with every dump and rehydrate,
-and every publish copies it into the dump's `-- migrated_from_format3_vector:` header lines (the
-header is what a joining machine reads before it touches its own data). Format 4 code never
+(table `pdata_migration_origin`, one row per machine), and a one-row table `pdata_migrated_from`
+records that the database was migrated at all, because that vector may be empty and an empty vector
+must still read as a lineage. Both are ordinary table data, so they replicate with every dump and
+rehydrate, and every publish copies them into the dump header (`-- migrated_from_format=3` and the
+`-- migrated_from_format3_vector:` lines); the header is what a joining machine reads before it
+touches its own data. Format 4 code never
 writes a format 3 dump, so a format 3 database with unpublished changes cannot publish them once ccst is
 4.0.0. `migrate-uuid` therefore refuses that state with a message that gives the recovery: install
 3.16.2 (`uv tool install cc-session-tools==3.16.2`), run `ccst pdata sync-check` until it reports

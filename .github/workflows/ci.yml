@@ -24,6 +24,9 @@ jobs:
       - name: Install package and dev deps (non-editable)
         run: uv sync --no-editable --extra dev
 
+      - name: Type check
+        run: uv run mypy src
+
       - name: Run tests
         run: uv run pytest -q
 

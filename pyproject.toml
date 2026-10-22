@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "cc-session-tools"
-version = "4.0.0"
+version = "4.0.1"
 description = "Claude Code session management CLI tools (ccd, ccr, ccs, claude-code-usage, ccst) and hook library (hooks package)"
 readme = "README.md"
 license = { file = "LICENSE" }
@@ -91,6 +91,7 @@ dev = [
     "types-openpyxl>=3.1",
     "xlrd>=2.0",
     "types-xlrd",
+    "pandas-stubs",
     "xlwt>=1.3",
 ]
 
