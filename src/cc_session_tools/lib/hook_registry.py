@@ -48,7 +48,7 @@ HOOK_DESCRIPTIONS: dict[str, str] = {
     "last-screenshot": "Resolves the newest screenshot for the >lss token and injects its path",
     "messaging-deliver": "Delivers inter-session messages (digest + auto-read + receipts) on session start and each prompt",
     "catchup": "Reconciles+launches missed scheduled jobs (ccsched) detached and surfaces a catch-up digest (SessionStart + UserPromptSubmit)",
-    "pending-migration": "Detects legacy pre-1.0.0 flat-file data left unmigrated (ccmsg/ccsched/sessions/telemetry) and surfaces a FAIL digest pointing at `ccst migrate all`; honours `ccst doctor --mute` (SessionStart)",
+    "pending-migration": "Detects legacy pre-1.0.0 flat-file data left unmigrated (ccmsg/ccsched/sessions/telemetry) and surfaces a FAIL digest pointing at `ccst migrate all`, plus pdata project databases still on format 3 (integer ids) pointing at `ccst pdata migrate-uuid` and the runbook; honours `ccst doctor --mute` (SessionStart)",
     "context-window-warning": "Nudges toward /compact when the context window passes 150k/200k tokens; silenced for the session by /context-override (Stop)",
     "pending-rename": "Surfaces `.pending-rename` markers left by the move-session skill, skipping those whose /rename already landed and collapsing the list above 3; self-times-out at 5s with a visible notice (SessionStart)",
     "pdata-sync": "Multi-laptop `ccst pdata` sync: rehydrates this project's DB from the published dump when it dominates local and the project isn't occupied by another live session (SessionStart), and publishes a fresh dump when local has new writes (SessionEnd); surfaces forks/checksum failures via Telegram + the catch-up digest",

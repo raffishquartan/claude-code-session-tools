@@ -929,6 +929,95 @@ def check_pdata_verify(projects: list[str]) -> list[CheckResult]:
     return results
 
 
+PDATA_UUID_MIGRATION_CHECK = "migration-to-4.0.0:pdata-uuid"
+
+
+def pdata_uuid_migration_remedy(project: str) -> str:
+    """What to run for `project`'s pending format 4 migration: the command, where to run it,
+    and where the runbook lives. Shared by this check and the `pending-migration` hook."""
+    from cc_session_tools.lib.pdata import formats
+
+    return (
+        f"run `{formats.MIGRATE_COMMAND} --project {project}` (dry run), then "
+        f"`{formats.MIGRATE_COMMAND} --write --project {project}`, from a plain terminal with "
+        f"no `claude` session running; follow {formats.RUNBOOK_PATH} in the cc-session-tools "
+        f"repository (every machine sharing the project must be converged first)"
+    )
+
+
+def check_pdata_uuid_migration(projects: list[str]) -> list[CheckResult]:
+    """FAIL for each project whose pdata database still has format 3 (integer) record ids, or
+    whose schema format and `pdata-uuid-ids` marker disagree. Every `ccst pdata` record verb,
+    the sync hook and the scheduled jobs refuse a format 3 database, so this is the doctor's
+    view of the same state (design D6a). Opens each database read-only and never creates one.
+
+    One result per project, named `migration-to-4.0.0:pdata-uuid:<project>` so a project can be
+    muted on its own; a single OK result when there are no project databases."""
+    from cc_session_tools.lib.pdata import formats, store
+
+    if not projects:
+        return [CheckResult(
+            name=PDATA_UUID_MIGRATION_CHECK, status=Status.OK,
+            reason="no pdata project databases - nothing to migrate",
+        )]
+
+    results: list[CheckResult] = []
+    for project in projects:
+        name = f"{PDATA_UUID_MIGRATION_CHECK}:{project}"
+        db_path = store.db_path(project)
+        try:
+            fmt = formats.database_format(db_path)
+        except formats.UnknownPdataFormatError as exc:
+            results.append(CheckResult(name=name, status=Status.FAIL, reason=f"{db_path}: {exc}"))
+            continue
+        except sqlite3.DatabaseError as exc:
+            results.append(CheckResult(
+                name=name, status=Status.FAIL,
+                reason=f"{db_path} exists but failed to open: {exc}",
+            ))
+            continue
+        if fmt is None:
+            results.append(CheckResult(
+                name=name, status=Status.OK, reason="no database - nothing to migrate",
+            ))
+            continue
+        marker = _migration_recorded(db_path, formats.UUID_IDS_MIGRATION)
+        remedy = pdata_uuid_migration_remedy(project)
+        if fmt == formats.PDATA_FORMAT_INTEGER_IDS and not marker:
+            results.append(CheckResult(
+                name=name, status=Status.FAIL,
+                reason=(
+                    "database is format 3 (integer record ids); record commands, sync and "
+                    f"the pdata jobs refuse it until it is migrated - {remedy}"
+                ),
+            ))
+        elif fmt == formats.PDATA_FORMAT_INTEGER_IDS:
+            results.append(CheckResult(
+                name=name, status=Status.FAIL,
+                reason=(
+                    f"the {formats.UUID_IDS_MIGRATION} marker is recorded but the database is "
+                    "still format 3 (integer record ids) - it was restored from a pre-migration "
+                    f"backup or the marker was copied in; back up {db_path}, then {remedy}"
+                ),
+            ))
+        elif not marker:
+            results.append(CheckResult(
+                name=name, status=Status.FAIL,
+                reason=(
+                    "database is format 4 but the "
+                    f"{formats.UUID_IDS_MIGRATION} marker is missing - an earlier "
+                    f"`{formats.MIGRATE_COMMAND} --write` stopped before finishing; re-run "
+                    f"`{formats.MIGRATE_COMMAND} --write --project {project}` from a plain "
+                    "terminal to finish it"
+                ),
+            ))
+        else:
+            results.append(CheckResult(
+                name=name, status=Status.OK, reason="database is format 4 (UUID record ids)",
+            ))
+    return results
+
+
 def check_sessions_project_dir_absolute(sessions_db_path: Path) -> list[CheckResult]:
     """WARN if any sessions.db row has a non-absolute project_dir. Every reader that
     scopes --global by root (ccs.py, sessions.find_matching_sessions) compares
@@ -1234,8 +1323,10 @@ def run_all_checks(
     if projects_root is not None:
         results.extend(check_pending_pdata_migration(projects_root))
 
-    # Last persisted ccst pdata verify result per project (spec §8.2)
+    # pdata format 4 migration, then the last persisted ccst pdata verify result per project
+    # (spec §8.2) - the migration check first, since record verbs refuse until it is OK.
     if pdata_verify_projects is not None:
+        results.extend(check_pdata_uuid_migration(pdata_verify_projects))
         results.extend(check_pdata_verify(pdata_verify_projects))
 
     # Non-absolute project_dir rows in sessions.db - the uuid-migration check runs first,
