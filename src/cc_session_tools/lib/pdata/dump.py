@@ -139,6 +139,16 @@ def mismatched_dump_format(existing: DumpInfo, *, local_format: int) -> int | No
     return None
 
 
+def only_format3_published(project_root: Path) -> bool:
+    """True when the project at `project_root` has a format 3 `latest.sql` and no current-format
+    one: its data still lives in format 3, so a database must not be created from nothing
+    (formats.AwaitingMigrationError)."""
+    return (
+        latest_path(project_root, pdata_format=formats.PDATA_FORMAT_INTEGER_IDS).exists()
+        and not latest_path(project_root).exists()
+    )
+
+
 def _unique_archive_path(archive_dir: Path) -> Path:
     """A filename for this archived dump, unique within archive_dir, whose lexicographic sort
     order (what _prune_archive relies on to find "most recent") always matches real chronological

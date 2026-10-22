@@ -39,8 +39,9 @@ class RehydrateResult:
     # actually published it, which is the only thing worth showing a human. Set on
     # FAST_FORWARDED; None on every other outcome, since nothing was adopted.
     dumped_at: int | None = None
-    # Set on MIGRATION_PENDING only: the local database's format and the published dump's
-    # (None when nothing is published).
+    # Set on MIGRATION_PENDING only: the local database's format (None when this machine has no
+    # database and the only published dump is format 3) and the published dump's (None when
+    # nothing is published).
     local_format: int | None = None
     dump_format: int | None = None
 
@@ -48,7 +49,7 @@ class RehydrateResult:
 def migration_pending_detail(result: RehydrateResult, *, project: str) -> str:
     """What to tell the user about a MIGRATION_PENDING outcome: both formats and the command.
     Raises on any other outcome, like conflict_detail."""
-    if result.outcome is not RehydrateOutcome.MIGRATION_PENDING or result.local_format is None:
+    if result.outcome is not RehydrateOutcome.MIGRATION_PENDING:
         raise ValueError(f"not a migration-pending outcome: {result.outcome.value}")
     return formats.migration_pending_detail(
         project, local_format=result.local_format, dump_format=result.dump_format,
@@ -61,9 +62,17 @@ def format_gate(
     """A MIGRATION_PENDING result when `project` cannot sync until it is migrated, else None.
     That is: the local database is not the current format (it is never loaded into or
     published from, whatever is published), or `existing` - the published current-format dump -
-    is a trustworthy dump of another format. Reads the database file read-only; a project with
-    no database yet is the current format, since connecting creates it so."""
+    is a trustworthy dump of another format, or there is no local database and the project's
+    only published dump is format 3 (nothing may create one then: see
+    formats.AwaitingMigrationError). Reads the database file read-only; any other project with no
+    database yet is the current format, since connecting creates it so."""
     local_format = formats.database_format(store.db_path(project))
+    if local_format is None and dump.only_format3_published(project_root):
+        return RehydrateResult(
+            outcome=RehydrateOutcome.MIGRATION_PENDING,
+            local_format=None,
+            dump_format=formats.PDATA_FORMAT_INTEGER_IDS,
+        )
     if local_format is not None and local_format != formats.CURRENT_PDATA_FORMAT:
         return RehydrateResult(
             outcome=RehydrateOutcome.MIGRATION_PENDING,

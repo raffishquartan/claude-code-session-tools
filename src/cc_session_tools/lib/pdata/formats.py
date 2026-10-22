@@ -52,6 +52,12 @@ class UnknownPdataFormatError(ValueError):
     """`records.id` is declared with a type no ccst release ever created."""
 
 
+class AwaitingMigrationError(ValueError):
+    """Creating this project's database is refused: the project's only published dump is
+    format 3, so a database created here would be a format 4 lineage of its own that no
+    machine holding the format 3 data could migrate into (see format3_only_message)."""
+
+
 def pdata_format(conn: sqlite3.Connection) -> int:
     """The format of the open database. A database with no `records` table yet has nothing to
     migrate and is CURRENT_PDATA_FORMAT: the base schema creates it as format 4."""
@@ -112,10 +118,39 @@ def legacy_format_message(project: str) -> str:
     )
 
 
-def migration_pending_detail(project: str, *, local_format: int, dump_format: int | None) -> str:
+def _format3_only_explanation(project: str) -> str:
+    return (
+        f"the project's only published dump is format {PDATA_FORMAT_INTEGER_IDS} (integer "
+        f"record ids), so this ccst creates nothing for it until that data is migrated. On a "
+        f"machine that holds {project}'s format {PDATA_FORMAT_INTEGER_IDS} database, from a "
+        f"plain terminal, run `{MIGRATE_COMMAND} --project {project}` (dry run), then the same "
+        f"with --write; this machine then loads the format {CURRENT_PDATA_FORMAT} dump on its "
+        f"next sync. If no machine holds that database any more, install "
+        f"{LAST_FORMAT3_RELEASE}, run `ccst pdata rehydrate --project {project}` to load the "
+        f"format {PDATA_FORMAT_INTEGER_IDS} dump, then upgrade and migrate here. See "
+        f"{RUNBOOK_PATH} in the cc-session-tools repository."
+    )
+
+
+def format3_only_message(project: str) -> str:
+    """Why a verb refused to create `project`'s database: this machine has none, and the
+    project's only published dump is format 3."""
+    return f"{project}: this machine has no database for it and {_format3_only_explanation(project)}"
+
+
+def migration_pending_detail(
+    project: str, *, local_format: int | None, dump_format: int | None,
+) -> str:
     """Why sync left `project` alone: its database and its published dump are not both the
-    current format. `dump_format` is None when nothing is published. Callers prefix the project
-    name and "migration pending" in their own style, so the text starts with neither."""
+    current format. `local_format` is None when this machine has no database (and the only
+    published dump is format 3); `dump_format` is None when nothing is published. Callers prefix
+    the project name and "migration pending" in their own style, so the text starts with
+    neither."""
+    if local_format is None:
+        return (
+            f"there is no database on this machine and {_format3_only_explanation(project)} "
+            "Nothing was created, loaded or published."
+        )
     if dump_format is None or dump_format == local_format:
         return (
             f"the database is format {local_format} and this ccst uses "

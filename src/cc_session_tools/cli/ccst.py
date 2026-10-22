@@ -1046,24 +1046,49 @@ def _record_id_arg(raw: str) -> str:
     return raw
 
 
+def _pdata_gate_targets(args: argparse.Namespace) -> list[str]:
+    """The projects a gated verb would open: the named one, or every project its --all-projects
+    run would visit. `reconcile-session-output --all-projects` visits projects that have a
+    cc-sessions/ directory, with or without a database, so it is the one verb whose sweep can
+    create a database."""
+    from cc_session_tools.lib import roots
+    from cc_session_tools.lib.pdata import session_output, verify
+
+    if not getattr(args, "all_projects", False):
+        return [args.project]
+    if args.verb == "reconcile-session-output":
+        try:
+            return [name for name, _root in session_output.discover_projects_with_sessions()]
+        except roots.RootsConfigError:
+            return []  # the verb's own handler reports the missing configuration
+    return verify.discover_projects()
+
+
 def _pdata_format_refusal(args: argparse.Namespace) -> int | None:
     """The format gate (`formats` module docstring): returns exit code 1, after printing the
-    migration message for each target project whose database is still format 3, when the verb
-    is not exempt; else None. Read-only, and runs before the verb's handler opens anything."""
+    migration message for each target project whose database is still format 3, or that has no
+    database while its only published dump is format 3, when the verb is not exempt; else None.
+    Read-only, and runs before the verb's handler opens anything."""
     import sqlite3
 
-    from cc_session_tools.lib.pdata import formats, store, verify
+    from cc_session_tools.lib.pdata import dump, formats, store
 
     if args.verb in formats.FORMAT_GATE_EXEMPT_VERBS:
         return None
-    all_projects = getattr(args, "all_projects", False)
-    projects = verify.discover_projects() if all_projects else [args.project]
     refused = False
-    for project in projects:
+    for project in _pdata_gate_targets(args):
         try:
             path = store.db_path(project)
+            project_root = store.project_root(project)
         except ValueError:
             continue  # the verb's own handler rejects an invalid project name
+        if not path.exists():
+            # `init` refuses this case itself, with its adoption-mismatch message.
+            if args.verb != "init" and dump.only_format3_published(project_root):
+                print(f"ccst pdata {args.verb}: {formats.format3_only_message(project)}",
+                      file=sys.stderr)
+                refused = True
+            continue
         try:
             fmt = formats.database_format(path)
         except formats.UnknownPdataFormatError as exc:

@@ -40,3 +40,16 @@ refuse with a message directing the user to `ccst pdata migrate-uuid`; `migrate-
 #### Scenario: A record verb on an unmigrated project
 - **WHEN** a user runs `ccst pdata add` on a format 3 project after upgrading to 4.0.0
 - **THEN** the command exits non-zero, writes nothing, and prints the migration command
+
+### Requirement: No database is created for a project whose only dump is format 3
+When a machine has no database for a project, and the project has a format 3 dump in
+`.pdata-db-dump/` and no dump in `.pdata-db-dump/v4/`, nothing SHALL create a database for it:
+every `ccst pdata` verb (including the session-output reconcile job's `--all-projects` sweep), the
+record service, sync-check and the sync hooks SHALL treat the project as pending migration, create
+nothing and publish nothing, with a message naming `ccst pdata migrate-uuid` to be run on a machine
+that holds the format 3 database. A database created there would publish a format 4 dump with no
+migration lineage, which every machine holding the format 3 data would then be refused against.
+
+#### Scenario: A fresh machine before any machine has migrated
+- **WHEN** a machine with no database for a project runs `ccst pdata add`, the reconcile job or sync-check while the project's only dump is format 3
+- **THEN** no database is created, no `.pdata-db-dump/v4/` dump is published, and a machine holding the format 3 database can still migrate it

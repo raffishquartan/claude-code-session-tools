@@ -12,7 +12,7 @@ from contextlib import contextmanager
 from datetime import datetime, timezone
 
 from cc_session_tools.lib import db
-from cc_session_tools.lib.pdata import formats, ids, naming, store, vector_clock_store
+from cc_session_tools.lib.pdata import dump, formats, ids, naming, store, vector_clock_store
 
 _ALLOWED_COLUMN_TYPES = frozenset({"TEXT", "INTEGER", "REAL", "BLOB"})
 
@@ -68,9 +68,14 @@ def connect(project: str) -> sqlite3.Connection:
     A file this call creates gets the format 4 schema and the `pdata-uuid-ids` marker at once:
     it has nothing to migrate. An existing format 3 file keeps its integer-id `records` table
     (CREATE TABLE IF NOT EXISTS is a no-op against it) until `ccst pdata migrate-uuid` rewrites
-    it."""
+    it.
+
+    Raises formats.AwaitingMigrationError, creating nothing, when there is no file and the
+    project's only published dump is format 3."""
     path = store.db_path(project)
     is_new_file = not path.exists()
+    if is_new_file and dump.only_format3_published(store.project_root(project)):
+        raise formats.AwaitingMigrationError(formats.format3_only_message(project))
     conn = db.connect(path, ddl=_BASE_DDL)
     if is_new_file:
         db.record_migration(conn, formats.UUID_IDS_MIGRATION, applied_at=_now_iso())
