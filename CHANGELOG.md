@@ -7,6 +7,76 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [4.0.0] - 2026-10-22
+
+`pdata` record ids were SQLite integer rowids, assigned independently on each machine, so two
+machines that both added records while forked could give the same id to two unrelated records.
+`ccst pdata resolve` could only refuse those ("id collision") and leave a manual fix. Record ids
+are now UUIDs: an id is never handed out twice, the same id on both sides is always the same
+record, and a fork in which each machine added records is an ordinary per-record choice. Existing
+databases need a one-time migration on every machine, from a plain terminal, following
+`docs/pdata-uuid-migration-runbook.md`.
+
+### Added
+
+- **`ccst pdata migrate-uuid` (dry run by default, `--write` to execute; `--project NAME` or
+  `--all-projects`).** Converts a format 3 (integer id) database to format 4 (UUID ids). On the
+  first machine every integer id `N` becomes the UUIDv5 of `<project>:N` in `records`, every
+  `ext_<group>` table and `pdata_verify_watermark`, live and soft-deleted rows alike, so every
+  machine derives the same UUIDs; it refuses unless the database is converged with the published
+  format 3 dump, no `claude` session is running in the project and the database is not locked;
+  it backs up to `project-db/migration-backups/pdata-<project>-pre-4.0.0-<stamp>.db` first,
+  verifies, records the `pdata-uuid-ids` marker and publishes the format 4 dump. A later machine
+  adopts the published format 4 dump after checking its own format 3 state is the one that dump
+  was migrated from, and refuses (naming the recovery) when it is not. Re-running is a no-op, and
+  a run that stopped part way is finished by the next one. The dry run lists extension and
+  content fields whose names suggest they hold record ids, which ccst cannot rewrite.
+- **`ccst doctor` check `migration-to-4.0.0:pdata-uuid:<project>`.** FAILs while a project's
+  database is format 3, naming `ccst pdata migrate-uuid --write` (from a plain terminal) and the
+  runbook, and FAILs when the database format and the marker disagree. The `pending-migration`
+  SessionStart hook reports the same projects, honouring `ccst doctor --mute`.
+- **`install-everything.sh` migration banner.** After `ccst doctor`, the new
+  `ccst pdata migration-notice` prints the migrate-uuid dry run and a framed banner listing every
+  format 3 project, the exact commands and the runbook path, and saying to migrate before starting
+  any `claude` session. Nothing is printed when every project is migrated; the script's exit status
+  is unchanged (it now prints the banner even when `ccst doctor` fails, then exits with doctor's
+  status).
+- **`docs/pdata-uuid-migration-runbook.md`**, a terminal-only, per-machine checklist: step 0 on
+  3.x (disable the pdata `ccsched` jobs, converge with `sync-check`), first machine, each later
+  machine, expected output per command, troubleshooting by message, rollback and a final
+  checklist.
+- **Deterministic ids for session-output records.** The session-output watermark and each
+  registered file get a UUIDv5 id derived from the project and the file, so two machines register
+  the same file under the same id, and registering an already registered file is a no-op.
+
+### Changed
+
+- **BREAKING**: `pdata` record ids are UUID strings (`records.id TEXT PRIMARY KEY`, and `TEXT`
+  `record_id` columns in `ext_<group>` and `pdata_verify_watermark`). New records get a UUIDv4.
+  JSON output carries ids as strings, and listings order by `created_at, id` instead of `id`.
+- **BREAKING**: `ccst pdata get/update/delete/restore --id` take a UUID, and
+  `ccst pdata resolve --choice` takes `UUID=local|dump`; anything else is a usage error naming
+  the value. `resolve.apply_resolution()` takes `{uuid_string: "local" | "dump"}`.
+- **BREAKING**: the format 4 dump is published to `.pdata-db-dump/v4/` (`latest.sql`,
+  `latest.sha256`, `archive/`) and starts with a `-- pdata_format=4` header; a migrated project's
+  dump also records the format 3 vector clock it came from. The format 3 files directly under
+  `.pdata-db-dump/` are never written, loaded or modified by 4.x, so a 3.x machine keeps working
+  on them in isolation, and a rollback can return to them.
+- **BREAKING**: a format 3 database is read-only until migrated. Every record-touching
+  `ccst pdata` verb refuses with a message naming `ccst pdata migrate-uuid --write`; `rehydrate`,
+  adopt-from-dump, `sync-check`, the `pdata-sync` hook and the pdata scheduled jobs report
+  "migration pending" (not a fork, not an error) and change nothing. `migrate-uuid`,
+  `migration-notice`, `sync-check` (status only), `verify`, `readiness-scan` and `ccst doctor`
+  still run. `sync-check --all-projects` counts these projects as `migration-pending`.
+- `ccst pdata resolve`'s `dump` choice also copies the record's `created_at`.
+
+### Removed
+
+- The id-collision classification in `ccst pdata resolve` (`RecordDiff.id_collision` and its
+  refusal): with UUIDs the same id on both sides is the same record, and records added on each
+  side appear as one-sided records with an ordinary `local`/`dump` choice. Edit conflicts,
+  delete-versus-update and group mismatches are classified as before.
+
 ## [3.16.2] - 2026-10-19
 
 ### Fixed
@@ -2476,7 +2546,8 @@ integration (push notifications when 8-digit confirmation gates fire).
 - `--version` flag on all three CLIs.
 - `.gitignore` entry for `.worktrees/`.
 
-[Unreleased]: https://github.com/raffishquartan/claude-code-session-tools/compare/v3.16.2...HEAD
+[Unreleased]: https://github.com/raffishquartan/claude-code-session-tools/compare/v4.0.0...HEAD
+[4.0.0]: https://github.com/raffishquartan/claude-code-session-tools/compare/v3.16.2...v4.0.0
 [3.16.2]: https://github.com/raffishquartan/claude-code-session-tools/compare/v3.16.1...v3.16.2
 [3.16.1]: https://github.com/raffishquartan/claude-code-session-tools/compare/v3.16.0...v3.16.1
 [3.16.0]: https://github.com/raffishquartan/claude-code-session-tools/compare/v3.15.1...v3.16.0
