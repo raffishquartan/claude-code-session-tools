@@ -18,9 +18,9 @@
 
 ## 4. Dump format and sync
 
-- [ ] 4.1 Add the `-- pdata_format=` header; write format 4 dumps and archives to `.pdata-db-dump/v4/` and never touch format 3 files; reads treat a missing header as format 3. Verify: `tests/pdata/test_dump.py` for header, location and format 3 files byte-identical after a publish.
-- [ ] 4.2 Gate `rehydrate`, adopt-from-dump, `sync_check` and the sync hook on a format match: mismatch is a "migration pending" outcome (not FORK, not an error), names both formats and the command, and changes nothing. Verify: tests in `test_rehydrate.py`, `test_sync_check.py`, `test_pdata_sync_hook.py`, and `test_ccst_pdata_init_cli.py` for adoption.
-- [ ] 4.3 Replace the integer-collision branch in `resolve._classify`/`apply_resolution` with the UUID semantics (same id = same record; edit conflict, delete-versus-update, group mismatch retained), remove the out-of-band message; update tests in `tests/pdata/test_resolve.py` (`:83,168,173-209,544,574-613`). Verify: rewritten tests, including a fork where each side added different records.
+- [x] 4.1 Add the `-- pdata_format=` header; write format 4 dumps and archives to `.pdata-db-dump/v4/` and never touch format 3 files; reads treat a missing header as format 3. Verify: `tests/pdata/test_dump.py` for header, location and format 3 files byte-identical after a publish.
+- [x] 4.2 Gate `rehydrate`, adopt-from-dump, `sync_check` and the sync hook on a format match: mismatch is a "migration pending" outcome (not FORK, not an error), names both formats and the command, and changes nothing. Verify: tests in `test_rehydrate.py`, `test_sync_check.py`, `test_pdata_sync_hook.py`, and `test_ccst_pdata_init_cli.py` for adoption.
+- [x] 4.3 Replace the integer-collision branch in `resolve._classify`/`apply_resolution` with the UUID semantics (same id = same record; edit conflict, delete-versus-update, group mismatch retained), remove the out-of-band message; update tests in `tests/pdata/test_resolve.py` (`:83,168,173-209,544,574-613`). Verify: rewritten tests, including a fork where each side added different records.
 
 ## 5. `ccst pdata migrate-uuid`
 
