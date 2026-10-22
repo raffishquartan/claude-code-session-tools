@@ -75,7 +75,7 @@ def _is_pdata_result(result: CheckResult) -> bool:
 
 
 def _format_digest(unmuted: list[CheckResult]) -> str:
-    lines = ["ccst: unmigrated data detected —"]
+    lines = ["ccst: unmigrated data detected:"]
     for r in unmuted:
         lines.append(f"  [{r.status.value}] {r.name}: {r.reason}")
     lines.append("")
