@@ -154,10 +154,11 @@ def ensure_session_output_schema(project: str) -> None:
 
 
 def _get_watermark_record(project: str, *, include_deleted: bool = False) -> Record | None:
-    """This project's watermark record: the one with watermark_record_id, else the oldest
-    watermark row. The fallback is a watermark that predates deterministic ids, which
-    `ccst pdata migrate-uuid` carried over under the id it maps every format 3 record to;
-    reusing it is what keeps a migrated project at one watermark row."""
+    """This project's watermark record: the live one with watermark_record_id, else the oldest
+    live watermark row; with `include_deleted`, and only when no watermark row is live, the
+    soft-deleted one chosen the same way. A watermark row can have another id because
+    `ccst pdata migrate-uuid` gives every row of a format 3 database the id it maps that row's
+    integer id to; reusing that row keeps a migrated project at one watermark."""
     from cc_session_tools.lib.pdata import service, store
 
     if not store.db_path(project).exists():
@@ -171,13 +172,20 @@ def _get_watermark_record(project: str, *, include_deleted: bool = False) -> Rec
         # call further down — this short-circuit only skips the unnecessary read-only connect.
         return None
 
-    record = service.get_record(
+    preferred = service.get_record(
         project=project, record_id=watermark_record_id(project), include_deleted=include_deleted,
     )
-    if record is not None:
-        return record
+    if preferred is not None and preferred.deleted_at is None:
+        return preferred
+    live = service.list_records(project=project, record_group=WATERMARK_GROUP, limit=1)
+    if live:
+        return live[0]
+    if preferred is not None:
+        return preferred
+    if not include_deleted:
+        return None
     records = service.list_records(
-        project=project, record_group=WATERMARK_GROUP, limit=1, include_deleted=include_deleted,
+        project=project, record_group=WATERMARK_GROUP, limit=1, include_deleted=True,
     )
     return records[0] if records else None
 

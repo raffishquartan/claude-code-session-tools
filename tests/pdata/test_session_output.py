@@ -378,3 +378,68 @@ def test_a_watermark_with_a_non_deterministic_id_is_reused_not_duplicated(monkey
 
     rows = service.list_records(project="testproj", record_group=session_output.WATERMARK_GROUP)
     assert [(r.id, r.content) for r in rows] == [(legacy.id, "200")]
+
+
+def test_a_live_watermark_is_preferred_over_a_soft_deleted_one(monkeypatch, tmp_path):
+    """A soft-deleted legacy watermark row older than the live one is never read, restored or
+    updated while the live one exists."""
+    monkeypatch.setenv("CCST_PROJECT_DB_DIR", str(tmp_path))
+    from cc_session_tools.lib.pdata import service
+
+    legacy = service.add_record(
+        project="testproj", record_group=session_output.WATERMARK_GROUP, content="100",
+        file_path=None, fields={}, created_at=100,
+    )
+    service.delete_record(project="testproj", record_id=legacy.id, expected_version=1)
+    live = service.add_record(
+        project="testproj", record_group=session_output.WATERMARK_GROUP, content="300",
+        file_path=None, fields={}, created_at=300,
+    )
+
+    assert session_output.get_watermark("testproj") == 300
+    session_output.set_watermark("testproj", 400)
+
+    rows = service.list_records(
+        project="testproj", record_group=session_output.WATERMARK_GROUP, include_deleted=True,
+    )
+    by_id = {r.id: r for r in rows}
+    assert by_id[live.id].content == "400"
+    assert by_id[legacy.id].content == "100"
+    assert by_id[legacy.id].deleted_at is not None
+
+
+def test_a_live_legacy_watermark_is_preferred_over_a_soft_deleted_deterministic_one(
+    monkeypatch, tmp_path,
+):
+    monkeypatch.setenv("CCST_PROJECT_DB_DIR", str(tmp_path))
+    from cc_session_tools.lib.pdata import service
+
+    session_output.set_watermark("testproj", 100)
+    deterministic = session_output.watermark_record_id("testproj")
+    service.delete_record(project="testproj", record_id=deterministic, expected_version=1)
+    legacy = service.add_record(
+        project="testproj", record_group=session_output.WATERMARK_GROUP, content="300",
+        file_path=None, fields={}, created_at=300,
+    )
+
+    session_output.set_watermark("testproj", 400)
+
+    assert service.get_record(project="testproj", record_id=legacy.id).content == "400"
+    gone = service.get_record(project="testproj", record_id=deterministic, include_deleted=True)
+    assert gone is not None and gone.deleted_at is not None and gone.content == "100"
+
+
+def test_a_soft_deleted_watermark_is_restored_when_no_live_one_exists(monkeypatch, tmp_path):
+    monkeypatch.setenv("CCST_PROJECT_DB_DIR", str(tmp_path))
+    from cc_session_tools.lib.pdata import service
+
+    session_output.set_watermark("testproj", 100)
+    deterministic = session_output.watermark_record_id("testproj")
+    service.delete_record(project="testproj", record_id=deterministic, expected_version=1)
+
+    session_output.set_watermark("testproj", 400)
+
+    rows = service.list_records(
+        project="testproj", record_group=session_output.WATERMARK_GROUP, include_deleted=True,
+    )
+    assert [(r.id, r.content, r.deleted_at) for r in rows] == [(deterministic, "400", None)]
