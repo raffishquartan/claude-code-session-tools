@@ -12,7 +12,7 @@ from contextlib import contextmanager
 from datetime import datetime, timezone
 
 from cc_session_tools.lib import db
-from cc_session_tools.lib.pdata import formats, ids, naming, store
+from cc_session_tools.lib.pdata import formats, ids, naming, store, vector_clock_store
 
 _ALLOWED_COLUMN_TYPES = frozenset({"TEXT", "INTEGER", "REAL", "BLOB"})
 
@@ -55,7 +55,7 @@ CREATE TABLE IF NOT EXISTS pdata_meta (
     revision INTEGER NOT NULL,
     updated_at INTEGER NOT NULL
 );
-""" + db.MIGRATIONS_DDL
+""" + vector_clock_store.MIGRATION_ORIGIN_DDL + db.MIGRATIONS_DDL
 
 
 def connect(project: str) -> sqlite3.Connection:

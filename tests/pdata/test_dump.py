@@ -424,16 +424,47 @@ def test_read_latest_refuses_an_unknown_format_header(tmp_path, monkeypatch):
 
 def test_the_migrated_from_format3_vector_round_trips(tmp_path, monkeypatch):
     conn = _format4_db(tmp_path, monkeypatch)
+    with repository._immediate(conn):
+        vector_clock_store.write_migration_origin(conn, {"machine-a": 3, "machine-b": 7})
     project_root = tmp_path / "proj"
-    dump.write_latest(
-        conn, project_root=project_root, machine_id="ltxy", vector={"ltxy": 1},
-        migrated_from_format3_vector={"machine-a": 3, "machine-b": 7},
-    )
+    dump.write_latest(conn, project_root=project_root, machine_id="ltxy", vector={"ltxy": 1})
     text = dump.latest_path(project_root).read_text()
     assert "-- migrated_from_format3_vector:machine-a=3\n" in text
     info = dump.read_latest(project_root)
     assert info.migrated_from_format3_vector == {"machine-a": 3, "machine-b": 7}
     assert info.vector == {"ltxy": 1}
+
+
+def test_every_publish_carries_the_migration_origin_from_the_database(tmp_path, monkeypatch):
+    """Design D6c: the origin lives in the database, so a later publish - by any machine, after
+    any number of edits - still carries it in the header a joining machine reads."""
+    conn = _format4_db(tmp_path, monkeypatch)
+    with repository._immediate(conn):
+        vector_clock_store.write_migration_origin(conn, {"machine-a": 3})
+    project_root = tmp_path / "proj"
+    dump.write_latest(conn, project_root=project_root, machine_id="ltxy", vector={"ltxy": 1})
+    with repository._immediate(conn):
+        repository.insert_base_record(
+            conn, record_group="g", content="later", file_path=None, created_at=2, updated_at=2,
+        )
+    dump.write_latest(conn, project_root=project_root, machine_id="ltxy", vector={"ltxy": 2})
+    assert dump.read_latest(project_root).migrated_from_format3_vector == {"machine-a": 3}
+
+
+def test_a_fresh_database_has_an_empty_migration_origin_table(tmp_path, monkeypatch):
+    conn = _format4_db(tmp_path, monkeypatch)
+    assert vector_clock_store.read_migration_origin(conn) == {}
+
+
+def test_a_database_without_the_origin_table_publishes_no_origin(tmp_path, monkeypatch):
+    """A database rehydrated from a dump published before the table existed has no
+    `pdata_migration_origin` table until its next repository.connect()."""
+    conn = _format4_db(tmp_path, monkeypatch)
+    conn.execute("DROP TABLE pdata_migration_origin")
+    assert vector_clock_store.read_migration_origin(conn) == {}
+    project_root = tmp_path / "proj"
+    dump.write_latest(conn, project_root=project_root, machine_id="ltxy", vector={"ltxy": 1})
+    assert dump.read_latest(project_root).migrated_from_format3_vector is None
 
 
 def test_a_dump_not_migrated_from_format3_has_no_recorded_vector(tmp_path, monkeypatch):

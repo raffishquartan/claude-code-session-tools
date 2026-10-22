@@ -17,7 +17,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Final
 
-from cc_session_tools.lib.pdata import formats, vector_clock
+from cc_session_tools.lib.pdata import formats, vector_clock, vector_clock_store
 
 _ARCHIVE_KEEP = 24
 
@@ -177,12 +177,12 @@ def _unique_archive_path(archive_dir: Path) -> Path:
 
 def write_latest(
     conn: sqlite3.Connection, *, project_root: Path, machine_id: str, vector: dict[str, int],
-    migrated_from_format3_vector: Mapping[str, int] | None = None,
 ) -> None:
     """Publish `conn`'s database as the project's current-format `latest.sql`, archiving the
     previous one. Only a current-format database is ever published: format 3 dumps belong to
-    ccst 3.x and this code never writes them. `migrated_from_format3_vector`, when given, is
-    recorded in the header (see `_MIGRATED_FROM_PREFIX`)."""
+    ccst 3.x and this code never writes them. The database's recorded migration origin
+    (vector_clock_store.read_migration_origin), when it has one, goes into the header on every
+    publish (see `_MIGRATED_FROM_PREFIX`)."""
     local_format = formats.pdata_format(conn)
     if local_format != formats.CURRENT_PDATA_FORMAT:
         raise ValueError(
@@ -196,11 +196,10 @@ def write_latest(
         f"{_DUMPED_AT_PREFIX}{int(time.time())}",
         *(f"{_VECTOR_PREFIX}{k}={v}" for k, v in sorted(vector.items())),
     ]
-    if migrated_from_format3_vector is not None:
-        header_lines.extend(
-            f"{_MIGRATED_FROM_PREFIX}{k}={v}"
-            for k, v in sorted(migrated_from_format3_vector.items())
-        )
+    header_lines.extend(
+        f"{_MIGRATED_FROM_PREFIX}{k}={v}"
+        for k, v in sorted(vector_clock_store.read_migration_origin(conn).items())
+    )
     full_text = "\n".join(header_lines) + "\n" + text
     checksum = hashlib.sha256(full_text.encode()).hexdigest()
 
