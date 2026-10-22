@@ -88,7 +88,7 @@ wheels = [
 
 [[package]]
 name = "cc-session-tools"
-version = "4.0.0"
+version = "4.0.1"
 source = { editable = "." }
 dependencies = [
     { name = "httpx" },
@@ -111,6 +111,7 @@ dev = [
 dev = [
     { name = "extract-msg" },
     { name = "mypy" },
+    { name = "pandas-stubs" },
     { name = "pillow" },
     { name = "pytesseract" },
     { name = "pytest" },
@@ -142,6 +143,7 @@ provides-extras = ["dev"]
 dev = [
     { name = "extract-msg", specifier = ">=0.45" },
     { name = "mypy", specifier = ">=1.10" },
+    { name = "pandas-stubs" },
     { name = "pillow", specifier = ">=10.0" },
     { name = "pytesseract", specifier = ">=0.3" },
     { name = "pytest", specifier = ">=7" },

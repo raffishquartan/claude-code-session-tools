@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [4.0.1] - 2026-10-22
+
+### Fixed
+- `mypy src` now exits 0 after `uv sync`: `pandas-stubs` is in the `dev` dependency group, so the ten `import-untyped` errors (missing stub packages, not code defects) no longer appear.
+
+### Changed
+- CI runs `mypy src` in the test job, so the type check stays clean.
+
 ## [4.0.0] - 2026-10-22
 
 `pdata` record ids were SQLite integer rowids, assigned independently on each machine, so two
