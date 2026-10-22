@@ -1066,12 +1066,13 @@ def _pdata_gate_targets(args: argparse.Namespace) -> list[str]:
 
 def _pdata_format_refusal(args: argparse.Namespace) -> int | None:
     """The format gate (`formats` module docstring): returns exit code 1, after printing the
-    migration message for each target project whose database is still format 3, or that has no
-    database while its only published dump is format 3, when the verb is not exempt; else None.
-    Read-only, and runs before the verb's handler opens anything."""
+    migration message for each target project whose database is still format 3, or was converted
+    by a migration run that did not finish, or that has no database while its only published dump
+    is format 3, when the verb is not exempt; else None. Read-only, and runs before the verb's
+    handler opens anything."""
     import sqlite3
 
-    from cc_session_tools.lib.pdata import dump, formats, store
+    from cc_session_tools.lib.pdata import dump, formats, store, vector_clock_store
 
     if args.verb in formats.FORMAT_GATE_EXEMPT_VERBS:
         return None
@@ -1099,6 +1100,10 @@ def _pdata_format_refusal(args: argparse.Namespace) -> int | None:
             continue  # not a readable database: the verb's own handler reports it per project
         if fmt == formats.PDATA_FORMAT_INTEGER_IDS:
             print(f"ccst pdata {args.verb}: {formats.legacy_format_message(project)}",
+                  file=sys.stderr)
+            refused = True
+        elif vector_clock_store.migration_unfinished(path):
+            print(f"ccst pdata {args.verb}: {formats.unfinished_migration_message(project)}",
                   file=sys.stderr)
             refused = True
     return 1 if refused else None

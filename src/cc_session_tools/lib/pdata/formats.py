@@ -138,14 +138,32 @@ def format3_only_message(project: str) -> str:
     return f"{project}: this machine has no database for it and {_format3_only_explanation(project)}"
 
 
+def _unfinished_explanation(project: str) -> str:
+    return (
+        f"the database was converted to format {CURRENT_PDATA_FORMAT} by `{MIGRATE_COMMAND}`, "
+        f"but that run did not finish (its {UUID_IDS_MIGRATION} marker is not recorded), so it "
+        f"is not verified yet and nothing reads, publishes or syncs it. From a plain terminal "
+        f"with no `claude` session running, run `{MIGRATE_COMMAND} --project {project} --write` "
+        f"to finish it. See {RUNBOOK_PATH} in the cc-session-tools repository."
+    )
+
+
+def unfinished_migration_message(project: str) -> str:
+    """Why a verb refused on `project`'s converted but not yet verified database."""
+    return f"{project}: {_unfinished_explanation(project)}"
+
+
 def migration_pending_detail(
     project: str, *, local_format: int | None, dump_format: int | None,
+    unfinished: bool = False,
 ) -> str:
     """Why sync left `project` alone: its database and its published dump are not both the
     current format. `local_format` is None when this machine has no database (and the only
     published dump is format 3); `dump_format` is None when nothing is published. Callers prefix
     the project name and "migration pending" in their own style, so the text starts with
-    neither."""
+    neither. `unfinished` is True for a converted database whose migration run did not finish."""
+    if unfinished:
+        return _unfinished_explanation(project)
     if local_format is None:
         return (
             f"there is no database on this machine and {_format3_only_explanation(project)} "

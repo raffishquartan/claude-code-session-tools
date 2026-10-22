@@ -83,11 +83,17 @@ file and a rename, and the files of an unfinished first publish are removed.
 ### Requirement: Migration is idempotent and resumable
 Running `--write` on an already migrated project SHALL report that nothing needs doing and exit 0,
 changing nothing. If a previous run converted the database but did not record the marker or publish
-the dump, a re-run SHALL complete exactly those steps.
+the dump, a re-run SHALL complete exactly those steps. Until the marker is recorded, a converted
+database SHALL be treated as pending migration everywhere else: no `ccst pdata` record verb,
+`dump`, sync-check or sync hook reads, publishes or syncs it.
 
 #### Scenario: Second run
 - **WHEN** `--write` is run twice
 - **THEN** the second run reports `already migrated` and changes no file
+
+#### Scenario: Sync during an unfinished migration
+- **WHEN** sync-check or the SessionEnd hook runs on a converted database whose marker is not recorded
+- **THEN** it reports a pending migration naming `ccst pdata migrate-uuid --write`, publishes nothing, and a re-run of `migrate-uuid --write` finishes the migration
 
 ### Requirement: A machine joining after the first migration adopts it
 When a format 4 dump already exists for a project, `migrate-uuid --write` on another machine SHALL

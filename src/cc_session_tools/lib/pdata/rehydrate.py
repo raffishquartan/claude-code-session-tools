@@ -44,6 +44,9 @@ class RehydrateResult:
     # nothing is published).
     local_format: int | None = None
     dump_format: int | None = None
+    # Set on MIGRATION_PENDING only: the local database was converted to the current format but
+    # the migration run did not finish (vector_clock_store.migration_unfinished).
+    unfinished_migration: bool = False
 
 
 def migration_pending_detail(result: RehydrateResult, *, project: str) -> str:
@@ -53,6 +56,7 @@ def migration_pending_detail(result: RehydrateResult, *, project: str) -> str:
         raise ValueError(f"not a migration-pending outcome: {result.outcome.value}")
     return formats.migration_pending_detail(
         project, local_format=result.local_format, dump_format=result.dump_format,
+        unfinished=result.unfinished_migration,
     )
 
 
@@ -64,9 +68,21 @@ def format_gate(
     published from, whatever is published), or `existing` - the published current-format dump -
     is a trustworthy dump of another format, or there is no local database and the project's
     only published dump is format 3 (nothing may create one then: see
-    formats.AwaitingMigrationError). Reads the database file read-only; any other project with no
-    database yet is the current format, since connecting creates it so."""
-    local_format = formats.database_format(store.db_path(project))
+    formats.AwaitingMigrationError), or the local database is a converted one whose migration
+    run did not finish (it is not verified until `ccst pdata migrate-uuid --write` finishes it).
+    Reads the database file read-only; any other project with no database yet is the current
+    format, since connecting creates it so."""
+    db_path = store.db_path(project)
+    local_format = formats.database_format(db_path)
+    if local_format == formats.CURRENT_PDATA_FORMAT and vector_clock_store.migration_unfinished(
+        db_path,
+    ):
+        return RehydrateResult(
+            outcome=RehydrateOutcome.MIGRATION_PENDING,
+            local_format=local_format,
+            dump_format=_published_format(project_root, existing=existing),
+            unfinished_migration=True,
+        )
     if local_format is None and dump.only_format3_published(project_root):
         return RehydrateResult(
             outcome=RehydrateOutcome.MIGRATION_PENDING,

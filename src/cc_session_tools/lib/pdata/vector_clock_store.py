@@ -1,5 +1,5 @@
-"""Reads/writes the pdata_meta table (spec: "The vector clock") and the pdata_migration_origin
-table for one already-open connection. Pure vector math lives in vector_clock.py - this module is
+"""Reads/writes the pdata_meta table (spec: "The vector clock") and the migration origin tables
+(pdata_migration_origin, pdata_migrated_from) for one already-open connection. Pure vector math lives in vector_clock.py - this module is
 the only place that touches SQL for either. Caller owns the transaction (wrap writes in
 repository._immediate), matching every other write path in this package."""
 from __future__ import annotations
@@ -7,8 +7,10 @@ from __future__ import annotations
 import sqlite3
 import time
 from collections.abc import Mapping
+from pathlib import Path
 from typing import Final
 
+from cc_session_tools.lib import db
 from cc_session_tools.lib.pdata import formats, vector_clock
 
 # The migration origin of a format 4 database (design D6c). `pdata_migrated_from` holds one row,
@@ -73,6 +75,22 @@ def read_migration_origin(conn: sqlite3.Connection) -> dict[str, int] | None:
         (formats.PDATA_FORMAT_INTEGER_IDS,),
     ).fetchone() is not None
     return vector if migrated or vector else None
+
+
+def migration_unfinished(path: Path) -> bool:
+    """True when the database at `path` was converted by `ccst pdata migrate-uuid` (it has a
+    migration origin) but its `pdata-uuid-ids` marker is not recorded: the run that converted it
+    stopped before verifying it. Opens the file read-only."""
+    conn = db.connect(path, readonly=True)
+    try:
+        if read_migration_origin(conn) is None:
+            return False
+        return not (
+            _table_exists(conn, "migrations")
+            and db.migration_applied(conn, formats.UUID_IDS_MIGRATION)
+        )
+    finally:
+        conn.close()
 
 
 def write_migration_origin(conn: sqlite3.Connection, vector: Mapping[str, int]) -> None:
