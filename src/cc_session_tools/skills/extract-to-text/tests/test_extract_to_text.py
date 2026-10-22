@@ -14,6 +14,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 SCRIPT = Path(__file__).resolve().parent.parent / "scripts" / "extract_to_text.py"
 
@@ -46,7 +47,7 @@ def _env_without(*binaries: str, tmp: Path) -> dict[str, str]:
         if not os.path.isdir(d):
             continue
         for name in os.listdir(d):
-            if name in binaries or (bin_dir / name).exists():
+            if name in binaries or os.path.lexists(bin_dir / name):
                 continue
             (bin_dir / name).symlink_to(os.path.join(d, name))
     return {**os.environ, "PATH": str(bin_dir)}
@@ -85,6 +86,21 @@ def _write_minimal_pdf(path: Path, text: str) -> None:
         f"startxref\n{xref_offset}\n%%EOF"
     ).encode("ascii")
     path.write_bytes(bytes(out))
+
+
+class EnvWithoutHelper(unittest.TestCase):
+    def test_dangling_link_in_two_path_dirs_is_linked_once(self) -> None:
+        with tempfile.TemporaryDirectory() as t:
+            root = Path(t)
+            dirs = [root / "a", root / "b"]
+            for d in dirs:
+                d.mkdir()
+                (d / "dangling").symlink_to(root / "missing")
+                (d / "hidden").write_text("")
+            with mock.patch.dict("os.environ", {"PATH": ":".join(str(d) for d in dirs)}):
+                env = _env_without("hidden", tmp=root)
+            linked = sorted(p.name for p in Path(env["PATH"]).iterdir())
+            self.assertEqual(linked, ["dangling"])
 
 
 class ExtractToTextCli(unittest.TestCase):

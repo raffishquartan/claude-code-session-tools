@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [4.0.2] - 2026-10-22
+
+### Fixed
+- The `extract-to-text` skill tests no longer fail with `FileExistsError` on machines whose PATH holds a dangling symlink in more than one directory (the PATH-hiding test helper now treats a dangling link as already present). The default `pytest` run exits 0 on such machines.
+
 ## [4.0.1] - 2026-10-22
 
 ### Fixed
