@@ -65,6 +65,9 @@ the originating failure directly: two machines backfilling the same files produc
 not duplicates, and the watermark can no longer exist twice (today `limit=1 ORDER BY id` would pick
 nondeterministically under random UUIDs). A same-id divergence is an edit conflict that `resolve`
 can settle.
+Migrated rows are mapped by D2, not D3: a migrated watermark or session-output row carries
+uuid5(`<project>:<old integer id>`), and the reconcile code finds existing rows by the D3 id
+or, failing that, by `file_path` (watermark: the oldest watermark row), so no duplicate appears.
 
 Why v5 here and v4 elsewhere: v4 is random, so it is right for new records (two machines can never
 pick the same id) but two machines migrating the same old record would pick different ids and the
@@ -107,6 +110,17 @@ day (`ccsched disable`) and re-enable them after it migrates. A machine that did
 step 2 has its `migrate-uuid` refuse (the recorded-vector check above) and those changes must be
 re-entered by hand; changes that are only session-output rows are re-derived by the reconcile job
 under their deterministic ids.
+
+### D6c. Lineage vector storage, and the unpublished-changes dead end
+The format 3 vector clock that a format 4 database was migrated from is stored in the database
+(table `pdata_migration_origin`, one row per machine), so it replicates with every dump and rehydrate,
+and every publish copies it into the dump's `-- migrated_from_format3_vector:` header lines (the
+header is what a joining machine reads before it touches its own data). Format 4 code never
+writes a format 3 dump, so a format 3 database with unpublished changes cannot publish them once ccst is
+4.0.0. `migrate-uuid` therefore refuses that state with a message that gives the recovery: install
+3.16.2 (`uv tool install cc-session-tools==3.16.2`), run `ccst pdata sync-check` until it reports
+"unchanged", then upgrade again; the runbook makes this step 0 ("on every machine, while still on
+3.x, before upgrading anything").
 
 ### D6a. Making the required migration impossible to miss
 Upgrading is `uv tool install cc-session-tools --upgrade`, which cannot print anything about data.
