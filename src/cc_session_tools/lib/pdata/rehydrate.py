@@ -159,13 +159,13 @@ def rehydrate(project: str, *, force: bool = False) -> RehydrateResult:
         return RehydrateResult(outcome=RehydrateOutcome.DEFERRED)
 
     latest = dump.latest_path(project_root)
-    tmp_path = _build_replacement(db_path.parent, dump.sql_body(latest.read_text()))
+    tmp_path = build_replacement(db_path.parent, dump.sql_body(latest.read_text()))
     try:
         tmp_path.replace(db_path)  # atomic directory-entry swap on the same filesystem
     except BaseException:
         tmp_path.unlink(missing_ok=True)
         raise
-    _drop_stale_wal_sidecars(db_path)
+    drop_stale_wal_sidecars(db_path)
 
     return RehydrateResult(
         outcome=RehydrateOutcome.FAST_FORWARDED,
@@ -174,7 +174,7 @@ def rehydrate(project: str, *, force: bool = False) -> RehydrateResult:
     )
 
 
-def _build_replacement(db_dir: Path, sql_body: str) -> Path:
+def build_replacement(db_dir: Path, sql_body: str) -> Path:
     """Write sql_body into a brand-new sqlite file next to the live .db, ready for an atomic
     swap. Deliberately NOT opened through db.connect() — no WAL mode, no `PRAGMA
     foreign_keys=ON` — for two independent reasons:
@@ -204,7 +204,7 @@ def _build_replacement(db_dir: Path, sql_body: str) -> Path:
     return tmp_path
 
 
-def _drop_stale_wal_sidecars(db_path: Path) -> None:
+def drop_stale_wal_sidecars(db_path: Path) -> None:
     """tmp_path.replace(db_path) only swaps db_path's directory entry for a new inode — rename(2)
     is atomic on a POSIX filesystem (Linux/WSL2 included) regardless of what else has either path
     open, so that part of the old "atomic on the same filesystem" reasoning holds. What it does

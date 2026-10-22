@@ -425,7 +425,7 @@ def _joined(record_ids: list[str]) -> str:
 
 
 def _open_dump(project_root: Path) -> sqlite3.Connection:
-    """In-memory replay of the published dump. rehydrate.py's `_build_replacement()` builds the
+    """In-memory replay of the published dump. rehydrate.py's `build_replacement()` builds the
     same kind of one-shot SQLite replica on disk, ready for an atomic swap; this module never
     swaps files — it only ever reads the dump side for comparison — so `:memory:` is used instead,
     with no temp file or cleanup needed.

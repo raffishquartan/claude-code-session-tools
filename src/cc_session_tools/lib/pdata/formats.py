@@ -27,6 +27,9 @@ CURRENT_PDATA_FORMAT: Final = PDATA_FORMAT_UUID_IDS
 UUID_IDS_MIGRATION: Final = "pdata-uuid-ids"
 
 MIGRATE_COMMAND: Final = "ccst pdata migrate-uuid"
+# The last ccst release that reads and writes format 3: the one to reinstall when a format 3
+# database must still publish, fast-forward or resolve a fork before it can be migrated (D6c).
+LAST_FORMAT3_RELEASE: Final = "3.16.2"
 RUNBOOK_PATH: Final = "docs/pdata-uuid-migration-runbook.md"
 
 # `ccst pdata` verbs that still run on a format 3 database: the migration itself, and the
