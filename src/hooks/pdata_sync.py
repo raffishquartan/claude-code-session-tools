@@ -162,6 +162,11 @@ def on_session_start(cwd: str, *, session_pid: int | None) -> str | None:
         # sync_notify.py's module docstring, which names this hook for exactly that reason).
         sync_notify.notify_conflict(project, outcome=result.outcome.value, detail=detail)
         return f"[pdata-sync] {project}: {detail}"
+    if result.outcome is rehydrate.RehydrateOutcome.MIGRATION_PENDING:
+        # Not a conflict: no notification. The pending-migration hook and `ccst doctor` carry
+        # the call to action; this line says why nothing was synced.
+        detail = rehydrate.migration_pending_detail(result, project=project)
+        return f"[pdata-sync] {project}: migration pending - {detail}"
     if result.outcome is rehydrate.RehydrateOutcome.DEFERRED:
         # Another writer holds the local db's lock right now - transient, the next trigger
         # retries. Not actionable, but still worth a line so a stuck-looking rehydrate is visible
@@ -188,10 +193,15 @@ def on_session_end(cwd: str) -> None:
         return
     project, project_root = resolved
 
+    existing = dump.read_latest(project_root)
+    if rehydrate.format_gate(project, project_root=project_root, existing=existing) is not None:
+        # Waiting for `ccst pdata migrate-uuid`: nothing is published, silently, as for every
+        # other SessionEnd outcome that needs no notification.
+        return
+
     conn = repository.connect(project)
     try:
         local_vector = vector_clock_store.read_vector(conn)
-        existing = dump.read_latest(project_root)
         comparison = dump.decide_publish(local_vector=local_vector, existing=existing)
         if comparison is not None:
             sync_notify.notify_conflict(

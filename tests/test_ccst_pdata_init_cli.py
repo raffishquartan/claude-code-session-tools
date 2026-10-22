@@ -444,3 +444,57 @@ def test_pdata_init_dry_run_warns_about_a_pointer_collision(base_env, tmp_path):
     assert "data/things.md" in r.stdout
     assert "data/things.csv.pdata-pointer.md" in r.stdout
     assert (project_dir / "data" / "things.md").read_text() == "REAL NARRATIVE - MUST SURVIVE\n"
+
+
+# ---------- adoption refuses a dump of another format ----------
+
+
+def _format3_dump_for_demo(tmp_path: Path) -> Path:
+    """Publish a format 3 (ccst 3.x) dump for project `demo` at the format 3 location, with no
+    local database. Returns the project directory."""
+    from pdata.legacy_fixture import make_format3_db, write_format3_dump
+
+    project_dir = tmp_path / "projects" / "demo"
+    project_dir.mkdir(parents=True)
+    source = make_format3_db(tmp_path / "elsewhere" / "demo.db")
+    write_format3_dump(source, project_dir, machine_id="macbook", vector={"macbook": 3})
+    return project_dir
+
+
+def _assert_mismatch_refusal(r: subprocess.CompletedProcess[str]) -> None:
+    assert r.returncode == 2, (r.stdout, r.stderr)
+    assert "published dump is format 3" in r.stderr
+    assert "format 4" in r.stderr
+    assert "ccst pdata migrate-uuid --project demo" in r.stderr
+    assert "Adopting existing pdata" not in r.stdout
+
+
+@pytest.mark.parametrize("write", [False, True])
+def test_pdata_init_refuses_to_adopt_a_format3_dump(base_env, tmp_path, write):
+    from pdata.legacy_fixture import snapshot_dir
+
+    project_dir = _format3_dump_for_demo(tmp_path)
+    dump_before = snapshot_dir(project_dir / ".pdata-db-dump")
+
+    r = _run(base_env, "pdata", "init", "--project", "demo", *(["--write"] if write else []))
+
+    _assert_mismatch_refusal(r)
+    assert not (Path(base_env["CCST_PROJECT_DB_DIR"]) / "demo.db").exists()
+    assert snapshot_dir(project_dir / ".pdata-db-dump") == dump_before
+
+
+@pytest.mark.parametrize("write", [False, True])
+def test_pdata_init_refuses_to_adopt_a_format3_dump_in_the_v4_location(
+    base_env, tmp_path, write,
+):
+    project_dir = _format3_dump_for_demo(tmp_path)
+    legacy_dir = project_dir / ".pdata-db-dump"
+    (legacy_dir / "v4").mkdir()
+    for name in ("latest.sql", "latest.sha256"):
+        (legacy_dir / "v4" / name).write_bytes((legacy_dir / name).read_bytes())
+        (legacy_dir / name).unlink()
+
+    r = _run(base_env, "pdata", "init", "--project", "demo", *(["--write"] if write else []))
+
+    _assert_mismatch_refusal(r)
+    assert not (Path(base_env["CCST_PROJECT_DB_DIR"]) / "demo.db").exists()

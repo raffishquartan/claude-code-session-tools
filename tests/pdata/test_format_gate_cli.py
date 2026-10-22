@@ -96,12 +96,26 @@ def test_verify_still_runs_on_a_format_3_database(legacy):
     assert r.stdout.startswith("old: "), (r.stdout, r.stderr)
 
 
-def test_sync_check_still_runs_on_a_format_3_database(legacy):
-    env, _ = legacy
+def test_sync_check_on_a_format_3_database_reports_status_only(legacy):
+    env, tmp_path = legacy
+    before = snapshot_dir(tmp_path)
     r = _run(env, "pdata", "sync-check", "--project", "old")
-    assert "database is format 3" not in r.stderr
-    assert r.returncode in (0, 1), (r.stdout, r.stderr)
-    assert "ccst pdata sync-check: old:" in r.stdout + r.stderr
+    assert r.returncode == 0, (r.stdout, r.stderr)
+    assert r.stderr == ""
+    assert r.stdout.startswith(
+        "ccst pdata sync-check: old: migration pending (format 3 dump: not_published) - "
+    ), r.stdout
+    assert "ccst pdata migrate-uuid --project old" in r.stdout
+    assert snapshot_dir(tmp_path) == before
+
+
+def test_sync_check_all_projects_counts_pending_migrations(legacy):
+    env, tmp_path = legacy
+    before = snapshot_dir(tmp_path)
+    r = _run(env, "pdata", "sync-check", "--all-projects")
+    assert r.returncode == 0, (r.stdout, r.stderr)
+    assert "migration-pending 1" in r.stdout
+    assert snapshot_dir(tmp_path) == before
 
 
 def test_readiness_scan_is_not_gated(legacy):
@@ -116,3 +130,38 @@ def test_doctor_is_not_gated(legacy):
     env = {**env, "HOME": str(tmp_path / "home")}
     r = _run(env, "doctor")
     assert "database is format 3" not in r.stderr
+
+
+def test_rehydrate_reports_a_format_mismatched_dump_as_a_pending_migration(legacy):
+    """A format 4 project whose v4 location holds a format 3 dump: rehydrate loads nothing and
+    says so, rather than calling it lock contention or a fork."""
+    from .legacy_fixture import write_format3_dump
+
+    env, tmp_path = legacy
+    r = _run(env, "pdata", "add", "--project", "new", "--group", "notes", "--content", "x")
+    assert r.returncode == 0, r.stderr
+    project_root = tmp_path / "projects" / "new"
+    legacy_dir = write_format3_dump(
+        tmp_path / "project-db" / "old.db", project_root, machine_id="machine-a",
+        vector={"machine-a": 3},
+    )
+    v4 = legacy_dir / "v4"
+    v4.mkdir()
+    for name in ("latest.sql", "latest.sha256"):
+        (v4 / name).write_bytes((legacy_dir / name).read_bytes())
+    def files() -> dict[str, bytes]:
+        # A read-only open of a WAL database may create its -wal/-shm sidecars; data is what
+        # must not change.
+        return {
+            k: v for k, v in snapshot_dir(tmp_path).items() if not k.endswith(("-wal", "-shm"))
+        }
+
+    before = files()
+
+    for argv in (("--project", "new"), ("--project", "new", "--force")):
+        r = _run(env, "pdata", "rehydrate", *argv)
+        assert r.returncode == 0, (r.stdout, r.stderr)
+        assert r.stdout.startswith("ccst pdata rehydrate: new: migration pending - "), r.stdout
+        assert "published dump is format 3" in r.stdout
+        assert "ccst pdata migrate-uuid --project new" in r.stdout
+        assert files() == before

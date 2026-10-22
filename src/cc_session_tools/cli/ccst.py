@@ -1713,6 +1713,12 @@ def _cmd_pdata_rehydrate(args: argparse.Namespace) -> int:
             sync_notify.notify_conflict(project, outcome=result.outcome.value, detail=detail)
             if not compact:
                 print(f"ccst pdata rehydrate: {project}: {detail}", file=sys.stderr)
+        elif result.outcome is rehydrate.RehydrateOutcome.MIGRATION_PENDING:
+            # Nothing loaded, and not a conflict: the published dump and this database are
+            # different formats until `ccst pdata migrate-uuid` runs on the format 3 side.
+            if not compact:
+                detail = rehydrate.migration_pending_detail(result, project=project)
+                print(f"ccst pdata rehydrate: {project}: migration pending - {detail}")
         else:
             # DEFERRED - another writer holds sync_lock right now. Expected and transient, not
             # an error (rehydrate.py's own RehydrateOutcome docstring: "retry later" rather than
@@ -1731,7 +1737,8 @@ def _cmd_pdata_rehydrate(args: argparse.Namespace) -> int:
             f"no-op {counts[rehydrate.RehydrateOutcome.NO_OP.value]}, "
             f"fork {counts[rehydrate.RehydrateOutcome.FORK.value]}, "
             f"checksum-invalid {counts[rehydrate.RehydrateOutcome.CHECKSUM_INVALID.value]}, "
-            f"deferred {counts[rehydrate.RehydrateOutcome.DEFERRED.value]} of "
+            f"deferred {counts[rehydrate.RehydrateOutcome.DEFERRED.value]}, "
+            f"migration-pending {counts[rehydrate.RehydrateOutcome.MIGRATION_PENDING.value]} of "
             f"{len(projects)} project(s)"
         )
 
@@ -2000,6 +2007,18 @@ def _cmd_pdata_sync_check(args: argparse.Namespace) -> int:
             worst = max(worst, 1)
             if not compact:
                 print(f"ccst pdata sync-check: {project}: {result.detail}", file=sys.stderr)
+        elif result.outcome is sync_check.SyncOutcome.MIGRATION_PENDING:
+            # Status, not an error and not a conflict: the project waits for `ccst pdata
+            # migrate-uuid`, and the doctor check and pending-migration hook report that.
+            if not compact:
+                status = (
+                    f" (format 3 dump: {result.format3_status.value})"
+                    if result.format3_status is not None else ""
+                )
+                print(
+                    f"ccst pdata sync-check: {project}: migration pending{status} - "
+                    f"{result.detail}"
+                )
         elif not compact:
             print(f"ccst pdata sync-check: {project}: {_sync_check_line(result)}")
 
@@ -2012,6 +2031,7 @@ def _cmd_pdata_sync_check(args: argparse.Namespace) -> int:
             f"conflict {counts[sync_check.SyncOutcome.CONFLICT.value]}, "
             f"deferred {counts[sync_check.SyncOutcome.DEFERRED.value]}, "
             f"occupied {counts[sync_check.SyncOutcome.OCCUPIED.value]}, "
+            f"migration-pending {counts[sync_check.SyncOutcome.MIGRATION_PENDING.value]}, "
             f"errors {errors} of {len(projects)} project(s)"
         )
 

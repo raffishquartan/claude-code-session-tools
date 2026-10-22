@@ -368,3 +368,161 @@ def test_a_dump_check_refusal_is_reported_as_a_conflict(monkeypatch, notified):
 def test_check_project_rejects_a_bad_project_name():
     with pytest.raises(ValueError):
         sync_check.check_project("../escape")
+
+
+# ------------------------------------------------- format gate: migration pending ----
+
+
+def _legacy_local(project: str, *, vector: dict[str, int] | None = None) -> Path:
+    """A format 3 database for `project`; `vector` replaces its vector clock when given."""
+    import sqlite3
+
+    from .legacy_fixture import make_format3_db
+
+    path = make_format3_db(store.db_path(project))
+    if vector is not None:
+        conn = sqlite3.connect(str(path))
+        try:
+            conn.execute("DELETE FROM pdata_meta")
+            conn.executemany(
+                "INSERT INTO pdata_meta (machine_id, revision, updated_at) VALUES (?, ?, 1)",
+                list(vector.items()),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+    return path
+
+
+def _snapshot(project: str) -> tuple[bytes, dict[str, bytes]]:
+    from .legacy_fixture import snapshot_dir
+
+    root = store.project_root(project)
+    return store.db_path(project).read_bytes(), snapshot_dir(root) if root.exists() else {}
+
+
+def test_a_format3_database_meeting_a_format4_dump_is_migration_pending(notified):
+    _legacy_local("proj")
+    project_root = store.project_root("proj")
+    _publish_dump(
+        project_root, remote_project="proj-remote", content="remote", vector={"mbp": 5},
+        machine_id="mbp",
+    )
+    before = _snapshot("proj")
+
+    result = sync_check.check_project("proj")
+
+    assert result.outcome is sync_check.SyncOutcome.MIGRATION_PENDING
+    assert result.detail is not None
+    assert "format 3" in result.detail and "format 4" in result.detail
+    assert "ccst pdata migrate-uuid --project proj" in result.detail
+    assert _snapshot("proj") == before  # loaded nothing, published nothing
+    assert notified == []  # not a conflict, not a fork
+
+
+@pytest.mark.parametrize(
+    ("local_vector", "dump_vector", "expected"),
+    [
+        ({"machine-a": 3}, {"machine-a": 3}, "unchanged"),
+        ({"machine-a": 4}, {"machine-a": 3}, "unpublished_changes"),
+        ({"machine-a": 3}, {"machine-a": 3, "mbp": 1}, "behind"),
+        ({"machine-a": 4}, {"machine-a": 3, "mbp": 1}, "fork"),
+    ],
+)
+def test_sync_check_on_a_format3_database_is_status_only(
+    notified, local_vector, dump_vector, expected,
+):
+    from .legacy_fixture import write_format3_dump
+
+    db_path = _legacy_local("proj", vector=local_vector)
+    project_root = store.project_root("proj")
+    write_format3_dump(db_path, project_root, machine_id="machine-a", vector=dump_vector)
+    before = _snapshot("proj")
+
+    result = sync_check.check_project("proj")
+
+    assert result.outcome is sync_check.SyncOutcome.MIGRATION_PENDING
+    assert result.format3_status is sync_check.Format3Status(expected)
+    assert "ccst pdata migrate-uuid" in (result.detail or "")
+    assert _snapshot("proj") == before
+    assert not dump.dump_dir(project_root).exists()  # never publishes a format 4 dump
+    assert notified == []
+
+
+def test_sync_check_on_a_format3_database_with_nothing_published(notified):
+    _legacy_local("proj")
+    before = _snapshot("proj")
+
+    result = sync_check.check_project("proj")
+
+    assert result.outcome is sync_check.SyncOutcome.MIGRATION_PENDING
+    assert result.format3_status is sync_check.Format3Status.NOT_PUBLISHED
+    assert _snapshot("proj") == before
+    assert notified == []
+
+
+def test_sync_check_on_a_format3_database_with_a_corrupt_format3_dump(notified):
+    from .legacy_fixture import write_format3_dump
+
+    db_path = _legacy_local("proj")
+    project_root = store.project_root("proj")
+    legacy_dir = write_format3_dump(
+        db_path, project_root, machine_id="machine-a", vector={"machine-a": 3},
+    )
+    (legacy_dir / "latest.sql").write_text("TRUNCATED")
+    before = _snapshot("proj")
+
+    result = sync_check.check_project("proj")
+
+    assert result.outcome is sync_check.SyncOutcome.MIGRATION_PENDING
+    assert result.format3_status is sync_check.Format3Status.CHECKSUM_INVALID
+    assert _snapshot("proj") == before
+    assert notified == []
+
+
+def test_a_format4_database_with_a_format3_dump_in_the_v4_location_is_migration_pending(
+    notified,
+):
+    from .legacy_fixture import make_format3_db, write_format3_dump
+
+    _build_local("proj", vector={MACHINE: 1})
+    project_root = store.project_root("proj")
+    source = make_format3_db(project_root.parent / "legacy-src" / "x.db")
+    legacy_dir = write_format3_dump(
+        source, project_root, machine_id="machine-a", vector={"machine-a": 9},
+    )
+    v4 = dump.dump_dir(project_root)
+    v4.mkdir(parents=True)
+    for name in ("latest.sql", "latest.sha256"):
+        (v4 / name).write_bytes((legacy_dir / name).read_bytes())
+    before = _snapshot("proj")
+
+    result = sync_check.check_project("proj")
+
+    assert result.outcome is sync_check.SyncOutcome.MIGRATION_PENDING
+    assert result.format3_status is None
+    assert "published dump is format 3" in (result.detail or "")
+    assert _snapshot("proj") == before
+    assert notified == []
+
+
+def test_a_format4_database_ignores_the_format3_dump_and_publishes_to_v4(notified):
+    """After migration the format 3 dump stays where it is; the first format 4 publish goes to
+    v4/ and leaves it untouched."""
+    from .legacy_fixture import make_format3_db, snapshot_dir, write_format3_dump
+
+    _build_local("proj", vector={MACHINE: 1})
+    project_root = store.project_root("proj")
+    source = make_format3_db(project_root.parent / "legacy-src" / "x.db")
+    legacy_dir = write_format3_dump(
+        source, project_root, machine_id="machine-a", vector={"machine-a": 9},
+    )
+    legacy_before = snapshot_dir(legacy_dir)
+
+    result = sync_check.check_project("proj")
+
+    assert result.outcome is sync_check.SyncOutcome.PUBLISHED
+    assert dump.read_latest(project_root).pdata_format == 4
+    legacy_after = {k: v for k, v in snapshot_dir(legacy_dir).items() if not k.startswith("v4")}
+    assert legacy_after == legacy_before
+    assert notified == []

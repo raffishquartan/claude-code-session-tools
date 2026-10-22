@@ -610,3 +610,77 @@ def test_sync_notify_wrote_no_real_rows(tmp_path: Path) -> None:
 
     assert ledger.read_recent(job_id="pdata-sync:proj") == []
     assert sync_notify._JOB_ID_PREFIX == "pdata-sync:"
+
+
+# ---------- format gate: an unmigrated project is never loaded into or published from ----------
+
+
+def _legacy_project(project: str) -> Path:
+    from .legacy_fixture import make_format3_db
+
+    store.project_root(project).mkdir(parents=True, exist_ok=True)
+    return make_format3_db(store.db_path(project))
+
+
+def _project_files(project: str) -> tuple[bytes, dict[str, bytes]]:
+    from .legacy_fixture import snapshot_dir
+
+    return store.db_path(project).read_bytes(), snapshot_dir(store.project_root(project))
+
+
+def test_session_start_on_a_format3_database_reports_a_pending_migration(
+    unoccupied: None, notified: list[tuple[str, str, str]],
+) -> None:
+    _legacy_project("proj")
+    _publish_dump("proj", content="remote-content", vector={"mbp": 5}, machine_id="mbp")
+    before = _project_files("proj")
+
+    message = pdata_sync.on_session_start(_cwd_for("proj"), session_pid=None)
+
+    assert message is not None
+    assert message.startswith("[pdata-sync] proj: migration pending - ")
+    assert "format 3" in message and "format 4" in message
+    assert "ccst pdata migrate-uuid --project proj" in message
+    assert _project_files("proj") == before
+    assert notified == []  # not a fork, not a conflict
+
+
+def test_session_end_on_a_format3_database_publishes_nothing(
+    notified: list[tuple[str, str, str]], tmp_path: Path,
+) -> None:
+    from .legacy_fixture import write_format3_dump
+
+    db_path = _legacy_project("proj")
+    write_format3_dump(
+        db_path, store.project_root("proj"), machine_id="machine-a", vector={"machine-a": 3},
+    )
+    before = _project_files("proj")
+
+    pdata_sync.on_session_end(_cwd_for("proj"))
+
+    assert _project_files("proj") == before
+    assert not dump.dump_dir(store.project_root("proj")).exists()
+    assert notified == []
+
+
+def test_session_end_never_publishes_over_a_format_mismatched_dump(
+    notified: list[tuple[str, str, str]],
+) -> None:
+    from .legacy_fixture import make_format3_db, write_format3_dump
+
+    _build_local("proj", content="local-content", vector={MACHINE: 3})
+    project_root = store.project_root("proj")
+    source = make_format3_db(project_root.parent / "legacy-src" / "x.db")
+    legacy_dir = write_format3_dump(
+        source, project_root, machine_id="machine-a", vector={"machine-a": 9},
+    )
+    v4 = dump.dump_dir(project_root)
+    v4.mkdir(parents=True)
+    for name in ("latest.sql", "latest.sha256"):
+        (v4 / name).write_bytes((legacy_dir / name).read_bytes())
+    before = (v4 / "latest.sql").read_bytes()
+
+    pdata_sync.on_session_end(_cwd_for("proj"))
+
+    assert (v4 / "latest.sql").read_bytes() == before
+    assert notified == []

@@ -10,6 +10,7 @@ from pathlib import Path
 
 from cc_session_tools.lib.pdata import (
     dump,
+    formats,
     repository,
     store,
     sync_lock,
@@ -24,6 +25,8 @@ class RehydrateOutcome(enum.Enum):
     FORK = "fork"  # surfaced, nothing written
     CHECKSUM_INVALID = "checksum_invalid"  # surfaced, nothing written
     DEFERRED = "deferred"  # another writer holds the lock right now — retry later
+    # The database or the published dump is not the current format: nothing loaded, not a fork.
+    MIGRATION_PENDING = "migration_pending"
 
 
 @dataclass(frozen=True, slots=True)
@@ -36,6 +39,59 @@ class RehydrateResult:
     # actually published it, which is the only thing worth showing a human. Set on
     # FAST_FORWARDED; None on every other outcome, since nothing was adopted.
     dumped_at: int | None = None
+    # Set on MIGRATION_PENDING only: the local database's format and the published dump's
+    # (None when nothing is published).
+    local_format: int | None = None
+    dump_format: int | None = None
+
+
+def migration_pending_detail(result: RehydrateResult, *, project: str) -> str:
+    """What to tell the user about a MIGRATION_PENDING outcome: both formats and the command.
+    Raises on any other outcome, like conflict_detail."""
+    if result.outcome is not RehydrateOutcome.MIGRATION_PENDING or result.local_format is None:
+        raise ValueError(f"not a migration-pending outcome: {result.outcome.value}")
+    return formats.migration_pending_detail(
+        project, local_format=result.local_format, dump_format=result.dump_format,
+    )
+
+
+def format_gate(
+    project: str, *, project_root: Path, existing: dump.DumpInfo,
+) -> RehydrateResult | None:
+    """A MIGRATION_PENDING result when `project` cannot sync until it is migrated, else None.
+    That is: the local database is not the current format (it is never loaded into or
+    published from, whatever is published), or `existing` - the published current-format dump -
+    is a trustworthy dump of another format. Reads the database file read-only; a project with
+    no database yet is the current format, since connecting creates it so."""
+    local_format = formats.database_format(store.db_path(project))
+    if local_format is not None and local_format != formats.CURRENT_PDATA_FORMAT:
+        return RehydrateResult(
+            outcome=RehydrateOutcome.MIGRATION_PENDING,
+            local_format=local_format,
+            dump_format=_published_format(project_root, existing=existing),
+        )
+    mismatched = dump.mismatched_dump_format(
+        existing, local_format=formats.CURRENT_PDATA_FORMAT,
+    )
+    if mismatched is not None:
+        return RehydrateResult(
+            outcome=RehydrateOutcome.MIGRATION_PENDING,
+            local_format=formats.CURRENT_PDATA_FORMAT,
+            dump_format=mismatched,
+        )
+    return None
+
+
+def _published_format(project_root: Path, *, existing: dump.DumpInfo) -> int | None:
+    """The format of the newest dump published for the project: the current-format location
+    first (by its header, or by its location when the dump is untrustworthy), then the format 3
+    location; None when neither holds a dump."""
+    if existing.present:
+        if existing.pdata_format is None:
+            return formats.CURRENT_PDATA_FORMAT
+        return existing.pdata_format
+    legacy = dump.latest_path(project_root, pdata_format=formats.PDATA_FORMAT_INTEGER_IDS)
+    return formats.PDATA_FORMAT_INTEGER_IDS if legacy.exists() else None
 
 
 def conflict_detail(result: RehydrateResult, *, project: str) -> str:
@@ -66,6 +122,11 @@ def conflict_detail(result: RehydrateResult, *, project: str) -> str:
 def rehydrate(project: str, *, force: bool = False) -> RehydrateResult:
     project_root = store.project_root(project)
     info = dump.read_latest(project_root)
+    # Before anything else, and not overridable by force: a format mismatch must never replace
+    # the local database (design D5).
+    pending = format_gate(project, project_root=project_root, existing=info)
+    if pending is not None:
+        return pending
     if not info.checksum_valid:
         return RehydrateResult(outcome=RehydrateOutcome.CHECKSUM_INVALID)
 

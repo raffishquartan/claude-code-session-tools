@@ -89,11 +89,35 @@ def projects_needing_migration(projects: Iterable[str]) -> list[str]:
     ]
 
 
+def _migrate_instructions(project: str) -> str:
+    return (
+        f"From a plain terminal with no `claude` session running, run "
+        f"`{MIGRATE_COMMAND} --project {project}` (dry run), then the same with --write. See "
+        f"{RUNBOOK_PATH} in the cc-session-tools repository."
+    )
+
+
 def legacy_format_message(project: str) -> str:
     """Why a record verb refused on `project`'s format 3 database, and what to run."""
     return (
         f"{project}: database is format 3 (integer record ids); this ccst uses format 4 (UUID "
-        f"record ids) and changes nothing until it is migrated. From a plain terminal with no "
-        f"`claude` session running, run `{MIGRATE_COMMAND} --project {project}` (dry run), then "
-        f"the same with --write. See {RUNBOOK_PATH} in the cc-session-tools repository."
+        f"record ids) and changes nothing until it is migrated. {_migrate_instructions(project)}"
+    )
+
+
+def migration_pending_detail(project: str, *, local_format: int, dump_format: int | None) -> str:
+    """Why sync left `project` alone: its database and its published dump are not both the
+    current format. `dump_format` is None when nothing is published. Callers prefix the project
+    name and "migration pending" in their own style, so the text starts with neither."""
+    if dump_format is None or dump_format == local_format:
+        return (
+            f"the database is format {local_format} and this ccst uses "
+            f"format {CURRENT_PDATA_FORMAT}; nothing was loaded or published. "
+            f"{_migrate_instructions(project)}"
+        )
+    return (
+        f"the database is format {local_format} but the published dump is "
+        f"format {dump_format}; nothing was loaded or published (this is not a fork). The "
+        f"format {PDATA_FORMAT_INTEGER_IDS} side must be migrated. "
+        f"{_migrate_instructions(project)}"
     )

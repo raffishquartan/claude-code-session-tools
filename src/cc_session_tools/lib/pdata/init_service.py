@@ -16,6 +16,7 @@ from cc_session_tools.lib.pdata import (
     backup,
     cutover,
     dump,
+    formats,
     init_paths,
     manifest,
     rehydrate,
@@ -389,9 +390,18 @@ def _pending_adoption(*, project: str, project_root: Path) -> dump.DumpInfo | No
     returns `checksum_valid=False` both when no dump was ever published and when one exists but is
     corrupt, and those two cases must not be treated the same - the first is the ordinary
     first-ever migration, the second is a real problem that must be surfaced, never silently
-    papered over by falling through to classification."""
+    papered over by falling through to classification.
+
+    A dump of another format than the database `init` creates (format 4) is never adopted:
+    neither one in the format 4 location whose header says otherwise, nor a format 3 dump with
+    no format 4 dump beside it (another machine has not migrated this project yet)."""
     latest_path = dump.latest_path(project_root)
     if not latest_path.exists():
+        legacy_path = dump.latest_path(
+            project_root, pdata_format=formats.PDATA_FORMAT_INTEGER_IDS,
+        )
+        if legacy_path.exists() and not _live_already_locally_migrated(project):
+            raise ValueError(_format_mismatch_refusal(project, formats.PDATA_FORMAT_INTEGER_IDS))
         return None
     info = dump.read_latest(project_root)
     if not info.checksum_valid:
@@ -402,13 +412,29 @@ def _pending_adoption(*, project: str, project_root: Path) -> dump.DumpInfo | No
             "project. Publish a fresh dump from a known-good machine (ccst pdata dump --force) "
             "or reconcile manually (ccst pdata resolve) once those commands exist."
         )
+    if _live_already_locally_migrated(project):
+        return None
+    mismatched = dump.mismatched_dump_format(info, local_format=formats.CURRENT_PDATA_FORMAT)
+    if mismatched is not None:
+        raise ValueError(_format_mismatch_refusal(project, mismatched))
+    return info
+
+
+def _live_already_locally_migrated(project: str) -> bool:
     # The live .db, not a --rehearse sandbox's: a rehearsal copy never contains the real .db, so
     # the sandbox would always look unmigrated and rehearsal would never reach classification.
     with init_paths.live_project_db_dir():
-        already_migrated = _already_locally_migrated(project)
-    if already_migrated:
-        return None
-    return info
+        return _already_locally_migrated(project)
+
+
+def _format_mismatch_refusal(project: str, dump_format: int) -> str:
+    detail = formats.migration_pending_detail(
+        project, local_format=formats.CURRENT_PDATA_FORMAT, dump_format=dump_format,
+    )
+    return (
+        f"ccst pdata init --project {project}: refusing to adopt the published sync dump - "
+        f"{detail}"
+    )
 
 
 def _adopt_from_dump(
