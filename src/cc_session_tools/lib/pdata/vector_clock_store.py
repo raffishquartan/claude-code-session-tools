@@ -9,15 +9,22 @@ import time
 from collections.abc import Mapping
 from typing import Final
 
-from cc_session_tools.lib.pdata import vector_clock
+from cc_session_tools.lib.pdata import formats, vector_clock
 
-# The format 3 vector clock a format 4 database was migrated from (design D6c): one row per
-# machine, empty for a database created as format 4. It is ordinary table data, so it replicates
-# with every dump and rehydrate, and dump.write_latest copies it into every dump header.
+# The migration origin of a format 4 database (design D6c). `pdata_migrated_from` holds one row,
+# the format the database was migrated from (3), when it was converted by `ccst pdata
+# migrate-uuid`, and none when it was created as format 4. `pdata_migration_origin` holds the
+# format 3 vector clock it was migrated from, one row per machine; that vector may be empty, so
+# it is the presence row, not the vector, that says the database was migrated. Both are ordinary
+# table data, so they replicate with every dump and rehydrate, and dump.write_latest copies the
+# origin into every dump header.
 MIGRATION_ORIGIN_DDL: Final = """
 CREATE TABLE IF NOT EXISTS pdata_migration_origin (
     machine_id TEXT PRIMARY KEY,
     revision INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS pdata_migrated_from (
+    pdata_format INTEGER PRIMARY KEY
 );
 """
 
@@ -46,25 +53,43 @@ def bump_own(conn: sqlite3.Connection, machine_id: str, *, updated_at: int | Non
     write_vector(conn, v, updated_at=updated_at if updated_at is not None else int(time.time()))
 
 
-def read_migration_origin(conn: sqlite3.Connection) -> dict[str, int]:
-    """The recorded format 3 origin vector, or {} when there is none. A database rehydrated
-    from a dump published before the table existed has no such table until its next
-    repository.connect(), and has no origin either."""
-    exists = conn.execute(
-        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='pdata_migration_origin'"
-    ).fetchone()
-    if exists is None:
-        return {}
-    rows = conn.execute("SELECT machine_id, revision FROM pdata_migration_origin").fetchall()
-    return {row[0]: row[1] for row in rows}
+def _table_exists(conn: sqlite3.Connection, table: str) -> bool:
+    return conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (table,)
+    ).fetchone() is not None
+
+
+def read_migration_origin(conn: sqlite3.Connection) -> dict[str, int] | None:
+    """The format 3 vector the database was migrated from (possibly empty), or None when it was
+    not migrated. A recorded vector row counts as an origin with or without the presence row. A
+    database rehydrated from a dump published before these tables existed has neither until its
+    next repository.connect(), and has no origin either."""
+    vector: dict[str, int] = {}
+    if _table_exists(conn, "pdata_migration_origin"):
+        rows = conn.execute("SELECT machine_id, revision FROM pdata_migration_origin").fetchall()
+        vector = {row[0]: row[1] for row in rows}
+    migrated = _table_exists(conn, "pdata_migrated_from") and conn.execute(
+        "SELECT 1 FROM pdata_migrated_from WHERE pdata_format=?",
+        (formats.PDATA_FORMAT_INTEGER_IDS,),
+    ).fetchone() is not None
+    return vector if migrated or vector else None
 
 
 def write_migration_origin(conn: sqlite3.Connection, vector: Mapping[str, int]) -> None:
-    """Replace the recorded origin vector with `vector`. Creates the table if needed: the
-    migration writes it into a database converted from format 3, which never had it."""
-    conn.execute(MIGRATION_ORIGIN_DDL)
+    """Record that the database was migrated from format 3 at `vector` (which may be empty),
+    replacing any recorded origin. Creates the tables if needed: the migration writes them into
+    a database converted from format 3, which never had them."""
+    # One statement per execute(): executescript() would commit the caller's transaction.
+    for statement in MIGRATION_ORIGIN_DDL.split(";"):
+        if statement.strip():
+            conn.execute(statement)
     conn.execute("DELETE FROM pdata_migration_origin")
     conn.executemany(
         "INSERT INTO pdata_migration_origin (machine_id, revision) VALUES (?, ?)",
         sorted(vector.items()),
+    )
+    conn.execute("DELETE FROM pdata_migrated_from")
+    conn.execute(
+        "INSERT INTO pdata_migrated_from (pdata_format) VALUES (?)",
+        (formats.PDATA_FORMAT_INTEGER_IDS,),
     )

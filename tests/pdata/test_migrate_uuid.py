@@ -734,3 +734,67 @@ def test_an_interrupted_publish_on_resume_leaves_no_format4_dump(
     assert not dump.latest_path(project_root).exists()
     monkeypatch.setattr(migrate_uuid.dump, "write_latest", real)
     assert migrate_uuid.migrate_project(PROJECT, write=True).outcome is migrate_uuid.Outcome.RESUMED
+
+
+# ------------------------------------------------------------------ an empty format 3 vector
+
+
+def _empty_vector_project() -> Path:
+    """A converged format 3 project whose vector clock is empty (no ccst write ever bumped it)."""
+    path = make_format3_db(store.db_path(PROJECT))
+    conn = sqlite3.connect(str(path))
+    try:
+        conn.execute("DELETE FROM pdata_meta")
+        conn.commit()
+    finally:
+        conn.close()
+    write_format3_dump(path, store.project_root(PROJECT), machine_id="machine-a", vector={})
+    return path
+
+
+def test_an_empty_format3_vector_is_still_a_migration_lineage(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    with on_machine(monkeypatch, tmp_path, "machine-b"):
+        b_path = _empty_vector_project()
+    with on_machine(monkeypatch, tmp_path, "machine-a"):
+        _empty_vector_project()
+        result = migrate_uuid.migrate_project(PROJECT, write=True)
+        assert result.outcome is migrate_uuid.Outcome.MIGRATED, migrate_uuid.render(result)
+        conn = db.connect(store.db_path(PROJECT), readonly=True)
+        try:
+            assert vector_clock_store.read_migration_origin(conn) == {}
+        finally:
+            conn.close()
+    assert dump.read_latest(store.project_root(PROJECT)).migrated_from_format3_vector == {}
+
+    with on_machine(monkeypatch, tmp_path, "machine-b"):
+        dry = migrate_uuid.migrate_project(PROJECT, write=False)
+        assert dry.outcome is migrate_uuid.Outcome.PLANNED, migrate_uuid.render(dry)
+        result = migrate_uuid.migrate_project(PROJECT, write=True)
+        assert result.outcome is migrate_uuid.Outcome.ADOPTED, migrate_uuid.render(result)
+        assert _ids(b_path) == _mapped(1, 2)
+
+
+def test_resume_finishes_a_migration_from_an_empty_format3_vector(tmp_path: Path) -> None:
+    """An empty origin is still an origin: the resume verifies and publishes, rather than
+    taking the database for one created as format 4."""
+    path = _empty_vector_project()
+    migrate_uuid.migrate_project(PROJECT, write=True)
+    conn = sqlite3.connect(str(path))
+    try:
+        conn.execute("DELETE FROM migrations WHERE name=?", (formats.UUID_IDS_MIGRATION,))
+        conn.commit()
+    finally:
+        conn.close()
+    project_root = store.project_root(PROJECT)
+    _drop_v4_dump(project_root)
+
+    dry = migrate_uuid.migrate_project(PROJECT, write=False)
+    assert dry.plan is not None
+    assert dry.plan.pending_steps == (
+        "run verify", f"record the {formats.UUID_IDS_MIGRATION} marker", "publish the format 4 dump",
+    )
+    result = migrate_uuid.migrate_project(PROJECT, write=True)
+    assert result.outcome is migrate_uuid.Outcome.RESUMED, migrate_uuid.render(result)
+    assert dump.read_latest(project_root).migrated_from_format3_vector == {}

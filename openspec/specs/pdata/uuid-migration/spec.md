@@ -95,10 +95,18 @@ first check that its local format 3 database matches the format 3 vector clock r
 dump's header. If it matches, the machine SHALL end with the same data as the dump; if it does not
 match (it has format 3 changes the migrated lineage never saw), `--write` SHALL refuse, state that
 those changes must be re-entered after adopting the format 4 dump, and leave the database unchanged.
+That a database or dump was migrated from format 3 SHALL be recorded explicitly (a
+`-- migrated_from_format=3` header line and a database row), independent of the recorded vector,
+so a format 3 database whose vector clock is empty migrates and is joined like any other; a dump
+with no such record is not a migration lineage and no format 3 database matches it.
 
 #### Scenario: Second machine matches the migrated lineage
 - **WHEN** machine B is converged with the format 3 state that machine A migrated from
 - **THEN** `migrate-uuid --write` on B succeeds and B's records equal the format 4 dump
+
+#### Scenario: The format 3 vector clock was empty
+- **WHEN** the first machine migrates a converged format 3 database whose vector clock is empty, and a second machine holds the same format 3 data
+- **THEN** the format 4 dump records an empty origin, and the second machine's dry run plans adoption
 
 #### Scenario: Second machine has changes the lineage never saw
 - **WHEN** machine B published format 3 changes after machine A migrated

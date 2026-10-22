@@ -36,8 +36,12 @@ _FORMAT_PREFIX: Final = "-- pdata_format="
 _MACHINE_PREFIX: Final = "-- machine_id="
 _DUMPED_AT_PREFIX: Final = "-- dumped_at="
 _VECTOR_PREFIX: Final = "-- vector:"
-# The format 3 vector clock a migrated database had when `ccst pdata migrate-uuid` converted
-# it, so a machine migrating later can check its own format 3 state is the same lineage.
+# A dump of a database `ccst pdata migrate-uuid` converted says so with a
+# `-- migrated_from_format=3` line, followed by one `-- migrated_from_format3_vector:` line per
+# machine of the format 3 vector clock it had then (none when that vector was empty), so a
+# machine migrating later can check its own format 3 state is the same lineage. A header with
+# vector lines and no `-- migrated_from_format=` line also reads as migrated.
+_MIGRATED_FROM_FORMAT_PREFIX: Final = "-- migrated_from_format="
 _MIGRATED_FROM_PREFIX: Final = "-- migrated_from_format3_vector:"
 
 # serialize()'s output always starts with this exact line - the single source of truth for where
@@ -110,8 +114,9 @@ class DumpInfo:
     # absent). None when the dump is absent or fails its checksum, since nothing in an
     # untrusted file is read.
     pdata_format: int | None = None
-    # The `-- migrated_from_format3_vector:` lines, or None when the dump has none (it was not
-    # published by a migration).
+    # The format 3 vector the published database was migrated from (possibly empty), from the
+    # `-- migrated_from_format=` and `-- migrated_from_format3_vector:` lines; None when the
+    # header has neither (the database was not migrated).
     migrated_from_format3_vector: dict[str, int] | None = None
 
 
@@ -207,10 +212,12 @@ def write_latest(
         f"{_DUMPED_AT_PREFIX}{int(time.time())}",
         *(f"{_VECTOR_PREFIX}{k}={v}" for k, v in sorted(vector.items())),
     ]
-    header_lines.extend(
-        f"{_MIGRATED_FROM_PREFIX}{k}={v}"
-        for k, v in sorted(vector_clock_store.read_migration_origin(conn).items())
-    )
+    origin = vector_clock_store.read_migration_origin(conn)
+    if origin is not None:
+        header_lines.append(f"{_MIGRATED_FROM_FORMAT_PREFIX}{formats.PDATA_FORMAT_INTEGER_IDS}")
+        header_lines.extend(
+            f"{_MIGRATED_FROM_PREFIX}{k}={v}" for k, v in sorted(origin.items())
+        )
     full_text = "\n".join(header_lines) + "\n" + text
     checksum = hashlib.sha256(full_text.encode()).hexdigest()
 
@@ -296,6 +303,9 @@ def read_latest(
         elif line.startswith(_VECTOR_PREFIX):
             k, _, v = line.removeprefix(_VECTOR_PREFIX).partition("=")
             vector[k] = int(v)
+        elif line.startswith(_MIGRATED_FROM_FORMAT_PREFIX):
+            _parse_migrated_from_format(line, latest)
+            migrated_from = {} if migrated_from is None else migrated_from
         elif line.startswith(_MIGRATED_FROM_PREFIX):
             k, _, v = line.removeprefix(_MIGRATED_FROM_PREFIX).partition("=")
             migrated_from = {} if migrated_from is None else migrated_from
@@ -314,6 +324,16 @@ def _parse_format(line: str, latest: Path) -> int:
         f"{latest}: header line {line!r} names a dump format this ccst does not know "
         f"(known: {', '.join(str(f) for f in sorted(_FORMAT_SUBDIR))})"
     )
+
+
+def _parse_migrated_from_format(line: str, latest: Path) -> None:
+    """Check a `-- migrated_from_format=` line names format 3, the only format a migration
+    converts from."""
+    if line.removeprefix(_MIGRATED_FROM_FORMAT_PREFIX) != str(formats.PDATA_FORMAT_INTEGER_IDS):
+        raise formats.UnknownPdataFormatError(
+            f"{latest}: header line {line!r} names a migration from a format this ccst does not "
+            f"know (known: {formats.PDATA_FORMAT_INTEGER_IDS})"
+        )
 
 
 def decide_publish(

@@ -745,11 +745,12 @@ def _resume(project: str, *, db_path: Path, project_root: Path, write: bool) -> 
         origin = vector_clock_store.read_migration_origin(conn)
     finally:
         conn.close()
+    migrated = origin is not None
     marker = _marker_recorded(db_path)
     steps: list[str] = []
     if not marker:
-        steps.extend([_STEP_VERIFY, _STEP_MARKER] if origin else [_STEP_MARKER])
-    if origin and not dump.read_latest(project_root).present:
+        steps.extend([_STEP_VERIFY, _STEP_MARKER] if migrated else [_STEP_MARKER])
+    if migrated and not dump.read_latest(project_root).present:
         steps.append(_STEP_PUBLISH)
     if not steps:
         return MigrationResult(
@@ -763,7 +764,7 @@ def _resume(project: str, *, db_path: Path, project_root: Path, write: bool) -> 
     )
     plan = MigrationPlan(
         project=project, db_path=db_path, path=MigrationPath.RESUME, group_counts=(),
-        extension_tables=(), watermark_rows=0, format3_vector=origin,
+        extension_tables=(), watermark_rows=0, format3_vector=origin or {},
         preconditions=preconditions, suspicious_fields=(), pending_steps=tuple(steps),
     )
     if not plan.ready:

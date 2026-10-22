@@ -459,17 +459,18 @@ def test_every_publish_carries_the_migration_origin_from_the_database(tmp_path, 
     assert dump.read_latest(project_root).migrated_from_format3_vector == {"machine-a": 3}
 
 
-def test_a_fresh_database_has_an_empty_migration_origin_table(tmp_path, monkeypatch):
+def test_a_fresh_database_has_no_migration_origin(tmp_path, monkeypatch):
     conn = _format4_db(tmp_path, monkeypatch)
-    assert vector_clock_store.read_migration_origin(conn) == {}
+    assert vector_clock_store.read_migration_origin(conn) is None
 
 
-def test_a_database_without_the_origin_table_publishes_no_origin(tmp_path, monkeypatch):
-    """A database rehydrated from a dump published before the table existed has no
-    `pdata_migration_origin` table until its next repository.connect()."""
+def test_a_database_without_the_origin_tables_publishes_no_origin(tmp_path, monkeypatch):
+    """A database rehydrated from a dump published before the tables existed has neither
+    origin table until its next repository.connect()."""
     conn = _format4_db(tmp_path, monkeypatch)
     conn.execute("DROP TABLE pdata_migration_origin")
-    assert vector_clock_store.read_migration_origin(conn) == {}
+    conn.execute("DROP TABLE pdata_migrated_from")
+    assert vector_clock_store.read_migration_origin(conn) is None
     project_root = tmp_path / "proj"
     dump.write_latest(conn, project_root=project_root, machine_id="ltxy", vector={"ltxy": 1})
     assert dump.read_latest(project_root).migrated_from_format3_vector is None
@@ -521,3 +522,43 @@ def test_an_interrupted_publish_keeps_the_previous_dump_whole(tmp_path, monkeypa
         "latest.sha256", "latest.sql",
     ]
     assert dump.read_latest(project_root).vector == {"ltxy": 1}
+
+
+def test_an_empty_migration_origin_is_recorded_and_published_explicitly(tmp_path, monkeypatch):
+    """A database migrated from a format 3 database whose vector clock was empty still has a
+    migration origin; the header says so with its own line, independent of the vector lines."""
+    conn = _format4_db(tmp_path, monkeypatch)
+    with repository._immediate(conn):
+        vector_clock_store.write_migration_origin(conn, {})
+    assert vector_clock_store.read_migration_origin(conn) == {}
+    project_root = tmp_path / "proj"
+    dump.write_latest(conn, project_root=project_root, machine_id="ltxy", vector={"ltxy": 1})
+    text = dump.latest_path(project_root).read_text()
+    assert "-- migrated_from_format=3\n" in text
+    assert "-- migrated_from_format3_vector:" not in text
+    assert dump.read_latest(project_root).migrated_from_format3_vector == {}
+
+
+def test_a_dump_header_with_origin_vector_lines_only_is_read_as_migrated(tmp_path, monkeypatch):
+    """A header that has `-- migrated_from_format3_vector:` lines and no
+    `-- migrated_from_format=` line still reads as a migration origin."""
+    import hashlib
+
+    conn = _format4_db(tmp_path, monkeypatch)
+    with repository._immediate(conn):
+        vector_clock_store.write_migration_origin(conn, {"machine-a": 3})
+    project_root = tmp_path / "proj"
+    dump.write_latest(conn, project_root=project_root, machine_id="ltxy", vector={"ltxy": 1})
+    latest = dump.latest_path(project_root)
+    text = latest.read_text().replace("-- migrated_from_format=3\n", "", 1)
+    latest.write_text(text)
+    (latest.parent / "latest.sha256").write_text(hashlib.sha256(text.encode()).hexdigest())
+    assert dump.read_latest(project_root).migrated_from_format3_vector == {"machine-a": 3}
+
+
+def test_a_migration_origin_row_without_the_presence_row_still_counts(tmp_path, monkeypatch):
+    conn = _format4_db(tmp_path, monkeypatch)
+    with repository._immediate(conn):
+        vector_clock_store.write_migration_origin(conn, {"machine-a": 3})
+        conn.execute("DELETE FROM pdata_migrated_from")
+    assert vector_clock_store.read_migration_origin(conn) == {"machine-a": 3}
