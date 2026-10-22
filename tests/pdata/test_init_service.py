@@ -1086,9 +1086,10 @@ def test_write_failing_rollback_does_not_mask_the_original_error_and_names_ids(m
         init_service.write(project="demo", on_progress=progress.append)
 
     notes = "\n".join(excinfo.value.__notes__)
+    (live,) = _live_rows()
     assert "rollback of 1 inserted row(s) aborted" in notes
-    assert "record ids: [1]" in notes
-    assert any("record ids: [1]" in line for line in progress)
+    assert f"record ids: {live.id}" in notes
+    assert any(f"record ids: {live.id}" in line for line in progress)
 
 
 def test_write_reports_each_rollback_failure_by_record_id(monkeypatch, tmp_path):
@@ -1111,9 +1112,10 @@ def test_write_reports_each_rollback_failure_by_record_id(monkeypatch, tmp_path)
     with pytest.raises(RuntimeError, match="orig") as excinfo:
         init_service.write(project="demo", on_progress=progress.append)
 
+    (live,) = _live_rows()
     assert any("rolled back 0 of 1" in line for line in progress)
-    assert any("record 1: rollback failed" in line for line in progress)
-    assert "record 1: rollback failed" in "\n".join(excinfo.value.__notes__)
+    assert any(f"record {live.id}: rollback failed" in line for line in progress)
+    assert f"record {live.id}: rollback failed" in "\n".join(excinfo.value.__notes__)
 
 
 def test_write_source_recount_error_is_a_failure_reason_not_a_crash(monkeypatch, tmp_path):

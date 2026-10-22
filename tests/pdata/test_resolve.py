@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 import sqlite3
 
 import pytest
@@ -423,7 +424,7 @@ def test_apply_resolution_accepts_empty_choices_when_the_diff_is_genuinely_empty
     conn = repository.connect("proj")
     try:
         with repository._immediate(conn):
-            repository.insert_base_record(
+            record_id = repository.insert_base_record(
                 conn, record_group="g", content="same-content", file_path=None,
                 created_at=1, updated_at=1,
             )
@@ -435,7 +436,8 @@ def test_apply_resolution_accepts_empty_choices_when_the_diff_is_genuinely_empty
     def build(remote_conn):
         remote_conn.execute(
             "INSERT INTO records (id, record_group, content, file_path, created_at, updated_at) "
-            "VALUES (1, 'g', 'same-content', NULL, 1, 1)"
+            "VALUES (?, 'g', 'same-content', NULL, 1, 1)",
+            (record_id,),
         )
 
     _publish_remote_dump(
@@ -727,7 +729,7 @@ def test_apply_resolution_refuses_a_partial_resolve_naming_the_missing_record_id
         vector={"ltxy": 1, "mbp": 5}, build=build,
     )
 
-    with pytest.raises(ValueError, match=rf"\[{id2}, {id3}\]"):
+    with pytest.raises(ValueError, match=re.escape(str(sorted([id2, id3])))):
         resolve.apply_resolution("proj", {id1: "dump"})
 
     # Nothing was written: not the row, not the vector, not a fresh dump.
@@ -986,3 +988,35 @@ def test_apply_resolution_defers_instead_of_writing_while_another_writer_holds_t
     finally:
         conn.close()
     assert dump.read_latest(project_root).vector == {"ltxy": 1, "mbp": 2}
+
+
+def test_diff_lists_records_in_creation_order_not_id_order(monkeypatch, tmp_path):
+    _setup_env(monkeypatch, tmp_path)
+    late_low_id = "00000000-0000-4000-8000-000000000000"
+    early_high_id = "ffffffff-ffff-4fff-bfff-ffffffffffff"
+    middle_id = "77777777-7777-4777-8777-777777777777"
+    conn = repository.connect("proj")
+    try:
+        with repository._immediate(conn):
+            for record_id, created_at in ((late_low_id, 30), (early_high_id, 10)):
+                repository.insert_base_record(
+                    conn, record_group="g", content="local", file_path=None,
+                    created_at=created_at, updated_at=created_at, record_id=record_id,
+                )
+            vector_clock_store.write_vector(conn, {"ltxy": 1}, updated_at=1)
+    finally:
+        conn.close()
+
+    def build(remote_conn):
+        repository.insert_base_record(
+            remote_conn, record_group="g", content="dump", file_path=None,
+            created_at=20, updated_at=20, record_id=middle_id,
+        )
+
+    _publish_remote_dump(
+        store.project_root("proj"), remote_project="proj-remote", machine_id="mbp",
+        vector={"mbp": 1}, build=build,
+    )
+
+    diff = resolve.diff_against_dump("proj")
+    assert [rd.record_id for rd in diff.records] == [early_high_id, middle_id, late_low_id]

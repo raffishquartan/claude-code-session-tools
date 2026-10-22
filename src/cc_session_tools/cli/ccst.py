@@ -55,7 +55,7 @@ Current subcommands:
                                  --project NAME or --all-projects, if it's ahead. --force
                                  fast-forwards even over a diverged local revision.
   pdata resolve                  Diagnose (default, prints the diff) or apply per-record
-                                 --choice ID=local|dump resolutions for a cross-machine fork.
+                                 --choice UUID=local|dump resolutions for a cross-machine fork.
   pdata sync-check               Do whichever of rehydrate/dump each project needs, in that
                                  order, for --project NAME or --all-projects. The unattended
                                  trigger behind the hourly pdata-sync-hourly ccsched job:
@@ -1029,6 +1029,50 @@ def _cmd_gc_prune(args: argparse.Namespace) -> int:
 # ---------- pdata ----------
 
 
+def _record_id_arg(raw: str) -> str:
+    """argparse type for a record id: a canonical UUID string, else a usage error naming it."""
+    from cc_session_tools.lib.pdata import ids
+
+    if not ids.is_record_id(raw):
+        raise argparse.ArgumentTypeError(
+            f"{raw!r} is not a UUID (record ids look like 40090682-d73d-4958-a608-9c9960620f31)"
+        )
+    return raw
+
+
+def _pdata_format_refusal(args: argparse.Namespace) -> int | None:
+    """The format gate (`formats` module docstring): returns exit code 1, after printing the
+    migration message for each target project whose database is still format 3, when the verb
+    is not exempt; else None. Read-only, and runs before the verb's handler opens anything."""
+    import sqlite3
+
+    from cc_session_tools.lib.pdata import formats, store, verify
+
+    if args.verb in formats.FORMAT_GATE_EXEMPT_VERBS:
+        return None
+    all_projects = getattr(args, "all_projects", False)
+    projects = verify.discover_projects() if all_projects else [args.project]
+    refused = False
+    for project in projects:
+        try:
+            path = store.db_path(project)
+        except ValueError:
+            continue  # the verb's own handler rejects an invalid project name
+        try:
+            fmt = formats.database_format(path)
+        except formats.UnknownPdataFormatError as exc:
+            print(f"ccst pdata {args.verb}: {project}: {exc}", file=sys.stderr)
+            refused = True
+            continue
+        except sqlite3.DatabaseError:
+            continue  # not a readable database: the verb's own handler reports it per project
+        if fmt == formats.PDATA_FORMAT_INTEGER_IDS:
+            print(f"ccst pdata {args.verb}: {formats.legacy_format_message(project)}",
+                  file=sys.stderr)
+            refused = True
+    return 1 if refused else None
+
+
 def _parse_field_assignment(raw: str) -> tuple[str, str | None]:
     """Parse "k=v" into (k, v). The literal token `null` (unquoted, lowercase) is interpreted
     as SQL NULL rather than the four-character string "null" - this is the documented way to
@@ -1694,17 +1738,20 @@ def _cmd_pdata_rehydrate(args: argparse.Namespace) -> int:
     return worst
 
 
-def _parse_resolve_choice(raw: str) -> tuple[int, str]:
-    """Parse "ID=local|dump" into (record_id, choice). Only checks the shape - whether choice is
-    actually 'local'/'dump' is apply_resolution's own job (its error message is printed verbatim,
-    not re-derived here). Raises ValueError on malformed input."""
-    id_str, sep, choice = raw.partition("=")
-    if not sep or not id_str or not choice:
-        raise ValueError(f"malformed --choice (want ID=local|dump): {raw!r}")
-    try:
-        record_id = int(id_str)
-    except ValueError:
-        raise ValueError(f"malformed --choice (want ID=local|dump): {raw!r}") from None
+def _parse_resolve_choice(raw: str) -> tuple[str, str]:
+    """Parse "UUID=local|dump" into (record_id, choice). Only checks the shape and that the id is
+    a canonical UUID - whether choice is actually 'local'/'dump' is apply_resolution's own job
+    (its error message is printed verbatim, not re-derived here). Raises ValueError on malformed
+    input."""
+    from cc_session_tools.lib.pdata import ids
+
+    record_id, sep, choice = raw.partition("=")
+    if not sep or not record_id or not choice:
+        raise ValueError(f"malformed --choice (want UUID=local|dump): {raw!r}")
+    if not ids.is_record_id(record_id):
+        raise ValueError(
+            f"malformed --choice (want UUID=local|dump): {raw!r} - {record_id!r} is not a UUID"
+        )
     return record_id, choice
 
 
@@ -3191,7 +3238,7 @@ def _build_parser() -> argparse.ArgumentParser:
 
     pdata_get_parser = pdata_sub.add_parser("get", help="Fetch a single record by id")
     pdata_get_parser.add_argument("--project", required=True, metavar="NAME")
-    pdata_get_parser.add_argument("--id", required=True, type=int)
+    pdata_get_parser.add_argument("--id", required=True, type=_record_id_arg, metavar="UUID")
     pdata_get_parser.add_argument("--include-deleted", action="store_true")
 
     pdata_list_parser = pdata_sub.add_parser("list", help="List records in one record_group")
@@ -3222,7 +3269,7 @@ def _build_parser() -> argparse.ArgumentParser:
 
     pdata_update_parser = pdata_sub.add_parser("update", help="Update a record (version-checked)")
     pdata_update_parser.add_argument("--project", required=True, metavar="NAME")
-    pdata_update_parser.add_argument("--id", required=True, type=int)
+    pdata_update_parser.add_argument("--id", required=True, type=_record_id_arg, metavar="UUID")
     pdata_update_parser.add_argument("--version", required=True, type=int, dest="version",
                                       metavar="EXPECTED_VERSION")
     pdata_update_parser.add_argument(
@@ -3248,13 +3295,13 @@ def _build_parser() -> argparse.ArgumentParser:
 
     pdata_delete_parser = pdata_sub.add_parser("delete", help="Soft-delete a record (version-checked)")
     pdata_delete_parser.add_argument("--project", required=True, metavar="NAME")
-    pdata_delete_parser.add_argument("--id", required=True, type=int)
+    pdata_delete_parser.add_argument("--id", required=True, type=_record_id_arg, metavar="UUID")
     pdata_delete_parser.add_argument("--version", required=True, type=int,
                                       metavar="EXPECTED_VERSION")
 
     pdata_restore_parser = pdata_sub.add_parser("restore", help="Clear a soft-delete")
     pdata_restore_parser.add_argument("--project", required=True, metavar="NAME")
-    pdata_restore_parser.add_argument("--id", required=True, type=int)
+    pdata_restore_parser.add_argument("--id", required=True, type=_record_id_arg, metavar="UUID")
 
     pdata_init_parser = pdata_sub.add_parser(
         "init", help="Initialize/migrate a project's data store (spec §7)"
@@ -3403,7 +3450,7 @@ def _build_parser() -> argparse.ArgumentParser:
              "--choice requires --project)",
     )
     pdata_resolve_parser.add_argument(
-        "--choice", action="append", default=[], metavar="ID=local|dump",
+        "--choice", action="append", default=[], metavar="UUID=local|dump",
         help="Apply a per-record resolution; may repeat. Requires --project. Without any "
              "--choice, resolve runs in diagnostic (dry-run) mode and prints the diff.",
     )
@@ -3749,6 +3796,9 @@ def main() -> None:
             sys.exit(_cmd_gc_prune(args))
 
     if args.noun == "pdata":
+        refusal = _pdata_format_refusal(args)
+        if refusal is not None:
+            sys.exit(refusal)
         if args.verb == "add":
             sys.exit(_cmd_pdata_add(args))
         if args.verb == "schema":

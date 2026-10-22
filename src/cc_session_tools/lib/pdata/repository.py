@@ -9,9 +9,10 @@ from __future__ import annotations
 import sqlite3
 from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
+from datetime import datetime, timezone
 
 from cc_session_tools.lib import db
-from cc_session_tools.lib.pdata import naming, store
+from cc_session_tools.lib.pdata import formats, ids, naming, store
 
 _ALLOWED_COLUMN_TYPES = frozenset({"TEXT", "INTEGER", "REAL", "BLOB"})
 
@@ -29,7 +30,7 @@ def _normalize_column_type(sql_type: str) -> str:
 
 _BASE_DDL = """
 CREATE TABLE IF NOT EXISTS records (
-    id INTEGER PRIMARY KEY,
+    id TEXT PRIMARY KEY,
     record_group TEXT NOT NULL,
     content TEXT NOT NULL,
     file_path TEXT,
@@ -54,7 +55,7 @@ CREATE TABLE IF NOT EXISTS pdata_meta (
     revision INTEGER NOT NULL,
     updated_at INTEGER NOT NULL
 );
-"""
+""" + db.MIGRATIONS_DDL
 
 
 def connect(project: str) -> sqlite3.Connection:
@@ -62,10 +63,24 @@ def connect(project: str) -> sqlite3.Connection:
 
     isolation_level=None turns off sqlite3's implicit BEGIN so callers issue their own
     BEGIN IMMEDIATE for multi-statement writes (see _immediate), matching
-    lib/messaging/repository.py's connect()."""
-    conn = db.connect(store.db_path(project), ddl=_BASE_DDL)
+    lib/messaging/repository.py's connect().
+
+    A file this call creates gets the format 4 schema and the `pdata-uuid-ids` marker at once:
+    it has nothing to migrate. An existing format 3 file keeps its integer-id `records` table
+    (CREATE TABLE IF NOT EXISTS is a no-op against it) until `ccst pdata migrate-uuid` rewrites
+    it."""
+    path = store.db_path(project)
+    is_new_file = not path.exists()
+    conn = db.connect(path, ddl=_BASE_DDL)
+    if is_new_file:
+        db.record_migration(conn, formats.UUID_IDS_MIGRATION, applied_at=_now_iso())
+        conn.commit()
     conn.isolation_level = None
     return conn
+
+
+def _now_iso() -> str:
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 @contextmanager
@@ -89,19 +104,22 @@ def insert_base_record(
     file_path: str | None,
     created_at: int,
     updated_at: int,
-) -> int:
-    """Insert one records row (caller already validated record_group). Returns the new id.
-    Caller owns the transaction (wrap in _immediate if this isn't the only statement)."""
-    cur = conn.execute(
-        "INSERT INTO records (record_group, content, file_path, created_at, updated_at) "
-        "VALUES (?, ?, ?, ?, ?)",
-        (record_group, content, file_path, created_at, updated_at),
+    record_id: str | None = None,
+) -> str:
+    """Insert one records row (caller already validated record_group) and return its id:
+    `record_id` when given (a deterministic id, see ids.deterministic_record_id), else a new
+    random one. Caller owns the transaction (wrap in _immediate if this isn't the only
+    statement)."""
+    new_id = record_id if record_id is not None else ids.new_record_id()
+    conn.execute(
+        "INSERT INTO records (id, record_group, content, file_path, created_at, updated_at) "
+        "VALUES (?, ?, ?, ?, ?, ?)",
+        (new_id, record_group, content, file_path, created_at, updated_at),
     )
-    assert cur.lastrowid is not None  # sqlite3 always sets this after a successful INSERT
-    return cur.lastrowid
+    return new_id
 
 
-def get_base_record(conn: sqlite3.Connection, record_id: int) -> sqlite3.Row | None:
+def get_base_record(conn: sqlite3.Connection, record_id: str) -> sqlite3.Row | None:
     row: sqlite3.Row | None = conn.execute(
         "SELECT * FROM records WHERE id=?", (record_id,)
     ).fetchone()
@@ -126,8 +144,8 @@ def has_any_records(conn: sqlite3.Connection) -> bool:
 
 
 def ensure_extension_table(conn: sqlite3.Connection, record_group: str) -> None:
-    """CREATE ext_<group> (record_id INTEGER PRIMARY KEY REFERENCES records(id)) if it doesn't
-    exist yet — record_group is validated by naming.extension_table_name(). Caller owns the
+    """CREATE ext_<group> (record_id <records.id type> PRIMARY KEY REFERENCES records(id)) if it
+    doesn't exist yet - record_group is validated by naming.extension_table_name(). Caller owns the
     transaction.
 
     On the table's *first* creation only, backfills an ext row for every records row already
@@ -140,8 +158,9 @@ def ensure_extension_table(conn: sqlite3.Connection, record_group: str) -> None:
     if extension_table_exists(conn, record_group):
         return
     table = naming.extension_table_name(record_group)
+    id_type = formats.record_id_sql_type(conn)
     conn.execute(
-        f'CREATE TABLE "{table}" (record_id INTEGER PRIMARY KEY REFERENCES records(id))'
+        f'CREATE TABLE "{table}" (record_id {id_type} PRIMARY KEY REFERENCES records(id))'
     )
     conn.execute(
         f'INSERT INTO "{table}" (record_id) SELECT id FROM records WHERE record_group=?',
@@ -277,7 +296,7 @@ def list_base_records(
         clauses.append("updated_at <= ?")
         params.append(until)
     where = " AND ".join(clauses)
-    sql = f"SELECT * FROM records WHERE {where} ORDER BY id"
+    sql = f"SELECT * FROM records WHERE {where} ORDER BY created_at, id"
     if limit is not None:
         sql += " LIMIT ?"
         params.append(limit)
@@ -287,7 +306,7 @@ def list_base_records(
 def update_base_record(
     conn: sqlite3.Connection,
     *,
-    record_id: int,
+    record_id: str,
     expected_version: int,
     content: str | None,
     file_path: str | None,
@@ -314,7 +333,7 @@ def update_base_record(
 
 
 def update_extension_row(
-    conn: sqlite3.Connection, record_group: str, record_id: int, fields: Mapping[str, object],
+    conn: sqlite3.Connection, record_group: str, record_id: str, fields: Mapping[str, object],
 ) -> None:
     """Raises AssertionError if no ext_<group> row exists for record_id. This should be
     unreachable: ensure_extension_table backfills every pre-existing row when the extension
@@ -341,7 +360,7 @@ def update_extension_row(
 
 
 def soft_delete(
-    conn: sqlite3.Connection, *, record_id: int, expected_version: int, deleted_at: int,
+    conn: sqlite3.Connection, *, record_id: str, expected_version: int, deleted_at: int,
 ) -> bool:
     """Same version-checked contract as update_base_record (spec §4.5/§6.2). Returns True iff
     the row was found, not already deleted, and had the expected version."""
@@ -353,7 +372,7 @@ def soft_delete(
     return cur.rowcount == 1
 
 
-def restore(conn: sqlite3.Connection, *, record_id: int, restored_at: int) -> bool:
+def restore(conn: sqlite3.Connection, *, record_id: str, restored_at: int) -> bool:
     """Clears deleted_at. No version check on restore (spec doesn't require one for restore —
     only delete/update are version-gated); bumps version so a concurrent restore+edit still
     shows up in the version history. Returns True iff a soft-deleted row was found."""
@@ -412,7 +431,10 @@ def query_records(
         params.append(value)
 
     join = f'LEFT JOIN "{table}" e ON e.record_id = r.id' if table else ""
-    sql = f"SELECT r.* FROM records r {join} WHERE {' AND '.join(clauses)} ORDER BY r.id"
+    sql = (
+        f"SELECT r.* FROM records r {join} WHERE {' AND '.join(clauses)} "
+        f"ORDER BY r.created_at, r.id"
+    )
     if limit is not None:
         sql += " LIMIT ?"
         params.append(limit)
@@ -420,7 +442,7 @@ def query_records(
 
 
 def insert_extension_row(
-    conn: sqlite3.Connection, record_group: str, record_id: int, fields: Mapping[str, object],
+    conn: sqlite3.Connection, record_group: str, record_id: str, fields: Mapping[str, object],
 ) -> None:
     """INSERT INTO ext_<group> (record_id, <given fields>) VALUES (...). Always creates a row
     (even with fields={}) so the group's base/ext rows stay 1:1 whenever ext_<group> exists —
@@ -437,7 +459,7 @@ def insert_extension_row(
 
 
 def get_extension_row(
-    conn: sqlite3.Connection, record_group: str, record_id: int,
+    conn: sqlite3.Connection, record_group: str, record_id: str,
 ) -> sqlite3.Row | None:
     if not extension_table_exists(conn, record_group):
         return None

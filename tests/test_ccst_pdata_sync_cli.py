@@ -65,6 +65,12 @@ def _stub_pgrep(tmp_path: Path, monkeypatch, *, pids: tuple[int, ...] = ()) -> N
     monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ['PATH']}")
 
 
+# The one record both the local database and the simulated remote dump hold: the same logical
+# record on both sides, so a content difference is an edit conflict on it.
+_SHARED_RECORD_ID = "40090682-d73d-4958-a608-9c9960620f31"
+_ABSENT_RECORD_ID = "40090682-d73d-4958-a608-000000000000"
+
+
 def _build_local(project: str, *, content: str = "local", vector: dict[str, int] | None = None) -> None:
     """Create <project>.db through the real repository.connect() path, with one records row and
     (optionally) a pdata_meta vector - matches test_rehydrate.py's/test_resolve.py's fixture
@@ -74,7 +80,7 @@ def _build_local(project: str, *, content: str = "local", vector: dict[str, int]
         with repository._immediate(conn):
             repository.insert_base_record(
                 conn, record_group="g", content=content, file_path=None,
-                created_at=1, updated_at=1,
+                created_at=1, updated_at=1, record_id=_SHARED_RECORD_ID,
             )
             if vector is not None:
                 vector_clock_store.write_vector(conn, vector, updated_at=1)
@@ -104,7 +110,7 @@ def _publish_remote_dump(
             with repository._immediate(conn):
                 repository.insert_base_record(
                     conn, record_group="g", content=content, file_path=None,
-                    created_at=1, updated_at=1,
+                    created_at=1, updated_at=1, record_id=_SHARED_RECORD_ID,
                 )
                 vector_clock_store.write_vector(conn, vector, updated_at=1)
             dump.write_latest(
@@ -515,7 +521,7 @@ def test_resolve_diagnostic_all_projects_compact_summary(base_env):
 
 def test_resolve_choice_rejects_all_projects(base_env):
     r = _run(
-        base_env, "pdata", "resolve", "--all-projects", "--choice", "1=local",
+        base_env, "pdata", "resolve", "--all-projects", "--choice", f"{_ABSENT_RECORD_ID}=local",
     )
     assert r.returncode == 2
     assert "--choice requires --project" in r.stderr
@@ -584,11 +590,11 @@ def test_resolve_choice_apply_prints_apply_resolution_error_verbatim(base_env):
 
     r = _run(
         base_env, "pdata", "resolve", "--project", "proj",
-        "--choice", "999999=local",
+        "--choice", f"{_ABSENT_RECORD_ID}=local",
     )
 
     assert r.returncode == 1
-    assert "999999" in r.stderr
+    assert _ABSENT_RECORD_ID in r.stderr
     assert "are not part of the current diff" in r.stderr
 
 

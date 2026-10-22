@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from cc_session_tools.lib.pdata import repository
+from cc_session_tools.lib.pdata import ids, repository
 
 
 def test_connect_creates_records_and_record_group_fields_tables(monkeypatch, tmp_path):
@@ -50,7 +50,7 @@ def test_insert_base_record_then_get_by_id(monkeypatch, tmp_path):
             conn, record_group="ccst-ideas", content="an idea", file_path=None,
             created_at=1000, updated_at=1000,
         )
-        assert record_id == 1
+        assert ids.is_record_id(record_id)
         row = repository.get_base_record(conn, record_id)
         assert row is not None
         assert row["record_group"] == "ccst-ideas"
@@ -60,6 +60,21 @@ def test_insert_base_record_then_get_by_id(monkeypatch, tmp_path):
         assert row["updated_at"] == 1000
         assert row["version"] == 1
         assert row["deleted_at"] is None
+    finally:
+        conn.close()
+
+
+def test_insert_base_record_uses_a_given_record_id(monkeypatch, tmp_path):
+    monkeypatch.setenv("CCST_PROJECT_DB_DIR", str(tmp_path))
+    given = ids.deterministic_record_id("testproj", "k")
+    conn = repository.connect("testproj")
+    try:
+        record_id = repository.insert_base_record(
+            conn, record_group="ccst-ideas", content="x", file_path=None,
+            created_at=1, updated_at=1, record_id=given,
+        )
+        assert record_id == given
+        assert repository.get_base_record(conn, given) is not None
     finally:
         conn.close()
 
@@ -164,14 +179,16 @@ def test_add_extension_column_with_default(monkeypatch, tmp_path):
     try:
         with repository._immediate(conn):
             repository.add_extension_column(conn, "key-events", "is_read", "INTEGER", default=0)
-            repository.insert_base_record(
+            record_id = repository.insert_base_record(
                 conn, record_group="key-events", content="x", file_path=None,
                 created_at=1, updated_at=1,
             )
             conn.execute(
-                'INSERT INTO "ext_key_events" (record_id) VALUES (1)'
+                'INSERT INTO "ext_key_events" (record_id) VALUES (?)', (record_id,)
             )
-        row = conn.execute('SELECT is_read FROM "ext_key_events" WHERE record_id=1').fetchone()
+        row = conn.execute(
+            'SELECT is_read FROM "ext_key_events" WHERE record_id=?', (record_id,)
+        ).fetchone()
         assert row["is_read"] == 0
     finally:
         conn.close()

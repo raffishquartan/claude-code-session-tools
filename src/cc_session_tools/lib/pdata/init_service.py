@@ -166,7 +166,7 @@ class WriteFailure:
 
 @dataclass
 class WriteResult:
-    created_record_ids: list[int]
+    created_record_ids: list[str]
     entries_written: list[str]
     backup_path: Path | None
     failure: WriteFailure | None
@@ -210,7 +210,7 @@ def _emit(on_progress: Callable[[str], None] | None, message: str) -> None:
         on_progress(message)
 
 
-def _rollback(*, project: str, created_ids: list[int]) -> list[str]:
+def _rollback(*, project: str, created_ids: list[str]) -> list[str]:
     """Soft-delete every id in created_ids (spec §4.5) — no hard delete, full auditability.
     Every id here was inserted earlier in this single-threaded run, so its version is always
     1. Each delete_record call is wrapped individually: service.RecordNotFoundError/
@@ -229,7 +229,7 @@ def _rollback(*, project: str, created_ids: list[int]) -> list[str]:
 
 
 def _rollback_after_error(
-    exc: BaseException, *, project: str, created_ids: list[int],
+    exc: BaseException, *, project: str, created_ids: list[str],
     on_progress: Callable[[str], None] | None,
 ) -> None:
     """Roll back `created_ids` after an error `write()` did not anticipate, without ever
@@ -243,7 +243,7 @@ def _rollback_after_error(
     except Exception as rollback_exc:
         note = (
             f"rollback of {len(created_ids)} inserted row(s) aborted: {rollback_exc!r} - rows "
-            f"from this run may still be live; record ids: {created_ids}"
+            f"from this run may still be live; record ids: {', '.join(created_ids)}"
         )
         exc.add_note(note)
         _emit(on_progress, note)
@@ -263,7 +263,7 @@ def _rollback_after_error(
 def _recover_from_failed_cutover(
     exc: BaseException, *, project: str, m: Manifest, proposal_path: Path,
     written_entries: list[ManifestEntry], archived: list[ManifestEntry],
-    entry_rows: dict[str, list[tuple[int, ImportRow]]],
+    entry_rows: dict[str, list[tuple[str, ImportRow]]],
     on_progress: Callable[[str], None] | None,
 ) -> None:
     """Cutover failed part-way. An entry whose source was already moved into the archive is cut
@@ -497,13 +497,13 @@ def write(
         m = manifest.load(proposal_path)
         _validate_no_conflicting_field_types(m)
 
-        created_ids: list[int] = []
+        created_ids: list[str] = []
         reasons: list[str] = []
         written_entries: list[ManifestEntry] = []
         # (record_id, ImportRow) pairs per entry — kept (not just the id) so _verify can
         # spot-check DB content against what was actually imported, and so the
         # human-readable diff report (spec §7.1 step 4) has real content to show.
-        entry_rows: dict[str, list[tuple[int, ImportRow]]] = {}
+        entry_rows: dict[str, list[tuple[str, ImportRow]]] = {}
 
         _check_db_not_locked(project)
 
@@ -547,7 +547,7 @@ def write(
                             field_name=spec.name, sql_type=spec.sql_type,
                             description=spec.description, default=spec.default,
                         )
-                    rows_for_entry: list[tuple[int, ImportRow]] = []
+                    rows_for_entry: list[tuple[str, ImportRow]] = []
                     for row in import_entry(project_root, entry):
                         record = service.add_record(
                             project=project, record_group=entry.db_group(),
@@ -643,7 +643,7 @@ def write(
 
 def _verify(
     *, project: str, project_root: Path, written_entries: list[ManifestEntry],
-    entry_rows: dict[str, list[tuple[int, ImportRow]]],
+    entry_rows: dict[str, list[tuple[str, ImportRow]]],
 ) -> list[str]:
     """Spec §7.1 step 4: entry-count parity (DB rows vs. an independent re-count of
     the source file), a content spot-check (DB content vs. what was actually passed
@@ -708,7 +708,7 @@ def _pointer_note(plan: cutover.PointerPlan) -> str:
 
 def _render_diff_report(
     *, written_entries: list[ManifestEntry],
-    entry_rows: dict[str, list[tuple[int, ImportRow]]],
+    entry_rows: dict[str, list[tuple[str, ImportRow]]],
     pointer_notes: list[cutover.PointerPlan],
 ) -> str:
     """Spec §7.1 step 4's human-readable diff report — old content vs. what landed

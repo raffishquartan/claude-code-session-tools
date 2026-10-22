@@ -7,6 +7,10 @@ from pathlib import Path
 
 import pytest
 
+from cc_session_tools.lib.pdata import ids
+
+_ABSENT_ID = "40090682-d73d-4958-a608-000000000000"
+
 
 def _run(env: dict, *args: str) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
@@ -28,7 +32,7 @@ def test_pdata_add_content_only(base_env):
     r = _run(base_env, "pdata", "add", "--project", "testproj",
               "--group", "ccst-ideas", "--content", "an idea")
     assert r.returncode == 0, r.stderr
-    assert "1" in r.stdout
+    assert ids.is_record_id(r.stdout.strip())
 
 
 def test_pdata_add_rejects_invalid_group(base_env):
@@ -47,7 +51,7 @@ def test_pdata_add_accepts_created_at_flag(base_env):
               "--group", "ccst-ideas", "--content", "an old idea",
               "--created-at", "1000")
     assert r.returncode == 0, r.stderr
-    assert "1" in r.stdout
+    assert ids.is_record_id(r.stdout.strip())
 
 
 def test_pdata_schema_add_field(base_env):
@@ -134,12 +138,12 @@ def test_pdata_get_shows_flattened_fields(base_env):
 
 
 def test_pdata_get_missing_id_errors(base_env):
-    r = _run(base_env, "pdata", "get", "--project", "testproj", "--id", "999")
+    r = _run(base_env, "pdata", "get", "--project", "testproj", "--id", _ABSENT_ID)
     assert r.returncode == 1
 
 
 def test_pdata_get_rejects_bad_project_name(base_env):
-    r = _run(base_env, "pdata", "get", "--project", "../escape", "--id", "1")
+    r = _run(base_env, "pdata", "get", "--project", "../escape", "--id", _ABSENT_ID)
     assert r.returncode == 2
 
 
@@ -290,13 +294,13 @@ def test_pdata_delete_version_conflict_exits_3(base_env):
 
 
 def test_pdata_delete_rejects_bad_project_name(base_env):
-    r = _run(base_env, "pdata", "delete", "--project", "../escape", "--id", "1",
+    r = _run(base_env, "pdata", "delete", "--project", "../escape", "--id", _ABSENT_ID,
               "--version", "1")
     assert r.returncode == 2
 
 
 def test_pdata_restore_rejects_bad_project_name(base_env):
-    r = _run(base_env, "pdata", "restore", "--project", "../escape", "--id", "1")
+    r = _run(base_env, "pdata", "restore", "--project", "../escape", "--id", _ABSENT_ID)
     assert r.returncode == 2
 
 
@@ -329,7 +333,7 @@ def test_pdata_add_warns_on_non_iso_date_but_still_writes(base_env):
              "--content", "an event", "--field", "event_date=2026.10.05")
     assert r.returncode == 0, r.stderr
     assert "key-events.event_date" in r.stderr and "2026.10.05" in r.stderr
-    assert r.stdout.strip() == "1"
+    assert ids.is_record_id(r.stdout.strip())
 
 
 def test_pdata_add_iso_date_prints_no_warning(base_env):
@@ -342,10 +346,10 @@ def test_pdata_add_iso_date_prints_no_warning(base_env):
 
 def test_pdata_update_warns_on_non_iso_date_but_still_writes(base_env):
     _date_field(base_env)
-    _run(base_env, "pdata", "add", "--project", "testproj", "--group", "key-events",
-         "--content", "an event")
-    r = _run(base_env, "pdata", "update", "--project", "testproj", "--id", "1",
+    record_id = _run(base_env, "pdata", "add", "--project", "testproj", "--group",
+                     "key-events", "--content", "an event").stdout.strip()
+    r = _run(base_env, "pdata", "update", "--project", "testproj", "--id", record_id,
              "--version", "1", "--field", "event_date=5 October 2026")
     assert r.returncode == 0, r.stderr
     assert "key-events.event_date" in r.stderr and "5 October 2026" in r.stderr
-    assert "updated record 1" in r.stdout
+    assert f"updated record {record_id}" in r.stdout

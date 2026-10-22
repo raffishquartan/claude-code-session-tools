@@ -100,7 +100,7 @@ class RecordDiff:
     in for a real disagreement, so read the two per-side fields instead.
     """
 
-    record_id: int
+    record_id: str
     record_group: str
     local: RecordPayload | None
     dump: RecordPayload | None
@@ -146,7 +146,7 @@ def is_choice(value: str) -> TypeGuard[Choice]:
     return value in _VALID_CHOICES
 
 
-def narrow_choices(choices: dict[int, str]) -> dict[int, Choice]:
+def narrow_choices(choices: dict[str, str]) -> dict[str, Choice]:
     """Validate a `{record_id: str}` mapping at the untrusted boundary and return it typed as
     `{record_id: Choice}`, raising ValueError naming the first offending record_id otherwise.
 
@@ -154,7 +154,7 @@ def narrow_choices(choices: dict[int, str]) -> dict[int, Choice]:
     but nothing stops an unchecked call from an untyped caller), so this is not the only guard —
     it exists so a CLI/skill caller has a boundary at which arbitrary strings become `Choice`
     without a cast, and so both paths raise the identical message."""
-    narrowed: dict[int, Choice] = {}
+    narrowed: dict[str, Choice] = {}
     for record_id, choice in choices.items():
         if not is_choice(choice):
             raise ValueError(_invalid_choice_message(record_id, choice))
@@ -162,7 +162,7 @@ def narrow_choices(choices: dict[int, str]) -> dict[int, Choice]:
     return narrowed
 
 
-def _invalid_choice_message(record_id: int, choice: str) -> str:
+def _invalid_choice_message(record_id: str, choice: str) -> str:
     return f"invalid choice {choice!r} for record_id {record_id}: must be 'local' or 'dump'"
 
 
@@ -214,7 +214,7 @@ def diff_against_dump(project: str) -> ResolveDiff:
         dump_conn.close()
 
 
-def apply_resolution(project: str, choices: dict[int, Choice]) -> ApplyOutcome:
+def apply_resolution(project: str, choices: dict[str, Choice]) -> ApplyOutcome:
     """Apply choices (`{record_id: "local" | "dump"}`) for the current diff. All-or-nothing:
     `choices` must name EVERY record_id in the diff, no more and no fewer, or nothing is applied
     at all.
@@ -279,7 +279,7 @@ def apply_resolution(project: str, choices: dict[int, Choice]) -> ApplyOutcome:
 def _apply_resolution(
     project: str,
     project_root: Path,
-    choices: dict[int, Choice],
+    choices: dict[str, Choice],
     local_conn: sqlite3.Connection,
     dump_conn: sqlite3.Connection,
     info: dump.DumpInfo,
@@ -458,11 +458,20 @@ def _row_to_base_dict(row: sqlite3.Row) -> BaseFields:
     }
 
 
-def _all_record_ids(conn: sqlite3.Connection) -> set[int]:
-    return {row["id"] for row in conn.execute("SELECT id FROM records")}
+def _ordered_record_ids(
+    local_conn: sqlite3.Connection, dump_conn: sqlite3.Connection,
+) -> list[str]:
+    """Every record id on either side, ordered by `created_at` then id (local's `created_at`
+    when both sides have the id), so the diff lists records in creation order whatever the id
+    values are."""
+    created_at: dict[str, int] = {}
+    for conn in (dump_conn, local_conn):
+        for row in conn.execute("SELECT id, created_at FROM records"):
+            created_at[row["id"]] = row["created_at"]
+    return sorted(created_at, key=lambda record_id: (created_at[record_id], record_id))
 
 
-def _snapshot(conn: sqlite3.Connection, record_id: int) -> _Snapshot | None:
+def _snapshot(conn: sqlite3.Connection, record_id: str) -> _Snapshot | None:
     row = repository.get_base_record(conn, record_id)
     if row is None:
         return None
@@ -540,7 +549,7 @@ def _diff_records(
     local_conn: sqlite3.Connection, dump_conn: sqlite3.Connection,
 ) -> list[RecordDiff]:
     diffs: list[RecordDiff] = []
-    for record_id in sorted(_all_record_ids(local_conn) | _all_record_ids(dump_conn)):
+    for record_id in _ordered_record_ids(local_conn, dump_conn):
         local_snap = _snapshot(local_conn, record_id)
         dump_snap = _snapshot(dump_conn, record_id)
         if local_snap == dump_snap:
@@ -633,7 +642,7 @@ def _apply_extension_fields(
     local_conn: sqlite3.Connection,
     dump_conn: sqlite3.Connection,
     record_group: str,
-    record_id: int,
+    record_id: str,
     fields: dict[str, object],
 ) -> None:
     dump_types = _dump_extension_column_types(dump_conn, record_group)

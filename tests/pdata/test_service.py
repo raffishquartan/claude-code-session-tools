@@ -2,10 +2,13 @@ from __future__ import annotations
 
 import itertools
 import time
+import uuid
 
 import pytest
 
-from cc_session_tools.lib.pdata import repository, service, vector_clock_store
+from cc_session_tools.lib.pdata import ids, repository, service, vector_clock_store
+
+_ABSENT_ID = "40090682-d73d-4958-a608-000000000000"
 
 
 def test_add_record_content_only(monkeypatch, tmp_path):
@@ -14,10 +17,31 @@ def test_add_record_content_only(monkeypatch, tmp_path):
         project="testproj", record_group="ccst-ideas", content="an idea",
         file_path=None, fields={}, created_at=1000,
     )
-    assert record.id == 1
+    assert ids.is_record_id(record.id)
     assert record.record_group == "ccst-ideas"
     assert record.content == "an idea"
     assert record.fields == {}
+
+
+def test_add_then_get_round_trips_a_canonical_uuid(monkeypatch, tmp_path):
+    monkeypatch.setenv("CCST_PROJECT_DB_DIR", str(tmp_path))
+    added = service.add_record(
+        project="testproj", record_group="ccst-ideas", content="x", file_path=None, fields={},
+    )
+    assert str(uuid.UUID(added.id)) == added.id
+    fetched = service.get_record(project="testproj", record_id=added.id)
+    assert fetched is not None
+    assert fetched.id == added.id
+
+
+def test_add_record_with_a_given_id_keeps_it(monkeypatch, tmp_path):
+    monkeypatch.setenv("CCST_PROJECT_DB_DIR", str(tmp_path))
+    given = ids.deterministic_record_id("testproj", "singleton")
+    record = service.add_record(
+        project="testproj", record_group="ccst-ideas", content="x", file_path=None, fields={},
+        record_id=given,
+    )
+    assert record.id == given
 
 
 def test_add_record_rejects_invalid_record_group(monkeypatch, tmp_path):
@@ -212,7 +236,7 @@ def test_get_record_flattens_extension_fields(monkeypatch, tmp_path):
 
 def test_get_record_returns_none_for_missing_id(monkeypatch, tmp_path):
     monkeypatch.setenv("CCST_PROJECT_DB_DIR", str(tmp_path))
-    assert service.get_record(project="testproj", record_id=999) is None
+    assert service.get_record(project="testproj", record_id=_ABSENT_ID) is None
 
 
 def test_list_records_flattens_extension_fields_for_every_row(monkeypatch, tmp_path):
@@ -316,7 +340,7 @@ def test_update_record_missing_id_raises_not_found(monkeypatch, tmp_path):
     monkeypatch.setenv("CCST_PROJECT_DB_DIR", str(tmp_path))
     with pytest.raises(service.RecordNotFoundError):
         service.update_record(
-            project="testproj", record_id=999, expected_version=1,
+            project="testproj", record_id=_ABSENT_ID, expected_version=1,
             content="new", file_path=None, fields={}, updated_at=2,
         )
 
