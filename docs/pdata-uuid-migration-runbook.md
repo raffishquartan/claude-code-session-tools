@@ -30,7 +30,8 @@ Default locations used below (adjust if you set `CCST_DATA_HOME`, `CCST_PROJECT_
   - record commands (`ccst pdata add/get/list/query/update/delete/...`) refuse with a message
     naming `ccst pdata migrate-uuid` (exit 1);
   - `ccst pdata sync-check` reports `migration pending` and neither loads nor publishes anything
-    (exit 0); the `pdata-sync` hook and the pdata scheduled jobs do the same or refuse;
+    (exit 0), and the `pdata-sync` hook does the same; any other `--all-projects` run, including
+    the pdata scheduled jobs, skips and names each unmigrated project, runs on the rest and exits 1;
   - `ccst doctor` shows `[FAIL] migration-to-4.0.0:pdata-uuid:<project>`;
   - a `claude` session start shows the same through the `pending-migration` hook;
   - `install-everything.sh` ends with a framed `pdata MIGRATION REQUIRED` banner.
