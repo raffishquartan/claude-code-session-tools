@@ -59,7 +59,9 @@ databases need a one-time migration on every machine, from a plain terminal, fol
   the value. `resolve.apply_resolution()` takes `{uuid_string: "local" | "dump"}`.
 - **BREAKING**: the format 4 dump is published to `.pdata-db-dump/v4/` (`latest.sql`,
   `latest.sha256`, `archive/`) and starts with a `-- pdata_format=4` header; a migrated project's
-  dump also records the format 3 vector clock it came from. The format 3 files directly under
+  dump also records that it was migrated (`-- migrated_from_format=3`) and the format 3 vector
+  clock it came from, which may be empty. Both files are written through a temporary file and a
+  rename. The format 3 files directly under
   `.pdata-db-dump/` are never written, loaded or modified by 4.x, so a 3.x machine keeps working
   on them in isolation, and a rollback can return to them.
 - **BREAKING**: a format 3 database is read-only until migrated. Every record-touching
@@ -67,7 +69,13 @@ databases need a one-time migration on every machine, from a plain terminal, fol
   adopt-from-dump, `sync-check`, the `pdata-sync` hook and the pdata scheduled jobs report
   "migration pending" (not a fork, not an error) and change nothing. `migrate-uuid`,
   `migration-notice`, `sync-check` (status only), `verify`, `readiness-scan` and `ccst doctor`
-  still run. `sync-check --all-projects` counts these projects as `migration-pending`.
+  still run. `sync-check --all-projects` counts these projects as `migration-pending`; any other
+  verb run with `--all-projects` (including the scheduled `dump`, `rehydrate` and
+  session-output reconcile jobs) skips and names them, runs on every other project, and exits 1.
+  The same holds for a database converted by a `migrate-uuid --write` run that did not finish
+  (until a re-run records its marker), and for a project this machine has no database for while
+  its only published dump is format 3: nothing creates a database for it until a machine holding
+  the format 3 data has migrated it.
 - `ccst pdata resolve`'s `dump` choice also copies the record's `created_at`.
 
 ### Removed
