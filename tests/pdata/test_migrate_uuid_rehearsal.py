@@ -167,3 +167,117 @@ def test_two_machines_migrate_to_identical_ids_and_then_sync_without_a_fork(
         name: data for name, data in snapshot_dir(format3_dump_dir).items()
         if not name.startswith("v4/")
     } == format3_files
+
+
+def _ccsched(env: dict[str, str], *args: str) -> str:
+    result = subprocess.run(
+        [sys.executable, "-m", "cc_session_tools.cli.ccsched", *args],
+        capture_output=True, text=True, env=env, cwd=env["HOME"],
+    )
+    output = result.stdout + result.stderr
+    assert result.returncode == 0, f"ccsched {' '.join(args)} -> {result.returncode}\n{output}"
+    return output
+
+
+_PDATA_JOBS = {
+    "pdata-sync-hourly": ("ccst", "pdata", "sync-check", "--all-projects"),
+    "pm-session-output-reconcile": (
+        "ccst", "pdata", "reconcile-session-output", "--all-projects",
+    ),
+    "pdata-verify-all": ("ccst", "pdata", "verify", "--all-projects"),
+}
+
+
+def test_runbook_job_names_are_the_bundled_pdata_jobs() -> None:
+    from cc_session_tools.lib.scheduler import bundled_jobs
+
+    bundled = {job.job_id: job.command for job in bundled_jobs.BUNDLED_CCSCHED_JOBS}
+    assert {name: bundled[name] for name in _PDATA_JOBS} == _PDATA_JOBS
+
+
+def test_runbook_ccsched_and_doctor_steps(
+    machines: tuple[dict[str, str], dict[str, str]],
+) -> None:
+    """The runbook's job and doctor steps: disable the pdata jobs, doctor FAILs before and is OK
+    after the migration, re-enable the jobs."""
+    a, _ = machines
+    for job_id, command in _PDATA_JOBS.items():
+        _ccsched(a, "add", "--id", job_id, "--cadence", "daily@03:00", "--command", *command)
+    for job_id in _PDATA_JOBS:
+        assert f"disabled {job_id}" in _ccsched(a, "disable", job_id)
+    listing = _ccsched(a, "list")
+    for job_id in _PDATA_JOBS:
+        [row] = [line for line in listing.splitlines() if line.startswith(job_id + " ")]
+        assert " false " in row
+
+    out = _ccst(a, "doctor", "--all", "--no-pypi", expect=1)
+    assert f"[FAIL] migration-to-4.0.0:pdata-uuid:{PROJECT}" in out
+    assert formats.RUNBOOK_PATH in out
+
+    _ccst(a, "pdata", "migrate-uuid", "--all-projects", "--write")
+    out = _ccst(a, "doctor", "--all", "--no-pypi", expect=1)
+    assert f"[OK  ] migration-to-4.0.0:pdata-uuid:{PROJECT}" in out
+
+    for job_id in _PDATA_JOBS:
+        assert f"enabled {job_id}" in _ccsched(a, "enable", job_id)
+
+
+def test_lineage_mismatch_recovery_moves_the_database_aside_and_rehydrates(
+    machines: tuple[dict[str, str], dict[str, str]], tmp_path: Path,
+) -> None:
+    """Machine B made a format 3 write after A migrated: migrate-uuid refuses; the runbook's
+    recovery (move the database aside, `ccst pdata rehydrate`) leaves B on A's format 4 data,
+    with the old database kept to copy the missing change from."""
+    a, b = machines
+    _ccst(a, "pdata", "migrate-uuid", "--all-projects", "--write")
+    conn = sqlite3.connect(str(_db(b)))
+    try:
+        conn.execute("UPDATE pdata_meta SET revision = revision + 1")
+        conn.execute(
+            "INSERT INTO records (id, record_group, content, created_at, updated_at) "
+            "VALUES (3, 'notes', 'only on b', 2000, 2000)"
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    out = _ccst(b, "pdata", "migrate-uuid", "--all-projects", "--write", expect=1)
+    assert "[NO] this database is the format 3 state the format 4 dump came from" in out
+    assert f"ccst pdata rehydrate --project {PROJECT}" in out
+
+    aside = tmp_path / "aside" / f"{PROJECT}.db"
+    aside.parent.mkdir()
+    _db(b).rename(aside)
+    out = _ccst(b, "pdata", "rehydrate", "--project", PROJECT)
+    assert "fast-forwarded" in out
+    assert _records(a) == _records(b)
+    out = _ccst(b, "pdata", "migrate-uuid", "--all-projects", "--write")
+    assert "already migrated" in out
+    _ccst(b, "pdata", "verify", "--all-projects")
+
+
+def test_rollback_restores_the_backup_and_the_format3_dump_still_matches(
+    machines: tuple[dict[str, str], dict[str, str]], tmp_path: Path,
+) -> None:
+    """The runbook's rollback on one machine: move the format 4 database aside and copy the
+    named backup back; the restored database is format 3 and converged with the untouched
+    format 3 dump, which is what 3.x needs to carry on syncing."""
+    import shutil
+
+    a, _ = machines
+    before = _records(a)
+    out = _ccst(a, "pdata", "migrate-uuid", "--all-projects", "--write")
+    [backup_line] = [line for line in out.splitlines() if line.strip().startswith("backup: ")]
+    backup = Path(backup_line.split("backup: ", 1)[1].strip())
+
+    aside = tmp_path / "aside"
+    aside.mkdir()
+    for sidecar in (_db(a), Path(f"{_db(a)}-wal"), Path(f"{_db(a)}-shm")):
+        if sidecar.exists():
+            sidecar.rename(aside / sidecar.name)
+    shutil.copy2(backup, _db(a))
+
+    assert formats.database_format(_db(a)) == formats.PDATA_FORMAT_INTEGER_IDS
+    assert _records(a) == before
+    out = _ccst(a, "pdata", "sync-check", "--project", PROJECT)
+    assert "migration pending (format 3 dump: unchanged)" in out

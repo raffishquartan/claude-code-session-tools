@@ -240,9 +240,10 @@ def _reentry_explanation(project: str) -> str:
         f"another machine already migrated {project} and published the format 4 dump, from a "
         "format 3 state this database is not in: this database has format 3 changes that "
         "lineage never saw, so it cannot be migrated to match it. Nothing was changed. To "
-        "adopt the format 4 data, move this database aside (keep it to copy from), run "
-        f"`{formats.MIGRATE_COMMAND} --project {project} --write` again so the project starts "
-        "from the format 4 dump, then re-enter the missing changes by hand. Session-output rows "
+        "adopt the format 4 data, move this database, and any -wal and -shm files beside it, out "
+        f"of the project-db directory (keep them to copy from), run `ccst pdata rehydrate "
+        f"--project {project}` so the project starts from the format 4 dump, then re-enter the "
+        "missing changes by hand. Session-output rows "
         "need no re-entry: the reconcile job re-derives them. See "
         f"{formats.RUNBOOK_PATH} (troubleshooting: lineage mismatch)"
     )
