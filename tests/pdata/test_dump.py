@@ -50,10 +50,18 @@ def _build_db(path: Path, *, field_order: list[str], row_order: list[int]) -> sq
     return conn
 
 
-def test_dump_is_identical_regardless_of_insertion_or_schema_evolution_order(tmp_path):
+def test_dump_is_identical_regardless_of_insertion_or_schema_evolution_order(
+    tmp_path, monkeypatch,
+):
     """The exact scenario that broke raw iterdump() during design: two databases holding
     identical logical content, built via a DIFFERENT sequence of operations, must still
-    produce byte-identical dumps."""
+    produce byte-identical dumps.
+
+    The clock is pinned because repository.connect() records the `pdata-uuid-ids` marker in the
+    `migrations` table, with the wall-clock second, when it creates a file: two databases created
+    either side of a second boundary hold different `applied_at` values, which is a real content
+    difference the dump must carry, not an ordering one."""
+    monkeypatch.setattr(repository, "_now_iso", lambda: "2026-10-22T00:00:00Z")
     con_a = _build_db(tmp_path / "a.db", field_order=["owner", "priority"], row_order=[1, 2, 3])
     con_b = _build_db(tmp_path / "b.db", field_order=["priority", "owner"], row_order=[3, 1, 2])
     assert dump.serialize(con_a) == dump.serialize(con_b)
