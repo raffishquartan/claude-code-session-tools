@@ -24,11 +24,11 @@
 
 ## 5. `ccst pdata migrate-uuid`
 
-- [ ] 5.1 Implement the migration module: plan builder shared by dry run and write; precondition checks (format 3, converged with the format 3 dump, `occupancy.is_occupied` clear, lock probe) each with its own message. Verify: tests per refusal in the spec (unpublished changes, fork, running claude, locked, no database).
-- [ ] 5.2 Implement the rewrite: backup via `db.backup_to` into `migration-backups/pdata-<project>-pre-4.0.0-<stamp>.db` and open-check it; single `BEGIN IMMEDIATE` rebuild of `records`, every `ext_*` and `pdata_verify_watermark` with the uuid5 mapping (live and soft-deleted rows); row-count and `verify` checks; marker; publish the format 4 dump with the format 3 vector in the header. Verify: tests for mapping determinism across two copies, soft-deleted rows, per-group counts, backup contents, failure rollback leaves the original.
-- [ ] 5.3 Implement idempotency/resume and the joining-machine path (format 4 dump present: check the recorded vector, adopt or refuse with the re-entry message). Verify: tests for second run, resume after a missing marker or dump, matching and non-matching lineages.
-- [ ] 5.4 Wire the CLI (`--project/--all-projects`, `--dry-run/--write`, default dry run; dry run lists suspicious `*_id`/`ref` fields). Verify: CLI tests for flags, exit codes and output.
-- [ ] 5.5 End-to-end rehearsal in a sandbox with two simulated machines sharing one dump directory: converge on 3.x state, migrate A, publish, migrate B, assert identical ids, then add a record on each and sync without a fork. Verify: scripted test or recorded rehearsal output in the PR.
+- [x] 5.1 Implement the migration module: plan builder shared by dry run and write; precondition checks (format 3, converged with the format 3 dump, `occupancy.is_occupied` clear, lock probe) each with its own message. Verify: tests per refusal in the spec (unpublished changes, fork, running claude, locked, no database).
+- [x] 5.2 Implement the rewrite: backup via `db.backup_to` into `migration-backups/pdata-<project>-pre-4.0.0-<stamp>.db` and open-check it; single `BEGIN IMMEDIATE` rebuild of `records`, every `ext_*` and `pdata_verify_watermark` with the uuid5 mapping (live and soft-deleted rows); row-count and `verify` checks; marker; publish the format 4 dump with the format 3 vector in the header. Verify: tests for mapping determinism across two copies, soft-deleted rows, per-group counts, backup contents, failure rollback leaves the original.
+- [x] 5.3 Implement idempotency/resume and the joining-machine path (format 4 dump present: check the recorded vector, adopt or refuse with the re-entry message). Verify: tests for second run, resume after a missing marker or dump, matching and non-matching lineages.
+- [x] 5.4 Wire the CLI (`--project/--all-projects`, `--dry-run/--write`, default dry run; dry run lists suspicious `*_id`/`ref` fields). Verify: CLI tests for flags, exit codes and output.
+- [x] 5.5 End-to-end rehearsal in a sandbox with two simulated machines sharing one dump directory: converge on 3.x state, migrate A, publish, migrate B, assert identical ids, then add a record on each and sync without a fork. Verify: scripted test or recorded rehearsal output in the PR.
 
 ## 6. Doctor, hook and docs
 

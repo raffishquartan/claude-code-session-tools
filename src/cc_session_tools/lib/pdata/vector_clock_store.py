@@ -1,5 +1,5 @@
 """Reads/writes the pdata_meta table (spec: "The vector clock") and the pdata_migration_origin
-table for one already-open connection. Pure vector math lives in vector_clock.py — this module is
+table for one already-open connection. Pure vector math lives in vector_clock.py - this module is
 the only place that touches SQL for either. Caller owns the transaction (wrap writes in
 repository._immediate), matching every other write path in this package."""
 from __future__ import annotations

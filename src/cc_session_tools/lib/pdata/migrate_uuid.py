@@ -610,8 +610,7 @@ def _record_marker(project: str) -> None:
     conn = repository.connect(project)
     try:
         db.record_migration(
-            conn, formats.UUID_IDS_MIGRATION,
-            applied_at=datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            conn, formats.UUID_IDS_MIGRATION, applied_at=repository._now_iso(),
         )
     finally:
         conn.close()
