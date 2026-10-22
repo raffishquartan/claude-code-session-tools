@@ -41,6 +41,10 @@ refuse with a message directing the user to `ccst pdata migrate-uuid`; `migrate-
 - **WHEN** a user runs `ccst pdata add` on a format 3 project after upgrading to 4.0.0
 - **THEN** the command exits non-zero, writes nothing, and prints the migration command
 
+#### Scenario: An --all-projects run with an unmigrated project
+- **WHEN** a verb that touches records (such as `dump`, `rehydrate`, `resolve` or `reconcile-session-output`) runs with `--all-projects` and some projects are still format 3
+- **THEN** it runs on every other project, skips and names each format 3 project without touching it, and exits 1 at the end
+
 ### Requirement: No database is created for a project whose only dump is format 3
 When a machine has no database for a project, and the project has a format 3 dump in
 `.pdata-db-dump/` and no dump in `.pdata-db-dump/v4/`, nothing SHALL create a database for it:

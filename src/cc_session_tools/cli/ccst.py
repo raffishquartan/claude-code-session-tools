@@ -1064,49 +1064,134 @@ def _pdata_gate_targets(args: argparse.Namespace) -> list[str]:
     return verify.discover_projects()
 
 
-def _pdata_format_refusal(args: argparse.Namespace) -> int | None:
-    """The format gate (`formats` module docstring): returns exit code 1, after printing the
-    migration message for each target project whose database is still format 3, or was converted
-    by a migration run that did not finish, or that has no database while its only published dump
-    is format 3, when the verb is not exempt; else None. Read-only, and runs before the verb's
-    handler opens anything."""
+@dataclass(frozen=True, slots=True)
+class _PdataFormatGate:
+    targets: tuple[str, ...]  # every project the verb would open
+    refused: tuple[str, ...]  # those it must not open, each already named on stderr
+
+
+def _pdata_gate_reason(verb: str, project: str) -> str | None:
+    """Why the format gate keeps `verb` off `project`, or None when it may run there."""
     import sqlite3
 
     from cc_session_tools.lib.pdata import dump, formats, store, vector_clock_store
 
-    if args.verb in formats.FORMAT_GATE_EXEMPT_VERBS:
+    try:
+        path = store.db_path(project)
+        project_root = store.project_root(project)
+    except ValueError:
+        return None  # the verb's own handler rejects an invalid project name
+    if not path.exists():
+        # `init` refuses this case itself, with its adoption-mismatch message.
+        if verb != "init" and dump.only_format3_published(project_root):
+            return formats.format3_only_message(project)
         return None
-    refused = False
-    for project in _pdata_gate_targets(args):
-        try:
-            path = store.db_path(project)
-            project_root = store.project_root(project)
-        except ValueError:
-            continue  # the verb's own handler rejects an invalid project name
-        if not path.exists():
-            # `init` refuses this case itself, with its adoption-mismatch message.
-            if args.verb != "init" and dump.only_format3_published(project_root):
-                print(f"ccst pdata {args.verb}: {formats.format3_only_message(project)}",
-                      file=sys.stderr)
-                refused = True
-            continue
-        try:
-            fmt = formats.database_format(path)
-        except formats.UnknownPdataFormatError as exc:
-            print(f"ccst pdata {args.verb}: {project}: {exc}", file=sys.stderr)
-            refused = True
-            continue
-        except sqlite3.DatabaseError:
-            continue  # not a readable database: the verb's own handler reports it per project
-        if fmt == formats.PDATA_FORMAT_INTEGER_IDS:
-            print(f"ccst pdata {args.verb}: {formats.legacy_format_message(project)}",
-                  file=sys.stderr)
-            refused = True
-        elif vector_clock_store.migration_unfinished(path):
-            print(f"ccst pdata {args.verb}: {formats.unfinished_migration_message(project)}",
-                  file=sys.stderr)
-            refused = True
-    return 1 if refused else None
+    try:
+        fmt = formats.database_format(path)
+    except formats.UnknownPdataFormatError as exc:
+        return f"{project}: {exc}"
+    except sqlite3.DatabaseError:
+        return None  # not a readable database: the verb's own handler reports it per project
+    if fmt == formats.PDATA_FORMAT_INTEGER_IDS:
+        return formats.legacy_format_message(project)
+    if vector_clock_store.migration_unfinished(path):
+        return formats.unfinished_migration_message(project)
+    return None
+
+
+def _pdata_format_gate(args: argparse.Namespace) -> _PdataFormatGate:
+    """The format gate (`formats` module docstring), for a verb that is not exempt: every target
+    project whose database is still format 3, or was converted by a migration run that did not
+    finish, or that has no database while its only published dump is format 3, is refused, with
+    the reason printed to stderr. Read-only, and runs before the verb's handler opens anything."""
+    from cc_session_tools.lib.pdata import formats
+
+    if args.verb in formats.FORMAT_GATE_EXEMPT_VERBS:
+        return _PdataFormatGate(targets=(), refused=())
+    targets = tuple(_pdata_gate_targets(args))
+    skipping = "skipped " if getattr(args, "all_projects", False) else ""
+    refused: list[str] = []
+    for project in targets:
+        reason = _pdata_gate_reason(args.verb, project)
+        if reason is not None:
+            print(f"ccst pdata {args.verb}: {skipping}{reason}", file=sys.stderr)
+            refused.append(project)
+    return _PdataFormatGate(targets=targets, refused=tuple(refused))
+
+
+def _pdata_projects(args: argparse.Namespace) -> list[str]:
+    """The projects a verb handler runs on: the named one, or for --all-projects every project
+    with a database except those the format gate refused."""
+    from cc_session_tools.lib.pdata import verify
+
+    if not args.all_projects:
+        return [args.project]
+    gated: frozenset[str] = getattr(args, "format_gated_projects", frozenset())
+    return [project for project in verify.discover_projects() if project not in gated]
+
+
+def _cmd_pdata(args: argparse.Namespace) -> int:
+    """Run one `ccst pdata` verb behind the format gate. A single-project run on a gated project
+    refuses with exit 1. An --all-projects run skips the gated projects (naming each), runs the
+    verb on the rest, and exits 1 at the end when it skipped any and the verb itself succeeded."""
+    gate = _pdata_format_gate(args)
+    if gate.refused:
+        if not getattr(args, "all_projects", False):
+            return 1
+        args.format_gated_projects = frozenset(gate.refused)
+        if set(gate.targets) <= set(gate.refused):
+            return 1
+    status = _run_pdata_verb(args)
+    return 1 if gate.refused and status == 0 else status
+
+
+def _run_pdata_verb(args: argparse.Namespace) -> int:
+    if args.verb == "add":
+        return _cmd_pdata_add(args)
+    if args.verb == "schema":
+        if args.subverb == "add-field":
+            return _cmd_pdata_schema_add_field(args)
+        if args.subverb == "list":
+            return _cmd_pdata_schema_list(args)
+        if args.subverb == "show":
+            return _cmd_pdata_schema_show(args)
+    if args.verb == "get":
+        return _cmd_pdata_get(args)
+    if args.verb == "list":
+        return _cmd_pdata_list(args)
+    if args.verb == "query":
+        return _cmd_pdata_query(args)
+    if args.verb == "update":
+        return _cmd_pdata_update(args)
+    if args.verb == "delete":
+        return _cmd_pdata_delete(args)
+    if args.verb == "restore":
+        return _cmd_pdata_restore(args)
+    if args.verb == "init":
+        return _cmd_pdata_init(args)
+    if args.verb == "reorganize":
+        return _cmd_pdata_reorganize(args)
+    if args.verb == "rename-group":
+        return _cmd_pdata_rename_group(args)
+    if args.verb == "reconcile-session-output":
+        return _cmd_pdata_reconcile_session_output(args)
+    if args.verb == "verify":
+        return _cmd_pdata_verify(args)
+    if args.verb == "readiness-scan":
+        return _cmd_pdata_readiness_scan(args)
+    if args.verb == "dump":
+        return _cmd_pdata_dump(args)
+    if args.verb == "rehydrate":
+        return _cmd_pdata_rehydrate(args)
+    if args.verb == "resolve":
+        return _cmd_pdata_resolve(args)
+    if args.verb == "sync-check":
+        return _cmd_pdata_sync_check(args)
+    if args.verb == "migrate-uuid":
+        return _cmd_pdata_migrate_uuid(args)
+    if args.verb == "migration-notice":
+        return _cmd_pdata_migration_notice(args)
+    raise AssertionError(f"unhandled ccst pdata verb {args.verb!r}")
 
 
 def _parse_field_assignment(raw: str) -> tuple[str, str | None]:
@@ -1533,7 +1618,11 @@ def _cmd_pdata_reconcile_session_output(args: argparse.Namespace) -> int:
 
     try:
         if args.all_projects:
-            targets = session_output.discover_projects_with_sessions()
+            gated: frozenset[str] = getattr(args, "format_gated_projects", frozenset())
+            targets = [
+                (name, root) for name, root in session_output.discover_projects_with_sessions()
+                if name not in gated
+            ]
         else:
             root = session_output.find_project_root(args.project)
             if root is None:
@@ -1571,7 +1660,7 @@ def _cmd_pdata_reconcile_session_output(args: argparse.Namespace) -> int:
 def _cmd_pdata_verify(args: argparse.Namespace) -> int:
     from cc_session_tools.lib.pdata import verify
 
-    projects = verify.discover_projects() if args.all_projects else [args.project]
+    projects = _pdata_projects(args)
     if not projects:
         print("ccst pdata verify: no project databases found", file=sys.stderr)
         return 2
@@ -1646,10 +1735,10 @@ def _cmd_pdata_verify(args: argparse.Namespace) -> int:
 def _cmd_pdata_dump(args: argparse.Namespace) -> int:
     from cc_session_tools.lib import machine_identity
     from cc_session_tools.lib.pdata import (
-        dump, repository, store, sync_notify, vector_clock_store, verify,
+        dump, repository, store, sync_notify, vector_clock_store,
     )
 
-    projects = verify.discover_projects() if args.all_projects else [args.project]
+    projects = _pdata_projects(args)
     if not projects:
         print("ccst pdata dump: no project databases found", file=sys.stderr)
         return 2
@@ -1710,9 +1799,9 @@ def _cmd_pdata_dump(args: argparse.Namespace) -> int:
 
 
 def _cmd_pdata_rehydrate(args: argparse.Namespace) -> int:
-    from cc_session_tools.lib.pdata import rehydrate, sync_notify, verify
+    from cc_session_tools.lib.pdata import rehydrate, sync_notify
 
-    projects = verify.discover_projects() if args.all_projects else [args.project]
+    projects = _pdata_projects(args)
     if not projects:
         print("ccst pdata rehydrate: no project databases found", file=sys.stderr)
         return 2
@@ -1839,7 +1928,7 @@ def _close_empty_fork_if_any(project: str) -> bool:
 
 
 def _cmd_pdata_resolve(args: argparse.Namespace) -> int:
-    from cc_session_tools.lib.pdata import resolve, verify
+    from cc_session_tools.lib.pdata import resolve
 
     if args.choice:
         if args.all_projects:
@@ -1873,7 +1962,7 @@ def _cmd_pdata_resolve(args: argparse.Namespace) -> int:
         print(f"ccst pdata resolve: {args.project}: resolved {len(choices)} record(s)")
         return 0
 
-    projects = verify.discover_projects() if args.all_projects else [args.project]
+    projects = _pdata_projects(args)
     if not projects:
         print("ccst pdata resolve: no project databases found", file=sys.stderr)
         return 2
@@ -1996,9 +2085,9 @@ def _cmd_pdata_sync_check(args: argparse.Namespace) -> int:
     rules). This handler is the loop, the printing, and the exit-code mapping."""
     import sqlite3
 
-    from cc_session_tools.lib.pdata import sync_check, verify
+    from cc_session_tools.lib.pdata import sync_check
 
-    projects = verify.discover_projects() if args.all_projects else [args.project]
+    projects = _pdata_projects(args)
     if not projects:
         print("ccst pdata sync-check: no project databases found", file=sys.stderr)
         return 2
@@ -2070,9 +2159,7 @@ def _cmd_pdata_sync_check(args: argparse.Namespace) -> int:
 def _cmd_pdata_migrate_uuid(args: argparse.Namespace) -> int:
     """`ccst pdata migrate-uuid`: every rule lives in `pdata.migrate_uuid`; this handler is the
     project loop, the printing and the exit status (the worst over all projects)."""
-    from cc_session_tools.lib.pdata import verify
-
-    projects = verify.discover_projects() if args.all_projects else [args.project]
+    projects = _pdata_projects(args)
     if not projects:
         print("ccst pdata migrate-uuid: no project databases found - nothing to migrate")
         return 0
@@ -3932,54 +4019,7 @@ def main() -> None:
             sys.exit(_cmd_gc_prune(args))
 
     if args.noun == "pdata":
-        refusal = _pdata_format_refusal(args)
-        if refusal is not None:
-            sys.exit(refusal)
-        if args.verb == "add":
-            sys.exit(_cmd_pdata_add(args))
-        if args.verb == "schema":
-            if args.subverb == "add-field":
-                sys.exit(_cmd_pdata_schema_add_field(args))
-            if args.subverb == "list":
-                sys.exit(_cmd_pdata_schema_list(args))
-            if args.subverb == "show":
-                sys.exit(_cmd_pdata_schema_show(args))
-        if args.verb == "get":
-            sys.exit(_cmd_pdata_get(args))
-        if args.verb == "list":
-            sys.exit(_cmd_pdata_list(args))
-        if args.verb == "query":
-            sys.exit(_cmd_pdata_query(args))
-        if args.verb == "update":
-            sys.exit(_cmd_pdata_update(args))
-        if args.verb == "delete":
-            sys.exit(_cmd_pdata_delete(args))
-        if args.verb == "restore":
-            sys.exit(_cmd_pdata_restore(args))
-        if args.verb == "init":
-            sys.exit(_cmd_pdata_init(args))
-        if args.verb == "reorganize":
-            sys.exit(_cmd_pdata_reorganize(args))
-        if args.verb == "rename-group":
-            sys.exit(_cmd_pdata_rename_group(args))
-        if args.verb == "reconcile-session-output":
-            sys.exit(_cmd_pdata_reconcile_session_output(args))
-        if args.verb == "verify":
-            sys.exit(_cmd_pdata_verify(args))
-        if args.verb == "readiness-scan":
-            sys.exit(_cmd_pdata_readiness_scan(args))
-        if args.verb == "dump":
-            sys.exit(_cmd_pdata_dump(args))
-        if args.verb == "rehydrate":
-            sys.exit(_cmd_pdata_rehydrate(args))
-        if args.verb == "resolve":
-            sys.exit(_cmd_pdata_resolve(args))
-        if args.verb == "sync-check":
-            sys.exit(_cmd_pdata_sync_check(args))
-        if args.verb == "migrate-uuid":
-            sys.exit(_cmd_pdata_migrate_uuid(args))
-        if args.verb == "migration-notice":
-            sys.exit(_cmd_pdata_migration_notice(args))
+        sys.exit(_cmd_pdata(args))
 
     if args.noun == "machine-identity":
         if args.verb == "show":

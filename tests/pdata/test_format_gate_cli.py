@@ -71,14 +71,60 @@ def test_record_verbs_refuse_on_a_format_3_database_and_write_nothing(legacy, ar
     assert snapshot_dir(tmp_path) == before
 
 
-def test_all_projects_refusal_names_only_the_unmigrated_projects(legacy):
-    env, tmp_path = legacy
+def _add_new_project(env: dict[str, str]) -> None:
     r = _run(env, "pdata", "add", "--project", "new", "--group", "notes", "--content", "x")
     assert r.returncode == 0, r.stderr
+
+
+def test_dump_all_projects_skips_unmigrated_projects_and_publishes_the_rest(legacy):
+    env, tmp_path = legacy
+    _add_new_project(env)
+    old_before = snapshot_dir(tmp_path / "projects" / "old")
+
     r = _run(env, "pdata", "dump", "--all-projects")
-    assert r.returncode == 1
-    assert "old: database is format 3" in r.stderr
+
+    assert r.returncode == 1, (r.stdout, r.stderr)
+    assert "ccst pdata dump: skipped old: database is format 3" in r.stderr
     assert "new:" not in r.stderr
+    assert "published 1 of 1 project(s)" in r.stdout
+    assert (tmp_path / "projects" / "new" / ".pdata-db-dump" / "v4" / "latest.sql").exists()
+    assert snapshot_dir(tmp_path / "projects" / "old") == old_before
+
+
+def test_reconcile_all_projects_skips_unmigrated_projects_and_reconciles_the_rest(legacy):
+    env, tmp_path = legacy
+    _add_new_project(env)
+    out = tmp_path / "projects" / "new" / "cc-sessions" / "20261020-x" / "out"
+    out.mkdir(parents=True)
+    (out / "report.md").write_text("x")
+
+    r = _run(env, "pdata", "reconcile-session-output", "--all-projects")
+
+    assert r.returncode == 1, (r.stdout, r.stderr)
+    assert "skipped old: database is format 3" in r.stderr
+    assert "new: scanned 1, registered 1" in r.stdout
+    assert "old:" not in r.stdout
+    r = _run(env, "pdata", "list", "--project", "new", "--group", "session-output")
+    assert r.returncode == 0, r.stderr
+    assert "report.md" in r.stdout
+
+
+def test_rehydrate_all_projects_skips_unmigrated_projects_and_checks_the_rest(legacy):
+    env, _ = legacy
+    _add_new_project(env)
+    r = _run(env, "pdata", "rehydrate", "--all-projects")
+    assert r.returncode == 1, (r.stdout, r.stderr)
+    assert "skipped old: database is format 3" in r.stderr
+    assert "of 1 project(s)" in r.stdout
+
+
+def test_all_projects_with_nothing_unmigrated_exits_0(legacy):
+    env, tmp_path = legacy
+    _add_new_project(env)
+    (tmp_path / "project-db" / "old.db").rename(tmp_path / "old.db.aside")
+    r = _run(env, "pdata", "dump", "--all-projects")
+    assert r.returncode == 0, (r.stdout, r.stderr)
+    assert "skipped" not in r.stderr
 
 
 def test_a_format_4_project_is_not_gated(legacy):
