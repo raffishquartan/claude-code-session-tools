@@ -77,7 +77,8 @@ For each direct read/write, rewrite the file I/O to use the equivalent `ccst pda
 
 - Reading to list or browse records: `ccst pdata list --project <name> --group <record_group>
   [--format json]`.
-- Reading one record: `ccst pdata get --project <name> --id <id>`.
+- Reading one record: `ccst pdata get --project <name> --id <uuid>` (record ids are UUIDs, so a
+  skill that needs one record finds its id with `list`/`query` first; never hard-code an id).
 - Filtering or searching: `ccst pdata query --project <name> --group <record_group> --where
   '<field> <op> <value>'`.
 - Appending a record: `ccst pdata add` (check `ccst pdata add --help` for the record shape the

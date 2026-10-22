@@ -68,7 +68,8 @@ ran):
   future session (a project-prefixed sequential id like `FIL-001` is a good sign; a per-session
   independently-renumbered `row_id` is not - see `pm-pdata-do-audit-and-prepare-to-migrate`'s own warnings about
   this exact failure mode, which shows up often). If nothing qualifies, mint a synthetic id
-  at migration time and record the mapping.
+  at migration time and record the mapping. Either way the key is a content field: the pdata
+  record id is a UUID that `ccst pdata add` assigns, not a key you choose or can reuse.
 - **Field types and normalisation** - fix the specific blockers the manifest/your own audit
   found: unify a comma-vs-semicolon tags column, normalise mixed date formats to one convention,
   split a multi-schema file (like a `#`-commented multi-section CSV) into multiple record groups

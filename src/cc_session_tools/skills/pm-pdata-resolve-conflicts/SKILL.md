@@ -31,7 +31,8 @@ move on to its next step with the write silently having failed.
    specific fields involved:
 
    ```sh
-   ccst pdata get --project <name> --id <id>  # confirm current state directly if useful
+   ccst pdata get --project <name> --id <uuid>  # confirm current state directly if useful
+   # record ids are UUIDs, e.g. --id 40090682-d73d-4958-a608-9c9960620f31
    ```
 
 2. **Present both sides to the user plainly** - what's currently stored, what this session tried to
@@ -59,7 +60,8 @@ move on to its next step with the write silently having failed.
 ## Cross-machine fork
 
 A user running Claude Code on multiple machines syncs `ccst pdata`
-projects automatically via `.pdata-db-dump/latest.sql` (multi-laptop pdata sync design). This is a
+projects automatically via `.pdata-db-dump/v4/latest.sql` (multi-laptop pdata sync design; the
+format 3 dump at `.pdata-db-dump/latest.sql` is the frozen 3.x one and is never read by 4.x). This is a
 *different* mechanism from the exit-3 case above - a fork can span every record in a project, not
 one row - but resolving it lands on exactly the same principle: **never auto-retry, never
 auto-merge, never silently keep one side and discard the other**, a human decides.
@@ -99,46 +101,34 @@ NAME`") until it's resolved. `ccst pdata resolve --project NAME` (Task 10) is wh
    drop a live edit - the user needs to see the shape of the conflict, not just two content blobs, to
    choose correctly.
 
-4. **`RecordDiff.id_collision` is not a local-vs-dump choice at all - it's a warning that the
-   `record_id` itself is meaningless for this row.** `records.id` has no `AUTOINCREMENT` (it's
-   SQLite's bare rowid, assigned independently per machine from that machine's own
-   `max(rowid)+1`), so two machines that fork and each insert one or more brand-new records can
-   legitimately land on the *same* id for two entirely unrelated records - not a hypothetical,
-   the expected outcome whenever both sides add the same number of new records to a group after
-   diverging. `apply_resolution()` refuses these outright (raises rather than accepting a choice)
-   specifically because picking either side would silently discard the other machine's real,
-   unrelated record. Tell the user this plainly and do not attempt to force a `local`/`dump` pick
-   through `apply_resolution` for these - they need a manual, out-of-band fix (e.g. re-inserting
-   the discarded record under a fresh id on whichever machine needs it), never an automatic one.
+4. **Records present on only one side are ordinary choices - usually "keep both".** Record ids are
+   UUIDs, never assigned twice, so the same id on both sides is always the same logical record, and
+   two machines that each added records while forked show up as records that exist on one side only
+   (`RecordDiff.local` or `RecordDiff.dump` is `None`). Two different records never share an id.
+   For a record only this machine has, `local` keeps it (`dump` is refused - the dump has no row
+   for it). For a record only the dump has, `dump` copies it in; `local` leaves it out, and because
+   this machine then publishes a dump the other machine fast-forwards to, `local` there means that
+   record is dropped everywhere. Say this plainly when presenting one-sided records: keeping both
+   machines' additions is `local` for the local-only ones and `dump` for the dump-only ones.
 
-5. **`RecordDiff.group_mismatch` is the other non-choosable category, and it is *not* an id
-   collision - don't describe it as one, and don't assume it's safe to fix by renaming without
-   checking first.** `record_group` is mutable (`ccst pdata rename-group` rewrites it in place),
-   so the ordinary cause is a group renamed on one machine only - same id, same `created_at`, two
-   different group names. But `created_at` is whole-second precision and is often
-   caller-supplied from a file's mtime, so two genuinely *unrelated* records independently
-   inserted into different groups in the same second (or imported from files sharing an mtime)
-   can coincidentally match on `created_at` too - indistinguishable from a rename by id/created_at
-   alone, and the same id-collision hazard as point 4 above, just wearing a different disguise.
-   Either way there is no single `ext_<group>` table a `local`/`dump` pick could write, so
-   `apply_resolution()` refuses these outright. **Before treating it as a rename**, compare each
-   side's `content`/`file_path` - if they describe the same real thing, it's a rename: re-run the
-   same `ccst pdata rename-group` on whichever machine has not had it, so both sides agree on the
-   name, then resolve again. If they describe two different things, it's a same-second id
-   collision, not a rename - treat it exactly like point 4 (manual, out-of-band fix, e.g.
-   re-inserting one record under a fresh id), and do NOT rename to make it match, since that would
-   turn it into an ordinary content diff and let a `local`/`dump` pick silently discard one side's
-   real, unrelated record.
+5. **`RecordDiff.group_mismatch` is the one non-choosable category.** The same record (same
+   UUID) carries a different `record_group` on each side: `record_group` is mutable
+   (`ccst pdata rename-group` rewrites it in place), so the cause is a group renamed on one
+   machine only. There is no single `ext_<group>` table a `local`/`dump` pick could write, so
+   `apply_resolution()` refuses these outright. Re-run the same `ccst pdata rename-group` on
+   whichever machine has not had it, so both sides agree on the name, then resolve again.
 
 6. **Resolution is all-or-nothing per `apply_resolution()` call.** Once the user has decided *every*
    differing record, call `resolve.apply_resolution()` with `{record_id: "local" | "dump"}`
-   covering every `record_id` in the current diff - no more and no fewer. Omitting any of them
-   raises (naming the missing ids) and applies nothing. A partial resolve is not supported and is
+   (UUID string keys, e.g. `{"40090682-d73d-4958-a608-9c9960620f31": "dump"}`; on the command
+   line, one `--choice <uuid>=local|dump` per record) covering every `record_id` in the current
+   diff - no more and no fewer. Omitting any of them raises (naming the missing ids) and applies
+   nothing. A partial resolve is not supported and is
    not safe: the vector-clock bookkeeping is per-project, not per-record, so publishing after a
    subset would declare the other machine fully incorporated while leaving records unreconciled,
    and that machine's next check would read `DUMP_DOMINATES` and overwrite its own unmerged edits
-   with no prompt. If some records are blocked (point 4 or 5), the whole resolve stays blocked
-   until they are fixed out-of-band - that is deliberate. The call is one atomic transaction; the
+   with no prompt. If some records are blocked (point 5), the whole resolve stays blocked
+   until they are fixed - that is deliberate. The call is one atomic transaction; the
    whole resolve counts as exactly one local write for the vector clock regardless of how many
    records it touched, and the store re-publishes a fresh dump immediately after committing, so
    the other machine's next check sees a dominating fast-forward rather than a repeat of the same

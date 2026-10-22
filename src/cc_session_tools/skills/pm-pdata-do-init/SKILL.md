@@ -247,8 +247,9 @@ There is no `--rollback` flag. Recover by hand:
    move or copy it into `<project-root>` itself; if you need to restore the `.db`, copy it to
    the real store path (`ccst pdata schema list --project <name>` will error with the current
    path if you're unsure) and leave the extracted project folder alone.
-2. Undo the DB side with `ccst pdata delete --project <name> --id <id> --version <n>` for the
-   specific rows that shouldn't have landed, or - for a wholesale bad run - delete the project's
+2. Undo the DB side with `ccst pdata delete --project <name> --id <uuid> --version <n>` for the
+   specific rows that shouldn't have landed (record ids are UUIDs - take them from
+   `ccst pdata list --project <name> --group <record_group> --format json`), or - for a wholesale bad run - delete the project's
    `.db` file directly and re-run `ccst pdata init` from scratch.
 3. Fix whatever was wrong in the proposal (classification, strategy, field mapping) before
    re-attempting.

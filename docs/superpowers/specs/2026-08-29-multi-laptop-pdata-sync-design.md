@@ -48,6 +48,13 @@ oneshot, pbt, pod`, plus any added later under `CCST_PROJECTS_ROOT`).
 
 ## Storage layout
 
+> **Since 4.0.0 (format 4, UUID record ids):** the current dump lives one level down, at
+> `~/cc/<project>/.pdata-db-dump/v4/` (`latest.sql`, `latest.sha256`, `archive/`), and record ids
+> are UUID strings. The files directly under `.pdata-db-dump/` described below are the format 3
+> (ccst 3.x, integer id) dump: 4.x never writes or loads them, and they stay in place, untouched,
+> so a 3.x machine (or a rollback to 3.x) can still read them. See
+> `openspec/changes/pdata-uuid-record-ids/` (design D5) and `docs/pdata-uuid-migration-runbook.md`.
+
 - `.pdata-db-dump/` at each project's root (`~/cc/<project>/.pdata-db-dump/`) - rides OneDrive's
   existing sync of the project folder, nothing new to configure.
 - Contains: `latest.sql` (the current dump, deterministic text - see "Dump format"),
@@ -144,6 +151,14 @@ machine's current vector clock - generalises cleanly to any number of machines (
 - **Neither dominates** (each has a revision the other lacks) → genuine fork. Never auto-resolved.
 
 ## Dump format
+
+> **Since 4.0.0:** `records.id` is `TEXT PRIMARY KEY` holding a UUID, and every
+> `ext_<record_group>.record_id` and `pdata_verify_watermark.record_id` is `TEXT` to match. The
+> custom wrapper below orders every table by its primary-key columns, so a UUID-keyed table dumps
+> in id order, not insertion order, exactly as the composite-key tables do. A format 4 dump starts
+> with a `-- pdata_format=4` header line (a dump without one is format 3), and a database migrated
+> from format 3 also carries `-- migrated_from_format3_vector:` header lines naming the format 3
+> vector clock it came from. The rowid paragraph below describes the format 3 schema.
 
 Deterministic text, **not** `sqlite3.Connection.iterdump()` used as-is, and not a raw binary copy
 of the `.db` file. Binary is ruled out because SQLite's on-disk byte layout isn't deterministic

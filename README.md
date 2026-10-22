@@ -396,6 +396,10 @@ ccst pdata schema list --project myproject
   vector clock per project means a genuine fork (two machines both edited) is flagged for
   your choice with `ccst pdata resolve`, never silently merged. Each machine has a confirmed
   identity (`ccst machine-identity show|confirm`).
+- **UUID record ids** - record ids are UUIDs, so two machines can never hand out the same id
+  for different records. Upgrading from 3.x needs a one-time `ccst pdata migrate-uuid` on every
+  machine, from a plain terminal: follow
+  [docs/pdata-uuid-migration-runbook.md](docs/pdata-uuid-migration-runbook.md).
 - **New projects start well** - the first `pdata init` for a new project seeds starter
   folders and a `CLAUDE.md` with date-format and line-ending conventions. An existing
   `CLAUDE.md` is never touched.

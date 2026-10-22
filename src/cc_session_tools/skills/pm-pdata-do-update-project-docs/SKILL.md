@@ -65,7 +65,8 @@ Rewrite each confirmed-stale reference to describe the pdata-backed store:
 
 - Replace the file path with the record_group(s) now holding that data, and the `ccst pdata`
   command a reader would actually use: `ccst pdata list --project <name> --group <record_group>`
-  to browse, `ccst pdata get --project <name> --id <id>` for one record, `ccst pdata query
+  to browse, `ccst pdata get --project <name> --id <uuid>` for one record (ids are UUIDs, so
+  docs name the query that finds a record rather than quoting an id), `ccst pdata query
   --project <name> --group <record_group> --where '<field> <op> <value>'` to filter.
 - Name the record_group explicitly rather than saying "the pdata store" generically - a reader
   needs to know which group to query.
