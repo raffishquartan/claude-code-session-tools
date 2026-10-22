@@ -513,7 +513,7 @@ def test_apply_resolution_refuses_a_schema_only_fork_instead_of_a_dead_end(monke
 def test_apply_resolution_rejects_an_invalid_choice_value(monkeypatch, tmp_path):
     _setup_env(monkeypatch, tmp_path)
     with pytest.raises(ValueError, match="invalid choice"):
-        resolve.apply_resolution("proj", {"40090682-d73d-4958-a608-9c9960620f31": "banana"})
+        resolve.apply_resolution("proj", {"3f2b8c1e-6d4a-4e9b-9a7c-2d5e8f1b0c64": "banana"})
 
 
 def test_apply_resolution_rejects_unknown_record_id(monkeypatch, tmp_path):

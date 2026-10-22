@@ -30,6 +30,9 @@ MIGRATE_COMMAND: Final = "ccst pdata migrate-uuid"
 # The last ccst release that reads and writes format 3: the one to reinstall when a format 3
 # database must still publish, fast-forward or resolve a fork before it can be migrated (D6c).
 LAST_FORMAT3_RELEASE: Final = "3.16.2"
+# The ccst release that introduced format 4: it names the pre-migration backups and the
+# `ccst doctor` migration check.
+FORMAT4_RELEASE: Final = "4.0.0"
 RUNBOOK_PATH: Final = "docs/pdata-uuid-migration-runbook.md"
 RUNBOOK_URL: Final = (
     f"https://github.com/raffishquartan/claude-code-session-tools/blob/main/{RUNBOOK_PATH}"

@@ -379,7 +379,7 @@ def last_run(project: str) -> VerifySummary | None:
         issues = [
             VerifyIssue(
                 check=d["check"], severity=d["severity"], record_group=d["record_group"],
-                # Runs persisted against a format 3 database hold integer ids.
+                # A run against a format 3 database stores integer ids; ids are strings here.
                 record_id=None if d["record_id"] is None else str(d["record_id"]),
                 message=d["message"],
             )

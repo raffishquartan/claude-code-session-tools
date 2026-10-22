@@ -203,3 +203,9 @@ def test_cli_verbs_refuse_to_create_the_database(
     assert f"{formats.MIGRATE_COMMAND} --project {PROJECT}" in r.stderr
     assert not (tmp_path / "machine-b" / "project-db" / f"{PROJECT}.db").exists()
     assert not (tmp_path / "projects" / PROJECT / dump.DUMP_ROOT_DIR_NAME / "v4").exists()
+
+
+def test_migration_pending_detail_refuses_any_other_outcome() -> None:
+    result = rehydrate.RehydrateResult(outcome=rehydrate.RehydrateOutcome.NO_OP)
+    with pytest.raises(ValueError, match="not a migration-pending outcome: no_op"):
+        rehydrate.migration_pending_detail(result, project=PROJECT)

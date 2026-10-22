@@ -10,6 +10,7 @@ import sqlite3
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -798,3 +799,240 @@ def test_resume_finishes_a_migration_from_an_empty_format3_vector(tmp_path: Path
     result = migrate_uuid.migrate_project(PROJECT, write=True)
     assert result.outcome is migrate_uuid.Outcome.RESUMED, migrate_uuid.render(result)
     assert dump.read_latest(project_root).migrated_from_format3_vector == {}
+
+
+# ------------------------------------------------------------------ refusal and error branches
+
+
+def _render(result: migrate_uuid.MigrationResult) -> str:
+    return "\n".join(migrate_uuid.render(result))
+
+
+class _QuickCheckFails:
+    """A connection whose PRAGMA quick_check reports a problem; everything else is real."""
+
+    def __init__(self, conn: sqlite3.Connection) -> None:
+        self._conn = conn
+
+    def execute(self, sql: str, *args: object) -> sqlite3.Cursor:
+        if sql == "PRAGMA quick_check":
+            return self._conn.execute("SELECT 'row 1 missing from index (simulated)'")
+        return self._conn.execute(sql, *args)
+
+    def close(self) -> None:
+        self._conn.close()
+
+
+def test_a_backup_that_fails_quick_check_stops_the_migration(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    path = _converged_project()
+    real_connect = db.connect
+
+    def connect(db_path: Path, **kwargs: Any) -> object:
+        conn = real_connect(db_path, **kwargs)
+        return _QuickCheckFails(conn) if migrate_uuid.BACKUP_DIR_NAME in db_path.parts else conn
+
+    monkeypatch.setattr(migrate_uuid.db, "connect", connect)
+    result = migrate_uuid.migrate_project(PROJECT, write=True)
+
+    assert result.outcome is migrate_uuid.Outcome.FAILED
+    assert "fails PRAGMA quick_check" in _render(result)
+    assert "the database is unchanged" in _render(result)
+    assert formats.database_format(path) == formats.PDATA_FORMAT_INTEGER_IDS
+
+
+def test_a_backup_that_is_not_format3_stops_the_migration(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    path = _converged_project()
+
+    def backup_to(source: Path, dest: Path) -> None:
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        conn = sqlite3.connect(str(dest))
+        try:
+            conn.execute("CREATE TABLE records (id TEXT PRIMARY KEY, record_group TEXT)")
+            conn.commit()
+        finally:
+            conn.close()
+
+    monkeypatch.setattr(migrate_uuid.db, "backup_to", backup_to)
+    result = migrate_uuid.migrate_project(PROJECT, write=True)
+
+    assert result.outcome is migrate_uuid.Outcome.FAILED
+    assert "is not a format 3 database" in _render(result)
+    assert formats.database_format(path) == formats.PDATA_FORMAT_INTEGER_IDS
+
+
+def test_a_backup_with_other_row_counts_stops_the_migration(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    path = _converged_project()
+    real_backup = db.backup_to
+
+    def backup_to(source: Path, dest: Path) -> None:
+        real_backup(source, dest)
+        conn = sqlite3.connect(str(dest))
+        try:
+            conn.execute("DELETE FROM records WHERE id=2")
+            conn.commit()
+        finally:
+            conn.close()
+
+    monkeypatch.setattr(migrate_uuid.db, "backup_to", backup_to)
+    result = migrate_uuid.migrate_project(PROJECT, write=True)
+
+    assert result.outcome is migrate_uuid.Outcome.FAILED
+    assert "does not hold the database's row counts" in _render(result)
+    assert _ids(path) == ["1", "2"]
+
+
+def _add_extension_table(path: Path, create_sql: str) -> None:
+    conn = sqlite3.connect(str(path))
+    try:
+        conn.execute(create_sql)
+        conn.commit()
+    finally:
+        conn.close()
+    write_format3_dump(path, store.project_root(PROJECT), machine_id="machine-a", vector=VECTOR)
+
+
+@pytest.mark.parametrize(
+    ("create_sql", "error"),
+    [
+        (
+            'CREATE TABLE "ext_odd" (record_id INTEGER NOT NULL PRIMARY KEY '
+            "REFERENCES records(id), x TEXT)",
+            "ext_odd: expected one `record_id INTEGER PRIMARY KEY` column, found 0",
+        ),
+        (
+            "CREATE TABLE [ext_bracketed] (record_id INTEGER PRIMARY KEY "
+            "REFERENCES records(id), x TEXT)",
+            "ext_bracketed: unrecognised CREATE TABLE statement",
+        ),
+    ],
+)
+def test_a_table_the_rewrite_cannot_parse_fails_it_and_changes_nothing(
+    tmp_path: Path, create_sql: str, error: str,
+) -> None:
+    path = make_format3_db(store.db_path(PROJECT))
+    _add_extension_table(path, create_sql)
+
+    result = migrate_uuid.migrate_project(PROJECT, write=True)
+
+    text = _render(result)
+    assert result.outcome is migrate_uuid.Outcome.FAILED
+    assert error in text
+    assert f"the original database is unchanged; the backup is {result.backup_path}" in text
+    assert formats.database_format(path) == formats.PDATA_FORMAT_INTEGER_IDS
+    assert _ids(path) == ["1", "2"]
+    assert not dump.read_latest(store.project_root(PROJECT)).present
+
+
+def test_a_joining_machine_refuses_a_format4_dump_that_fails_its_checksum(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _migrate_first_machine(monkeypatch, tmp_path)
+    (dump.dump_dir(store.project_root(PROJECT)) / "latest.sha256").write_text("0" * 64)
+    with on_machine(monkeypatch, tmp_path, "machine-b"):
+        b_path = make_format3_db(store.db_path(PROJECT))
+        result = migrate_uuid.migrate_project(PROJECT, write=True)
+        assert result.outcome is migrate_uuid.Outcome.REFUSED
+        assert "the format 4 dump fails its checksum" in _render(result)
+        assert formats.database_format(b_path) == formats.PDATA_FORMAT_INTEGER_IDS
+
+
+def test_adoption_that_cannot_build_the_replacement_changes_nothing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _migrate_first_machine(monkeypatch, tmp_path)
+    with on_machine(monkeypatch, tmp_path, "machine-b"):
+        b_path = make_format3_db(store.db_path(PROJECT))
+
+        def failing_build(db_dir: Path, sql_body: str) -> Path:
+            raise sqlite3.OperationalError("disk I/O error (simulated)")
+
+        monkeypatch.setattr(migrate_uuid.rehydrate, "build_replacement", failing_build)
+        result = migrate_uuid.migrate_project(PROJECT, write=True)
+
+        assert result.outcome is migrate_uuid.Outcome.FAILED
+        assert f"the original database is unchanged; the backup is {result.backup_path}" in (
+            _render(result)
+        )
+        assert _ids(b_path) == ["1", "2"]
+
+
+def test_adoption_refuses_a_replacement_that_is_not_format4(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _migrate_first_machine(monkeypatch, tmp_path)
+    with on_machine(monkeypatch, tmp_path, "machine-b"):
+        b_path = make_format3_db(store.db_path(PROJECT))
+        built: list[Path] = []
+
+        def format3_build(db_dir: Path, sql_body: str) -> Path:
+            built.append(make_format3_db(db_dir / "replacement.db"))
+            return built[0]
+
+        monkeypatch.setattr(migrate_uuid.rehydrate, "build_replacement", format3_build)
+        result = migrate_uuid.migrate_project(PROJECT, write=True)
+
+        assert result.outcome is migrate_uuid.Outcome.FAILED
+        assert "does not hold a format 4 database" in _render(result)
+        assert not built[0].exists()
+        assert _ids(b_path) == ["1", "2"]
+
+
+def _converted_without_marker() -> Path:
+    path = _converged_project()
+    migrate_uuid.migrate_project(PROJECT, write=True)
+    conn = sqlite3.connect(str(path))
+    try:
+        conn.execute("DELETE FROM migrations WHERE name=?", (formats.UUID_IDS_MIGRATION,))
+        conn.commit()
+    finally:
+        conn.close()
+    return path
+
+
+def test_resume_refuses_while_a_claude_session_occupies_the_project(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _converted_without_marker()
+    monkeypatch.setattr(
+        migrate_uuid.occupancy, "is_occupied", lambda root, *, exclude_pid=None: True
+    )
+    before = _everything(tmp_path)
+    result = migrate_uuid.migrate_project(PROJECT, write=True)
+    assert result.outcome is migrate_uuid.Outcome.REFUSED
+    assert result.plan is not None and result.plan.path is migrate_uuid.MigrationPath.RESUME
+    assert "close every running `claude` session" in _render(result)
+    assert _everything(tmp_path) == before
+
+
+def test_resume_reports_a_verify_failure_and_records_no_marker(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    path = _converted_without_marker()
+
+    def failing_verify(*, project: str, full: bool = False) -> verify.VerifySummary:
+        return verify.VerifySummary(
+            project=project, run_at=1, full_scan=full, status="FAIL",
+            issues=[verify.VerifyIssue(
+                check="row-count-parity", severity="FAIL", record_group="notes",
+                record_id=None, message="rows went missing (simulated)",
+            )],
+        )
+
+    monkeypatch.setattr(migrate_uuid.verify, "run_verify", failing_verify)
+    result = migrate_uuid.migrate_project(PROJECT, write=True)
+
+    text = _render(result)
+    assert result.outcome is migrate_uuid.Outcome.FAILED
+    assert "rows went missing" in text
+    assert f"{formats.MIGRATE_COMMAND} --project {PROJECT} --write" in text
+    conn = db.connect(path, readonly=True)
+    try:
+        assert not db.migration_applied(conn, formats.UUID_IDS_MIGRATION)
+    finally:
+        conn.close()

@@ -1041,7 +1041,7 @@ def _record_id_arg(raw: str) -> str:
 
     if not ids.is_record_id(raw):
         raise argparse.ArgumentTypeError(
-            f"{raw!r} is not a UUID (record ids look like 40090682-d73d-4958-a608-9c9960620f31)"
+            f"{raw!r} is not a UUID (record ids look like 3f2b8c1e-6d4a-4e9b-9a7c-2d5e8f1b0c64)"
         )
     return raw
 

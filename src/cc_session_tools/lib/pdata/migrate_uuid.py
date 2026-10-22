@@ -394,7 +394,7 @@ def _take_backup(plan: MigrationPlan) -> Path:
     database with the planned row counts. Raises MigrationFailedError if it is not."""
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     backup_path = plan.db_path.parent / BACKUP_DIR_NAME / (
-        f"pdata-{plan.project}-pre-4.0.0-{stamp}.db"
+        f"pdata-{plan.project}-pre-{formats.FORMAT4_RELEASE}-{stamp}.db"
     )
     db.backup_to(plan.db_path, backup_path)
     conn = db.connect(backup_path, readonly=True)

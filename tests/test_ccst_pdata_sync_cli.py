@@ -67,7 +67,7 @@ def _stub_pgrep(tmp_path: Path, monkeypatch, *, pids: tuple[int, ...] = ()) -> N
 
 # The one record both the local database and the simulated remote dump hold: the same logical
 # record on both sides, so a content difference is an edit conflict on it.
-_SHARED_RECORD_ID = "40090682-d73d-4958-a608-9c9960620f31"
+_SHARED_RECORD_ID = "3f2b8c1e-6d4a-4e9b-9a7c-2d5e8f1b0c64"
 _ABSENT_RECORD_ID = "40090682-d73d-4958-a608-000000000000"
 
 

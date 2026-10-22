@@ -11,7 +11,7 @@ import pytest
 
 from .legacy_fixture import make_format3_db, snapshot_dir
 
-_SOME_ID = "40090682-d73d-4958-a608-9c9960620f31"
+_SOME_ID = "3f2b8c1e-6d4a-4e9b-9a7c-2d5e8f1b0c64"
 
 
 def _run(env: dict[str, str], *args: str) -> subprocess.CompletedProcess[str]:
@@ -211,3 +211,20 @@ def test_rehydrate_reports_a_format_mismatched_dump_as_a_pending_migration(legac
         assert "published dump is format 3" in r.stdout
         assert "ccst pdata migrate-uuid --project new" in r.stdout
         assert files() == before
+
+
+def test_a_database_of_an_unknown_format_is_refused(legacy):
+    import sqlite3
+
+    env, tmp_path = legacy
+    conn = sqlite3.connect(str(tmp_path / "project-db" / "weird.db"))
+    try:
+        conn.execute("CREATE TABLE records (id BLOB PRIMARY KEY, record_group TEXT)")
+        conn.commit()
+    finally:
+        conn.close()
+    before = snapshot_dir(tmp_path)
+    r = _run(env, "pdata", "list", "--project", "weird", "--group", "notes")
+    assert r.returncode == 1, (r.stdout, r.stderr)
+    assert "ccst pdata list: weird: records.id is declared 'BLOB'" in r.stderr
+    assert snapshot_dir(tmp_path) == before

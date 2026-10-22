@@ -23,6 +23,7 @@ from cc_session_tools.lib import bun_tools
 from cc_session_tools.lib.claude_md_install import MalformedBlockError, find_hand_edited_sections
 from cc_session_tools.lib.db import connect as _db_connect
 from cc_session_tools.lib.db import migration_applied as _migration_applied
+from cc_session_tools.lib.pdata.formats import FORMAT4_RELEASE
 from cc_session_tools.lib.hook_registry import HOOK_VERBS, hook_name_from_command
 from cc_session_tools.lib.pdata.init_paths import (
     MIGRATED_ARCHIVE_DIRNAME,
@@ -929,7 +930,7 @@ def check_pdata_verify(projects: list[str]) -> list[CheckResult]:
     return results
 
 
-PDATA_UUID_MIGRATION_CHECK = "migration-to-4.0.0:pdata-uuid"
+PDATA_UUID_MIGRATION_CHECK = f"migration-to-{FORMAT4_RELEASE}:pdata-uuid"
 
 
 def pdata_uuid_migration_remedy(project: str) -> str:
@@ -951,7 +952,7 @@ def check_pdata_uuid_migration(projects: list[str]) -> list[CheckResult]:
     the sync hook and the scheduled jobs refuse a format 3 database, so this is the doctor's
     view of the same state (design D6a). Opens each database read-only and never creates one.
 
-    One result per project, named `migration-to-4.0.0:pdata-uuid:<project>` so a project can be
+    One result per project, named `<PDATA_UUID_MIGRATION_CHECK>:<project>` so a project can be
     muted on its own; a single OK result when there are no project databases."""
     from cc_session_tools.lib.pdata import formats, store
 

@@ -64,8 +64,8 @@ def _table_exists(conn: sqlite3.Connection, table: str) -> bool:
 def read_migration_origin(conn: sqlite3.Connection) -> dict[str, int] | None:
     """The format 3 vector the database was migrated from (possibly empty), or None when it was
     not migrated. A recorded vector row counts as an origin with or without the presence row. A
-    database rehydrated from a dump published before these tables existed has neither until its
-    next repository.connect(), and has no origin either."""
+    database loaded from a dump that lacks these tables has neither until repository.connect()
+    creates them, and has no origin."""
     vector: dict[str, int] = {}
     if _table_exists(conn, "pdata_migration_origin"):
         rows = conn.execute("SELECT machine_id, revision FROM pdata_migration_origin").fetchall()

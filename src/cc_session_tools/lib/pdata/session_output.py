@@ -236,10 +236,10 @@ def set_watermark(project: str, epoch: int) -> None:
 
 def _is_already_registered(project: str, rel_path: str) -> bool:
     """True iff a live record already has this file_path, or any record (live or soft-deleted)
-    already holds output_record_id for it. The file_path check covers records registered before
-    deterministic ids (a migrated project's carry their mapped ids); the id check makes
-    re-registering a file a no-op even after its record's file_path was edited, and never
-    re-inserts an id that already exists."""
+    already holds output_record_id for it. The file_path check covers a record whose id is not
+    output_record_id (a migrated project's records carry the ids the migration mapped their
+    integer ids to); the id check makes re-registering a file a no-op even after its record's
+    file_path was edited, and never re-inserts an id that already exists."""
     from cc_session_tools.lib.pdata import service, store
 
     if not store.db_path(project).exists():

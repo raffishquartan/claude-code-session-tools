@@ -32,7 +32,7 @@ move on to its next step with the write silently having failed.
 
    ```sh
    ccst pdata get --project <name> --id <uuid>  # confirm current state directly if useful
-   # record ids are UUIDs, e.g. --id 40090682-d73d-4958-a608-9c9960620f31
+   # record ids are UUIDs, e.g. --id 3f2b8c1e-6d4a-4e9b-9a7c-2d5e8f1b0c64
    ```
 
 2. **Present both sides to the user plainly** - what's currently stored, what this session tried to
@@ -120,7 +120,7 @@ NAME`") until it's resolved. `ccst pdata resolve --project NAME` (Task 10) is wh
 
 6. **Resolution is all-or-nothing per `apply_resolution()` call.** Once the user has decided *every*
    differing record, call `resolve.apply_resolution()` with `{record_id: "local" | "dump"}`
-   (UUID string keys, e.g. `{"40090682-d73d-4958-a608-9c9960620f31": "dump"}`; on the command
+   (UUID string keys, e.g. `{"3f2b8c1e-6d4a-4e9b-9a7c-2d5e8f1b0c64": "dump"}`; on the command
    line, one `--choice <uuid>=local|dump` per record) covering every `record_id` in the current
    diff - no more and no fewer. Omitting any of them raises (naming the missing ids) and applies
    nothing. A partial resolve is not supported and is
