@@ -574,3 +574,163 @@ def test_a_joining_machine_refuses_a_format4_dump_with_no_recorded_origin(
         assert result.outcome is migrate_uuid.Outcome.REFUSED
         assert "re-enter" in "\n".join(migrate_uuid.render(result))
         assert formats.database_format(b_path) == formats.PDATA_FORMAT_INTEGER_IDS
+
+
+# ------------------------------------------------------------------ failures after the commit
+
+
+def _v4_files(project_root: Path) -> list[str]:
+    directory = dump.dump_dir(project_root)
+    return sorted(p.name for p in directory.rglob("*") if p.is_file()) if directory.exists() else []
+
+
+def test_a_publish_interrupted_between_its_two_files_leaves_no_format4_dump(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A publish killed after latest.sql and before latest.sha256 must not leave a half-written
+    format 4 dump: the project would then take the ADOPT path on every re-run, with no migrated
+    machine to adopt from."""
+    path = _converged_project()
+    project_root = store.project_root(PROJECT)
+    real = dump.write_latest
+
+    def half(
+        conn: sqlite3.Connection, *, project_root: Path, machine_id: str, vector: dict[str, int],
+    ) -> None:
+        real(conn, project_root=project_root, machine_id=machine_id, vector=vector)
+        (dump.dump_dir(project_root) / "latest.sha256").unlink()
+        raise OSError("killed between latest.sql and latest.sha256 (simulated)")
+
+    monkeypatch.setattr(migrate_uuid.dump, "write_latest", half)
+    first = migrate_uuid.migrate_project(PROJECT, write=True)
+    assert first.outcome is migrate_uuid.Outcome.FAILED
+    assert formats.database_format(path) == formats.PDATA_FORMAT_INTEGER_IDS
+    assert _v4_files(project_root) == []
+
+    monkeypatch.setattr(migrate_uuid.dump, "write_latest", real)
+    second = migrate_uuid.migrate_project(PROJECT, write=True)
+    assert second.outcome is migrate_uuid.Outcome.MIGRATED, migrate_uuid.render(second)
+    assert second.plan is not None and second.plan.path is migrate_uuid.MigrationPath.REWRITE
+
+
+def test_a_failure_after_the_commit_never_claims_the_database_is_unchanged(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    path = _converged_project()
+
+    def failing_publish(*args: object, **kwargs: object) -> None:
+        raise OSError("no space left on device (simulated)")
+
+    monkeypatch.setattr(migrate_uuid.dump, "write_latest", failing_publish)
+    result = migrate_uuid.migrate_project(PROJECT, write=True)
+
+    text = "\n".join(migrate_uuid.render(result))
+    assert result.outcome is migrate_uuid.Outcome.FAILED
+    assert "unchanged" not in text
+    assert f"restored from the backup {result.backup_path}" in text
+    assert formats.database_format(path) == formats.PDATA_FORMAT_INTEGER_IDS
+
+
+def test_any_exception_after_the_commit_restores_the_backup(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    path = _converged_project()
+
+    def unexpected(project: str) -> None:
+        raise RuntimeError("unexpected failure (simulated)")
+
+    monkeypatch.setattr(migrate_uuid, "_record_marker", unexpected)
+    result = migrate_uuid.migrate_project(PROJECT, write=True)
+
+    assert result.outcome is migrate_uuid.Outcome.FAILED
+    assert "unexpected failure" in "\n".join(migrate_uuid.render(result))
+    assert formats.database_format(path) == formats.PDATA_FORMAT_INTEGER_IDS
+    assert _ids(path) == ["1", "2"]
+
+
+def test_a_checkpoint_failure_after_the_commit_restores_the_backup(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    path = _converged_project()
+
+    def failing_checkpoint(conn: sqlite3.Connection) -> None:
+        raise sqlite3.OperationalError("checkpoint failed (simulated)")
+
+    monkeypatch.setattr(migrate_uuid.db, "checkpoint", failing_checkpoint)
+    result = migrate_uuid.migrate_project(PROJECT, write=True)
+
+    text = "\n".join(migrate_uuid.render(result))
+    assert result.outcome is migrate_uuid.Outcome.FAILED
+    assert "checkpoint failed" in text
+    assert "restored from the backup" in text
+    assert formats.database_format(path) == formats.PDATA_FORMAT_INTEGER_IDS
+
+
+def test_a_failed_restore_names_the_backup_to_restore_by_hand(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _converged_project()
+
+    def failing_publish(*args: object, **kwargs: object) -> None:
+        raise OSError("no space left on device (simulated)")
+
+    def failing_restore(backup_path: Path, db_path: Path) -> None:
+        raise sqlite3.OperationalError("database is locked (simulated)")
+
+    monkeypatch.setattr(migrate_uuid.dump, "write_latest", failing_publish)
+    monkeypatch.setattr(migrate_uuid, "_restore", failing_restore)
+    result = migrate_uuid.migrate_project(PROJECT, write=True)
+
+    text = "\n".join(migrate_uuid.render(result))
+    assert result.outcome is migrate_uuid.Outcome.FAILED
+    assert "no space left" in text
+    assert "restoring the backup also failed" in text
+    assert "database is locked" in text
+    assert str(result.backup_path) in text
+    assert formats.RUNBOOK_PATH in text
+    assert "unchanged" not in text
+
+
+def test_a_failure_before_the_commit_says_the_database_is_unchanged(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _converged_project()
+
+    def boom(conn: sqlite3.Connection, origin: object) -> None:
+        raise sqlite3.OperationalError("disk I/O error (simulated)")
+
+    monkeypatch.setattr(migrate_uuid.vector_clock_store, "write_migration_origin", boom)
+    result = migrate_uuid.migrate_project(PROJECT, write=True)
+
+    assert result.outcome is migrate_uuid.Outcome.FAILED
+    assert f"the original database is unchanged; the backup is {result.backup_path}" in (
+        "\n".join(migrate_uuid.render(result))
+    )
+
+
+def test_an_interrupted_publish_on_resume_leaves_no_format4_dump(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _converged_project()
+    migrate_uuid.migrate_project(PROJECT, write=True)
+    project_root = store.project_root(PROJECT)
+    _drop_v4_dump(project_root)
+    real = dump.write_latest
+
+    def half(
+        conn: sqlite3.Connection, *, project_root: Path, machine_id: str, vector: dict[str, int],
+    ) -> None:
+        real(conn, project_root=project_root, machine_id=machine_id, vector=vector)
+        (dump.dump_dir(project_root) / "latest.sha256").unlink()
+        raise OSError("killed (simulated)")
+
+    monkeypatch.setattr(migrate_uuid.dump, "write_latest", half)
+    result = migrate_uuid.migrate_project(PROJECT, write=True)
+
+    text = "\n".join(migrate_uuid.render(result))
+    assert result.outcome is migrate_uuid.Outcome.FAILED
+    assert "unchanged" not in text
+    assert f"{formats.MIGRATE_COMMAND} --project {PROJECT} --write" in text
+    assert not dump.latest_path(project_root).exists()
+    monkeypatch.setattr(migrate_uuid.dump, "write_latest", real)
+    assert migrate_uuid.migrate_project(PROJECT, write=True).outcome is migrate_uuid.Outcome.RESUMED

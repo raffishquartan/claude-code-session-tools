@@ -10,6 +10,7 @@ from __future__ import annotations
 import hashlib
 import shutil
 import sqlite3
+import tempfile
 import time
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -222,12 +223,27 @@ def write_latest(
         shutil.copy2(latest, _unique_archive_path(archive_dir))
         _prune_archive(archive_dir)
 
-    # Deliberate order, not an oversight: latest.sql before latest.sha256. A crash or an
-    # interrupted OneDrive sync between these two writes leaves a latest.sql with no matching
-    # (or a stale) checksum file - read_latest() then correctly reports checksum_valid=False
-    # rather than trusting a half-written dump.
-    latest.write_text(full_text)
-    (directory / "latest.sha256").write_text(checksum)
+    # Each file is written in full to a temporary file beside it, then renamed into place, so
+    # neither is ever torn. latest.sql is renamed before latest.sha256: a crash between the two
+    # renames leaves the new latest.sql beside the previous (or no) checksum file, which
+    # read_latest() reports as checksum_valid=False rather than trusting it.
+    _replace_atomically(latest, full_text)
+    _replace_atomically(directory / "latest.sha256", checksum)
+
+
+def _replace_atomically(target: Path, text: str) -> None:
+    """Write `text` to `target` through a temporary file in the same directory and a rename,
+    removing the temporary file if anything fails."""
+    with tempfile.NamedTemporaryFile(
+        "w", dir=target.parent, prefix=f"{target.name}.", suffix=".tmp", delete=False,
+    ) as tmp:
+        tmp_path = Path(tmp.name)
+    try:
+        tmp_path.write_text(text)
+        tmp_path.replace(target)
+    except BaseException:
+        tmp_path.unlink(missing_ok=True)
+        raise
 
 
 def _prune_archive(archive_dir: Path) -> None:

@@ -61,8 +61,12 @@ Before changing anything `--write` SHALL back up the database to a timestamped f
 database directory's `migration-backups/` and verify the backup opens. After a successful rewrite
 it SHALL run the project's integrity verification, record a completion marker, and publish the
 format 4 dump with a header recording the format 3 vector clock it was migrated from. If the
-backup, rewrite, verification or publish fails, the original database SHALL remain in place and the
-error SHALL name the backup.
+backup, rewrite, verification or publish fails, the original database SHALL remain in place (or be
+restored from the backup when the failure follows the rewrite's commit) and the error SHALL name
+the backup. The error SHALL say the database is unchanged only when the rewrite never committed;
+when restoring the backup itself fails, it SHALL say so and name the backup to restore by hand. A
+failed publish SHALL leave no partial format 4 dump: each dump file is written through a temporary
+file and a rename, and the files of an unfinished first publish are removed.
 
 #### Scenario: Backup is taken and named
 - **WHEN** `--write` succeeds
@@ -71,6 +75,10 @@ error SHALL name the backup.
 #### Scenario: Failure leaves the original database
 - **WHEN** the rewrite fails part way
 - **THEN** the project database is the original format 3 database and the error names the backup
+
+#### Scenario: Publish interrupted between its two files
+- **WHEN** the publish fails after writing `latest.sql` and before `latest.sha256`
+- **THEN** the database is restored to format 3, no `.pdata-db-dump/v4/` dump remains, and a re-run migrates by the rewrite path
 
 ### Requirement: Migration is idempotent and resumable
 Running `--write` on an already migrated project SHALL report that nothing needs doing and exit 0,

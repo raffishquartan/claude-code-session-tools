@@ -15,7 +15,9 @@ Two paths, chosen by whether a format 4 dump is already published for the projec
   replaced by the dump's data.
 
 A dry run computes the same plan and preconditions and changes nothing. Every write path backs
-up the database first; any failure after the backup leaves the original database in place.
+up the database first. A failure before the rewrite commits leaves the database unchanged; any
+failure after it restores the backup and removes the unfinished format 4 dump, and when the
+restore itself fails the result names the backup to copy back by hand.
 """
 from __future__ import annotations
 
@@ -423,19 +425,46 @@ def _restore(backup_path: Path, db_path: Path) -> None:
 
 
 def _failed(
-    plan: MigrationPlan, *, backup_path: Path | None, error: BaseException, restored: bool,
+    plan: MigrationPlan, *, backup_path: Path | None, error: BaseException, where: str,
 ) -> MigrationResult:
-    if restored:
-        where = f"the original database was restored from the backup {backup_path}"
-    elif backup_path is not None:
-        where = f"the original database is unchanged; the backup is {backup_path}"
-    else:
-        where = "the database is unchanged"
+    """A FAILED result. `where` says what state the failure left the database in."""
     logger.warning("pdata migrate-uuid %s failed: %s", plan.project, error)
     return MigrationResult(
         project=plan.project, outcome=Outcome.FAILED, plan=plan, backup_path=backup_path,
         messages=(f"migration failed: {error}; {where}",),
     )
+
+
+def _unchanged(backup_path: Path) -> str:
+    return f"the original database is unchanged; the backup is {backup_path}"
+
+
+def _restore_after_commit(plan: MigrationPlan, *, backup_path: Path) -> str:
+    """Put the backup back after a failure that followed the rewrite's commit, and say how that
+    went: the database is then the original again, or, if restoring failed too, possibly the
+    converted but unverified one, which the user must replace from the backup by hand."""
+    try:
+        _restore(backup_path, plan.db_path)
+    except (OSError, sqlite3.Error) as exc:
+        logger.error(
+            "pdata migrate-uuid %s: restoring %s failed: %s", plan.project, backup_path, exc,
+        )
+        return (
+            f"restoring the backup also failed ({exc}), so {plan.db_path} may hold the "
+            f"converted but unverified database: with no ccst or claude process running, copy "
+            f"the backup {backup_path} over it (and remove any -wal and -shm files beside it), "
+            f"as in {formats.RUNBOOK_PATH} (rollback)"
+        )
+    return f"the original database was restored from the backup {backup_path}"
+
+
+def _discard_unfinished_publish(project_root: Path) -> None:
+    """Remove the format 4 `latest.sql`/`latest.sha256` a failed publish may have left. Only
+    called when no format 4 dump existed before that publish, so whatever is there is this
+    run's own unfinished output."""
+    directory = dump.dump_dir(project_root)
+    for name in ("latest.sql", "latest.sha256"):
+        (directory / name).unlink(missing_ok=True)
 
 
 # ------------------------------------------------------------------ the rewrite (first machine)
@@ -445,22 +474,27 @@ def _rewrite(plan: MigrationPlan, *, project_root: Path) -> MigrationResult:
     try:
         backup_path = _take_backup(plan)
     except (OSError, sqlite3.Error, MigrationFailedError) as exc:
-        return _failed(plan, backup_path=None, error=exc, restored=False)
+        return _failed(plan, backup_path=None, error=exc, where="the database is unchanged")
 
     baseline = _known_fail_issues(plan.project, plan.db_path, include_row_count_parity=True)
     try:
         _convert(plan)
     except (OSError, sqlite3.Error, MigrationFailedError) as exc:
-        return _failed(plan, backup_path=backup_path, error=exc, restored=False)
+        return _failed(plan, backup_path=backup_path, error=exc, where=_unchanged(backup_path))
 
+    # The conversion is committed: from here on a failure of any kind puts the backup back and
+    # removes whatever part of the format 4 dump was written (none existed before: this is the
+    # REWRITE path).
     try:
+        _checkpoint(plan.db_path)
         _check_converted(plan)
         _verify_against(plan.project, baseline)
         _record_marker(plan.project)
         machine_id = _publish(plan.project, project_root=project_root)
-    except (OSError, sqlite3.Error, MigrationFailedError) as exc:
-        _restore(backup_path, plan.db_path)
-        return _failed(plan, backup_path=backup_path, error=exc, restored=True)
+    except Exception as exc:
+        _discard_unfinished_publish(project_root)
+        where = _restore_after_commit(plan, backup_path=backup_path)
+        return _failed(plan, backup_path=backup_path, error=exc, where=where)
 
     rows = sum(g.rows for g in plan.group_counts)
     return MigrationResult(
@@ -487,12 +521,14 @@ def _rewrite_connection(db_path: Path) -> Iterator[sqlite3.Connection]:
 
 def _convert(plan: MigrationPlan) -> None:
     """The single transaction (design D9): every id table rebuilt with the uuid5 mapping and the
-    format 3 vector recorded as the migration origin, foreign keys off."""
+    format 3 vector recorded as the migration origin, foreign keys off. Raises only with the
+    transaction rolled back, so a raise means the database is unchanged."""
     with _rewrite_connection(plan.db_path) as conn:
         def mapped(old_id: int) -> str:
             return ids.deterministic_record_id(plan.project, str(old_id))
 
         conn.create_function(_MAP_FUNCTION, 1, mapped, deterministic=True)
+        # A per-connection setting, and this connection closes when the transaction ends.
         conn.execute("PRAGMA foreign_keys=OFF")
         conn.execute("BEGIN IMMEDIATE")
         try:
@@ -504,11 +540,17 @@ def _convert(plan: MigrationPlan) -> None:
             vector_clock_store.write_migration_origin(conn, plan.format3_vector)
             conn.execute("COMMIT")
         except BaseException:
-            conn.execute("ROLLBACK")
+            if conn.in_transaction:
+                conn.execute("ROLLBACK")
             raise
-        finally:
-            conn.execute("PRAGMA foreign_keys=ON")
+
+
+def _checkpoint(db_path: Path) -> None:
+    conn = db.connect(db_path)
+    try:
         db.checkpoint(conn)
+    finally:
+        conn.close()
 
 
 def _rewrite_table(conn: sqlite3.Connection, table: str, *, id_column: str) -> None:
@@ -637,7 +679,7 @@ def _adopt(plan: MigrationPlan, *, project_root: Path) -> MigrationResult:
     try:
         backup_path = _take_backup(plan)
     except (OSError, sqlite3.Error, MigrationFailedError) as exc:
-        return _failed(plan, backup_path=None, error=exc, restored=False)
+        return _failed(plan, backup_path=None, error=exc, where="the database is unchanged")
 
     latest = dump.latest_path(project_root)
     try:
@@ -645,7 +687,7 @@ def _adopt(plan: MigrationPlan, *, project_root: Path) -> MigrationResult:
             plan.db_path.parent, dump.sql_body(latest.read_text()),
         )
     except (OSError, sqlite3.Error) as exc:
-        return _failed(plan, backup_path=backup_path, error=exc, restored=False)
+        return _failed(plan, backup_path=backup_path, error=exc, where=_unchanged(backup_path))
     try:
         conn = sqlite3.connect(str(replacement))
         try:
@@ -656,13 +698,24 @@ def _adopt(plan: MigrationPlan, *, project_root: Path) -> MigrationResult:
         replacement.replace(plan.db_path)
     except (OSError, sqlite3.Error, MigrationFailedError) as exc:
         replacement.unlink(missing_ok=True)
-        return _failed(plan, backup_path=backup_path, error=exc, restored=False)
+        return _failed(plan, backup_path=backup_path, error=exc, where=_unchanged(backup_path))
     rehydrate.drop_stale_wal_sidecars(plan.db_path)
 
     messages = [f"backup: {backup_path}", f"adopted {latest}"]
-    if not _marker_recorded(plan.db_path):
-        _record_marker(plan.project)
-        messages.append(f"recorded the {formats.UUID_IDS_MIGRATION} marker")
+    try:
+        if not _marker_recorded(plan.db_path):
+            _record_marker(plan.project)
+            messages.append(f"recorded the {formats.UUID_IDS_MIGRATION} marker")
+    except (OSError, sqlite3.Error) as exc:
+        return _failed(
+            plan, backup_path=backup_path, error=exc,
+            where=(
+                f"the database holds the adopted format 4 data but its "
+                f"{formats.UUID_IDS_MIGRATION} marker is not recorded; re-run "
+                f"`{formats.MIGRATE_COMMAND} --project {plan.project} --write` to finish (the "
+                f"backup is {backup_path})"
+            ),
+        )
     return MigrationResult(
         project=plan.project, outcome=Outcome.ADOPTED, plan=plan, backup_path=backup_path,
         messages=tuple(messages),
@@ -734,7 +787,16 @@ def _resume(project: str, *, db_path: Path, project_root: Path, write: bool) -> 
                 f"published {dump.latest_path(project_root)} (machine_id={machine_id})"
             )
     except (OSError, sqlite3.Error, MigrationFailedError) as exc:
-        return _failed(plan, backup_path=None, error=exc, restored=False)
+        if _STEP_PUBLISH in steps:
+            _discard_unfinished_publish(project_root)
+        done = "; ".join(messages) or "none"
+        return _failed(
+            plan, backup_path=None, error=exc,
+            where=(
+                f"the steps finished before the failure are kept ({done}); re-run "
+                f"`{formats.MIGRATE_COMMAND} --project {project} --write` to finish"
+            ),
+        )
     return MigrationResult(
         project=project, outcome=Outcome.RESUMED, plan=plan, messages=tuple(messages),
     )

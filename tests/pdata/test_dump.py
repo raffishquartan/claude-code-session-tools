@@ -493,3 +493,31 @@ def test_write_latest_refuses_a_format3_database_and_writes_nothing(tmp_path):
     with pytest.raises(ValueError, match="format 3"):
         dump.write_latest(conn, project_root=project_root, machine_id="ltxy", vector={})
     assert not (project_root / ".pdata-db-dump").exists()
+
+
+def test_an_interrupted_publish_keeps_the_previous_dump_whole(tmp_path, monkeypatch):
+    """Each file is written to a temporary file and renamed into place, so a publish that fails
+    part-way never leaves a torn latest.sql or latest.sha256, nor temporary files behind."""
+    import pytest
+
+    conn = _format4_db(tmp_path, monkeypatch)
+    project_root = tmp_path / "proj"
+    dump.write_latest(conn, project_root=project_root, machine_id="ltxy", vector={"ltxy": 1})
+    directory = dump.dump_dir(project_root)
+    before = {name: (directory / name).read_bytes() for name in ("latest.sql", "latest.sha256")}
+
+    real_replace = Path.replace
+
+    def failing_replace(self: Path, target: Path) -> Path:
+        raise OSError("disk full (simulated)")
+
+    monkeypatch.setattr(Path, "replace", failing_replace)
+    with pytest.raises(OSError, match="simulated"):
+        dump.write_latest(conn, project_root=project_root, machine_id="ltxy", vector={"ltxy": 2})
+    monkeypatch.setattr(Path, "replace", real_replace)
+
+    assert {name: (directory / name).read_bytes() for name in before} == before
+    assert sorted(p.name for p in directory.iterdir() if p.is_file()) == [
+        "latest.sha256", "latest.sql",
+    ]
+    assert dump.read_latest(project_root).vector == {"ltxy": 1}
