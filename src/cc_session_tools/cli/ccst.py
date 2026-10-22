@@ -60,6 +60,9 @@ Current subcommands:
                                  order, for --project NAME or --all-projects. The unattended
                                  trigger behind the hourly pdata-sync-hourly ccsched job:
                                  skips an unchanged republish and never overrides a fork.
+  pdata migrate-uuid             Convert format 3 (integer id) databases to format 4 (UUID
+                                 ids) for --project NAME or --all-projects. Dry run unless
+                                 --write; run from a plain terminal with no `claude` session.
   machine-identity show          Print this laptop's resolved machine id and whether it's
                                  confirmed.
   machine-identity confirm       Store this laptop's confirmed machine id (--name NAME), used
@@ -2031,6 +2034,33 @@ def _cmd_pdata_sync_check(args: argparse.Namespace) -> int:
     return worst
 
 
+def _cmd_pdata_migrate_uuid(args: argparse.Namespace) -> int:
+    """`ccst pdata migrate-uuid`: every rule lives in `pdata.migrate_uuid`; this handler is the
+    project loop, the printing and the exit status (the worst over all projects)."""
+    import sqlite3
+
+    from cc_session_tools.lib.pdata import migrate_uuid, verify
+
+    projects = verify.discover_projects() if args.all_projects else [args.project]
+    if not projects:
+        print("ccst pdata migrate-uuid: no project databases found - nothing to migrate")
+        return 0
+    worst = 0
+    for project in projects:
+        try:
+            result = migrate_uuid.migrate_project(project, write=args.write)
+        except (OSError, ValueError, sqlite3.Error) as exc:
+            print(f"ccst pdata migrate-uuid: {project}: {exc}", file=sys.stderr)
+            worst = max(worst, 2)
+            continue
+        status = migrate_uuid.exit_status(result.outcome)
+        stream = sys.stderr if status else sys.stdout
+        for line in migrate_uuid.render(result):
+            print(line, file=stream)
+        worst = max(worst, status)
+    return worst
+
+
 def _sync_check_line(result: SyncCheckResult) -> str:
     """The one-line, --project-mode wording for each non-conflict sync-check outcome."""
     from cc_session_tools.lib.pdata import sync_check
@@ -3381,6 +3411,27 @@ def _build_parser() -> argparse.ArgumentParser:
              "(no file scan or registration)",
     )
 
+    pdata_migrate_uuid_parser = pdata_sub.add_parser(
+        "migrate-uuid",
+        help="Convert format 3 (integer id) databases to format 4 (UUID ids). Dry run by "
+             "default; run from a plain terminal with no `claude` session running",
+    )
+    migrate_uuid_target = pdata_migrate_uuid_parser.add_mutually_exclusive_group(required=True)
+    migrate_uuid_target.add_argument("--project", metavar="NAME")
+    migrate_uuid_target.add_argument(
+        "--all-projects", action="store_true",
+        help="Migrate every project with a .db under project-db/",
+    )
+    migrate_uuid_mode = pdata_migrate_uuid_parser.add_mutually_exclusive_group()
+    migrate_uuid_mode.add_argument(
+        "--dry-run", action="store_true",
+        help="Print the plan and every precondition without changing anything (the default)",
+    )
+    migrate_uuid_mode.add_argument(
+        "--write", action="store_true",
+        help="Back up, migrate, verify, record the marker and publish the format 4 dump",
+    )
+
     pdata_verify_parser = pdata_sub.add_parser(
         "verify", help="Run the integrity-check backstop (spec §6.3/§8.2)"
     )
@@ -3850,6 +3901,8 @@ def main() -> None:
             sys.exit(_cmd_pdata_resolve(args))
         if args.verb == "sync-check":
             sys.exit(_cmd_pdata_sync_check(args))
+        if args.verb == "migrate-uuid":
+            sys.exit(_cmd_pdata_migrate_uuid(args))
 
     if args.noun == "machine-identity":
         if args.verb == "show":

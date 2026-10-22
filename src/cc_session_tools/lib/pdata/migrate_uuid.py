@@ -743,6 +743,16 @@ def _resume(project: str, *, db_path: Path, project_root: Path, write: bool) -> 
 # ------------------------------------------------------------------ rendering
 
 
+def exit_status(outcome: Outcome) -> int:
+    """The command's exit status for one project: 1 when it refused, 2 when it failed after the
+    backup, else 0."""
+    if outcome is Outcome.REFUSED:
+        return 1
+    if outcome is Outcome.FAILED:
+        return 2
+    return 0
+
+
 def render(result: MigrationResult) -> list[str]:
     """The human-readable report for one project, as lines, for the CLI to print."""
     lines = [f"{result.project}: {_headline(result)}"]
