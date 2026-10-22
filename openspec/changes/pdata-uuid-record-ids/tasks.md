@@ -2,19 +2,19 @@
 
 ## 1. Format marker and schema
 
-- [ ] 1.1 Add the `pdata-uuid-ids` marker constant, a format probe (`records.id` declared TEXT = format 4, INTEGER = format 3) and a `pdata_format(conn)` helper in `lib/pdata/`; new databases are created format 4 (`records.id TEXT PRIMARY KEY`, `ext_*.record_id TEXT`, `pdata_verify_watermark.record_id TEXT`). Verify: unit tests for the probe on fresh, format 3 and format 4 databases.
-- [ ] 1.2 Add the format check used by every record-touching verb: format 3 refuses with a message naming `ccst pdata migrate-uuid`; `migrate-uuid`, `sync-check` (status), `verify` and `doctor` are exempt. Verify: CLI tests run each verb against a format 3 fixture and assert refusal, no writes, and the exempt verbs still run.
+- [x] 1.1 Add the `pdata-uuid-ids` marker constant, a format probe (`records.id` declared TEXT = format 4, INTEGER = format 3) and a `pdata_format(conn)` helper in `lib/pdata/`; new databases are created format 4 (`records.id TEXT PRIMARY KEY`, `ext_*.record_id TEXT`, `pdata_verify_watermark.record_id TEXT`). Verify: unit tests for the probe on fresh, format 3 and format 4 databases.
+- [x] 1.2 Add the format check used by every record-touching verb: format 3 refuses with a message naming `ccst pdata migrate-uuid`; `migrate-uuid`, `sync-check` (status), `verify` and `doctor` are exempt. Verify: CLI tests run each verb against a format 3 fixture and assert refusal, no writes, and the exempt verbs still run.
 
 ## 2. Record ids in the service and CLI
 
-- [ ] 2.1 Generate `uuid4` ids in `insert_base_record` and `service.add_record`; change `record_id` and `Record.id` types to `str`; update `init_service` rollback lists and output. Verify: `tests/pdata/test_repository.py` and `test_service.py` updated; add/get round trip asserts a canonical UUID.
-- [ ] 2.2 Replace `type=int` on `get/update/delete/restore --id` with a UUID validator that fails as a usage error naming the value; same for `resolve --choice <uuid>=local|dump`. Verify: tests for `--id 12`, a valid-but-absent UUID (record not found), and a bad `--choice`.
-- [ ] 2.3 Replace `ORDER BY id` in `list_base_records`, `query_records` and resolve diff ordering with `created_at, id`; JSON output emits string ids. Verify: ordering test with ids that sort against creation order; json output test.
-- [ ] 2.4 Update the `ccst pdata` help text (`ID=local|dump` becomes `UUID=local|dump`). Verify: help-output test.
+- [x] 2.1 Generate `uuid4` ids in `insert_base_record` and `service.add_record`; change `record_id` and `Record.id` types to `str`; update `init_service` rollback lists and output. Verify: `tests/pdata/test_repository.py` and `test_service.py` updated; add/get round trip asserts a canonical UUID.
+- [x] 2.2 Replace `type=int` on `get/update/delete/restore --id` with a UUID validator that fails as a usage error naming the value; same for `resolve --choice <uuid>=local|dump`. Verify: tests for `--id 12`, a valid-but-absent UUID (record not found), and a bad `--choice`.
+- [x] 2.3 Replace `ORDER BY id` in `list_base_records`, `query_records` and resolve diff ordering with `created_at, id`; JSON output emits string ids. Verify: ordering test with ids that sort against creation order; json output test.
+- [x] 2.4 Update the `ccst pdata` help text (`ID=local|dump` becomes `UUID=local|dump`). Verify: help-output test.
 
 ## 3. Deterministic ids
 
-- [ ] 3.1 Add the namespace constant and `deterministic_record_id(project, key)` helper; give the session-output watermark and each registered session-output record deterministic ids (`session_output.py`), and make registering an already-registered file a no-op by id. Verify: tests that two independent databases produce identical ids for the same watermark and file, and no duplicate on re-register.
+- [x] 3.1 Add the namespace constant and `deterministic_record_id(project, key)` helper; give the session-output watermark and each registered session-output record deterministic ids (`session_output.py`), and make registering an already-registered file a no-op by id. Verify: tests that two independent databases produce identical ids for the same watermark and file, and no duplicate on re-register.
 
 ## 4. Dump format and sync
 
