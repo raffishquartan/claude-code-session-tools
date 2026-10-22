@@ -31,13 +31,17 @@ MIGRATE_COMMAND: Final = "ccst pdata migrate-uuid"
 # database must still publish, fast-forward or resolve a fork before it can be migrated (D6c).
 LAST_FORMAT3_RELEASE: Final = "3.16.2"
 RUNBOOK_PATH: Final = "docs/pdata-uuid-migration-runbook.md"
+RUNBOOK_URL: Final = (
+    f"https://github.com/raffishquartan/claude-code-session-tools/blob/main/{RUNBOOK_PATH}"
+)
 
 # `ccst pdata` verbs that still run on a format 3 database: the migration itself, and the
 # diagnostics a user needs while deciding to migrate. `sync-check` only reports status on a
-# format 3 database. `readiness-scan` reads project files, never the database. `ccst doctor`
-# is not a `ccst pdata` verb and is never gated.
+# format 3 database. `readiness-scan` reads project files, never the database.
+# `migration-notice` only reads each database's format. `ccst doctor` is not a `ccst pdata`
+# verb and is never gated.
 FORMAT_GATE_EXEMPT_VERBS: Final = frozenset(
-    {"migrate-uuid", "sync-check", "verify", "readiness-scan"}
+    {"migrate-uuid", "migration-notice", "sync-check", "verify", "readiness-scan"}
 )
 
 _FORMAT_BY_ID_TYPE: Final = {"INTEGER": PDATA_FORMAT_INTEGER_IDS, "TEXT": PDATA_FORMAT_UUID_IDS}

@@ -25,7 +25,7 @@ import logging
 import re
 import sqlite3
 from collections import Counter
-from collections.abc import Iterator
+from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -815,3 +815,29 @@ def _render_plan(plan: MigrationPlan) -> list[str]:
     if plan.ready:
         lines.append("  every precondition holds: re-run with --write to migrate")
     return lines
+
+
+_BANNER_RULE: Final = "#" * 78
+
+
+def install_banner(projects: Sequence[str]) -> list[str]:
+    """The framed notice `install-everything.sh` prints when `projects` (the format 3 ones) is
+    not empty; no lines when it is (design D6a)."""
+    if not projects:
+        return []
+    return [
+        _BANNER_RULE,
+        "#  ccst: pdata MIGRATION REQUIRED - do this before starting any claude session",
+        _BANNER_RULE,
+        "These projects' pdata databases still use format 3 (integer record ids):",
+        *(f"  - {project}" for project in projects),
+        "Until they are migrated, `ccst pdata` record commands, sync and the pdata scheduled",
+        "jobs refuse them. Every machine sharing a project must be converged first, so follow",
+        "the runbook, from a plain terminal, once on each machine:",
+        f"  {formats.RUNBOOK_PATH} in the cc-session-tools repository",
+        f"  {formats.RUNBOOK_URL}",
+        "Its migration commands are:",
+        f"  {formats.MIGRATE_COMMAND} --all-projects            (dry run - changes nothing)",
+        f"  {formats.MIGRATE_COMMAND} --all-projects --write",
+        _BANNER_RULE,
+    ]

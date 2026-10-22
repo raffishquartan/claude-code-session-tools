@@ -72,7 +72,16 @@ ccst install-everything --apply
 
 # ── Step 3: Health check ─────────────────────────────────────────────────────
 step "3/3  Health check"
-ccst doctor
+doctor_status=0
+ccst doctor || doctor_status=$?
+
+# pdata databases still on format 3 (integer ids): the migrate-uuid dry run and a framed
+# banner, or nothing when every project is migrated. Advice only - never changes the exit status.
+ccst pdata migration-notice || echo "WARNING: could not check pdata migration status" >&2
+
+if [[ $doctor_status -ne 0 ]]; then
+    exit "$doctor_status"
+fi
 
 echo ""
 echo "Done."

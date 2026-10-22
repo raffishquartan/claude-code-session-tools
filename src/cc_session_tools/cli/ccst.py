@@ -63,6 +63,9 @@ Current subcommands:
   pdata migrate-uuid             Convert format 3 (integer id) databases to format 4 (UUID
                                  ids) for --project NAME or --all-projects. Dry run unless
                                  --write; run from a plain terminal with no `claude` session.
+  pdata migration-notice         Print the migrate-uuid dry run and a framed banner when any
+                                 project is still format 3; nothing otherwise. Used by
+                                 install-everything.sh; always exits 0.
   machine-identity show          Print this laptop's resolved machine id and whether it's
                                  confirmed.
   machine-identity confirm       Store this laptop's confirmed machine id (--name NAME), used
@@ -2037,18 +2040,26 @@ def _cmd_pdata_sync_check(args: argparse.Namespace) -> int:
 def _cmd_pdata_migrate_uuid(args: argparse.Namespace) -> int:
     """`ccst pdata migrate-uuid`: every rule lives in `pdata.migrate_uuid`; this handler is the
     project loop, the printing and the exit status (the worst over all projects)."""
-    import sqlite3
-
-    from cc_session_tools.lib.pdata import migrate_uuid, verify
+    from cc_session_tools.lib.pdata import verify
 
     projects = verify.discover_projects() if args.all_projects else [args.project]
     if not projects:
         print("ccst pdata migrate-uuid: no project databases found - nothing to migrate")
         return 0
+    return _run_pdata_migrate_uuid(projects, write=args.write)
+
+
+def _run_pdata_migrate_uuid(projects: list[str], *, write: bool) -> int:
+    """Run `migrate_uuid.migrate_project` over `projects`, printing each report; returns the
+    worst exit status."""
+    import sqlite3
+
+    from cc_session_tools.lib.pdata import migrate_uuid
+
     worst = 0
     for project in projects:
         try:
-            result = migrate_uuid.migrate_project(project, write=args.write)
+            result = migrate_uuid.migrate_project(project, write=write)
         except (OSError, ValueError, sqlite3.Error) as exc:
             print(f"ccst pdata migrate-uuid: {project}: {exc}", file=sys.stderr)
             worst = max(worst, 2)
@@ -2059,6 +2070,34 @@ def _cmd_pdata_migrate_uuid(args: argparse.Namespace) -> int:
             print(line, file=stream)
         worst = max(worst, status)
     return worst
+
+
+def _cmd_pdata_migration_notice(args: argparse.Namespace) -> int:
+    """`ccst pdata migration-notice`: for `install-everything.sh`. Prints nothing when no project
+    database is format 3; otherwise the migrate-uuid dry run for those projects, then the framed
+    banner. Always exits 0 - it is advice, and must not change the installer's exit status."""
+    import sqlite3
+
+    from cc_session_tools.lib.pdata import formats, migrate_uuid, store, verify
+
+    unmigrated: list[str] = []
+    for project in verify.discover_projects():
+        try:
+            fmt = formats.database_format(store.db_path(project))
+        except (formats.UnknownPdataFormatError, sqlite3.DatabaseError) as exc:
+            print(f"ccst pdata migration-notice: {project}: could not read the database "
+                  f"format ({exc}); see `ccst doctor`", file=sys.stderr)
+            continue
+        if fmt == formats.PDATA_FORMAT_INTEGER_IDS:
+            unmigrated.append(project)
+    if not unmigrated:
+        return 0
+    print(f"{formats.MIGRATE_COMMAND} --all-projects (dry run) for the format 3 projects:")
+    _run_pdata_migrate_uuid(unmigrated, write=False)
+    print()
+    for line in migrate_uuid.install_banner(unmigrated):
+        print(line)
+    return 0
 
 
 def _sync_check_line(result: SyncCheckResult) -> str:
@@ -3432,6 +3471,12 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Back up, migrate, verify, record the marker and publish the format 4 dump",
     )
 
+    pdata_sub.add_parser(
+        "migration-notice",
+        help="Print the migrate-uuid dry run and a framed banner when any project is still "
+             "format 3; nothing otherwise (used by install-everything.sh; always exits 0)",
+    )
+
     pdata_verify_parser = pdata_sub.add_parser(
         "verify", help="Run the integrity-check backstop (spec §6.3/§8.2)"
     )
@@ -3903,6 +3948,8 @@ def main() -> None:
             sys.exit(_cmd_pdata_sync_check(args))
         if args.verb == "migrate-uuid":
             sys.exit(_cmd_pdata_migrate_uuid(args))
+        if args.verb == "migration-notice":
+            sys.exit(_cmd_pdata_migration_notice(args))
 
     if args.noun == "machine-identity":
         if args.verb == "show":
