@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from cc_session_tools.lib import roots
+from cc_session_tools.lib.pdata import ids
 
 if TYPE_CHECKING:
     # Type-only import: every runtime use of `service` in this module is a local import inside
@@ -22,6 +23,18 @@ if TYPE_CHECKING:
 
 SESSION_OUTPUT_GROUP = "session-output"
 WATERMARK_GROUP = "session-output-watermark"
+
+
+def watermark_record_id(project: str) -> str:
+    """The id every machine gives this project's watermark record, so two machines that each
+    create it hold one record (a later difference is an edit conflict, not two watermarks)."""
+    return ids.deterministic_record_id(project, WATERMARK_GROUP)
+
+
+def output_record_id(project: str, rel_path: str) -> str:
+    """The id every machine gives the session-output record for the file at `rel_path`, so two
+    machines that register the same file hold one record."""
+    return ids.deterministic_record_id(project, f"{SESSION_OUTPUT_GROUP}:{rel_path}")
 
 
 @dataclass(frozen=True, slots=True)
@@ -140,7 +153,12 @@ def ensure_session_output_schema(project: str) -> None:
         conn.close()
 
 
-def _get_watermark_record(project: str) -> Record | None:
+def _get_watermark_record(project: str, *, include_deleted: bool = False) -> Record | None:
+    """This project's watermark record: the live one with watermark_record_id, else the oldest
+    live watermark row; with `include_deleted`, and only when no watermark row is live, the
+    soft-deleted one chosen the same way. A watermark row can have another id because
+    `ccst pdata migrate-uuid` gives every row of a format 3 database the id it maps that row's
+    integer id to; reusing that row keeps a migrated project at one watermark."""
     from cc_session_tools.lib.pdata import service, store
 
     if not store.db_path(project).exists():
@@ -154,7 +172,21 @@ def _get_watermark_record(project: str) -> Record | None:
         # call further down — this short-circuit only skips the unnecessary read-only connect.
         return None
 
-    records = service.list_records(project=project, record_group=WATERMARK_GROUP, limit=1)
+    preferred = service.get_record(
+        project=project, record_id=watermark_record_id(project), include_deleted=include_deleted,
+    )
+    if preferred is not None and preferred.deleted_at is None:
+        return preferred
+    live = service.list_records(project=project, record_group=WATERMARK_GROUP, limit=1)
+    if live:
+        return live[0]
+    if preferred is not None:
+        return preferred
+    if not include_deleted:
+        return None
+    records = service.list_records(
+        project=project, record_group=WATERMARK_GROUP, limit=1, include_deleted=True,
+    )
     return records[0] if records else None
 
 
@@ -175,13 +207,19 @@ def set_watermark(project: str, epoch: int) -> None:
     after the retry propagates rather than being silently discarded."""
     from cc_session_tools.lib.pdata import service
 
-    record = _get_watermark_record(project)
+    # include_deleted: a soft-deleted watermark still owns its id, so it is restored and
+    # updated rather than re-added under the same id.
+    record = _get_watermark_record(project, include_deleted=True)
     if record is None:
         service.add_record(
             project=project, record_group=WATERMARK_GROUP, content=str(epoch),
-            file_path=None, fields={}, created_at=epoch,
+            file_path=None, fields={}, created_at=epoch, record_id=watermark_record_id(project),
         )
         return
+    if record.deleted_at is not None:
+        service.restore_record(project=project, record_id=record.id, restored_at=epoch)
+        record = _get_watermark_record(project)
+        assert record is not None
     try:
         service.update_record(
             project=project, record_id=record.id, expected_version=record.version,
@@ -197,6 +235,11 @@ def set_watermark(project: str, epoch: int) -> None:
 
 
 def _is_already_registered(project: str, rel_path: str) -> bool:
+    """True iff a live record already has this file_path, or any record (live or soft-deleted)
+    already holds output_record_id for it. The file_path check covers a record whose id is not
+    output_record_id (a migrated project's records carry the ids the migration mapped their
+    integer ids to); the id check makes re-registering a file a no-op even after its record's
+    file_path was edited, and never re-inserts an id that already exists."""
     from cc_session_tools.lib.pdata import service, store
 
     if not store.db_path(project).exists():
@@ -209,6 +252,11 @@ def _is_already_registered(project: str, rel_path: str) -> bool:
         # claim that dry-run "writes nothing".
         return False
 
+    existing = service.get_record(
+        project=project, record_id=output_record_id(project, rel_path), include_deleted=True,
+    )
+    if existing is not None:
+        return True
     matches = service.query_records(
         project=project, record_group=SESSION_OUTPUT_GROUP,
         where=[f"file_path = {rel_path}"], limit=1,
@@ -245,7 +293,7 @@ def reconcile_project(
                 project=project, record_group=SESSION_OUTPUT_GROUP,
                 content=file_path.name, file_path=rel_path,
                 fields={"session_tag": session_tag_from_relpath(rel_path)},
-                created_at=mtime,
+                created_at=mtime, record_id=output_record_id(project, rel_path),
             )
         registered += 1
 

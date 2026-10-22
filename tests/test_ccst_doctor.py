@@ -1942,3 +1942,175 @@ def test_run_all_checks_includes_the_deps_checks(tmp_path: Path) -> None:
     by_name = {r.name: r for r in results}
     assert {"deps:bun", "deps:ccusage"} <= by_name.keys()
     assert all(by_name[n].status is not Status.FAIL for n in ("deps:bun", "deps:ccusage"))
+
+
+# ---------- check_pdata_uuid_migration (4.0.0 pdata record id migration) ----------
+
+
+def _pdata_db_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    db_dir = tmp_path / "project-db"
+    monkeypatch.setenv("CCST_PROJECT_DB_DIR", str(db_dir))
+    return db_dir
+
+
+def _format4_db(project: str) -> None:
+    from cc_session_tools.lib.pdata import repository
+
+    repository.connect(project).close()
+
+
+def _drop_uuid_marker(db_file: Path) -> None:
+    import sqlite3
+
+    conn = sqlite3.connect(str(db_file))
+    conn.execute("DELETE FROM migrations WHERE name = 'pdata-uuid-ids'")
+    conn.commit()
+    conn.close()
+
+
+def _add_uuid_marker(db_file: Path) -> None:
+    import sqlite3
+
+    conn = sqlite3.connect(str(db_file))
+    conn.executescript(_db.MIGRATIONS_DDL)
+    conn.execute(
+        "INSERT INTO migrations (name, applied_at) VALUES ('pdata-uuid-ids', '2026-10-22T00:00:00Z')"
+    )
+    conn.commit()
+    conn.close()
+
+
+def test_check_pdata_uuid_migration_ok_when_no_projects() -> None:
+    from cc_session_tools.lib.doctor import Status, check_pdata_uuid_migration
+
+    results = check_pdata_uuid_migration([])
+    assert [(r.name, r.status) for r in results] == [("migration-to-4.0.0:pdata-uuid", Status.OK)]
+
+
+def test_check_pdata_uuid_migration_ok_when_project_has_no_database(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from cc_session_tools.lib.doctor import Status, check_pdata_uuid_migration
+
+    _pdata_db_dir(tmp_path, monkeypatch)
+    [result] = check_pdata_uuid_migration(["p"])
+    assert result.name == "migration-to-4.0.0:pdata-uuid:p"
+    assert result.status is Status.OK
+    assert not (tmp_path / "project-db" / "p.db").exists()
+
+
+def test_check_pdata_uuid_migration_ok_when_format4_with_marker(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from cc_session_tools.lib.doctor import Status, check_pdata_uuid_migration
+
+    _pdata_db_dir(tmp_path, monkeypatch)
+    _format4_db("p")
+    [result] = check_pdata_uuid_migration(["p"])
+    assert result.status is Status.OK, result.reason
+
+
+def test_check_pdata_uuid_migration_fails_on_format3_naming_command_and_runbook(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from pdata.legacy_fixture import make_format3_db
+
+    from cc_session_tools.lib.doctor import Status, check_pdata_uuid_migration
+    from cc_session_tools.lib.pdata import formats
+
+    db_dir = _pdata_db_dir(tmp_path, monkeypatch)
+    make_format3_db(db_dir / "p.db")
+    [result] = check_pdata_uuid_migration(["p"])
+    assert result.name == "migration-to-4.0.0:pdata-uuid:p"
+    assert result.status is Status.FAIL
+    assert "ccst pdata migrate-uuid --write --project p" in result.reason
+    assert "plain terminal" in result.reason
+    assert formats.RUNBOOK_PATH in result.reason
+    assert formats.RUNBOOK_PATH == "docs/pdata-uuid-migration-runbook.md"
+
+
+def test_check_pdata_uuid_migration_fails_when_format3_has_the_marker(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from pdata.legacy_fixture import make_format3_db
+
+    from cc_session_tools.lib.doctor import Status, check_pdata_uuid_migration
+
+    db_dir = _pdata_db_dir(tmp_path, monkeypatch)
+    make_format3_db(db_dir / "p.db")
+    _add_uuid_marker(db_dir / "p.db")
+    [result] = check_pdata_uuid_migration(["p"])
+    assert result.status is Status.FAIL
+    assert "marker" in result.reason
+    assert "format 3" in result.reason
+
+
+def test_check_pdata_uuid_migration_fails_when_format4_lacks_the_marker(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from cc_session_tools.lib.doctor import Status, check_pdata_uuid_migration
+
+    db_dir = _pdata_db_dir(tmp_path, monkeypatch)
+    _format4_db("p")
+    _drop_uuid_marker(db_dir / "p.db")
+    [result] = check_pdata_uuid_migration(["p"])
+    assert result.status is Status.FAIL
+    assert "marker" in result.reason
+    assert "ccst pdata migrate-uuid --write --project p" in result.reason
+
+
+def test_check_pdata_uuid_migration_fails_on_an_unreadable_database(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from cc_session_tools.lib.doctor import Status, check_pdata_uuid_migration
+
+    db_dir = _pdata_db_dir(tmp_path, monkeypatch)
+    db_dir.mkdir()
+    (db_dir / "p.db").write_bytes(b"not a sqlite database at all" * 100)
+    [result] = check_pdata_uuid_migration(["p"])
+    assert result.status is Status.FAIL
+    assert "failed to open" in result.reason
+
+
+def test_check_pdata_uuid_migration_fails_on_an_unknown_id_type(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import sqlite3
+
+    from cc_session_tools.lib.doctor import Status, check_pdata_uuid_migration
+
+    db_dir = _pdata_db_dir(tmp_path, monkeypatch)
+    db_dir.mkdir()
+    conn = sqlite3.connect(str(db_dir / "p.db"))
+    conn.execute("CREATE TABLE records (id BLOB PRIMARY KEY)")
+    conn.commit()
+    conn.close()
+    [result] = check_pdata_uuid_migration(["p"])
+    assert result.status is Status.FAIL
+    assert "BLOB" in result.reason
+
+
+def test_run_all_checks_reports_pdata_uuid_migration_before_pdata_verify(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from pdata.legacy_fixture import make_format3_db
+
+    db_dir = _pdata_db_dir(tmp_path, monkeypatch)
+    make_format3_db(db_dir / "p.db")
+    settings = tmp_path / "settings.json"
+    settings.write_text('{"hooks": {}}')
+    results = run_all_checks(
+        installed_version="4.0.0",
+        settings_path=settings,
+        bundle_path=tmp_path / "no-bundle.json",
+        skills_source_dir=None,
+        skills_target_dir=tmp_path / "skills",
+        env={"CLAUDE_SESSION_TOOLS_REPO_ROOT": None, "CLAUDE_SESSION_TOOLS_PROJ_ROOT": None},
+        skip_pypi=True,
+        pdata_verify_projects=["p"],
+    )
+    names = [r.name for r in results]
+    assert "migration-to-4.0.0:pdata-uuid:p" in names
+    assert names.index("migration-to-4.0.0:pdata-uuid:p") < names.index("pdata-verify:p")
+    [check] = [r for r in results if r.name == "migration-to-4.0.0:pdata-uuid:p"]
+    assert check.status is Status.FAIL

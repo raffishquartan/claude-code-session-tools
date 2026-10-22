@@ -26,13 +26,15 @@ import enum
 from dataclasses import dataclass
 from pathlib import Path
 
-from cc_session_tools.lib import machine_identity, occupancy
+from cc_session_tools.lib import db, machine_identity, occupancy
 from cc_session_tools.lib.pdata import (
     dump,
+    formats,
     rehydrate,
     repository,
     store,
     sync_notify,
+    vector_clock,
     vector_clock_store,
 )
 
@@ -44,6 +46,20 @@ class SyncOutcome(enum.Enum):
     CONFLICT = "conflict"              # surfaced via notify_conflict; nothing written
     DEFERRED = "deferred"              # another writer holds the lock right now - retry next cycle
     OCCUPIED = "occupied"              # a live session is working in this project - skipped
+    # The database or the published dump is not the current format; status only, nothing
+    # loaded or published, not a conflict.
+    MIGRATION_PENDING = "migration_pending"
+
+
+class Format3Status(enum.Enum):
+    """How a format 3 database stands against its published format 3 dump. Read-only status for
+    an unmigrated project: `ccst pdata migrate-uuid` needs UNCHANGED (design D4)."""
+    UNCHANGED = "unchanged"                      # local equals the published dump
+    UNPUBLISHED_CHANGES = "unpublished_changes"  # local has writes the dump lacks
+    BEHIND = "behind"                            # the dump has writes local lacks
+    FORK = "fork"                                # each side has writes the other lacks
+    NOT_PUBLISHED = "not_published"              # no format 3 dump exists
+    CHECKSUM_INVALID = "checksum_invalid"        # a format 3 dump exists but fails its checksum
 
 
 @dataclass(frozen=True, slots=True)
@@ -58,6 +74,8 @@ class SyncCheckResult:
     # inventing a fourth copy of the same message.
     conflict_outcome: str | None = None
     detail: str | None = None
+    # For MIGRATION_PENDING on a format 3 database: where it stands against its format 3 dump.
+    format3_status: Format3Status | None = None
 
 
 def check_project(project: str) -> SyncCheckResult:
@@ -66,6 +84,12 @@ def check_project(project: str) -> SyncCheckResult:
     outcome is reported through the returned result."""
     project_root = store.project_root(project)  # also validates the project name
     existing = dump.read_latest(project_root)
+
+    # First, before the occupancy check: a project waiting for migration is only ever reported,
+    # never loaded into or published from, so nothing about a live session matters to it.
+    pending = rehydrate.format_gate(project, project_root=project_root, existing=existing)
+    if pending is not None:
+        return _migration_pending(project, project_root=project_root, pending=pending)
 
     if existing.present:
         decided = _rehydrate_half(project, project_root=project_root, existing=existing)
@@ -169,6 +193,42 @@ def _dump_half(
     finally:
         conn.close()
     return SyncCheckResult(outcome=SyncOutcome.PUBLISHED, machine_id=machine_id)
+
+
+def _migration_pending(
+    project: str, *, project_root: Path, pending: rehydrate.RehydrateResult,
+) -> SyncCheckResult:
+    status = None
+    if pending.local_format == formats.PDATA_FORMAT_INTEGER_IDS:
+        status = format3_status(project, project_root=project_root)
+    return SyncCheckResult(
+        outcome=SyncOutcome.MIGRATION_PENDING,
+        detail=rehydrate.migration_pending_detail(pending, project=project),
+        format3_status=status,
+    )
+
+
+def format3_status(project: str, *, project_root: Path) -> Format3Status:
+    """Where `project`'s format 3 database stands against its published format 3 dump. Opens
+    the database read-only and writes nothing."""
+    info = dump.read_latest(project_root, pdata_format=formats.PDATA_FORMAT_INTEGER_IDS)
+    if not info.present:
+        return Format3Status.NOT_PUBLISHED
+    if not info.checksum_valid:
+        return Format3Status.CHECKSUM_INVALID
+    conn = db.connect(store.db_path(project), readonly=True)
+    try:
+        local_vector = vector_clock_store.read_vector(conn)
+    finally:
+        conn.close()
+    if local_vector == info.vector:
+        return Format3Status.UNCHANGED
+    comparison = vector_clock.compare(local=local_vector, dump=info.vector)
+    if comparison is vector_clock.Comparison.LOCAL_DOMINATES:
+        return Format3Status.UNPUBLISHED_CHANGES
+    if comparison is vector_clock.Comparison.DUMP_DOMINATES:
+        return Format3Status.BEHIND
+    return Format3Status.FORK
 
 
 def _conflict(project: str, *, outcome: str, detail: str) -> SyncCheckResult:

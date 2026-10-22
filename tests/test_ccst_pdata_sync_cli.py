@@ -65,6 +65,12 @@ def _stub_pgrep(tmp_path: Path, monkeypatch, *, pids: tuple[int, ...] = ()) -> N
     monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ['PATH']}")
 
 
+# The one record both the local database and the simulated remote dump hold: the same logical
+# record on both sides, so a content difference is an edit conflict on it.
+_SHARED_RECORD_ID = "3f2b8c1e-6d4a-4e9b-9a7c-2d5e8f1b0c64"
+_ABSENT_RECORD_ID = "40090682-d73d-4958-a608-000000000000"
+
+
 def _build_local(project: str, *, content: str = "local", vector: dict[str, int] | None = None) -> None:
     """Create <project>.db through the real repository.connect() path, with one records row and
     (optionally) a pdata_meta vector - matches test_rehydrate.py's/test_resolve.py's fixture
@@ -74,7 +80,7 @@ def _build_local(project: str, *, content: str = "local", vector: dict[str, int]
         with repository._immediate(conn):
             repository.insert_base_record(
                 conn, record_group="g", content=content, file_path=None,
-                created_at=1, updated_at=1,
+                created_at=1, updated_at=1, record_id=_SHARED_RECORD_ID,
             )
             if vector is not None:
                 vector_clock_store.write_vector(conn, vector, updated_at=1)
@@ -86,7 +92,7 @@ def _publish_remote_dump(
     project_root: Path, *, remote_project: str, content: str, vector: dict[str, int],
     machine_id: str,
 ) -> None:
-    """Build a throwaway "remote" project db and dump it to project_root/.pdata-db-dump/latest.sql
+    """Build a throwaway "remote" project db and dump it to project_root/.pdata-db-dump/v4/latest.sql
     - simulating a dump published by another machine, without needing two real machines
     (same pattern as test_rehydrate.py's/test_resolve.py's _publish_remote_dump).
 
@@ -104,7 +110,7 @@ def _publish_remote_dump(
             with repository._immediate(conn):
                 repository.insert_base_record(
                     conn, record_group="g", content=content, file_path=None,
-                    created_at=1, updated_at=1,
+                    created_at=1, updated_at=1, record_id=_SHARED_RECORD_ID,
                 )
                 vector_clock_store.write_vector(conn, vector, updated_at=1)
             dump.write_latest(
@@ -458,7 +464,7 @@ def test_resolve_diagnostic_mode_reports_outstanding_records_and_schema_fields(b
     def build(remote_conn):
         remote_conn.execute(
             "INSERT INTO records (id, record_group, content, file_path, created_at, "
-            "updated_at) VALUES (999, 'g', 'dump-content', NULL, 5, 5)"
+            f"updated_at) VALUES ('{_ABSENT_RECORD_ID}', 'g', 'dump-content', NULL, 5, 5)"
         )
         repository.add_extension_column(remote_conn, "g", "priority", "INTEGER", default=None)
         # _diff_schema_fields reads record_group_fields, not the ext table's own columns - a
@@ -482,8 +488,36 @@ def test_resolve_diagnostic_mode_reports_outstanding_records_and_schema_fields(b
     assert r.returncode == 1, r.stdout
     assert "2 record(s) + 1 schema field(s) to resolve" in r.stdout
     assert "local-only" in r.stdout  # the real local record, absent from the fake remote dump
-    assert "dump-only" in r.stdout  # record 999, present only in the dump
+    assert f"record {_ABSENT_RECORD_ID} (group=g): dump-only" in r.stdout
     assert "schema field g.priority: dump only" in r.stdout
+
+
+def test_resolve_diagnostic_mode_reports_a_group_mismatch_without_calling_it_a_collision(
+    base_env,
+):
+    _build_local("proj", content="same", vector={"ltxy": 1})
+    project_root = store.project_root("proj")
+    conn = repository.connect("proj-remote")
+    try:
+        with repository._immediate(conn):
+            repository.insert_base_record(
+                conn, record_group="renamed", content="same", file_path=None,
+                created_at=1, updated_at=1, record_id=_SHARED_RECORD_ID,
+            )
+            vector_clock_store.write_vector(conn, {"mbp": 1}, updated_at=1)
+        dump.write_latest(conn, project_root=project_root, machine_id="mbp", vector={"mbp": 1})
+    finally:
+        conn.close()
+
+    r = _run(base_env, "pdata", "resolve", "--project", "proj")
+
+    assert r.returncode == 1, r.stdout
+    assert (
+        f"record {_SHARED_RECORD_ID} (local group=g, dump group=renamed): group mismatch - "
+        f"the same record"
+    ) in r.stdout
+    assert "ccst pdata rename-group" in r.stdout
+    assert "collision" not in r.stdout
 
 
 def test_resolve_diagnostic_reports_checksum_invalid_error(base_env):
@@ -515,7 +549,7 @@ def test_resolve_diagnostic_all_projects_compact_summary(base_env):
 
 def test_resolve_choice_rejects_all_projects(base_env):
     r = _run(
-        base_env, "pdata", "resolve", "--all-projects", "--choice", "1=local",
+        base_env, "pdata", "resolve", "--all-projects", "--choice", f"{_ABSENT_RECORD_ID}=local",
     )
     assert r.returncode == 2
     assert "--choice requires --project" in r.stderr
@@ -584,11 +618,11 @@ def test_resolve_choice_apply_prints_apply_resolution_error_verbatim(base_env):
 
     r = _run(
         base_env, "pdata", "resolve", "--project", "proj",
-        "--choice", "999999=local",
+        "--choice", f"{_ABSENT_RECORD_ID}=local",
     )
 
     assert r.returncode == 1
-    assert "999999" in r.stderr
+    assert _ABSENT_RECORD_ID in r.stderr
     assert "are not part of the current diff" in r.stderr
 
 
@@ -626,7 +660,7 @@ def test_sync_check_fast_forwards_when_the_dump_is_ahead(base_env):
         project_root, remote_project="proj-remote", content="from-remote",
         vector={"mbp": 1}, machine_id="mbp",
     )
-    before = (project_root / ".pdata-db-dump" / "latest.sql").read_text()
+    before = dump.latest_path(project_root).read_text()
 
     r = _run(base_env, "pdata", "sync-check", "--project", "proj")
 
@@ -641,7 +675,7 @@ def test_sync_check_fast_forwards_when_the_dump_is_ahead(base_env):
     finally:
         conn.close()
     # A fast-forward is terminal - no dump-check, so latest.sql is untouched.
-    assert (project_root / ".pdata-db-dump" / "latest.sql").read_text() == before
+    assert dump.latest_path(project_root).read_text() == before
 
 
 def test_sync_check_publishes_when_local_is_ahead(base_env):
@@ -668,7 +702,7 @@ def test_sync_check_skips_an_unchanged_republish(base_env):
     first = _run(base_env, "pdata", "sync-check", "--project", "proj")
     assert first.returncode == 0, first.stderr
     assert "published" in first.stdout
-    latest = store.project_root("proj") / ".pdata-db-dump" / "latest.sql"
+    latest = dump.latest_path(store.project_root("proj"))
     before_text = latest.read_text()
     before_mtime = latest.stat().st_mtime_ns
     time.sleep(0.01)
@@ -707,7 +741,7 @@ def test_sync_check_reports_a_corrupt_dump_as_a_conflict(base_env):
         project_root, remote_project="proj-remote", content="remote",
         vector={"mbp": 1}, machine_id="mbp",
     )
-    latest = project_root / ".pdata-db-dump" / "latest.sql"
+    latest = dump.latest_path(project_root)
     latest.write_text(latest.read_text() + "\n-- tampered\n")
 
     r = _run(base_env, "pdata", "sync-check", "--project", "proj")
@@ -720,7 +754,7 @@ def test_sync_check_publishes_a_first_dump_instead_of_calling_it_corrupt(base_en
     """A project that has never been dumped is the normal state right after `ccst pdata init`.
     It must publish, not report a checksum conflict every hour forever."""
     _build_local("proj", vector={"ltxy": 1})
-    assert not (store.project_root("proj") / ".pdata-db-dump" / "latest.sql").exists()
+    assert not dump.latest_path(store.project_root("proj")).exists()
 
     r = _run(base_env, "pdata", "sync-check", "--project", "proj")
 

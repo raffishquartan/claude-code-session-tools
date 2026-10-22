@@ -3,7 +3,7 @@
 One module registered under two events, branching on `hook_event_name` inside `main()` - the
 same shape `catchup.py` uses for its own SessionStart/UserPromptSubmit pair.
 
-- **SessionStart** rehydrates this project from `.pdata-db-dump/latest.sql` if the dump dominates
+- **SessionStart** rehydrates this project from `.pdata-db-dump/v4/latest.sql` if the dump dominates
   local, after the spec's occupancy gate ("Process safety"): if another live `claude` session is
   already working in this project - excluding this hook's own launching process, resolved via
   `occupancy.launching_claude_pid` (not bare `os.getppid()`, which is an `sh -c` wrapper rather
@@ -143,7 +143,7 @@ def on_session_start(cwd: str, *, session_pid: int | None) -> str | None:
             # formatters should render it the same way rather than diverge on a case neither can
             # actually hit yet). mtime reflects local sync-settle time, not the source machine's
             # actual publish time, but it beats an unhelpful "unknown" for a cosmetic detail.
-            latest_path = project_root / ".pdata-db-dump" / "latest.sql"
+            latest_path = dump.latest_path(project_root)
             when = dump.format_dumped_at(int(latest_path.stat().st_mtime))
         # The design's required content is "machine + timestamp it rehydrated from"; this exact
         # wording is the plan's own quoted deliverable, so it is reproduced verbatim rather than
@@ -162,6 +162,11 @@ def on_session_start(cwd: str, *, session_pid: int | None) -> str | None:
         # sync_notify.py's module docstring, which names this hook for exactly that reason).
         sync_notify.notify_conflict(project, outcome=result.outcome.value, detail=detail)
         return f"[pdata-sync] {project}: {detail}"
+    if result.outcome is rehydrate.RehydrateOutcome.MIGRATION_PENDING:
+        # Not a conflict: no notification. The pending-migration hook and `ccst doctor` carry
+        # the call to action; this line says why nothing was synced.
+        detail = rehydrate.migration_pending_detail(result, project=project)
+        return f"[pdata-sync] {project}: migration pending - {detail}"
     if result.outcome is rehydrate.RehydrateOutcome.DEFERRED:
         # Another writer holds the local db's lock right now - transient, the next trigger
         # retries. Not actionable, but still worth a line so a stuck-looking rehydrate is visible
@@ -188,10 +193,15 @@ def on_session_end(cwd: str) -> None:
         return
     project, project_root = resolved
 
+    existing = dump.read_latest(project_root)
+    if rehydrate.format_gate(project, project_root=project_root, existing=existing) is not None:
+        # Waiting for `ccst pdata migrate-uuid`: nothing is published, silently, as for every
+        # other SessionEnd outcome that needs no notification.
+        return
+
     conn = repository.connect(project)
     try:
         local_vector = vector_clock_store.read_vector(conn)
-        existing = dump.read_latest(project_root)
         comparison = dump.decide_publish(local_vector=local_vector, existing=existing)
         if comparison is not None:
             sync_notify.notify_conflict(

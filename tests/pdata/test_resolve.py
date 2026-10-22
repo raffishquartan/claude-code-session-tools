@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 import sqlite3
 
 import pytest
@@ -20,7 +21,7 @@ def _setup_env(monkeypatch, tmp_path):
 
 def _publish_remote_dump(project_root, *, remote_project, machine_id, vector, build):
     """Builds a throwaway "remote" project db (its own .db file) via `build(conn)` and dumps it
-    to project_root/.pdata-db-dump/latest.sql — simulating a dump published by another machine,
+    to project_root/.pdata-db-dump/v4/latest.sql — simulating a dump published by another machine,
     without needing two real machines to exercise resolve.py against (same pattern as
     test_rehydrate.py's `_publish_dump`)."""
     conn = repository.connect(remote_project)
@@ -80,7 +81,6 @@ def test_diff_pairs_base_and_extension_differences_into_one_record_diff(monkeypa
     assert diff.local["extension"] == {"priority": 1}
     assert diff.dump["extension"] == {"priority": 2}
     assert diff.is_delete_vs_update is False
-    assert diff.id_collision is False
     assert diff.group_mismatch is False
 
 
@@ -165,24 +165,23 @@ def test_diff_flags_delete_vs_update_conflict_distinct_from_a_content_diff(monke
     assert len(result.records) == 1
     diff = result.records[0]
     assert diff.is_delete_vs_update is True
-    assert diff.id_collision is False
     assert diff.local["base"]["deleted_at"] is None
     assert diff.dump["base"]["deleted_at"] == 3
 
 
-def test_diff_flags_id_collision_when_two_independent_new_records_share_an_id(
+def test_same_id_with_different_created_at_is_an_edit_conflict_not_a_collision(
     monkeypatch, tmp_path,
 ):
-    """records.id has no AUTOINCREMENT — two machines that fork and each insert a brand-new
-    record can legitimately allocate the same id to two unrelated rows (see resolve._classify's
-    docstring). created_at differing between local's and dump's row for the same id is
-    conclusive proof of this, since no write path ever mutates created_at post-insert."""
+    """A record id is a UUID, so the same id on both sides is the same logical record whatever
+    its other columns say: differing content (even with a differing created_at, as two machines
+    registering the same file with different mtimes produce) is an edit conflict, and there is
+    no id-collision category."""
     _setup_env(monkeypatch, tmp_path)
     conn = repository.connect("proj")
     try:
         with repository._immediate(conn):
             record_id = repository.insert_base_record(
-                conn, record_group="g", content="local-new-record", file_path=None,
+                conn, record_group="g", content="local-edit", file_path=None,
                 created_at=100, updated_at=100,
             )
             vector_clock_store.write_vector(conn, {"ltxy": 2, "mbp": 1}, updated_at=1)
@@ -194,7 +193,7 @@ def test_diff_flags_id_collision_when_two_independent_new_records_share_an_id(
         remote_conn.execute(
             "INSERT INTO records (id, record_group, content, file_path, created_at, updated_at) "
             "VALUES (?, ?, ?, ?, ?, ?)",
-            (record_id, "g", "dump-new-record", None, 200, 200),
+            (record_id, "g", "dump-edit", None, 200, 200),
         )
 
     _publish_remote_dump(
@@ -206,8 +205,12 @@ def test_diff_flags_id_collision_when_two_independent_new_records_share_an_id(
 
     assert len(result.records) == 1
     diff = result.records[0]
-    assert diff.id_collision is True
+    assert diff.local is not None and diff.dump is not None
+    assert diff.local["base"]["content"] == "local-edit"
+    assert diff.dump["base"]["content"] == "dump-edit"
     assert diff.is_delete_vs_update is False
+    assert diff.group_mismatch is False
+    assert not hasattr(diff, "id_collision")
 
 
 def test_apply_resolution_adds_missing_extension_column_before_writing_dump_choice(
@@ -423,7 +426,7 @@ def test_apply_resolution_accepts_empty_choices_when_the_diff_is_genuinely_empty
     conn = repository.connect("proj")
     try:
         with repository._immediate(conn):
-            repository.insert_base_record(
+            record_id = repository.insert_base_record(
                 conn, record_group="g", content="same-content", file_path=None,
                 created_at=1, updated_at=1,
             )
@@ -435,7 +438,8 @@ def test_apply_resolution_accepts_empty_choices_when_the_diff_is_genuinely_empty
     def build(remote_conn):
         remote_conn.execute(
             "INSERT INTO records (id, record_group, content, file_path, created_at, updated_at) "
-            "VALUES (1, 'g', 'same-content', NULL, 1, 1)"
+            "VALUES (?, 'g', 'same-content', NULL, 1, 1)",
+            (record_id,),
         )
 
     _publish_remote_dump(
@@ -509,7 +513,7 @@ def test_apply_resolution_refuses_a_schema_only_fork_instead_of_a_dead_end(monke
 def test_apply_resolution_rejects_an_invalid_choice_value(monkeypatch, tmp_path):
     _setup_env(monkeypatch, tmp_path)
     with pytest.raises(ValueError, match="invalid choice"):
-        resolve.apply_resolution("proj", {1: "banana"})
+        resolve.apply_resolution("proj", {"3f2b8c1e-6d4a-4e9b-9a7c-2d5e8f1b0c64": "banana"})
 
 
 def test_apply_resolution_rejects_unknown_record_id(monkeypatch, tmp_path):
@@ -537,17 +541,21 @@ def test_apply_resolution_rejects_unknown_record_id(monkeypatch, tmp_path):
         vector={"ltxy": 1, "mbp": 2}, build=build,
     )
 
-    with pytest.raises(ValueError, match="not part of the current diff"):
-        resolve.apply_resolution("proj", {999: "dump"})
+    absent_id = "40090682-d73d-4958-a608-000000000000"
+    with pytest.raises(
+        ValueError, match=re.escape(f"record_id(s) {absent_id} are not part of the current diff"),
+    ):
+        resolve.apply_resolution("proj", {absent_id: "dump"})
 
 
-def test_apply_resolution_refuses_an_id_collision_record(monkeypatch, tmp_path):
+@pytest.mark.parametrize("choice", ["local", "dump"])
+def test_apply_resolution_settles_a_same_id_edit_conflict(monkeypatch, tmp_path, choice):
     _setup_env(monkeypatch, tmp_path)
     conn = repository.connect("proj")
     try:
         with repository._immediate(conn):
             record_id = repository.insert_base_record(
-                conn, record_group="g", content="local-new", file_path=None,
+                conn, record_group="g", content="local-edit", file_path=None,
                 created_at=100, updated_at=100,
             )
             vector_clock_store.write_vector(conn, {"ltxy": 2, "mbp": 1}, updated_at=1)
@@ -559,7 +567,7 @@ def test_apply_resolution_refuses_an_id_collision_record(monkeypatch, tmp_path):
         remote_conn.execute(
             "INSERT INTO records (id, record_group, content, file_path, created_at, updated_at) "
             "VALUES (?, ?, ?, ?, ?, ?)",
-            (record_id, "g", "dump-new", None, 200, 200),
+            (record_id, "g", "dump-edit", None, 200, 200),
         )
 
     _publish_remote_dump(
@@ -567,15 +575,90 @@ def test_apply_resolution_refuses_an_id_collision_record(monkeypatch, tmp_path):
         vector={"ltxy": 1, "mbp": 2}, build=build,
     )
 
-    with pytest.raises(ValueError, match="id collision"):
-        resolve.apply_resolution("proj", {record_id: "dump"})
+    assert resolve.apply_resolution("proj", {record_id: choice}) is resolve.ApplyOutcome.APPLIED
+
+    conn = repository.connect("proj")
+    try:
+        row = repository.get_base_record(conn, record_id)
+        assert row["content"] == f"{choice}-edit"
+        # The chosen side's row is adopted whole, created_at included.
+        assert row["created_at"] == (100 if choice == "local" else 200)
+    finally:
+        conn.close()
+    assert resolve.diff_against_dump("proj").records == []
 
 
-def test_diff_flags_a_group_rename_as_group_mismatch_not_an_id_collision(monkeypatch, tmp_path):
+def test_a_fork_where_each_side_added_different_records_lists_them_one_sided(
+    monkeypatch, tmp_path,
+):
+    """The case the integer ids got wrong: both machines added a record after diverging. With
+    UUID ids the two records have different ids, so each is present on one side only, and
+    choosing `local` for the local one and `dump` for the dump one keeps both."""
+    _setup_env(monkeypatch, tmp_path)
+    shared_id = "10000000-0000-4000-8000-000000000001"
+    conn = repository.connect("proj")
+    try:
+        with repository._immediate(conn):
+            repository.insert_base_record(
+                conn, record_group="g", content="shared", file_path=None,
+                created_at=1, updated_at=1, record_id=shared_id,
+            )
+            local_id = repository.insert_base_record(
+                conn, record_group="g", content="added-locally", file_path=None,
+                created_at=5, updated_at=5,
+            )
+            vector_clock_store.write_vector(conn, {"ltxy": 2, "mbp": 1}, updated_at=1)
+    finally:
+        conn.close()
+    project_root = store.project_root("proj")
+    dump_ids: list[str] = []
+
+    def build(remote_conn):
+        repository.insert_base_record(
+            remote_conn, record_group="g", content="shared", file_path=None,
+            created_at=1, updated_at=1, record_id=shared_id,
+        )
+        dump_ids.append(repository.insert_base_record(
+            remote_conn, record_group="g", content="added-remotely", file_path=None,
+            created_at=6, updated_at=6,
+        ))
+
+    _publish_remote_dump(
+        project_root, remote_project="proj-remote", machine_id="mbp",
+        vector={"ltxy": 1, "mbp": 2}, build=build,
+    )
+    (dump_id,) = dump_ids
+    assert dump_id != local_id
+
+    diff = resolve.diff_against_dump("proj")
+
+    by_id = {rd.record_id: rd for rd in diff.records}
+    assert set(by_id) == {local_id, dump_id}
+    assert by_id[local_id].local is not None and by_id[local_id].dump is None
+    assert by_id[dump_id].local is None and by_id[dump_id].dump is not None
+    for rd in diff.records:
+        assert rd.group_mismatch is False and rd.is_delete_vs_update is False
+
+    outcome = resolve.apply_resolution("proj", {local_id: "local", dump_id: "dump"})
+
+    assert outcome is resolve.ApplyOutcome.APPLIED
+    conn = repository.connect("proj")
+    try:
+        contents = {
+            row["content"] for row in repository.list_base_records(
+                conn, record_group="g", since=None, until=None, limit=None,
+                include_deleted=False,
+            )
+        }
+    finally:
+        conn.close()
+    assert contents == {"shared", "added-locally", "added-remotely"}
+
+
+def test_diff_flags_a_group_rename_as_group_mismatch(monkeypatch, tmp_path):
     """`record_group` is NOT immutable - `ccst pdata rename-group` rewrites it in place
     (rename_group._rename_in_db). A record renamed on one machine only therefore shows the same
-    id and the same created_at with different record_groups: a genuine rename, not two unrelated
-    rows that happened to be assigned the same id. Only created_at is conclusive for the latter."""
+    id with different record_groups."""
     _setup_env(monkeypatch, tmp_path)
     conn = repository.connect("proj")
     try:
@@ -606,16 +689,12 @@ def test_diff_flags_a_group_rename_as_group_mismatch_not_an_id_collision(monkeyp
     assert len(result.records) == 1
     diff = result.records[0]
     assert diff.group_mismatch is True
-    assert diff.id_collision is False
     assert diff.is_delete_vs_update is False
 
 
-def test_diff_flags_an_id_collision_as_collision_only_even_when_groups_also_differ(
-    monkeypatch, tmp_path,
-):
-    """created_at differing is conclusive proof of an id collision; a differing record_group on
-    top of that adds nothing, so the record is reported as a collision and NOT additionally as a
-    group mismatch (the two categories are mutually exclusive, collision wins)."""
+def test_diff_flags_a_group_mismatch_even_when_created_at_also_differs(monkeypatch, tmp_path):
+    """The same id is the same record, so a differing record_group is a group mismatch whatever
+    created_at says - no column is read as evidence of two unrelated records."""
     _setup_env(monkeypatch, tmp_path)
     conn = repository.connect("proj")
     try:
@@ -645,8 +724,8 @@ def test_diff_flags_an_id_collision_as_collision_only_even_when_groups_also_diff
 
     assert len(result.records) == 1
     diff = result.records[0]
-    assert diff.id_collision is True
-    assert diff.group_mismatch is False
+    assert diff.group_mismatch is True
+    assert (diff.local_record_group, diff.dump_record_group) == ("g", "h")
 
 
 def test_apply_resolution_refuses_a_group_mismatch_record(monkeypatch, tmp_path):
@@ -678,13 +757,12 @@ def test_apply_resolution_refuses_a_group_mismatch_record(monkeypatch, tmp_path)
     with pytest.raises(ValueError, match="disagree on record_group") as excinfo:
         resolve.apply_resolution("proj", {record_id: "dump"})
 
-    # Distinctly labeled as the group_mismatch case, not the id_collision one (matched above via
-    # "disagree on record_group", which is not id_collision's error text). The message must also
-    # not tell the caller renaming is unconditionally safe - created_at can coincidentally match
-    # for two genuinely unrelated records too (whole-second precision, often mtime-derived), so it
-    # must tell the caller to check content/file_path before assuming a rename is the right fix.
+    # Names the record by its bare id and the remedy (rename the group on one side so both
+    # agree), and no longer speculates that the two might be unrelated records.
     message = str(excinfo.value)
-    assert "content" in message and "file_path" in message
+    assert message.startswith(f"record_id(s) {record_id}: group mismatch")
+    assert "ccst pdata rename-group" in message
+    assert "collision" not in message
 
 
 def test_apply_resolution_refuses_a_partial_resolve_naming_the_missing_record_ids(
@@ -727,7 +805,7 @@ def test_apply_resolution_refuses_a_partial_resolve_naming_the_missing_record_id
         vector={"ltxy": 1, "mbp": 5}, build=build,
     )
 
-    with pytest.raises(ValueError, match=rf"\[{id2}, {id3}\]"):
+    with pytest.raises(ValueError, match=re.escape(f"record_id(s) {', '.join(sorted([id2, id3]))} ")):
         resolve.apply_resolution("proj", {id1: "dump"})
 
     # Nothing was written: not the row, not the vector, not a fresh dump.
@@ -808,15 +886,15 @@ def test_diff_against_dump_rejects_a_checksum_invalid_dump(monkeypatch, tmp_path
         project_root, remote_project="proj-remote", machine_id="mbp",
         vector={"ltxy": 1, "mbp": 1}, build=build,
     )
-    (project_root / ".pdata-db-dump" / "latest.sql").write_text("TRUNCATED")
+    dump.latest_path(project_root).write_text("TRUNCATED")
 
     with pytest.raises(ValueError, match="checksum"):
         resolve.diff_against_dump("proj")
 
 
 def _publish_one_sided_dump_record(project_root):
-    """A dump holding exactly one record that local has never seen - no id reused on the local
-    side at all, no collision, no group mismatch. The plainest real-world diff shape there is
+    """A dump holding exactly one record that local has never seen - no group mismatch, no
+    delete-versus-update. The plainest real-world diff shape there is
     (one machine wrote something the other hasn't got yet), and the only one that reaches
     _apply_dump_choice's INSERT branch."""
     def build(remote_conn):
@@ -854,7 +932,6 @@ def test_apply_resolution_adopts_a_dump_only_record_with_its_extension_row(monke
     assert record_diff.local is None and record_diff.dump is not None
     assert record_diff.local_record_group is None
     assert record_diff.dump_record_group == "g"
-    assert record_diff.id_collision is False
     assert record_diff.group_mismatch is False
     assert record_diff.is_delete_vs_update is False
 
@@ -986,3 +1063,35 @@ def test_apply_resolution_defers_instead_of_writing_while_another_writer_holds_t
     finally:
         conn.close()
     assert dump.read_latest(project_root).vector == {"ltxy": 1, "mbp": 2}
+
+
+def test_diff_lists_records_in_creation_order_not_id_order(monkeypatch, tmp_path):
+    _setup_env(monkeypatch, tmp_path)
+    late_low_id = "00000000-0000-4000-8000-000000000000"
+    early_high_id = "ffffffff-ffff-4fff-bfff-ffffffffffff"
+    middle_id = "77777777-7777-4777-8777-777777777777"
+    conn = repository.connect("proj")
+    try:
+        with repository._immediate(conn):
+            for record_id, created_at in ((late_low_id, 30), (early_high_id, 10)):
+                repository.insert_base_record(
+                    conn, record_group="g", content="local", file_path=None,
+                    created_at=created_at, updated_at=created_at, record_id=record_id,
+                )
+            vector_clock_store.write_vector(conn, {"ltxy": 1}, updated_at=1)
+    finally:
+        conn.close()
+
+    def build(remote_conn):
+        repository.insert_base_record(
+            remote_conn, record_group="g", content="dump", file_path=None,
+            created_at=20, updated_at=20, record_id=middle_id,
+        )
+
+    _publish_remote_dump(
+        store.project_root("proj"), remote_project="proj-remote", machine_id="mbp",
+        vector={"mbp": 1}, build=build,
+    )
+
+    diff = resolve.diff_against_dump("proj")
+    assert [rd.record_id for rd in diff.records] == [early_high_id, middle_id, late_low_id]

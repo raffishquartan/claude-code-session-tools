@@ -48,18 +48,24 @@ Current subcommands:
                                  resolution, suspicious double-updates) for --project NAME or
                                  --all-projects and persist the result for ccst doctor.
   pdata dump                     Publish the current local DB state to
-                                 .pdata-db-dump/latest.sql for --project NAME or
+                                 .pdata-db-dump/v4/latest.sql for --project NAME or
                                  --all-projects. Refuses (unless --force) to overwrite an
                                  unresolved cross-machine fork.
   pdata rehydrate                Fast-forward the local DB from the published dump for
                                  --project NAME or --all-projects, if it's ahead. --force
                                  fast-forwards even over a diverged local revision.
   pdata resolve                  Diagnose (default, prints the diff) or apply per-record
-                                 --choice ID=local|dump resolutions for a cross-machine fork.
+                                 --choice UUID=local|dump resolutions for a cross-machine fork.
   pdata sync-check               Do whichever of rehydrate/dump each project needs, in that
                                  order, for --project NAME or --all-projects. The unattended
                                  trigger behind the hourly pdata-sync-hourly ccsched job:
                                  skips an unchanged republish and never overrides a fork.
+  pdata migrate-uuid             Convert format 3 (integer id) databases to format 4 (UUID
+                                 ids) for --project NAME or --all-projects. Dry run unless
+                                 --write; run from a plain terminal with no `claude` session.
+  pdata migration-notice         Print the migrate-uuid dry run and a framed banner when any
+                                 project is still format 3; nothing otherwise. Used by
+                                 install-everything.sh; always exits 0.
   machine-identity show          Print this laptop's resolved machine id and whether it's
                                  confirmed.
   machine-identity confirm       Store this laptop's confirmed machine id (--name NAME), used
@@ -1029,6 +1035,165 @@ def _cmd_gc_prune(args: argparse.Namespace) -> int:
 # ---------- pdata ----------
 
 
+def _record_id_arg(raw: str) -> str:
+    """argparse type for a record id: a canonical UUID string, else a usage error naming it."""
+    from cc_session_tools.lib.pdata import ids
+
+    if not ids.is_record_id(raw):
+        raise argparse.ArgumentTypeError(
+            f"{raw!r} is not a UUID (record ids look like 3f2b8c1e-6d4a-4e9b-9a7c-2d5e8f1b0c64)"
+        )
+    return raw
+
+
+def _pdata_gate_targets(args: argparse.Namespace) -> list[str]:
+    """The projects a gated verb would open: the named one, or every project its --all-projects
+    run would visit. `reconcile-session-output --all-projects` visits projects that have a
+    cc-sessions/ directory, with or without a database, so it is the one verb whose sweep can
+    create a database."""
+    from cc_session_tools.lib import roots
+    from cc_session_tools.lib.pdata import session_output, verify
+
+    if not getattr(args, "all_projects", False):
+        return [args.project]
+    if args.verb == "reconcile-session-output":
+        try:
+            return [name for name, _root in session_output.discover_projects_with_sessions()]
+        except roots.RootsConfigError:
+            return []  # the verb's own handler reports the missing configuration
+    return verify.discover_projects()
+
+
+@dataclass(frozen=True, slots=True)
+class _PdataFormatGate:
+    targets: tuple[str, ...]  # every project the verb would open
+    refused: tuple[str, ...]  # those it must not open, each already named on stderr
+
+
+def _pdata_gate_reason(verb: str, project: str) -> str | None:
+    """Why the format gate keeps `verb` off `project`, or None when it may run there."""
+    import sqlite3
+
+    from cc_session_tools.lib.pdata import dump, formats, store, vector_clock_store
+
+    try:
+        path = store.db_path(project)
+        project_root = store.project_root(project)
+    except ValueError:
+        return None  # the verb's own handler rejects an invalid project name
+    if not path.exists():
+        # `init` refuses this case itself, with its adoption-mismatch message.
+        if verb != "init" and dump.only_format3_published(project_root):
+            return formats.format3_only_message(project)
+        return None
+    try:
+        fmt = formats.database_format(path)
+    except formats.UnknownPdataFormatError as exc:
+        return f"{project}: {exc}"
+    except sqlite3.DatabaseError:
+        return None  # not a readable database: the verb's own handler reports it per project
+    if fmt == formats.PDATA_FORMAT_INTEGER_IDS:
+        return formats.legacy_format_message(project)
+    if vector_clock_store.migration_unfinished(path):
+        return formats.unfinished_migration_message(project)
+    return None
+
+
+def _pdata_format_gate(args: argparse.Namespace) -> _PdataFormatGate:
+    """The format gate (`formats` module docstring), for a verb that is not exempt: every target
+    project whose database is still format 3, or was converted by a migration run that did not
+    finish, or that has no database while its only published dump is format 3, is refused, with
+    the reason printed to stderr. Read-only, and runs before the verb's handler opens anything."""
+    from cc_session_tools.lib.pdata import formats
+
+    if args.verb in formats.FORMAT_GATE_EXEMPT_VERBS:
+        return _PdataFormatGate(targets=(), refused=())
+    targets = tuple(_pdata_gate_targets(args))
+    skipping = "skipped " if getattr(args, "all_projects", False) else ""
+    refused: list[str] = []
+    for project in targets:
+        reason = _pdata_gate_reason(args.verb, project)
+        if reason is not None:
+            print(f"ccst pdata {args.verb}: {skipping}{reason}", file=sys.stderr)
+            refused.append(project)
+    return _PdataFormatGate(targets=targets, refused=tuple(refused))
+
+
+def _pdata_projects(args: argparse.Namespace) -> list[str]:
+    """The projects a verb handler runs on: the named one, or for --all-projects every project
+    with a database except those the format gate refused."""
+    from cc_session_tools.lib.pdata import verify
+
+    if not args.all_projects:
+        return [args.project]
+    gated: frozenset[str] = getattr(args, "format_gated_projects", frozenset())
+    return [project for project in verify.discover_projects() if project not in gated]
+
+
+def _cmd_pdata(args: argparse.Namespace) -> int:
+    """Run one `ccst pdata` verb behind the format gate. A single-project run on a gated project
+    refuses with exit 1. An --all-projects run skips the gated projects (naming each), runs the
+    verb on the rest, and exits 1 at the end when it skipped any and the verb itself succeeded."""
+    gate = _pdata_format_gate(args)
+    if gate.refused:
+        if not getattr(args, "all_projects", False):
+            return 1
+        args.format_gated_projects = frozenset(gate.refused)
+        if set(gate.targets) <= set(gate.refused):
+            return 1
+    status = _run_pdata_verb(args)
+    return 1 if gate.refused and status == 0 else status
+
+
+def _run_pdata_verb(args: argparse.Namespace) -> int:
+    if args.verb == "add":
+        return _cmd_pdata_add(args)
+    if args.verb == "schema":
+        if args.subverb == "add-field":
+            return _cmd_pdata_schema_add_field(args)
+        if args.subverb == "list":
+            return _cmd_pdata_schema_list(args)
+        if args.subverb == "show":
+            return _cmd_pdata_schema_show(args)
+    if args.verb == "get":
+        return _cmd_pdata_get(args)
+    if args.verb == "list":
+        return _cmd_pdata_list(args)
+    if args.verb == "query":
+        return _cmd_pdata_query(args)
+    if args.verb == "update":
+        return _cmd_pdata_update(args)
+    if args.verb == "delete":
+        return _cmd_pdata_delete(args)
+    if args.verb == "restore":
+        return _cmd_pdata_restore(args)
+    if args.verb == "init":
+        return _cmd_pdata_init(args)
+    if args.verb == "reorganize":
+        return _cmd_pdata_reorganize(args)
+    if args.verb == "rename-group":
+        return _cmd_pdata_rename_group(args)
+    if args.verb == "reconcile-session-output":
+        return _cmd_pdata_reconcile_session_output(args)
+    if args.verb == "verify":
+        return _cmd_pdata_verify(args)
+    if args.verb == "readiness-scan":
+        return _cmd_pdata_readiness_scan(args)
+    if args.verb == "dump":
+        return _cmd_pdata_dump(args)
+    if args.verb == "rehydrate":
+        return _cmd_pdata_rehydrate(args)
+    if args.verb == "resolve":
+        return _cmd_pdata_resolve(args)
+    if args.verb == "sync-check":
+        return _cmd_pdata_sync_check(args)
+    if args.verb == "migrate-uuid":
+        return _cmd_pdata_migrate_uuid(args)
+    if args.verb == "migration-notice":
+        return _cmd_pdata_migration_notice(args)
+    raise AssertionError(f"unhandled ccst pdata verb {args.verb!r}")
+
+
 def _parse_field_assignment(raw: str) -> tuple[str, str | None]:
     """Parse "k=v" into (k, v). The literal token `null` (unquoted, lowercase) is interpreted
     as SQL NULL rather than the four-character string "null" - this is the documented way to
@@ -1453,7 +1618,11 @@ def _cmd_pdata_reconcile_session_output(args: argparse.Namespace) -> int:
 
     try:
         if args.all_projects:
-            targets = session_output.discover_projects_with_sessions()
+            gated: frozenset[str] = getattr(args, "format_gated_projects", frozenset())
+            targets = [
+                (name, root) for name, root in session_output.discover_projects_with_sessions()
+                if name not in gated
+            ]
         else:
             root = session_output.find_project_root(args.project)
             if root is None:
@@ -1491,7 +1660,7 @@ def _cmd_pdata_reconcile_session_output(args: argparse.Namespace) -> int:
 def _cmd_pdata_verify(args: argparse.Namespace) -> int:
     from cc_session_tools.lib.pdata import verify
 
-    projects = verify.discover_projects() if args.all_projects else [args.project]
+    projects = _pdata_projects(args)
     if not projects:
         print("ccst pdata verify: no project databases found", file=sys.stderr)
         return 2
@@ -1566,10 +1735,10 @@ def _cmd_pdata_verify(args: argparse.Namespace) -> int:
 def _cmd_pdata_dump(args: argparse.Namespace) -> int:
     from cc_session_tools.lib import machine_identity
     from cc_session_tools.lib.pdata import (
-        dump, repository, store, sync_notify, vector_clock_store, verify,
+        dump, repository, store, sync_notify, vector_clock_store,
     )
 
-    projects = verify.discover_projects() if args.all_projects else [args.project]
+    projects = _pdata_projects(args)
     if not projects:
         print("ccst pdata dump: no project databases found", file=sys.stderr)
         return 2
@@ -1630,9 +1799,9 @@ def _cmd_pdata_dump(args: argparse.Namespace) -> int:
 
 
 def _cmd_pdata_rehydrate(args: argparse.Namespace) -> int:
-    from cc_session_tools.lib.pdata import rehydrate, sync_notify, verify
+    from cc_session_tools.lib.pdata import rehydrate, sync_notify
 
-    projects = verify.discover_projects() if args.all_projects else [args.project]
+    projects = _pdata_projects(args)
     if not projects:
         print("ccst pdata rehydrate: no project databases found", file=sys.stderr)
         return 2
@@ -1669,6 +1838,12 @@ def _cmd_pdata_rehydrate(args: argparse.Namespace) -> int:
             sync_notify.notify_conflict(project, outcome=result.outcome.value, detail=detail)
             if not compact:
                 print(f"ccst pdata rehydrate: {project}: {detail}", file=sys.stderr)
+        elif result.outcome is rehydrate.RehydrateOutcome.MIGRATION_PENDING:
+            # Nothing loaded, and not a conflict: the published dump and this database are
+            # different formats until `ccst pdata migrate-uuid` runs on the format 3 side.
+            if not compact:
+                detail = rehydrate.migration_pending_detail(result, project=project)
+                print(f"ccst pdata rehydrate: {project}: migration pending - {detail}")
         else:
             # DEFERRED - another writer holds sync_lock right now. Expected and transient, not
             # an error (rehydrate.py's own RehydrateOutcome docstring: "retry later" rather than
@@ -1687,24 +1862,28 @@ def _cmd_pdata_rehydrate(args: argparse.Namespace) -> int:
             f"no-op {counts[rehydrate.RehydrateOutcome.NO_OP.value]}, "
             f"fork {counts[rehydrate.RehydrateOutcome.FORK.value]}, "
             f"checksum-invalid {counts[rehydrate.RehydrateOutcome.CHECKSUM_INVALID.value]}, "
-            f"deferred {counts[rehydrate.RehydrateOutcome.DEFERRED.value]} of "
+            f"deferred {counts[rehydrate.RehydrateOutcome.DEFERRED.value]}, "
+            f"migration-pending {counts[rehydrate.RehydrateOutcome.MIGRATION_PENDING.value]} of "
             f"{len(projects)} project(s)"
         )
 
     return worst
 
 
-def _parse_resolve_choice(raw: str) -> tuple[int, str]:
-    """Parse "ID=local|dump" into (record_id, choice). Only checks the shape - whether choice is
-    actually 'local'/'dump' is apply_resolution's own job (its error message is printed verbatim,
-    not re-derived here). Raises ValueError on malformed input."""
-    id_str, sep, choice = raw.partition("=")
-    if not sep or not id_str or not choice:
-        raise ValueError(f"malformed --choice (want ID=local|dump): {raw!r}")
-    try:
-        record_id = int(id_str)
-    except ValueError:
-        raise ValueError(f"malformed --choice (want ID=local|dump): {raw!r}") from None
+def _parse_resolve_choice(raw: str) -> tuple[str, str]:
+    """Parse "UUID=local|dump" into (record_id, choice). Only checks the shape and that the id is
+    a canonical UUID - whether choice is actually 'local'/'dump' is apply_resolution's own job
+    (its error message is printed verbatim, not re-derived here). Raises ValueError on malformed
+    input."""
+    from cc_session_tools.lib.pdata import ids
+
+    record_id, sep, choice = raw.partition("=")
+    if not sep or not record_id or not choice:
+        raise ValueError(f"malformed --choice (want UUID=local|dump): {raw!r}")
+    if not ids.is_record_id(record_id):
+        raise ValueError(
+            f"malformed --choice (want UUID=local|dump): {raw!r} - {record_id!r} is not a UUID"
+        )
     return record_id, choice
 
 
@@ -1749,7 +1928,7 @@ def _close_empty_fork_if_any(project: str) -> bool:
 
 
 def _cmd_pdata_resolve(args: argparse.Namespace) -> int:
-    from cc_session_tools.lib.pdata import resolve, verify
+    from cc_session_tools.lib.pdata import resolve
 
     if args.choice:
         if args.all_projects:
@@ -1783,7 +1962,7 @@ def _cmd_pdata_resolve(args: argparse.Namespace) -> int:
         print(f"ccst pdata resolve: {args.project}: resolved {len(choices)} record(s)")
         return 0
 
-    projects = verify.discover_projects() if args.all_projects else [args.project]
+    projects = _pdata_projects(args)
     if not projects:
         print("ccst pdata resolve: no project databases found", file=sys.stderr)
         return 2
@@ -1828,15 +2007,6 @@ def _cmd_pdata_resolve(args: argparse.Namespace) -> int:
             f"field(s) to resolve"
         )
         for rd in diff.records:
-            if rd.id_collision:
-                print(
-                    f"  record {rd.record_id} (group={rd.record_group}): id collision - "
-                    f"this id was independently assigned to two unrelated records on "
-                    f"different machines, not a genuine edit conflict; `ccst pdata resolve` "
-                    f"cannot apply a local/dump choice to this one, it needs manual, "
-                    f"out-of-band reconciliation"
-                )
-                continue
             if rd.group_mismatch:
                 # Both sides' own group names, not rd.record_group: that field carries whichever
                 # side happened to be available, and RecordDiff's docstring says so - printing it
@@ -1844,11 +2014,10 @@ def _cmd_pdata_resolve(args: argparse.Namespace) -> int:
                 # the reader neither which side they are seeing nor what the other side's is.
                 print(
                     f"  record {rd.record_id} (local group={rd.local_record_group}, "
-                    f"dump group={rd.dump_record_group}): group mismatch - same id and "
-                    f"created_at, but local and dump disagree on record_group; compare "
-                    f"content/file_path on each side before assuming this is a safe "
-                    f"`ccst pdata rename-group` rather than a same-second id collision - "
-                    f"`ccst pdata resolve` cannot apply a local/dump choice to this one"
+                    f"dump group={rd.dump_record_group}): group mismatch - the same record, "
+                    f"but local and dump disagree on record_group; run `ccst pdata "
+                    f"rename-group` on one side so both agree - `ccst pdata resolve` cannot "
+                    f"apply a local/dump choice to this one"
                 )
                 continue
             if rd.is_delete_vs_update:
@@ -1916,9 +2085,9 @@ def _cmd_pdata_sync_check(args: argparse.Namespace) -> int:
     rules). This handler is the loop, the printing, and the exit-code mapping."""
     import sqlite3
 
-    from cc_session_tools.lib.pdata import sync_check, verify
+    from cc_session_tools.lib.pdata import sync_check
 
-    projects = verify.discover_projects() if args.all_projects else [args.project]
+    projects = _pdata_projects(args)
     if not projects:
         print("ccst pdata sync-check: no project databases found", file=sys.stderr)
         return 2
@@ -1953,6 +2122,18 @@ def _cmd_pdata_sync_check(args: argparse.Namespace) -> int:
             worst = max(worst, 1)
             if not compact:
                 print(f"ccst pdata sync-check: {project}: {result.detail}", file=sys.stderr)
+        elif result.outcome is sync_check.SyncOutcome.MIGRATION_PENDING:
+            # Status, not an error and not a conflict: the project waits for `ccst pdata
+            # migrate-uuid`, and the doctor check and pending-migration hook report that.
+            if not compact:
+                status = (
+                    f" (format 3 dump: {result.format3_status.value})"
+                    if result.format3_status is not None else ""
+                )
+                print(
+                    f"ccst pdata sync-check: {project}: migration pending{status} - "
+                    f"{result.detail}"
+                )
         elif not compact:
             print(f"ccst pdata sync-check: {project}: {_sync_check_line(result)}")
 
@@ -1965,6 +2146,7 @@ def _cmd_pdata_sync_check(args: argparse.Namespace) -> int:
             f"conflict {counts[sync_check.SyncOutcome.CONFLICT.value]}, "
             f"deferred {counts[sync_check.SyncOutcome.DEFERRED.value]}, "
             f"occupied {counts[sync_check.SyncOutcome.OCCUPIED.value]}, "
+            f"migration-pending {counts[sync_check.SyncOutcome.MIGRATION_PENDING.value]}, "
             f"errors {errors} of {len(projects)} project(s)"
         )
 
@@ -1972,6 +2154,67 @@ def _cmd_pdata_sync_check(args: argparse.Namespace) -> int:
     # conflict, 0 otherwise. DEFERRED and OCCUPIED are transient, self-resolving states, not
     # findings, and contribute 0 - exactly as DEFERRED does there.
     return worst
+
+
+def _cmd_pdata_migrate_uuid(args: argparse.Namespace) -> int:
+    """`ccst pdata migrate-uuid`: every rule lives in `pdata.migrate_uuid`; this handler is the
+    project loop, the printing and the exit status (the worst over all projects)."""
+    projects = _pdata_projects(args)
+    if not projects:
+        print("ccst pdata migrate-uuid: no project databases found - nothing to migrate")
+        return 0
+    return _run_pdata_migrate_uuid(projects, write=args.write)
+
+
+def _run_pdata_migrate_uuid(projects: list[str], *, write: bool) -> int:
+    """Run `migrate_uuid.migrate_project` over `projects`, printing each report; returns the
+    worst exit status."""
+    import sqlite3
+
+    from cc_session_tools.lib.pdata import migrate_uuid
+
+    worst = 0
+    for project in projects:
+        try:
+            result = migrate_uuid.migrate_project(project, write=write)
+        except (OSError, ValueError, sqlite3.Error) as exc:
+            print(f"ccst pdata migrate-uuid: {project}: {exc}", file=sys.stderr)
+            worst = max(worst, 2)
+            continue
+        status = migrate_uuid.exit_status(result.outcome)
+        stream = sys.stderr if status else sys.stdout
+        for line in migrate_uuid.render(result):
+            print(line, file=stream)
+        worst = max(worst, status)
+    return worst
+
+
+def _cmd_pdata_migration_notice(args: argparse.Namespace) -> int:
+    """`ccst pdata migration-notice`: for `install-everything.sh`. Prints nothing when no project
+    database is format 3; otherwise the migrate-uuid dry run for those projects, then the framed
+    banner. Always exits 0 - it is advice, and must not change the installer's exit status."""
+    import sqlite3
+
+    from cc_session_tools.lib.pdata import formats, migrate_uuid, store, verify
+
+    unmigrated: list[str] = []
+    for project in verify.discover_projects():
+        try:
+            fmt = formats.database_format(store.db_path(project))
+        except (formats.UnknownPdataFormatError, sqlite3.DatabaseError) as exc:
+            print(f"ccst pdata migration-notice: {project}: could not read the database "
+                  f"format ({exc}); see `ccst doctor`", file=sys.stderr)
+            continue
+        if fmt == formats.PDATA_FORMAT_INTEGER_IDS:
+            unmigrated.append(project)
+    if not unmigrated:
+        return 0
+    print(f"{formats.MIGRATE_COMMAND} --all-projects (dry run) for the format 3 projects:")
+    _run_pdata_migrate_uuid(unmigrated, write=False)
+    print()
+    for line in migrate_uuid.install_banner(unmigrated):
+        print(line)
+    return 0
 
 
 def _sync_check_line(result: SyncCheckResult) -> str:
@@ -3191,7 +3434,7 @@ def _build_parser() -> argparse.ArgumentParser:
 
     pdata_get_parser = pdata_sub.add_parser("get", help="Fetch a single record by id")
     pdata_get_parser.add_argument("--project", required=True, metavar="NAME")
-    pdata_get_parser.add_argument("--id", required=True, type=int)
+    pdata_get_parser.add_argument("--id", required=True, type=_record_id_arg, metavar="UUID")
     pdata_get_parser.add_argument("--include-deleted", action="store_true")
 
     pdata_list_parser = pdata_sub.add_parser("list", help="List records in one record_group")
@@ -3222,7 +3465,7 @@ def _build_parser() -> argparse.ArgumentParser:
 
     pdata_update_parser = pdata_sub.add_parser("update", help="Update a record (version-checked)")
     pdata_update_parser.add_argument("--project", required=True, metavar="NAME")
-    pdata_update_parser.add_argument("--id", required=True, type=int)
+    pdata_update_parser.add_argument("--id", required=True, type=_record_id_arg, metavar="UUID")
     pdata_update_parser.add_argument("--version", required=True, type=int, dest="version",
                                       metavar="EXPECTED_VERSION")
     pdata_update_parser.add_argument(
@@ -3248,13 +3491,13 @@ def _build_parser() -> argparse.ArgumentParser:
 
     pdata_delete_parser = pdata_sub.add_parser("delete", help="Soft-delete a record (version-checked)")
     pdata_delete_parser.add_argument("--project", required=True, metavar="NAME")
-    pdata_delete_parser.add_argument("--id", required=True, type=int)
+    pdata_delete_parser.add_argument("--id", required=True, type=_record_id_arg, metavar="UUID")
     pdata_delete_parser.add_argument("--version", required=True, type=int,
                                       metavar="EXPECTED_VERSION")
 
     pdata_restore_parser = pdata_sub.add_parser("restore", help="Clear a soft-delete")
     pdata_restore_parser.add_argument("--project", required=True, metavar="NAME")
-    pdata_restore_parser.add_argument("--id", required=True, type=int)
+    pdata_restore_parser.add_argument("--id", required=True, type=_record_id_arg, metavar="UUID")
 
     pdata_init_parser = pdata_sub.add_parser(
         "init", help="Initialize/migrate a project's data store (spec §7)"
@@ -3324,6 +3567,33 @@ def _build_parser() -> argparse.ArgumentParser:
              "(no file scan or registration)",
     )
 
+    pdata_migrate_uuid_parser = pdata_sub.add_parser(
+        "migrate-uuid",
+        help="Convert format 3 (integer id) databases to format 4 (UUID ids). Dry run by "
+             "default; run from a plain terminal with no `claude` session running",
+    )
+    migrate_uuid_target = pdata_migrate_uuid_parser.add_mutually_exclusive_group(required=True)
+    migrate_uuid_target.add_argument("--project", metavar="NAME")
+    migrate_uuid_target.add_argument(
+        "--all-projects", action="store_true",
+        help="Migrate every project with a .db under project-db/",
+    )
+    migrate_uuid_mode = pdata_migrate_uuid_parser.add_mutually_exclusive_group()
+    migrate_uuid_mode.add_argument(
+        "--dry-run", action="store_true",
+        help="Print the plan and every precondition without changing anything (the default)",
+    )
+    migrate_uuid_mode.add_argument(
+        "--write", action="store_true",
+        help="Back up, migrate, verify, record the marker and publish the format 4 dump",
+    )
+
+    pdata_sub.add_parser(
+        "migration-notice",
+        help="Print the migrate-uuid dry run and a framed banner when any project is still "
+             "format 3; nothing otherwise (used by install-everything.sh; always exits 0)",
+    )
+
     pdata_verify_parser = pdata_sub.add_parser(
         "verify", help="Run the integrity-check backstop (spec §6.3/§8.2)"
     )
@@ -3362,7 +3632,7 @@ def _build_parser() -> argparse.ArgumentParser:
     )
 
     pdata_dump_parser = pdata_sub.add_parser(
-        "dump", help="Publish the current local DB state to .pdata-db-dump/latest.sql"
+        "dump", help="Publish the current local DB state to .pdata-db-dump/v4/latest.sql"
     )
     dump_target = pdata_dump_parser.add_mutually_exclusive_group(required=True)
     dump_target.add_argument("--project", metavar="NAME")
@@ -3403,7 +3673,7 @@ def _build_parser() -> argparse.ArgumentParser:
              "--choice requires --project)",
     )
     pdata_resolve_parser.add_argument(
-        "--choice", action="append", default=[], metavar="ID=local|dump",
+        "--choice", action="append", default=[], metavar="UUID=local|dump",
         help="Apply a per-record resolution; may repeat. Requires --project. Without any "
              "--choice, resolve runs in diagnostic (dry-run) mode and prints the diff.",
     )
@@ -3749,47 +4019,7 @@ def main() -> None:
             sys.exit(_cmd_gc_prune(args))
 
     if args.noun == "pdata":
-        if args.verb == "add":
-            sys.exit(_cmd_pdata_add(args))
-        if args.verb == "schema":
-            if args.subverb == "add-field":
-                sys.exit(_cmd_pdata_schema_add_field(args))
-            if args.subverb == "list":
-                sys.exit(_cmd_pdata_schema_list(args))
-            if args.subverb == "show":
-                sys.exit(_cmd_pdata_schema_show(args))
-        if args.verb == "get":
-            sys.exit(_cmd_pdata_get(args))
-        if args.verb == "list":
-            sys.exit(_cmd_pdata_list(args))
-        if args.verb == "query":
-            sys.exit(_cmd_pdata_query(args))
-        if args.verb == "update":
-            sys.exit(_cmd_pdata_update(args))
-        if args.verb == "delete":
-            sys.exit(_cmd_pdata_delete(args))
-        if args.verb == "restore":
-            sys.exit(_cmd_pdata_restore(args))
-        if args.verb == "init":
-            sys.exit(_cmd_pdata_init(args))
-        if args.verb == "reorganize":
-            sys.exit(_cmd_pdata_reorganize(args))
-        if args.verb == "rename-group":
-            sys.exit(_cmd_pdata_rename_group(args))
-        if args.verb == "reconcile-session-output":
-            sys.exit(_cmd_pdata_reconcile_session_output(args))
-        if args.verb == "verify":
-            sys.exit(_cmd_pdata_verify(args))
-        if args.verb == "readiness-scan":
-            sys.exit(_cmd_pdata_readiness_scan(args))
-        if args.verb == "dump":
-            sys.exit(_cmd_pdata_dump(args))
-        if args.verb == "rehydrate":
-            sys.exit(_cmd_pdata_rehydrate(args))
-        if args.verb == "resolve":
-            sys.exit(_cmd_pdata_resolve(args))
-        if args.verb == "sync-check":
-            sys.exit(_cmd_pdata_sync_check(args))
+        sys.exit(_cmd_pdata(args))
 
     if args.noun == "machine-identity":
         if args.verb == "show":

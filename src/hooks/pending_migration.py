@@ -1,4 +1,4 @@
-"""SessionStart hook: surface unmigrated legacy data-store files.
+"""SessionStart hook: surface unmigrated legacy data-store files and format 3 pdata databases.
 
 The 1.0.0 data-store restructure moved ccmsg/ccsched/sessions/telemetry from
 flat files into SQLite stores under ~/.local/share/claude/, via one-shot
@@ -9,6 +9,11 @@ design — so this hook only detects and surfaces the gap, via
 doctor.check_pending_data_store_migration, filtered through the same
 doctor-mutes store `ccst doctor --mute` uses (so an operator who has
 deliberately deferred migration doesn't get renagged every session).
+
+The 4.0.0 pdata record-id change works the same way: a project database still on format 3
+(integer ids) is reported via doctor.check_pdata_uuid_migration, whose reason names
+`ccst pdata migrate-uuid` and the runbook. That migration needs every machine converged and
+no `claude` session running, so it is never run from here either.
 
 Never blocks a session: any failure degrades to empty additionalContext and
 is logged via the CCST telemetry channel, matching messaging_deliver.py /
@@ -24,7 +29,9 @@ from cc_session_tools.lib import doctor_mutes
 from cc_session_tools.lib.doctor import (
     CheckResult,
     LegacyMigrationPaths,
+    PDATA_UUID_MIGRATION_CHECK,
     Status,
+    check_pdata_uuid_migration,
     check_pending_data_store_migration,
     filter_unmuted_issues,
 )
@@ -63,15 +70,26 @@ def _default_legacy_paths() -> LegacyMigrationPaths:
     )
 
 
+def _is_pdata_result(result: CheckResult) -> bool:
+    return result.name.startswith(PDATA_UUID_MIGRATION_CHECK)
+
+
 def _format_digest(unmuted: list[CheckResult]) -> str:
-    lines = ["ccst: unmigrated legacy data store(s) detected —"]
+    lines = ["ccst: unmigrated data detected:"]
     for r in unmuted:
         lines.append(f"  [{r.status.value}] {r.name}: {r.reason}")
     lines.append("")
-    lines.append(
-        "Run `ccst migrate all` from a plain terminal (NOT inside this Claude Code "
-        "session) to migrate. To defer, run: ccst doctor --mute <name>"
-    )
+    if any(not _is_pdata_result(r) for r in unmuted):
+        lines.append(
+            "Run `ccst migrate all` from a plain terminal (NOT inside this Claude Code "
+            "session) to migrate the legacy data stores."
+        )
+    if any(_is_pdata_result(r) for r in unmuted):
+        lines.append(
+            "pdata databases: run the command named above from a plain terminal (NOT inside "
+            "this Claude Code session); until then `ccst pdata` record commands refuse them."
+        )
+    lines.append("To defer, run: ccst doctor --mute <name>")
     return "\n".join(lines)
 
 
@@ -85,7 +103,10 @@ def main(argv: list[str] | None = None) -> int:
     event = str(data.get("hook_event_name", "SessionStart")) if isinstance(data, dict) else "SessionStart"
 
     try:
+        from cc_session_tools.lib.pdata import verify
+
         results = check_pending_data_store_migration(_default_legacy_paths())
+        results.extend(check_pdata_uuid_migration(verify.discover_projects()))
         mutes_path = doctor_mutes.default_mutes_path()
         muted = set(doctor_mutes.load_mutes(mutes_path))
         unmuted = filter_unmuted_issues(results, muted)

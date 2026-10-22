@@ -16,6 +16,7 @@ from cc_session_tools.lib.pdata import (
     backup,
     cutover,
     dump,
+    formats,
     init_paths,
     manifest,
     rehydrate,
@@ -58,7 +59,7 @@ def dry_run(*, project: str, rehearse: Path | None = None) -> DryRunResult:
         # function's docstring for the real incident.
         pending = _pending_adoption(project=project, project_root=project_root)
         if pending is not None:
-            latest_path = project_root / ".pdata-db-dump" / "latest.sql"
+            latest_path = dump.latest_path(project_root)
             published_at = _format_published_at(pending, latest_path)
             report = (
                 f"ccst pdata init --project {project}: a published sync dump already exists "
@@ -166,7 +167,7 @@ class WriteFailure:
 
 @dataclass
 class WriteResult:
-    created_record_ids: list[int]
+    created_record_ids: list[str]
     entries_written: list[str]
     backup_path: Path | None
     failure: WriteFailure | None
@@ -210,7 +211,7 @@ def _emit(on_progress: Callable[[str], None] | None, message: str) -> None:
         on_progress(message)
 
 
-def _rollback(*, project: str, created_ids: list[int]) -> list[str]:
+def _rollback(*, project: str, created_ids: list[str]) -> list[str]:
     """Soft-delete every id in created_ids (spec §4.5) — no hard delete, full auditability.
     Every id here was inserted earlier in this single-threaded run, so its version is always
     1. Each delete_record call is wrapped individually: service.RecordNotFoundError/
@@ -229,7 +230,7 @@ def _rollback(*, project: str, created_ids: list[int]) -> list[str]:
 
 
 def _rollback_after_error(
-    exc: BaseException, *, project: str, created_ids: list[int],
+    exc: BaseException, *, project: str, created_ids: list[str],
     on_progress: Callable[[str], None] | None,
 ) -> None:
     """Roll back `created_ids` after an error `write()` did not anticipate, without ever
@@ -243,7 +244,7 @@ def _rollback_after_error(
     except Exception as rollback_exc:
         note = (
             f"rollback of {len(created_ids)} inserted row(s) aborted: {rollback_exc!r} - rows "
-            f"from this run may still be live; record ids: {created_ids}"
+            f"from this run may still be live; record ids: {', '.join(created_ids)}"
         )
         exc.add_note(note)
         _emit(on_progress, note)
@@ -263,7 +264,7 @@ def _rollback_after_error(
 def _recover_from_failed_cutover(
     exc: BaseException, *, project: str, m: Manifest, proposal_path: Path,
     written_entries: list[ManifestEntry], archived: list[ManifestEntry],
-    entry_rows: dict[str, list[tuple[int, ImportRow]]],
+    entry_rows: dict[str, list[tuple[str, ImportRow]]],
     on_progress: Callable[[str], None] | None,
 ) -> None:
     """Cutover failed part-way. An entry whose source was already moved into the archive is cut
@@ -389,9 +390,18 @@ def _pending_adoption(*, project: str, project_root: Path) -> dump.DumpInfo | No
     returns `checksum_valid=False` both when no dump was ever published and when one exists but is
     corrupt, and those two cases must not be treated the same - the first is the ordinary
     first-ever migration, the second is a real problem that must be surfaced, never silently
-    papered over by falling through to classification."""
-    latest_path = project_root / ".pdata-db-dump" / "latest.sql"
+    papered over by falling through to classification.
+
+    A dump of another format than the database `init` creates (format 4) is never adopted:
+    neither one in the format 4 location whose header says otherwise, nor a format 3 dump with
+    no format 4 dump beside it (another machine has not migrated this project yet)."""
+    latest_path = dump.latest_path(project_root)
     if not latest_path.exists():
+        legacy_path = dump.latest_path(
+            project_root, pdata_format=formats.PDATA_FORMAT_INTEGER_IDS,
+        )
+        if legacy_path.exists() and not _live_already_locally_migrated(project):
+            raise ValueError(_format_mismatch_refusal(project, formats.PDATA_FORMAT_INTEGER_IDS))
         return None
     info = dump.read_latest(project_root)
     if not info.checksum_valid:
@@ -402,20 +412,36 @@ def _pending_adoption(*, project: str, project_root: Path) -> dump.DumpInfo | No
             "project. Publish a fresh dump from a known-good machine (ccst pdata dump --force) "
             "or reconcile manually (ccst pdata resolve) once those commands exist."
         )
+    if _live_already_locally_migrated(project):
+        return None
+    mismatched = dump.mismatched_dump_format(info, local_format=formats.CURRENT_PDATA_FORMAT)
+    if mismatched is not None:
+        raise ValueError(_format_mismatch_refusal(project, mismatched))
+    return info
+
+
+def _live_already_locally_migrated(project: str) -> bool:
     # The live .db, not a --rehearse sandbox's: a rehearsal copy never contains the real .db, so
     # the sandbox would always look unmigrated and rehearsal would never reach classification.
     with init_paths.live_project_db_dir():
-        already_migrated = _already_locally_migrated(project)
-    if already_migrated:
-        return None
-    return info
+        return _already_locally_migrated(project)
+
+
+def _format_mismatch_refusal(project: str, dump_format: int) -> str:
+    detail = formats.migration_pending_detail(
+        project, local_format=formats.CURRENT_PDATA_FORMAT, dump_format=dump_format,
+    )
+    return (
+        f"ccst pdata init --project {project}: refusing to adopt the published sync dump - "
+        f"{detail}"
+    )
 
 
 def _adopt_from_dump(
     *, project: str, project_root: Path, on_progress: Callable[[str], None] | None,
 ) -> WriteResult | None:
     """Spec "ccst pdata init on a second machine (adopt-from-dump)": a project already migrated
-    to pdata on another machine publishes a dump into <project_root>/.pdata-db-dump/latest.sql —
+    to pdata on another machine publishes a dump into <project_root>/.pdata-db-dump/v4/latest.sql —
     a machine with no local pdata content for this project yet must adopt that dump directly
     (same mechanism as the ongoing rehydrate trigger) rather than classifying/importing this
     machine's current flat files as if this were a first-ever migration, which would produce a DB
@@ -425,7 +451,7 @@ def _adopt_from_dump(
     info = _pending_adoption(project=project, project_root=project_root)
     if info is None:
         return None
-    latest_path = project_root / ".pdata-db-dump" / "latest.sql"
+    latest_path = dump.latest_path(project_root)
     published_at = _format_published_at(info, latest_path)
     message = (
         f"Adopting existing pdata from sync dump (published by {info.machine_id}, "
@@ -497,13 +523,13 @@ def write(
         m = manifest.load(proposal_path)
         _validate_no_conflicting_field_types(m)
 
-        created_ids: list[int] = []
+        created_ids: list[str] = []
         reasons: list[str] = []
         written_entries: list[ManifestEntry] = []
         # (record_id, ImportRow) pairs per entry — kept (not just the id) so _verify can
         # spot-check DB content against what was actually imported, and so the
         # human-readable diff report (spec §7.1 step 4) has real content to show.
-        entry_rows: dict[str, list[tuple[int, ImportRow]]] = {}
+        entry_rows: dict[str, list[tuple[str, ImportRow]]] = {}
 
         _check_db_not_locked(project)
 
@@ -547,7 +573,7 @@ def write(
                             field_name=spec.name, sql_type=spec.sql_type,
                             description=spec.description, default=spec.default,
                         )
-                    rows_for_entry: list[tuple[int, ImportRow]] = []
+                    rows_for_entry: list[tuple[str, ImportRow]] = []
                     for row in import_entry(project_root, entry):
                         record = service.add_record(
                             project=project, record_group=entry.db_group(),
@@ -643,7 +669,7 @@ def write(
 
 def _verify(
     *, project: str, project_root: Path, written_entries: list[ManifestEntry],
-    entry_rows: dict[str, list[tuple[int, ImportRow]]],
+    entry_rows: dict[str, list[tuple[str, ImportRow]]],
 ) -> list[str]:
     """Spec §7.1 step 4: entry-count parity (DB rows vs. an independent re-count of
     the source file), a content spot-check (DB content vs. what was actually passed
@@ -708,7 +734,7 @@ def _pointer_note(plan: cutover.PointerPlan) -> str:
 
 def _render_diff_report(
     *, written_entries: list[ManifestEntry],
-    entry_rows: dict[str, list[tuple[int, ImportRow]]],
+    entry_rows: dict[str, list[tuple[str, ImportRow]]],
     pointer_notes: list[cutover.PointerPlan],
 ) -> str:
     """Spec §7.1 step 4's human-readable diff report — old content vs. what landed

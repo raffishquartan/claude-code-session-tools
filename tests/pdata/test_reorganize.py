@@ -433,9 +433,10 @@ def test_write_survives_a_failed_rollback_reversal_without_crashing(monkeypatch,
         project="demo", record_group="letters", content="a",
         file_path="correspondence/2025.03.14-a.md", fields={}, created_at=1,
     )
+    # created_at orders the two (records list by created_at, then id), so a is moved first.
     service.add_record(
         project="demo", record_group="letters", content="b",
-        file_path="correspondence/2025.03.15-b.md", fields={}, created_at=1,
+        file_path="correspondence/2025.03.15-b.md", fields={}, created_at=2,
     )
 
     real_update = service.update_record

@@ -38,7 +38,7 @@ def _parse_where_clause(raw: str) -> tuple[str, str, str]:
 
 @dataclass
 class Record:
-    id: int
+    id: str
     record_group: str
     content: str
     file_path: str | None
@@ -90,7 +90,11 @@ def add_record(
     file_path: str | None,
     fields: Mapping[str, str | None],
     created_at: int | None = None,
+    record_id: str | None = None,
 ) -> Record:
+    """Insert one record. `record_id` is for records that are unique by meaning and must get
+    the same id on every machine (ids.deterministic_record_id); every other record omits it and
+    gets a new random id."""
     naming.validate_record_group(record_group)
     _validate_relative_file_path(file_path)
     ts = created_at if created_at is not None else int(time.time())
@@ -107,7 +111,7 @@ def add_record(
                 )
             record_id = repository.insert_base_record(
                 conn, record_group=record_group, content=content, file_path=file_path,
-                created_at=ts, updated_at=ts,
+                created_at=ts, updated_at=ts, record_id=record_id,
             )
             if repository.extension_table_exists(conn, record_group):
                 repository.insert_extension_row(conn, record_group, record_id, fields)
@@ -126,7 +130,7 @@ def add_record(
 
 
 def get_record(
-    *, project: str, record_id: int, include_deleted: bool = False,
+    *, project: str, record_id: str, include_deleted: bool = False,
 ) -> Record | None:
     conn = repository.connect(project)
     try:
@@ -294,7 +298,7 @@ class VersionConflictError(Exception):
 def update_record(
     *,
     project: str,
-    record_id: int,
+    record_id: str,
     expected_version: int,
     content: str | None,
     file_path: str | None,
@@ -384,7 +388,7 @@ def update_record(
 
 
 def delete_record(
-    *, project: str, record_id: int, expected_version: int, deleted_at: int | None = None,
+    *, project: str, record_id: str, expected_version: int, deleted_at: int | None = None,
 ) -> None:
     ts = deleted_at if deleted_at is not None else int(time.time())
     conn = repository.connect(project)
@@ -418,7 +422,7 @@ def delete_record(
         conn.close()
 
 
-def restore_record(*, project: str, record_id: int, restored_at: int | None = None) -> None:
+def restore_record(*, project: str, record_id: str, restored_at: int | None = None) -> None:
     ts = restored_at if restored_at is not None else int(time.time())
     conn = repository.connect(project)
     try:

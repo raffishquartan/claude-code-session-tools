@@ -33,7 +33,7 @@ def _publish_dump(
     project_root, *, remote_project: str, content: str, vector: dict[str, int], machine_id: str,
 ) -> None:
     """Build a throwaway "remote" project db (its own .db file, under the same PROJECT_DB_DIR)
-    and dump it to project_root/.pdata-db-dump/latest.sql — simulating a dump published by
+    and dump it to project_root/.pdata-db-dump/v4/latest.sql — simulating a dump published by
     another machine, without needing two real machines to exercise rehydrate() against."""
     conn = repository.connect(remote_project)
     try:
@@ -184,7 +184,7 @@ def test_checksum_invalid_is_refused_and_leaves_local_untouched(monkeypatch, tmp
         project_root, remote_project="proj-remote", content="remote-content",
         vector={"ltxy": 1, "mbp": 5}, machine_id="mbp",
     )
-    (project_root / ".pdata-db-dump" / "latest.sql").write_text("TRUNCATED")
+    dump.latest_path(project_root).write_text("TRUNCATED")
     db_path = store.db_path("proj")
     before = db_path.read_bytes()
 
@@ -219,3 +219,107 @@ def test_deferred_when_another_connection_holds_the_write_lock(monkeypatch, tmp_
     assert result.from_machine is None
     assert db_path.read_bytes() == before
     assert _local_contents("proj") == ["local-content"]
+
+
+# ---------- format gate: a format mismatch is a pending migration, never a load ----------
+
+
+def _legacy_local(project: str) -> None:
+    from .legacy_fixture import make_format3_db
+
+    make_format3_db(store.db_path(project))
+
+
+def _copy_legacy_dump_into_v4(project_root) -> None:
+    """A dump with no format header sitting at the format 4 location, as a stray copy would."""
+    from .legacy_fixture import make_format3_db, write_format3_dump
+
+    legacy_db = make_format3_db(project_root.parent / "legacy-src" / "x.db")
+    legacy_dir = write_format3_dump(
+        legacy_db, project_root, machine_id="machine-a", vector={"machine-a": 9},
+    )
+    v4 = dump.dump_dir(project_root)
+    v4.mkdir(parents=True, exist_ok=True)
+    for name in ("latest.sql", "latest.sha256"):
+        (v4 / name).write_bytes((legacy_dir / name).read_bytes())
+
+
+@pytest.mark.parametrize("force", [False, True])
+def test_a_format3_database_meeting_a_format4_dump_is_a_pending_migration(
+    monkeypatch, tmp_path, force,
+):
+    _setup_env(monkeypatch, tmp_path)
+    _legacy_local("proj")
+    project_root = store.project_root("proj")
+    _publish_dump(
+        project_root, remote_project="proj-remote", content="remote-content",
+        vector={"mbp": 5}, machine_id="mbp",
+    )
+    db_path = store.db_path("proj")
+    before = db_path.read_bytes()
+
+    result = rehydrate.rehydrate("proj", force=force)
+
+    assert result.outcome is rehydrate.RehydrateOutcome.MIGRATION_PENDING
+    assert (result.local_format, result.dump_format) == (3, 4)
+    assert db_path.read_bytes() == before
+    detail = rehydrate.migration_pending_detail(result, project="proj")
+    assert "format 3" in detail and "format 4" in detail
+    assert "ccst pdata migrate-uuid --project proj" in detail
+    assert "fork" not in detail.replace("not a fork", "")
+
+
+def test_a_format3_database_with_only_a_format3_dump_is_a_pending_migration(
+    monkeypatch, tmp_path,
+):
+    from .legacy_fixture import write_format3_dump
+
+    _setup_env(monkeypatch, tmp_path)
+    _legacy_local("proj")
+    project_root = store.project_root("proj")
+    write_format3_dump(
+        store.db_path("proj"), project_root, machine_id="machine-a", vector={"machine-a": 9},
+    )
+    db_path = store.db_path("proj")
+    before = db_path.read_bytes()
+
+    result = rehydrate.rehydrate("proj")
+
+    assert result.outcome is rehydrate.RehydrateOutcome.MIGRATION_PENDING
+    assert (result.local_format, result.dump_format) == (3, 3)
+    assert db_path.read_bytes() == before
+    assert "ccst pdata migrate-uuid" in rehydrate.migration_pending_detail(result, project="proj")
+
+
+@pytest.mark.parametrize("force", [False, True])
+def test_a_format4_database_never_loads_a_format3_dump_from_the_v4_location(
+    monkeypatch, tmp_path, force,
+):
+    _setup_env(monkeypatch, tmp_path)
+    _build_local("proj", content="local-content", vector={"ltxy": 1})
+    project_root = store.project_root("proj")
+    _copy_legacy_dump_into_v4(project_root)
+    db_path = store.db_path("proj")
+    before = db_path.read_bytes()
+
+    result = rehydrate.rehydrate("proj", force=force)
+
+    assert result.outcome is rehydrate.RehydrateOutcome.MIGRATION_PENDING
+    assert (result.local_format, result.dump_format) == (4, 3)
+    assert db_path.read_bytes() == before
+    assert _local_contents("proj") == ["local-content"]
+
+
+def test_conflict_detail_rejects_a_pending_migration():
+    result = rehydrate.RehydrateResult(
+        outcome=rehydrate.RehydrateOutcome.MIGRATION_PENDING, local_format=3, dump_format=4,
+    )
+    with pytest.raises(ValueError, match="not a conflict outcome"):
+        rehydrate.conflict_detail(result, project="proj")
+
+
+def test_migration_pending_detail_rejects_any_other_outcome():
+    with pytest.raises(ValueError, match="not a migration-pending outcome"):
+        rehydrate.migration_pending_detail(
+            rehydrate.RehydrateResult(outcome=rehydrate.RehydrateOutcome.NO_OP), project="proj",
+        )

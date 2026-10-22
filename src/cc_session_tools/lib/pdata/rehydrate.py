@@ -10,6 +10,7 @@ from pathlib import Path
 
 from cc_session_tools.lib.pdata import (
     dump,
+    formats,
     repository,
     store,
     sync_lock,
@@ -24,6 +25,8 @@ class RehydrateOutcome(enum.Enum):
     FORK = "fork"  # surfaced, nothing written
     CHECKSUM_INVALID = "checksum_invalid"  # surfaced, nothing written
     DEFERRED = "deferred"  # another writer holds the lock right now — retry later
+    # The database or the published dump is not the current format: nothing loaded, not a fork.
+    MIGRATION_PENDING = "migration_pending"
 
 
 @dataclass(frozen=True, slots=True)
@@ -36,6 +39,84 @@ class RehydrateResult:
     # actually published it, which is the only thing worth showing a human. Set on
     # FAST_FORWARDED; None on every other outcome, since nothing was adopted.
     dumped_at: int | None = None
+    # Set on MIGRATION_PENDING only: the local database's format (None when this machine has no
+    # database and the only published dump is format 3) and the published dump's (None when
+    # nothing is published).
+    local_format: int | None = None
+    dump_format: int | None = None
+    # Set on MIGRATION_PENDING only: the local database was converted to the current format but
+    # the migration run did not finish (vector_clock_store.migration_unfinished).
+    unfinished_migration: bool = False
+
+
+def migration_pending_detail(result: RehydrateResult, *, project: str) -> str:
+    """What to tell the user about a MIGRATION_PENDING outcome: both formats and the command.
+    Raises on any other outcome, like conflict_detail."""
+    if result.outcome is not RehydrateOutcome.MIGRATION_PENDING:
+        raise ValueError(f"not a migration-pending outcome: {result.outcome.value}")
+    return formats.migration_pending_detail(
+        project, local_format=result.local_format, dump_format=result.dump_format,
+        unfinished=result.unfinished_migration,
+    )
+
+
+def format_gate(
+    project: str, *, project_root: Path, existing: dump.DumpInfo,
+) -> RehydrateResult | None:
+    """A MIGRATION_PENDING result when `project` cannot sync until it is migrated, else None.
+    That is: the local database is not the current format (it is never loaded into or
+    published from, whatever is published), or `existing` - the published current-format dump -
+    is a trustworthy dump of another format, or there is no local database and the project's
+    only published dump is format 3 (nothing may create one then: see
+    formats.AwaitingMigrationError), or the local database is a converted one whose migration
+    run did not finish (it is not verified until `ccst pdata migrate-uuid --write` finishes it).
+    Reads the database file read-only; any other project with no database yet is the current
+    format, since connecting creates it so."""
+    db_path = store.db_path(project)
+    local_format = formats.database_format(db_path)
+    if local_format == formats.CURRENT_PDATA_FORMAT and vector_clock_store.migration_unfinished(
+        db_path,
+    ):
+        return RehydrateResult(
+            outcome=RehydrateOutcome.MIGRATION_PENDING,
+            local_format=local_format,
+            dump_format=_published_format(project_root, existing=existing),
+            unfinished_migration=True,
+        )
+    if local_format is None and dump.only_format3_published(project_root):
+        return RehydrateResult(
+            outcome=RehydrateOutcome.MIGRATION_PENDING,
+            local_format=None,
+            dump_format=formats.PDATA_FORMAT_INTEGER_IDS,
+        )
+    if local_format is not None and local_format != formats.CURRENT_PDATA_FORMAT:
+        return RehydrateResult(
+            outcome=RehydrateOutcome.MIGRATION_PENDING,
+            local_format=local_format,
+            dump_format=_published_format(project_root, existing=existing),
+        )
+    mismatched = dump.mismatched_dump_format(
+        existing, local_format=formats.CURRENT_PDATA_FORMAT,
+    )
+    if mismatched is not None:
+        return RehydrateResult(
+            outcome=RehydrateOutcome.MIGRATION_PENDING,
+            local_format=formats.CURRENT_PDATA_FORMAT,
+            dump_format=mismatched,
+        )
+    return None
+
+
+def _published_format(project_root: Path, *, existing: dump.DumpInfo) -> int | None:
+    """The format of the newest dump published for the project: the current-format location
+    first (by its header, or by its location when the dump is untrustworthy), then the format 3
+    location; None when neither holds a dump."""
+    if existing.present:
+        if existing.pdata_format is None:
+            return formats.CURRENT_PDATA_FORMAT
+        return existing.pdata_format
+    legacy = dump.latest_path(project_root, pdata_format=formats.PDATA_FORMAT_INTEGER_IDS)
+    return formats.PDATA_FORMAT_INTEGER_IDS if legacy.exists() else None
 
 
 def conflict_detail(result: RehydrateResult, *, project: str) -> str:
@@ -66,6 +147,11 @@ def conflict_detail(result: RehydrateResult, *, project: str) -> str:
 def rehydrate(project: str, *, force: bool = False) -> RehydrateResult:
     project_root = store.project_root(project)
     info = dump.read_latest(project_root)
+    # Before anything else, and not overridable by force: a format mismatch must never replace
+    # the local database (design D5).
+    pending = format_gate(project, project_root=project_root, existing=info)
+    if pending is not None:
+        return pending
     if not info.checksum_valid:
         return RehydrateResult(outcome=RehydrateOutcome.CHECKSUM_INVALID)
 
@@ -97,14 +183,14 @@ def rehydrate(project: str, *, force: bool = False) -> RehydrateResult:
     if sync_lock.is_locked(db_path):
         return RehydrateResult(outcome=RehydrateOutcome.DEFERRED)
 
-    latest = project_root / ".pdata-db-dump" / "latest.sql"
-    tmp_path = _build_replacement(db_path.parent, dump.sql_body(latest.read_text()))
+    latest = dump.latest_path(project_root)
+    tmp_path = build_replacement(db_path.parent, dump.sql_body(latest.read_text()))
     try:
         tmp_path.replace(db_path)  # atomic directory-entry swap on the same filesystem
     except BaseException:
         tmp_path.unlink(missing_ok=True)
         raise
-    _drop_stale_wal_sidecars(db_path)
+    drop_stale_wal_sidecars(db_path)
 
     return RehydrateResult(
         outcome=RehydrateOutcome.FAST_FORWARDED,
@@ -113,7 +199,7 @@ def rehydrate(project: str, *, force: bool = False) -> RehydrateResult:
     )
 
 
-def _build_replacement(db_dir: Path, sql_body: str) -> Path:
+def build_replacement(db_dir: Path, sql_body: str) -> Path:
     """Write sql_body into a brand-new sqlite file next to the live .db, ready for an atomic
     swap. Deliberately NOT opened through db.connect() — no WAL mode, no `PRAGMA
     foreign_keys=ON` — for two independent reasons:
@@ -143,7 +229,7 @@ def _build_replacement(db_dir: Path, sql_body: str) -> Path:
     return tmp_path
 
 
-def _drop_stale_wal_sidecars(db_path: Path) -> None:
+def drop_stale_wal_sidecars(db_path: Path) -> None:
     """tmp_path.replace(db_path) only swaps db_path's directory entry for a new inode — rename(2)
     is atomic on a POSIX filesystem (Linux/WSL2 included) regardless of what else has either path
     open, so that part of the old "atomic on the same filesystem" reasoning holds. What it does

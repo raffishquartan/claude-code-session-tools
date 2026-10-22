@@ -14,8 +14,8 @@ docstring.
 
 Named types, one line each — see each type's own docstring for the full reasoning:
 - `ApplyOutcome` — what `apply_resolution` did (`APPLIED`, or `LOCKED` for a transient lock).
-- `ClassifyResult` — `_classify`'s `(id_collision, group_mismatch, is_delete_vs_update)`, named so
-  the two callers' unpacking can't silently transpose a position.
+- `ClassifyResult` — `_classify`'s `(group_mismatch, is_delete_vs_update)`, named so the
+  unpacking can't silently transpose a position.
 - `BaseFields`/`RecordPayload` — the typed shape of one side's view of one record, replacing a
   bare `dict[str, object]` for the parts of it this module itself guarantees are fixed.
 """
@@ -100,14 +100,13 @@ class RecordDiff:
     in for a real disagreement, so read the two per-side fields instead.
     """
 
-    record_id: int
+    record_id: str
     record_group: str
     local: RecordPayload | None
     dump: RecordPayload | None
     local_record_group: str | None
     dump_record_group: str | None
     is_delete_vs_update: bool
-    id_collision: bool
     group_mismatch: bool
 
 
@@ -146,7 +145,7 @@ def is_choice(value: str) -> TypeGuard[Choice]:
     return value in _VALID_CHOICES
 
 
-def narrow_choices(choices: dict[int, str]) -> dict[int, Choice]:
+def narrow_choices(choices: dict[str, str]) -> dict[str, Choice]:
     """Validate a `{record_id: str}` mapping at the untrusted boundary and return it typed as
     `{record_id: Choice}`, raising ValueError naming the first offending record_id otherwise.
 
@@ -154,7 +153,7 @@ def narrow_choices(choices: dict[int, str]) -> dict[int, Choice]:
     but nothing stops an unchecked call from an untyped caller), so this is not the only guard —
     it exists so a CLI/skill caller has a boundary at which arbitrary strings become `Choice`
     without a cast, and so both paths raise the identical message."""
-    narrowed: dict[int, Choice] = {}
+    narrowed: dict[str, Choice] = {}
     for record_id, choice in choices.items():
         if not is_choice(choice):
             raise ValueError(_invalid_choice_message(record_id, choice))
@@ -162,7 +161,7 @@ def narrow_choices(choices: dict[int, str]) -> dict[int, Choice]:
     return narrowed
 
 
-def _invalid_choice_message(record_id: int, choice: str) -> str:
+def _invalid_choice_message(record_id: str, choice: str) -> str:
     return f"invalid choice {choice!r} for record_id {record_id}: must be 'local' or 'dump'"
 
 
@@ -214,7 +213,7 @@ def diff_against_dump(project: str) -> ResolveDiff:
         dump_conn.close()
 
 
-def apply_resolution(project: str, choices: dict[int, Choice]) -> ApplyOutcome:
+def apply_resolution(project: str, choices: dict[str, Choice]) -> ApplyOutcome:
     """Apply choices (`{record_id: "local" | "dump"}`) for the current diff. All-or-nothing:
     `choices` must name EVERY record_id in the diff, no more and no fewer, or nothing is applied
     at all.
@@ -223,8 +222,7 @@ def apply_resolution(project: str, choices: dict[int, Choice]) -> ApplyOutcome:
     it declares the dump machine's revision fully incorporated for the whole project. Publishing
     that while some records were left unreconciled would tell the other machine its state is
     already absorbed; its next check would read DUMP_DOMINATES and wholesale-replace its own real
-    edits with this side's, with no prompt. Refusing also closes the id-collision guard, which a
-    subset call could otherwise sidestep by simply omitting the colliding id.
+    edits with this side's, with no prompt.
 
     One call is one transaction covering every chosen record plus the post-resolve vector-clock
     bookkeeping, followed by an immediate re-dump once that transaction commits (the spec's exact
@@ -244,8 +242,8 @@ def apply_resolution(project: str, choices: dict[int, Choice]) -> ApplyOutcome:
     moment the write would start (nothing is written in that case — retry shortly). LOCKED is a
     return value rather than a raise for the same reason `rehydrate.RehydrateOutcome.DEFERRED`
     is: it is transient and expected, not a refusal. Every other failure below stays a
-    `ValueError`. Those nine (invalid choice, checksum-invalid, schema-only-fork, empty choices,
-    unknown record ids, id collisions, group mismatches, a partial resolve, and a dumpless choice)
+    `ValueError`. Those eight (invalid choice, checksum-invalid, schema-only-fork, empty choices,
+    unknown record ids, group mismatches, a partial resolve, and a dumpless choice)
     are genuine boundary-validation failures — a given `choices` either
     can or cannot be applied at all — and no automatic caller anywhere in `src/` branches on
     which category fired (unlike `rehydrate`/`dump`, whose hook and hourly-job callers are why
@@ -279,7 +277,7 @@ def apply_resolution(project: str, choices: dict[int, Choice]) -> ApplyOutcome:
 def _apply_resolution(
     project: str,
     project_root: Path,
-    choices: dict[int, Choice],
+    choices: dict[str, Choice],
     local_conn: sqlite3.Connection,
     dump_conn: sqlite3.Connection,
     info: dump.DumpInfo,
@@ -331,34 +329,25 @@ def _apply_resolution(
 
     unknown = sorted(set(choices) - set(by_id))
     if unknown:
-        raise ValueError(f"record_id(s) {unknown} are not part of the current diff")
+        raise ValueError(f"record_id(s) {_joined(unknown)} are not part of the current diff")
 
     # Checked across the whole diff, not just `choices`: these records can never be resolved by a
     # local/dump pick, so the all-or-nothing requirement below is unsatisfiable while they are in
     # the diff — say why up front instead of reporting them as merely "missing from choices".
-    collisions = sorted(rid for rid, rd in by_id.items() if rd.id_collision)
-    if collisions:
-        raise ValueError(
-            f"record_id(s) {collisions}: id collision (the same id was independently assigned to "
-            f"two unrelated records) — not resolvable as a local/dump choice, since either pick "
-            f"would discard one side's real record; needs a manual, out-of-band fix (see the "
-            f"pm-pdata-resolve-conflicts skill, point 4)"
-        )
-
     group_mismatches = sorted(rid for rid, rd in by_id.items() if rd.group_mismatch)
     if group_mismatches:
         raise ValueError(
-            f"record_id(s) {group_mismatches}: group mismatch (same id and created_at, but the "
-            f"two sides disagree on record_group) — not resolvable as a local/dump choice. "
-            f"Compare each side's content/file_path before assuming a rename is safe (see the "
-            f"pm-pdata-resolve-conflicts skill, point 5, for why it may instead be a "
-            f"same-second id collision), then retry"
+            f"record_id(s) {_joined(group_mismatches)}: group mismatch (the same record, but the "
+            f"two sides disagree on record_group, as after a `ccst pdata rename-group` on one "
+            f"side only) — not resolvable as a local/dump choice. Run `ccst pdata rename-group` "
+            f"on one side so both agree on the group (see the pm-pdata-resolve-conflicts "
+            f"skill), then retry"
         )
 
     missing = sorted(set(by_id) - set(choices))
     if missing:
         raise ValueError(
-            f"record_id(s) {missing} are in the current diff but have no choice — resolution is "
+            f"record_id(s) {_joined(missing)} are in the current diff but have no choice — resolution is "
             f"all-or-nothing: every differing record must get a 'local'/'dump' choice in one "
             f"call, or none are applied. A partial resolve would publish a vector claiming the "
             f"dump machine is fully incorporated while leaving these records unreconciled, and "
@@ -370,7 +359,7 @@ def _apply_resolution(
     )
     if dumpless:
         raise ValueError(
-            f"record_id(s) {dumpless}: choice 'dump' is invalid — the dump has no row for these "
+            f"record_id(s) {_joined(dumpless)}: choice 'dump' is invalid — the dump has no row for these "
             f"records (they exist locally only)"
         )
 
@@ -429,8 +418,14 @@ def _apply_resolution(
     return ApplyOutcome.APPLIED
 
 
+def _joined(record_ids: list[str]) -> str:
+    """Record ids as they appear in this module's messages: bare UUIDs, comma-separated, so a
+    reader can copy one straight into `--choice`."""
+    return ", ".join(record_ids)
+
+
 def _open_dump(project_root: Path) -> sqlite3.Connection:
-    """In-memory replay of the published dump. rehydrate.py's `_build_replacement()` builds the
+    """In-memory replay of the published dump. rehydrate.py's `build_replacement()` builds the
     same kind of one-shot SQLite replica on disk, ready for an atomic swap; this module never
     swaps files — it only ever reads the dump side for comparison — so `:memory:` is used instead,
     with no temp file or cleanup needed.
@@ -440,7 +435,7 @@ def _open_dump(project_root: Path) -> sqlite3.Connection:
     diff/snapshot/apply code below reads both sides through the same `row["col"]` access pattern,
     which a bare `sqlite3.connect()`'s default tuple rows would break silently (wrong-looking but
     still-truthy values from positional access, not a clean AttributeError)."""
-    latest = project_root / ".pdata-db-dump" / "latest.sql"
+    latest = dump.latest_path(project_root)
     conn = sqlite3.connect(":memory:")
     conn.row_factory = sqlite3.Row
     conn.executescript(dump.sql_body(latest.read_text()))
@@ -458,11 +453,20 @@ def _row_to_base_dict(row: sqlite3.Row) -> BaseFields:
     }
 
 
-def _all_record_ids(conn: sqlite3.Connection) -> set[int]:
-    return {row["id"] for row in conn.execute("SELECT id FROM records")}
+def _ordered_record_ids(
+    local_conn: sqlite3.Connection, dump_conn: sqlite3.Connection,
+) -> list[str]:
+    """Every record id on either side, ordered by `created_at` then id (local's `created_at`
+    when both sides have the id), so the diff lists records in creation order whatever the id
+    values are."""
+    created_at: dict[str, int] = {}
+    for conn in (dump_conn, local_conn):
+        for row in conn.execute("SELECT id, created_at FROM records"):
+            created_at[row["id"]] = row["created_at"]
+    return sorted(created_at, key=lambda record_id: (created_at[record_id], record_id))
 
 
-def _snapshot(conn: sqlite3.Connection, record_id: int) -> _Snapshot | None:
+def _snapshot(conn: sqlite3.Connection, record_id: str) -> _Snapshot | None:
     row = repository.get_base_record(conn, record_id)
     if row is None:
         return None
@@ -477,10 +481,9 @@ def _snapshot(conn: sqlite3.Connection, record_id: int) -> _Snapshot | None:
 
 
 class ClassifyResult(NamedTuple):
-    """`_classify`'s three mutually-exclusive verdicts, named rather than positional so neither
-    the return sites nor the unpack site can transpose them without the name changing too."""
+    """`_classify`'s two mutually-exclusive verdicts, named rather than positional so neither the
+    return sites nor the unpack site can transpose them without the name changing too."""
 
-    id_collision: bool
     group_mismatch: bool
     is_delete_vs_update: bool
 
@@ -488,59 +491,34 @@ class ClassifyResult(NamedTuple):
 def _classify(
     local_snap: _Snapshot | None, dump_snap: _Snapshot | None,
 ) -> ClassifyResult:
-    """Classifies one record_id's two snapshots. The three verdicts are mutually exclusive: a
-    collision is decided first and reported alone.
+    """Classifies one record_id's two snapshots. A record id is a UUID, never assigned twice, so
+    a record present on both sides under one id is one logical record, whatever its other columns
+    say; when the two snapshots differ it is an edit conflict, refined here into two categories
+    (a group mismatch is decided first and reported alone).
 
-    id_collision: true iff both sides have a row for this id but it is not the same logical
-    record. `records.id` has no AUTOINCREMENT (repository.py's `_BASE_DDL`) — it is SQLite's bare
-    rowid, assigned independently per-database from each database's own `max(rowid)+1`. Two
-    machines that fork after a shared rehydrated ancestor and then each insert one or more
-    brand-new records can legitimately allocate the SAME id to two entirely unrelated rows — this
-    is not a hypothetical edge case, it is the expected outcome whenever both sides add the same
-    number of new records to the same record_group after diverging (both start from the same
-    max(id), both increment by the same count). `created_at` is set once at insert time and never
-    mutated by any write path in the codebase (repository.py's
-    `update_base_record`/`soft_delete`/`restore` all leave it alone, and so does
-    rename_group.py's `_rename_in_db`) — so for the SAME logical record it must be identical on
-    both sides forever, and a difference is conclusive proof the id was independently assigned to
-    two different rows rather than proof of a genuine edit conflict on one row. It is the ONLY
-    column with that property: `record_group` is deliberately excluded from this test because
-    `ccst pdata rename-group` mutates it in place (rename_group._rename_in_db), so treating a
-    record_group difference as proof of collision would misdiagnose every record of a group
-    renamed on one machine only.
+    group_mismatch: true iff the two sides disagree on `record_group` — one side renamed the
+    record's group (`ccst pdata rename-group` rewrites it in place, rename_group._rename_in_db)
+    and the other did not. It gets its own category rather than being folded into an ordinary
+    content diff because a local/dump pick cannot express it: `RecordDiff.record_group` carries
+    one arbitrary side's name, so applying a choice would target that side's `ext_<group>` table
+    for a row whose real group may be the other one. `apply_resolution` refuses it.
 
-    group_mismatch: true iff created_at matches but the two sides disagree on `record_group` —
-    the ordinary case is one record renamed on one side only. NOT airtight proof the two sides
-    agree it's the same logical record, unlike id_collision's guarantee above: created_at is
-    whole-second precision and is frequently caller-supplied from a file's mtime (see
-    importers.py/session_output.py), so two genuinely unrelated records inserted into different
-    groups in the same second (or imported from files sharing an mtime) can coincidentally match
-    on created_at too, indistinguishable from a rename by id/created_at alone — apply_resolution's
-    error text for this category says so and asks the caller to check content/file_path before
-    assuming it's safe to rename-group and retry. Regardless of which case it actually is, it
-    gets its own category rather than being folded into an ordinary content diff because a
-    local/dump pick cannot express it: `RecordDiff.record_group` carries one arbitrary side's
-    name, so applying a choice would target that side's `ext_<group>` table for a row whose real
-    group may be the other one.
-
-    `apply_resolution` refuses to touch either category — see its own docstring/error text."""
+    is_delete_vs_update: true iff exactly one side has soft-deleted the record."""
     if local_snap is None or dump_snap is None:
-        return ClassifyResult(False, False, False)
+        return ClassifyResult(False, False)
+    if local_snap.record_group != dump_snap.record_group:
+        return ClassifyResult(True, False)
     local_base = local_snap.payload["base"]
     dump_base = dump_snap.payload["base"]
-    if local_base["created_at"] != dump_base["created_at"]:
-        return ClassifyResult(True, False, False)
-    if local_snap.record_group != dump_snap.record_group:
-        return ClassifyResult(False, True, False)
     is_delete_vs_update = (local_base["deleted_at"] is None) != (dump_base["deleted_at"] is None)
-    return ClassifyResult(False, False, is_delete_vs_update)
+    return ClassifyResult(False, is_delete_vs_update)
 
 
 def _diff_records(
     local_conn: sqlite3.Connection, dump_conn: sqlite3.Connection,
 ) -> list[RecordDiff]:
     diffs: list[RecordDiff] = []
-    for record_id in sorted(_all_record_ids(local_conn) | _all_record_ids(dump_conn)):
+    for record_id in _ordered_record_ids(local_conn, dump_conn):
         local_snap = _snapshot(local_conn, record_id)
         dump_snap = _snapshot(dump_conn, record_id)
         if local_snap == dump_snap:
@@ -561,7 +539,6 @@ def _diff_records(
             local_record_group=local_snap.record_group if local_snap is not None else None,
             dump_record_group=dump_snap.record_group if dump_snap is not None else None,
             is_delete_vs_update=classified.is_delete_vs_update,
-            id_collision=classified.id_collision,
             group_mismatch=classified.group_mismatch,
         ))
     return diffs
@@ -612,12 +589,15 @@ def _apply_dump_choice(
             ),
         )
     else:
+        # created_at too: the same record can carry a different created_at on each side (a
+        # registered session-output file takes it from the file's mtime on each machine), and
+        # choosing the dump adopts the dump's row whole.
         local_conn.execute(
-            "UPDATE records SET content=?, file_path=?, updated_at=?, version=?, deleted_at=? "
-            "WHERE id=?",
+            "UPDATE records SET content=?, file_path=?, created_at=?, updated_at=?, version=?, "
+            "deleted_at=? WHERE id=?",
             (
-                base["content"], base["file_path"], base["updated_at"], base["version"],
-                base["deleted_at"], record_diff.record_id,
+                base["content"], base["file_path"], base["created_at"], base["updated_at"],
+                base["version"], base["deleted_at"], record_diff.record_id,
             ),
         )
 
@@ -633,7 +613,7 @@ def _apply_extension_fields(
     local_conn: sqlite3.Connection,
     dump_conn: sqlite3.Connection,
     record_group: str,
-    record_id: int,
+    record_id: str,
     fields: dict[str, object],
 ) -> None:
     dump_types = _dump_extension_column_types(dump_conn, record_group)

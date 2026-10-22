@@ -100,7 +100,7 @@ def test_dump_dominates_fast_forwards_and_skips_the_dump_check(notified):
         project_root, remote_project="proj-remote", content="from-remote",
         vector={"mbp": 3}, machine_id="mbp",
     )
-    before = (project_root / ".pdata-db-dump" / "latest.sql").read_text()
+    before = dump.latest_path(project_root).read_text()
 
     result = sync_check.check_project("proj")
 
@@ -109,7 +109,7 @@ def test_dump_dominates_fast_forwards_and_skips_the_dump_check(notified):
     assert notified == []
     # A fast-forward makes local's vector exactly equal to the published one, so a dump-check
     # here could only ever re-discover "nothing new" - it must not rewrite latest.sql.
-    assert (project_root / ".pdata-db-dump" / "latest.sql").read_text() == before
+    assert dump.latest_path(project_root).read_text() == before
 
 
 def test_fork_is_reported_as_a_conflict_and_never_dump_checked(notified):
@@ -119,7 +119,7 @@ def test_fork_is_reported_as_a_conflict_and_never_dump_checked(notified):
         project_root, remote_project="proj-remote", content="remote",
         vector={"mbp": 1}, machine_id="mbp",
     )
-    before = (project_root / ".pdata-db-dump" / "latest.sql").read_text()
+    before = dump.latest_path(project_root).read_text()
 
     result = sync_check.check_project("proj")
 
@@ -128,7 +128,7 @@ def test_fork_is_reported_as_a_conflict_and_never_dump_checked(notified):
     assert "ccst pdata resolve --project proj" in (result.detail or "")
     assert [c[0] for c in notified] == ["proj"]
     assert notified[0][1] == "fork"
-    assert (project_root / ".pdata-db-dump" / "latest.sql").read_text() == before
+    assert dump.latest_path(project_root).read_text() == before
 
 
 def test_a_corrupt_published_dump_is_reported_as_a_conflict(notified):
@@ -139,7 +139,7 @@ def test_a_corrupt_published_dump_is_reported_as_a_conflict(notified):
         vector={"mbp": 1}, machine_id="mbp",
     )
     # Corrupt the published dump so its recorded sha256 no longer matches.
-    latest = project_root / ".pdata-db-dump" / "latest.sql"
+    latest = dump.latest_path(project_root)
     latest.write_text(latest.read_text() + "\n-- tampered\n")
 
     result = sync_check.check_project("proj")
@@ -165,7 +165,7 @@ def test_an_occupied_project_with_a_corrupt_dump_is_skipped_not_reported(monkeyp
         project_root, remote_project="proj-remote", content="remote",
         vector={"mbp": 1}, machine_id="mbp",
     )
-    latest = project_root / ".pdata-db-dump" / "latest.sql"
+    latest = dump.latest_path(project_root)
     latest.write_text(latest.read_text() + "\n-- tampered\n")
     monkeypatch.setattr(
         sync_check.occupancy, "is_occupied", lambda root, *, exclude_pid=None: True
@@ -217,7 +217,7 @@ def test_an_occupied_project_is_skipped_entirely(monkeypatch, notified):
     monkeypatch.setattr(
         sync_check.occupancy, "is_occupied", lambda root, *, exclude_pid=None: True
     )
-    before = (project_root / ".pdata-db-dump" / "latest.sql").read_text()
+    before = dump.latest_path(project_root).read_text()
 
     result = sync_check.check_project("proj")
 
@@ -232,7 +232,7 @@ def test_an_occupied_project_is_skipped_entirely(monkeypatch, notified):
         assert [r["content"] for r in rows] == ["local"]
     finally:
         conn.close()
-    assert (project_root / ".pdata-db-dump" / "latest.sql").read_text() == before
+    assert dump.latest_path(project_root).read_text() == before
 
 
 def test_the_occupancy_gate_is_checked_against_the_project_root(monkeypatch):
@@ -289,10 +289,10 @@ def test_an_unchanged_project_is_not_republished(notified):
         )
     finally:
         conn.close()
-    latest = project_root / ".pdata-db-dump" / "latest.sql"
+    latest = dump.latest_path(project_root)
     before_text = latest.read_text()
     before_mtime = latest.stat().st_mtime_ns
-    archive_before = len(list((project_root / ".pdata-db-dump" / "archive").glob("*.sql")))
+    archive_before = len(list((dump.dump_dir(project_root) / "archive").glob("*.sql")))
 
     result = sync_check.check_project("proj")
 
@@ -300,7 +300,7 @@ def test_an_unchanged_project_is_not_republished(notified):
     assert notified == []
     assert latest.read_text() == before_text
     assert latest.stat().st_mtime_ns == before_mtime
-    assert len(list((project_root / ".pdata-db-dump" / "archive").glob("*.sql"))) == archive_before
+    assert len(list((dump.dump_dir(project_root) / "archive").glob("*.sql"))) == archive_before
 
 
 def test_a_project_with_no_published_dump_yet_publishes_its_first_dump(notified):
@@ -310,7 +310,7 @@ def test_a_project_with_no_published_dump_yet_publishes_its_first_dump(notified)
     only problem is that nobody has dumped it yet."""
     _build_local("proj", content="local", vector={MACHINE: 1})
     project_root = store.project_root("proj")
-    assert not (project_root / ".pdata-db-dump" / "latest.sql").exists()
+    assert not dump.latest_path(project_root).exists()
 
     result = sync_check.check_project("proj")
 
@@ -354,7 +354,7 @@ def test_a_dump_check_refusal_is_reported_as_a_conflict(monkeypatch, notified):
         sync_check.dump, "decide_publish",
         lambda *, local_vector, existing: vector_clock.Comparison.FORK,
     )
-    before = (project_root / ".pdata-db-dump" / "latest.sql").read_text()
+    before = dump.latest_path(project_root).read_text()
 
     result = sync_check.check_project("proj")
 
@@ -362,9 +362,167 @@ def test_a_dump_check_refusal_is_reported_as_a_conflict(monkeypatch, notified):
     assert result.conflict_outcome == "fork"
     assert "refusing to publish" in (result.detail or "")
     assert notified[0][1] == "fork"
-    assert (project_root / ".pdata-db-dump" / "latest.sql").read_text() == before
+    assert dump.latest_path(project_root).read_text() == before
 
 
 def test_check_project_rejects_a_bad_project_name():
     with pytest.raises(ValueError):
         sync_check.check_project("../escape")
+
+
+# ------------------------------------------------- format gate: migration pending ----
+
+
+def _legacy_local(project: str, *, vector: dict[str, int] | None = None) -> Path:
+    """A format 3 database for `project`; `vector` replaces its vector clock when given."""
+    import sqlite3
+
+    from .legacy_fixture import make_format3_db
+
+    path = make_format3_db(store.db_path(project))
+    if vector is not None:
+        conn = sqlite3.connect(str(path))
+        try:
+            conn.execute("DELETE FROM pdata_meta")
+            conn.executemany(
+                "INSERT INTO pdata_meta (machine_id, revision, updated_at) VALUES (?, ?, 1)",
+                list(vector.items()),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+    return path
+
+
+def _snapshot(project: str) -> tuple[bytes, dict[str, bytes]]:
+    from .legacy_fixture import snapshot_dir
+
+    root = store.project_root(project)
+    return store.db_path(project).read_bytes(), snapshot_dir(root) if root.exists() else {}
+
+
+def test_a_format3_database_meeting_a_format4_dump_is_migration_pending(notified):
+    _legacy_local("proj")
+    project_root = store.project_root("proj")
+    _publish_dump(
+        project_root, remote_project="proj-remote", content="remote", vector={"mbp": 5},
+        machine_id="mbp",
+    )
+    before = _snapshot("proj")
+
+    result = sync_check.check_project("proj")
+
+    assert result.outcome is sync_check.SyncOutcome.MIGRATION_PENDING
+    assert result.detail is not None
+    assert "format 3" in result.detail and "format 4" in result.detail
+    assert "ccst pdata migrate-uuid --project proj" in result.detail
+    assert _snapshot("proj") == before  # loaded nothing, published nothing
+    assert notified == []  # not a conflict, not a fork
+
+
+@pytest.mark.parametrize(
+    ("local_vector", "dump_vector", "expected"),
+    [
+        ({"machine-a": 3}, {"machine-a": 3}, "unchanged"),
+        ({"machine-a": 4}, {"machine-a": 3}, "unpublished_changes"),
+        ({"machine-a": 3}, {"machine-a": 3, "mbp": 1}, "behind"),
+        ({"machine-a": 4}, {"machine-a": 3, "mbp": 1}, "fork"),
+    ],
+)
+def test_sync_check_on_a_format3_database_is_status_only(
+    notified, local_vector, dump_vector, expected,
+):
+    from .legacy_fixture import write_format3_dump
+
+    db_path = _legacy_local("proj", vector=local_vector)
+    project_root = store.project_root("proj")
+    write_format3_dump(db_path, project_root, machine_id="machine-a", vector=dump_vector)
+    before = _snapshot("proj")
+
+    result = sync_check.check_project("proj")
+
+    assert result.outcome is sync_check.SyncOutcome.MIGRATION_PENDING
+    assert result.format3_status is sync_check.Format3Status(expected)
+    assert "ccst pdata migrate-uuid" in (result.detail or "")
+    assert _snapshot("proj") == before
+    assert not dump.dump_dir(project_root).exists()  # never publishes a format 4 dump
+    assert notified == []
+
+
+def test_sync_check_on_a_format3_database_with_nothing_published(notified):
+    _legacy_local("proj")
+    before = _snapshot("proj")
+
+    result = sync_check.check_project("proj")
+
+    assert result.outcome is sync_check.SyncOutcome.MIGRATION_PENDING
+    assert result.format3_status is sync_check.Format3Status.NOT_PUBLISHED
+    assert _snapshot("proj") == before
+    assert notified == []
+
+
+def test_sync_check_on_a_format3_database_with_a_corrupt_format3_dump(notified):
+    from .legacy_fixture import write_format3_dump
+
+    db_path = _legacy_local("proj")
+    project_root = store.project_root("proj")
+    legacy_dir = write_format3_dump(
+        db_path, project_root, machine_id="machine-a", vector={"machine-a": 3},
+    )
+    (legacy_dir / "latest.sql").write_text("TRUNCATED")
+    before = _snapshot("proj")
+
+    result = sync_check.check_project("proj")
+
+    assert result.outcome is sync_check.SyncOutcome.MIGRATION_PENDING
+    assert result.format3_status is sync_check.Format3Status.CHECKSUM_INVALID
+    assert _snapshot("proj") == before
+    assert notified == []
+
+
+def test_a_format4_database_with_a_format3_dump_in_the_v4_location_is_migration_pending(
+    notified,
+):
+    from .legacy_fixture import make_format3_db, write_format3_dump
+
+    _build_local("proj", vector={MACHINE: 1})
+    project_root = store.project_root("proj")
+    source = make_format3_db(project_root.parent / "legacy-src" / "x.db")
+    legacy_dir = write_format3_dump(
+        source, project_root, machine_id="machine-a", vector={"machine-a": 9},
+    )
+    v4 = dump.dump_dir(project_root)
+    v4.mkdir(parents=True)
+    for name in ("latest.sql", "latest.sha256"):
+        (v4 / name).write_bytes((legacy_dir / name).read_bytes())
+    before = _snapshot("proj")
+
+    result = sync_check.check_project("proj")
+
+    assert result.outcome is sync_check.SyncOutcome.MIGRATION_PENDING
+    assert result.format3_status is None
+    assert "published dump is format 3" in (result.detail or "")
+    assert _snapshot("proj") == before
+    assert notified == []
+
+
+def test_a_format4_database_ignores_the_format3_dump_and_publishes_to_v4(notified):
+    """After migration the format 3 dump stays where it is; the first format 4 publish goes to
+    v4/ and leaves it untouched."""
+    from .legacy_fixture import make_format3_db, snapshot_dir, write_format3_dump
+
+    _build_local("proj", vector={MACHINE: 1})
+    project_root = store.project_root("proj")
+    source = make_format3_db(project_root.parent / "legacy-src" / "x.db")
+    legacy_dir = write_format3_dump(
+        source, project_root, machine_id="machine-a", vector={"machine-a": 9},
+    )
+    legacy_before = snapshot_dir(legacy_dir)
+
+    result = sync_check.check_project("proj")
+
+    assert result.outcome is sync_check.SyncOutcome.PUBLISHED
+    assert dump.read_latest(project_root).pdata_format == 4
+    legacy_after = {k: v for k, v in snapshot_dir(legacy_dir).items() if not k.startswith("v4")}
+    assert legacy_after == legacy_before
+    assert notified == []

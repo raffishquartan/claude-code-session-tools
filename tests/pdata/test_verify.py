@@ -41,7 +41,7 @@ def test_ensure_verify_tables_is_idempotent(monkeypatch, tmp_path):
 def test_verify_issue_and_summary_are_plain_dataclasses():
     issue = verify.VerifyIssue(
         check="file-path-resolution", severity="FAIL", record_group="filings",
-        record_id=1, message="broken",
+        record_id="3f2b8c1e-6d4a-4e9b-9a7c-2d5e8f1b0c64", message="broken",
     )
     summary = verify.VerifySummary(
         project="demo", run_at=1000, full_scan=False, status="FAIL", issues=[issue],

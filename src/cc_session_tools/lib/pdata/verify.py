@@ -22,11 +22,14 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from cc_session_tools.lib.pdata import importers, init_paths, manifest, repository, store
+from cc_session_tools.lib.pdata import formats, importers, init_paths, manifest, repository, store
 
+# {record_id_type} is records.id's own type (formats.record_id_sql_type), so the watermark matches
+# the database it is created in: TEXT on format 4, INTEGER on a format 3 database that verify (one
+# of the verbs exempt from the format gate) runs on before it is migrated.
 _VERIFY_DDL = """
 CREATE TABLE IF NOT EXISTS pdata_verify_watermark (
-    record_id INTEGER PRIMARY KEY,
+    record_id {record_id_type} PRIMARY KEY,
     last_seen_version INTEGER NOT NULL,
     last_seen_updated_at INTEGER NOT NULL
 );
@@ -53,7 +56,8 @@ class VerifyIssue:
     check: str
     severity: str
     record_group: str | None
-    record_id: int | None
+    # Text on both formats: a format 3 integer id is reported as its decimal string.
+    record_id: str | None
     message: str
 
 
@@ -70,7 +74,7 @@ def ensure_verify_tables(conn: sqlite3.Connection) -> None:
     """CREATE ... IF NOT EXISTS both verify-only tables — safe to call on
     every run, matching repository.connect()'s own connect-time DDL
     idempotency."""
-    conn.executescript(_VERIFY_DDL)
+    conn.executescript(_VERIFY_DDL.format(record_id_type=formats.record_id_sql_type(conn)))
 
 
 def _count_base_records(
@@ -223,7 +227,7 @@ def check_file_path_resolution(
             if not (project_root / file_path).is_file():
                 issues.append(VerifyIssue(
                     check="file-path-resolution", severity="FAIL",
-                    record_group=record_group, record_id=row["id"],
+                    record_group=record_group, record_id=str(row["id"]),
                     message=(
                         f"record {row['id']}: file_path {file_path!r} does not "
                         f"resolve under {project_root}"
@@ -264,7 +268,7 @@ def check_suspicious_double_updates(
                 if version_delta >= 2 and time_delta <= _DOUBLE_UPDATE_WINDOW_SECONDS:
                     issues.append(VerifyIssue(
                         check="suspicious-double-update", severity="WARN",
-                        record_group=record_group, record_id=row["id"],
+                        record_group=record_group, record_id=str(row["id"]),
                         message=(
                             f"record {row['id']} in {record_group!r}: version "
                             f"advanced by {version_delta} within {time_delta}s of "
@@ -372,7 +376,15 @@ def last_run(project: str) -> VerifySummary | None:
         ).fetchone()
         if row is None:
             return None
-        issues = [VerifyIssue(**d) for d in json.loads(row["details"])]
+        issues = [
+            VerifyIssue(
+                check=d["check"], severity=d["severity"], record_group=d["record_group"],
+                # A run against a format 3 database stores integer ids; ids are strings here.
+                record_id=None if d["record_id"] is None else str(d["record_id"]),
+                message=d["message"],
+            )
+            for d in json.loads(row["details"])
+        ]
         return VerifySummary(
             project=project, run_at=row["run_at"], full_scan=bool(row["full_scan"]),
             status=row["status"], issues=issues,
