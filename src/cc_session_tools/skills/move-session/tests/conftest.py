@@ -10,9 +10,14 @@ from __future__ import annotations
 import json
 import os
 import sys
+import time
 from pathlib import Path
 
 import pytest
+
+# How far in the past make_session() sets a transcript's mtime: well outside
+# the script's 30-second liveness window.
+IDLE_SECONDS = 120
 
 SKILL_ROOT = Path(__file__).resolve().parent.parent
 SCRIPTS_DIR = SKILL_ROOT / "scripts"
@@ -85,6 +90,9 @@ def make_session(tmp_home: Path, projects_root: Path):
     cwd. Returns (cc_sessions_dir, jsonl_path, uuid).
 
     Defaults: 2-record jsonl with valid CC-style records so tombstone path works.
+    The jsonl's mtime is set IDLE_SECONDS in the past so the script's
+    30-second "recently written" liveness check treats the session as idle;
+    tests that need a fresh transcript touch it themselves.
     """
     def _make(project_name: str, tag: str, *, uuid: str | None = None,
               extra_jsonls: int = 0) -> tuple[Path, Path, str]:
@@ -144,6 +152,8 @@ def make_session(tmp_home: Path, projects_root: Path):
             },
         ]
         jsonl.write_text("".join(json.dumps(r) + "\n" for r in records))
+        idle_at = time.time() - IDLE_SECONDS
+        os.utime(jsonl, (idle_at, idle_at))
 
         for i in range(extra_jsonls):
             extra_uuid = str(uuidlib.uuid4())

@@ -8,16 +8,25 @@ given:
   - MOVE: copy cc-sessions/<tag>/ into a different project cwd, copy the jsonl
     transcript to the new project key dir, and rewrite path strings inside it.
   - RENAME: copy cc-sessions/<tag>/ to cc-sessions/<new-tag>/ in the same parent
-    project. The jsonl is NOT touched - the project key is unchanged, and the
-    source cc-sessions dir is preserved by the copy so old paths still resolve.
+    project. The jsonl is not copied and its paths are not rewritten - the
+    project key is unchanged, and the source cc-sessions dir is preserved by
+    the copy so old paths still resolve.
   - MOVE+RENAME: both at once.
 
 Path-string rewrites in the destination jsonl (MOVE / MOVE+RENAME only - RENAME
-does not touch the jsonl):
+does not rewrite paths):
   - long path:     <src-cwd-abs>             -> <dst-cwd-abs>
   - encoded key:   <src-cwd-encoded>         -> <dst-cwd-encoded>
   - tilde form:    ~/<src-rel-to-home>       -> ~/<dst-rel-to-home>   (only if src-cwd-abs is under $HOME)
   - tag substring: cc-sessions/<old-tag>     -> cc-sessions/<new-tag> (MOVE+RENAME only)
+
+Picker label (RENAME / MOVE+RENAME): after any destination verification, the
+script appends the custom-title + agent-name pair that /rename writes, carrying
+the new tag, to the transcript the session resumes into - the shared jsonl on
+RENAME, the destination copy on MOVE+RENAME - so the picker and status line
+show the new tag on first resume. A tag-changing operation refuses while any
+Claude Code process holds the session, since that process would re-append its
+old title after its next prompt.
 
 The script never deletes from the source. In copy mode (default) with tombstoning
 on (default):
@@ -25,8 +34,9 @@ on (default):
   - For MOVE / MOVE+RENAME only, ALSO appends a synthetic user/assistant exchange
     to the SOURCE jsonl announcing the move.
   - For RENAME-only, does NOT append jsonl tombstone records: src_jsonl ==
-    dst_jsonl in that case (same project key, jsonl never copied) and appending
-    would corrupt the live transcript the user resumes into.
+    dst_jsonl in that case (same project key, jsonl never copied), and
+    tombstone conversation records would corrupt the transcript the user
+    resumes into.
 """
 
 from __future__ import annotations
@@ -68,12 +78,52 @@ from cc_session_rules import (  # noqa: F401  (re-exported for tests)
     validate_strict_tag_suffix,
     validate_tag_suffix_no_spaces,
 )
+from cc_session_tools.lib.proc_lock import pid_alive
 
 HOOK_SECURITY_PREFIX = "Review this shell command for security risks"
-SCRIPT_PATH = "~/.claude/skills/move-session/scripts/move_session.py"
+# A transcript written to more recently than this is treated as held by a
+# running Claude Code process.
+RECENT_WRITE_SECONDS = 30
 
 
 # ---------- active-session detection ----------
+
+def recent_write_reason(src_jsonl: Path) -> str | None:
+    """Return a refusal reason when src_jsonl was modified within the last
+    RECENT_WRITE_SECONDS, else None."""
+    age = time.time() - src_jsonl.stat().st_mtime
+    if age < RECENT_WRITE_SECONDS:
+        return f"source jsonl {src_jsonl.name} modified {age:.1f}s ago (CC is actively appending)"
+    return None
+
+
+def detect_live_holder(session_uuid: str, live_sessions_dir: Path) -> list[str]:
+    """Return one refusal reason per live Claude Code process that has the
+    session open: a process record <live_sessions_dir>/<pid>.json whose
+    sessionId is session_uuid and whose <pid> is alive. Independent of whether
+    this script itself runs inside Claude Code.
+
+    Used for tag-changing operations: a live process re-appends its in-memory
+    title to the transcript after every prompt, which would undo the new
+    picker label.
+    """
+    reasons: list[str] = []
+    if live_sessions_dir.is_dir():
+        for record in sorted(live_sessions_dir.glob("*.json")):
+            if not record.stem.isdigit():
+                continue
+            try:
+                data = json.loads(record.read_text())
+            except (OSError, json.JSONDecodeError):
+                # Claude Code rewrites these records in place; a half-written
+                # one is skipped rather than guessed at.
+                continue
+            if data.get("sessionId") == session_uuid and pid_alive(int(record.stem)):
+                reasons.append(
+                    f"live Claude Code process (pid {record.stem}) has this session open "
+                    f"(process record {record})"
+                )
+    return reasons
 
 def detect_active_source_session(
     src_cwd_abs: str,
@@ -104,13 +154,10 @@ def detect_active_source_session(
 
     src_jsonl_active = False
     if src_jsonl is not None and src_jsonl.exists():
-        try:
-            age = time.time() - src_jsonl.stat().st_mtime
-            if age < 30:
-                src_jsonl_active = True
-                reasons.append(f"source jsonl {src_jsonl.name} modified {age:.1f}s ago (CC is actively appending)")
-        except OSError:
-            pass
+        recent = recent_write_reason(src_jsonl)
+        if recent is not None:
+            src_jsonl_active = True
+            reasons.append(recent)
 
     cwd_and_freshest = False
     if in_cc and src_jsonl is not None:
@@ -161,7 +208,7 @@ def print_in_session_recipe(
     op_label = "+".join(op) or "NO-OP"
 
     print("=" * 72)
-    print(f"REFUSED ({op_label}): cannot move/rename a session from within the session itself")
+    print(f"REFUSED ({op_label}): cannot move or rename a session while Claude Code has it open")
     print("=" * 72)
     print()
     print("Detection signals:")
@@ -177,10 +224,10 @@ def print_in_session_recipe(
     print()
     print("To do this safely:")
     print()
-    print("  # 1. Exit this CC session  (Ctrl-D, or type /exit)")
+    print("  # 1. Exit the CC session that has it open  (Ctrl-D, or type /exit)")
     print()
     print("  # 2. From a normal shell, re-run with the same flags:")
-    cmd_lines = [f"  python3 {SCRIPT_PATH}"]
+    cmd_lines = ["  ccst move-session"]
     cmd_lines.append(f"      --src-session {src_session_dir}")
     if cwd_changed:
         cmd_lines.append(f"      --dst-cwd     {dst_cwd_abs}")
@@ -198,11 +245,6 @@ def print_in_session_recipe(
     if session_uuid:
         print("  # 3. Resume from the new location:")
         print(f"  cd {dst_cwd_abs} && claude --resume {session_uuid}")
-        if tag_changed:
-            print()
-            print("  # 3a. In the resumed session, update the picker display name")
-            print("  #     to match the new cc-sessions directory:")
-            print(f"  /rename {dst_tag}")
         print()
     print("  # 4. (Optional, only after you have verified the destination works)")
     print(f"  rm -rf {src_session_dir}")
@@ -314,10 +356,11 @@ def discover_session_jsonl(src_key_dir: Path, src_session_dir: Path, uuid_hint: 
       1. --uuid hint (exact match wins, even if it's a hook-security-check transcript).
       2. Single non-hook candidate -> use it.
       3. Custom-title match: a custom-title record in the jsonl matches the cc-sessions
-         tag (written by `claude -n <tag>` at startup, or by /rename later).
-      4. .tag file match: after a RENAME the script writes <uuid>.tag with the new tag
-         suffix. custom_titles won't be updated until /rename runs inside CC, so this
-         step catches the window between RENAME and /rename.
+         tag (written by `claude -n <tag>` at startup, by /rename, or by this
+         script's RENAME).
+      4. sessions.db tag match: a RENAME records the new tag suffix in the
+         session_tags table, keyed by uuid; a candidate whose recorded suffix
+         matches the tag's suffix wins.
       5. Date-prefix fallback: filter by YYYYMMDD prefix vs jsonl first timestamp.
       6. If still ambiguous, list candidates and require --uuid.
     """
@@ -338,18 +381,17 @@ def discover_session_jsonl(src_key_dir: Path, src_session_dir: Path, uuid_hint: 
     if len(candidates) == 1:
         return candidates[0]
     # Step 3: strongest discriminator — a custom-title record matching the cc-sessions
-    # tag (set by `claude -n <tag>` at startup, or by /rename later).
+    # tag (set by `claude -n <tag>` at startup, by /rename, or by a RENAME here).
     tag = src_session_dir.name
     by_title = [c for c in candidates if tag in c.get("custom_titles", set())]
     if len(by_title) == 1:
         return by_title[0]
     if by_title:
         candidates = by_title  # narrow before next discriminator
-    # Step 4: sessions.db tag lookup. After a RENAME the script records the new
-    # tag suffix in sessions.db (session_tags table) so that ccr <new-name> can
-    # resolve the jsonl before /rename updates custom_titles. Query the same store
-    # here to resolve MOVE/MOVE+RENAME that follow a RENAME without an intervening
-    # /rename in CC.
+    # Step 4: sessions.db tag lookup. A RENAME records the new tag suffix in
+    # sessions.db (session_tags table), keyed by uuid. It resolves a renamed
+    # session whose transcript carries no title for the current tag, such as
+    # one renamed by an earlier version of this script, which wrote no title.
     from cc_session_tools.lib import sessions_db
 
     dm = DATE_PREFIX_RE.match(tag)
@@ -549,6 +591,48 @@ def append_tombstone(src_jsonl: Path, last_record: dict, src_session_dir: Path, 
     return len(records)
 
 
+# ---------- picker label ----------
+
+def picker_label_records(session_uuid: str, tag: str) -> list[dict]:
+    """The custom-title + agent-name pair Claude Code's /rename appends. The
+    picker and status line take the session's label from these records."""
+    return [
+        {"type": "custom-title", "customTitle": tag, "sessionId": session_uuid},
+        {"type": "agent-name", "agentName": tag, "sessionId": session_uuid},
+    ]
+
+
+def encode_record(record: dict) -> str:
+    """One jsonl line in Claude Code's own compact form (no trailing newline)."""
+    return json.dumps(record, ensure_ascii=False, separators=(",", ":"))
+
+
+def append_picker_label(jsonl: Path, session_uuid: str, tag: str) -> None:
+    """Append the picker-label pair for `tag` to `jsonl` in a single write,
+    starting on a fresh line, then re-read the last two lines and confirm they
+    parse back to the intended records. Exits 1 naming the transcript if not."""
+    records = picker_label_records(session_uuid, tag)
+    with jsonl.open("rb") as fh:
+        fh.seek(0, os.SEEK_END)
+        needs_newline = False
+        if fh.tell() > 0:
+            fh.seek(-1, os.SEEK_END)
+            needs_newline = fh.read(1) != b"\n"
+    payload = ("\n" if needs_newline else "") + "".join(encode_record(r) + "\n" for r in records)
+    with jsonl.open("a", encoding="utf-8") as fh:
+        fh.write(payload)
+
+    tail = jsonl.read_text(encoding="utf-8").splitlines()[-len(records):]
+    try:
+        written = [json.loads(line) for line in tail]
+    except json.JSONDecodeError as e:
+        raise SystemExit(f"Picker label append did not parse back ({e}): {jsonl}")
+    if written != records:
+        raise SystemExit(
+            f"Picker label append did not read back as the intended records: {jsonl}"
+        )
+
+
 def sync_sessions_table(
     src_project_dir: Path,
     src_basename: str,
@@ -738,6 +822,19 @@ def main() -> int:
 
     # Refuse if we're being invoked from inside the source CC session itself.
     is_active, reasons = detect_active_source_session(src_cwd_abs, src_jsonl, src_key_dir)
+    # A tag-changing operation also refuses, wherever the script runs, while
+    # any Claude Code process holds the session: that process re-appends its
+    # in-memory title after every prompt, which would revert the picker label
+    # written below. Signals: a live process record naming the session, or a
+    # transcript written within RECENT_WRITE_SECONDS.
+    if dst_tag != src_tag:
+        holders = detect_live_holder(session_uuid, Path.home() / ".claude" / "sessions")
+        reasons.extend(holders)
+        recent = recent_write_reason(src_jsonl)
+        if recent is not None and not any(r.startswith(f"source jsonl {src_jsonl.name} ") for r in reasons):
+            reasons.append(recent)
+        if holders or recent is not None:
+            is_active = True
     if is_active and not args.verify_only:
         print_in_session_recipe(
             src_session_dir=src_session_dir,
@@ -814,7 +911,9 @@ def main() -> int:
         for old, new in replacements:
             print(f"    {old!r}\n      -> {new!r}")
     else:
-        print(f"  string replacements: none (rename-only, jsonl unchanged)")
+        print(f"  string replacements: none (rename-only, jsonl paths unchanged)")
+    if tag_changed:
+        print(f"  picker label       : {dst_tag!r} appended to {'dst' if cwd_changed else 'src'} jsonl")
     if src_task_json_count > 0:
         print(f"  src task dir       : {src_task_dir} ({src_task_json_count} .json files)")
         print(f"  dst task dir       : {dst_task_dir}")
@@ -914,12 +1013,25 @@ def main() -> int:
             print("VERIFY: FAIL - destination jsonl did not pass all checks. NOT writing tombstone.")
             return 1
 
+    # Picker label: on a tag change, append the custom-title + agent-name pair
+    # /rename would write to the transcript the session resumes into (the
+    # shared jsonl on RENAME-only, the verified destination copy on
+    # MOVE+RENAME), so the picker and status line show the new tag on first
+    # resume. Placed after verification, whose line-parity check it would
+    # otherwise break, and before the tombstone, so a failed append leaves the
+    # source untouched.
+    if tag_changed:
+        resume_jsonl = dst_jsonl if cwd_changed else src_jsonl
+        append_picker_label(resume_jsonl, session_uuid, dst_tag)
+        print(f"  set picker label {dst_tag!r} in {resume_jsonl}")
+
     # Tombstone (always informative when something changed).
     # IMPORTANT: jsonl tombstone records are appended to the SOURCE jsonl only
     # when the project key changes (MOVE / MOVE+RENAME). For RENAME-only the
     # source jsonl IS the destination jsonl (same project key, jsonl never
-    # copied) - appending tombstone records to it would corrupt the live
-    # transcript that the user resumes into. The TOMBSTONE.md file is still
+    # copied) - tombstone records are conversation content claiming the
+    # session has moved, and in the transcript the user resumes into they
+    # would corrupt the conversation. The TOMBSTONE.md file is still
     # written to the source cc-sessions/ dir in both cases, since that dir is
     # always preserved as a record after the copy.
     if not args.no_tombstone:
@@ -927,7 +1039,7 @@ def main() -> int:
             n = append_tombstone(src_jsonl, summary["last_record"], src_session_dir, dst_session_dir)
             print(f"  appended {n} tombstone records to {src_jsonl}")
         else:
-            print(f"  jsonl tombstone records skipped (rename-only; src jsonl is shared with dst - appending would corrupt the live transcript)")
+            print(f"  jsonl tombstone records skipped (rename-only; src jsonl is the transcript the session resumes into - tombstone records would corrupt the conversation)")
         md = write_tombstone_md(src_session_dir, dst_session_dir, dst_jsonl)
         print(f"  wrote {md}")
     else:
@@ -975,28 +1087,13 @@ def main() -> int:
     except ImportError:
         pass  # messaging lib not installed; nothing to refresh
 
-    # Pending-rename marker: dropped into the destination cc-sessions dir on
-    # tag change. The bundled SessionStart hook
-    # (~/.claude/skills/move-session/hooks/sessionstart-pending-rename.sh)
-    # surfaces these markers as a system reminder so the model runs /rename
-    # on the next resume without the user having to remember.
     if tag_changed:
-        marker = dst_session_dir / ".pending-rename"
-        marker.write_text(
-            f"uuid: {session_uuid}\n"
-            f"tag: {dst_tag}\n"
-            f"written_at: {now_iso()}\n"
-        )
-        print(f"  wrote pending-rename marker: {marker}")
-
-        # Record the new tag suffix in sessions.db (session_tags table) so that
-        # find_jsonl_for_session(dst_tag) resolves immediately. Without this, ccr
-        # <new-name> finds the cc-sessions directory on disk but claude --resume
-        # <new-name> falls back to the picker because the jsonl custom-title still
-        # has the old name (RENAME-only never modifies the jsonl, and /rename hasn't
-        # run yet). The sessions.db tag row gives find_jsonl_for_session an
-        # alternative lookup path that works before the title is updated. write_tag
-        # upserts, so this overwrites any stale row for this uuid with the new suffix.
+        # Record the new tag suffix in sessions.db (session_tags table). This
+        # keeps session_tags coherent with the cc-sessions directory, so
+        # find_jsonl_for_session(dst_tag) confirms the session through its
+        # tag-row strategy and discover_session_jsonl()'s step 4 can tell it
+        # apart from same-date siblings in a later move. write_tag upserts, so
+        # this overwrites any stale row for this uuid with the new suffix.
         from cc_session_tools.lib import sessions_db
 
         dst_tag_m = DATE_PREFIX_RE.match(dst_tag)
@@ -1023,8 +1120,7 @@ def main() -> int:
     print("=" * 72)
     print(f"  Resume with:  cd {dst_cwd_abs} && claude --resume {session_uuid}")
     if tag_changed:
-        print(f"  Picker label will be auto-fixed by the pending-rename hook on resume.")
-        print(f"  (If the hook isn't installed yet, run: /rename {dst_tag})")
+        print(f"  The session resumes with picker label {dst_tag!r}.")
     print()
     print(f"  After verifying the destination resumes correctly, run this to")
     print(f"  delete the stale source files (script generated for you because")

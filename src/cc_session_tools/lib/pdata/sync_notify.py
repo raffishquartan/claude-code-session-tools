@@ -14,17 +14,13 @@ writes to, so a conflict is picked up by the existing `surface.surface()` / `dig
 pipeline (the machinery behind `[cc-scheduler] scheduled-task catch-up: ...`) with no second
 digest-plumbing path to maintain.
 
-This deliberately does NOT reuse the other SessionStart mechanism this repo has —
-`hooks.pending_rename`'s dedicated `.pending-rename`-marker bash hook. That mechanism is not
-a general-purpose "digest queue" a second caller can feed; it is a bespoke marker file plus a
-bespoke bash script checking exactly that one file, with no reusable write-side API at all —
-using it here would mean building a third channel (a new marker format, a new SessionStart hook
-script), which is exactly the "not building either channel" scope this module is meant to stay
-inside. It would also be redundant for the case it might otherwise justify itself for: a live
-session that just hit a conflict already gets an immediate, in-the-moment
-`hookSpecificOutput`/`systemMessage` straight from the calling hook (see Task 12's
-`hooks.pdata_sync`, which prints its own message using the same JSON protocol as
-`catchup.py`'s `_emit`, exactly like `pending_rename.py` does) — no digest round-trip needed.
+This deliberately does NOT add a dedicated SessionStart channel (a marker file plus its own
+hook script): that would be a third channel with no reusable write-side API, which is exactly
+the "not building either channel" scope this module is meant to stay inside. It would also be
+redundant for the case it might otherwise justify itself for: a live session that just hit a
+conflict already gets an immediate, in-the-moment `hookSpecificOutput`/`systemMessage` straight
+from the calling hook (see Task 12's `hooks.pdata_sync`, which prints its own message using the
+same JSON protocol as `catchup.py`'s `_emit`) — no digest round-trip needed.
 
 The ledger *is* still the right channel for the one case that genuinely needs it: a conflict
 discovered by Task 13's hourly bundled `ccsched` job, with no session open to print anything live.

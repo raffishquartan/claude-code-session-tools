@@ -106,6 +106,7 @@ import datetime
 import importlib
 import json
 import os
+import subprocess
 import sys
 from dataclasses import dataclass
 from enum import Enum
@@ -3941,10 +3942,48 @@ def _build_parser() -> argparse.ArgumentParser:
         "action", nargs="?", default="on", choices=["on", "off", "status"]
     )
 
+    # ---- move-session ----
+    # Listed here for the help output only: main() forwards `ccst move-session
+    # ...` to the bundled script before argparse runs (see _cmd_move_session).
+    sub.add_parser(
+        "move-session",
+        add_help=False,
+        help="Move and/or rename a Claude Code session (the move-session skill's script; "
+        "`ccst move-session --help` for its options)",
+    )
+
     return parser
 
 
+MOVE_SESSION_NOUN = "move-session"
+
+
+def _cmd_move_session(script_args: list[str]) -> int:
+    """Run the bundled move-session script with ``script_args`` unchanged,
+    under this interpreter (the one that has cc-session-tools installed), and
+    return its exit code.
+
+    Dispatched before argparse because the script owns its own command line:
+    a subparser could not forward a call whose first argument is an option
+    (every real call starts with --src-session), and ``--help`` would print
+    ccst's help instead of the script's. A subprocess keeps the script's
+    sys.argv, argparse prog and module state its own.
+
+    Not exempt from install auto-sync, like any ordinary ccst command.
+    """
+    from cc_session_tools.lib import install_sync
+
+    install_sync.ensure_synced(
+        noun=MOVE_SESSION_NOUN, verb=None, installed_version=__version__
+    )
+    script = _discover_source_dir() / "move-session" / "scripts" / "move_session.py"
+    return subprocess.run([sys.executable, str(script), *script_args]).returncode
+
+
 def main() -> None:
+    if sys.argv[1:2] == [MOVE_SESSION_NOUN]:
+        sys.exit(_cmd_move_session(sys.argv[2:]))
+
     parser = _build_parser()
     args = parser.parse_args()
 

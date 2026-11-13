@@ -44,6 +44,12 @@ def test_unknown_hook_never_exits_2(removed_hook: str) -> None:
     assert result.returncode != 2
 
 
+def test_retired_pending_rename_hook_is_rejected() -> None:
+    result = _run("hooks", "run", "pending-rename", stdin="{}")
+    assert result.returncode == 1
+    assert "pending-rename" in result.stderr
+
+
 def test_unknown_hook_message_says_how_to_remove_the_stale_entry() -> None:
     result = _run("hooks", "run", "prompt-guard", stdin="{}")
     assert "ccst hooks uninstall --hook prompt-guard --apply" in result.stderr
@@ -69,7 +75,6 @@ def test_hook_verbs_covers_every_shim_module() -> None:
         "catchup",
         "pending-migration",
         "context-window-warning",
-        "pending-rename",
         "pdata-sync",
     }
     assert set(HOOK_VERBS) == expected

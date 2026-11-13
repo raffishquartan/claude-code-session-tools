@@ -35,7 +35,7 @@ class TestDetectActive:
         monkeypatch.setenv("CLAUDECODE", "1")
         session_dir, jsonl, _ = make_session("proj", "20260503-test")
         src_cwd = str(session_dir.parent.parent)
-        # jsonl was just written by make_session, so mtime is fresh
+        os.utime(jsonl)  # fresh write: mtime = now
         is_active, reasons = ms.detect_active_source_session(
             src_cwd, jsonl, jsonl.parent)
         assert is_active is True

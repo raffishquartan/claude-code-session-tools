@@ -363,8 +363,7 @@ These keep the rest of CCST working without any action from you:
 - `messaging-deliver` - delivers `ccmsg` messages at session start and each prompt.
 - `catchup` - catches up missed scheduled jobs and shows the digest.
 - `pdata-sync` - syncs `pdata` databases across your machines (see below).
-- `pending-migration` and `pending-rename` - surface unfinished data migrations and
-  half-finished session renames.
+- `pending-migration` - surfaces unfinished data migrations.
 - `last-screenshot` - type `>lss` in a prompt and Claude gets the path of your newest
   screenshot (set `CCST_SCREENSHOT_DIR`; several directories may be separated by `:`).
 - `marker-allow` - lets skills drop small marker files without a permission prompt.

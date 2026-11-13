@@ -146,8 +146,11 @@ It imports the lib via `scripts/cc_session_rules.py`, a thin shim that re-export
 public API. The shim preserves the `python3 cc_session_rules.py check-init ...`
 command-line interface used by `ccd`'s bash wrapper.
 
-A `hooks/sessionstart-pending-rename.sh` hook detects sessions that were started with
-a placeholder tag and prompts the user to rename on resume.
+On a tag change (RENAME or MOVE+RENAME) the script appends the `custom-title` and
+`agent-name` records that `/rename` writes to the transcript the session resumes into,
+so the picker shows the new tag on first resume. It refuses a tag change while any live
+Claude Code process holds the session. Run it as `ccst move-session <args>`, which uses
+the interpreter that has `cc-session-tools` installed.
 
 ### `skills/claude-usage/`
 
@@ -168,7 +171,6 @@ Dependency on the CLI: `claude-code-usage` must be on `PATH` (satisfied when
 
 - **ripgrep (`rg`)**: Optional. `ccs --contents` prefers `rg` for performance;
   falls back to threaded Python `grep` when `rg` is not on `PATH`.
-- **bats**: Test-only. Used for `skills/move-session/tests/test_hook.bats`.
 - **ccusage**: Optional, used by `claude_code_usage.ccusage_wrapper` for
   dollar-total cross-validation. If not on `PATH`, the reconciliation step is
   skipped gracefully.
@@ -298,12 +300,13 @@ tests/                          lib + claude_code_usage tests (pytest tests/)
   test_schema.py                unit tests for claude_code_usage/schema.py
   test_session_names.py         unit tests for claude_code_usage/session_names.py
 
-skills/move-session/tests/      move-session skill tests (88 tests)
+skills/move-session/tests/      move-session skill tests (121 tests)
   conftest.py                   fixtures: tmp_home, roots_file (env-var driven), make_session
   test_detection.py             in-session detection, dry-run flag, CLAUDECODE env var
-  test_hook.bats                bash hook tests (requires bats)
   test_integration.py           end-to-end subprocess tests of move_session.py
   test_jsonl.py                 JSONL rewriting and tombstone logic
+  test_messaging_safety.py      pending-message display-tag refresh on move/rename
+  test_picker_label.py          picker-label append and live-process detection
   test_validators.py            validator functions re-exported via cc_session_rules shim
 ```
 

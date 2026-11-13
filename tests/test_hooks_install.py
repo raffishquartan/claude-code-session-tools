@@ -132,6 +132,15 @@ def test_prune_keeps_hooks_this_build_still_has(name: str) -> None:
     assert pruned == target
 
 
+def test_prune_removes_retired_pending_rename_hook() -> None:
+    """move-session writes the picker label into the transcript itself, so
+    the SessionStart pending-rename hook is retired and its entry pruned."""
+    target = {"hooks": {"SessionStart": [{"hooks": [_ccst("pending-rename"), _ccst("catchup")]}]}}
+    pruned, removals = prune_stale_hooks(target)
+    assert [r.hook_name for r in removals] == ["pending-rename"]
+    assert pruned["hooks"]["SessionStart"][0]["hooks"] == [_ccst("catchup")]
+
+
 def test_prune_never_touches_hooks_ccst_does_not_own() -> None:
     """Anything not spelled `ccst hooks run <name>` belongs to someone else —
     a third-party hook, or one the operator wrote by hand."""

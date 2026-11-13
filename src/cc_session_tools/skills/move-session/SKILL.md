@@ -15,7 +15,7 @@ Claude Code stores a session in two places:
 This skill is the **only sanctioned way** to change a session's `cc-sessions/<tag>/` directory after creation. It supports three operations (per CLAUDE.md):
 
 - **Move** to a different project cwd (jsonl is copied to a new project key, paths rewritten).
-- **Rename** the tag suffix in place (cc-sessions dir is copied to the new name; jsonl is NOT touched because the project key is unchanged).
+- **Rename** the tag suffix in place (cc-sessions dir is copied to the new name; the jsonl stays where it is because the project key is unchanged, and gains only the picker-label records for the new tag).
 - **Move + rename** atomically (both happen in one invocation).
 
 The `YYYYMMDD-` start-date prefix is **immutable** in all cases. Every other part of the tag and the project location may change, subject to validation.
@@ -30,7 +30,7 @@ The `YYYYMMDD-` start-date prefix is **immutable** in all cases. Every other par
 
 - Cleaning up old hook-security-check transcripts - that is the `clean-hook-sessions` skill.
 - Moving a session to a *fresh* directory that does not yet exist - first ensure the destination cwd exists on disk and is a direct subdir of one of the roots in `~/.claude/cc-session-roots.txt`.
-- Changing only the *picker display name* (the `/rename` slash command line) without touching the cc-sessions directory - the user can do that themselves with `/rename`.
+- Changing only the *picker display name* without touching the cc-sessions directory - that is Claude Code's built-in rename command, not this skill.
 
 ## Defaults and safety
 
@@ -40,11 +40,11 @@ The `YYYYMMDD-` start-date prefix is **immutable** in all cases. Every other par
 - **Tombstone on by default.** In copy mode with `--execute`, the script appends a synthetic user/assistant exchange to the SOURCE jsonl announcing the move, plus drops a `TOMBSTONE.md` in the source `cc-sessions/<tag>/`. Disable with `--no-tombstone`.
 - **Messaging safety (rename + project move).** After a rename or move, the script refreshes the `from_session` display tag in any pending (non-archived) messages that reference the moved session's uuid. uuid routing is unaffected — messages are never orphaned — so this is a cosmetic update that keeps receipts and digests showing the new tag. On a project move the session's uuid-keyed delivery cursor is preserved unchanged; no message is re-delivered or lost.
 - **Task file migration.** When a session is moved or renamed, `~/.claude/tasks/` stores task JSON files keyed by the session directory's absolute path (with `/` replaced by `-`). The script migrates these automatically for all operation types (MOVE, RENAME, MOVE+RENAME), copying the source task directory to the new key. If the source task directory does not exist the step is silently skipped. Clobber check applies: aborts if the destination task directory already exists. The cleanup script (`/tmp/move-session-cleanup-*.sh`) includes `rm -rf` of the source task directory.
-- **Pending-rename marker (tag-changing operations only).** When the operation changes the tag (`RENAME` or `MOVE+RENAME`), the script writes a `.pending-rename` file into the destination `cc-sessions/<new-tag>/`. The bundled SessionStart hook (`~/.claude/skills/move-session/hooks/sessionstart-pending-rename.sh`, registered in `settings.json`) surfaces this on the next resume with TWO copy-pastable commands per marker: a `/rename <new-tag>` line for the model to run inside CC (updates the picker label), and an `rm "<marker-path>"` line for the user to run in a normal shell outside CC (clears the marker so the reminder doesn't keep firing). The split exists because the global `bash-hard-deny` hook blocks local-file `rm` from inside CC - so the model can't delete the marker itself, by design. Both commands stay valid until run, so it doesn't matter how long elapses between the move and the next resume.
-- **Tag mapping update (tag-changing operations only).** When the tag changes, the script upserts the new tag suffix into the `session_tags` table in `sessions.db` (`~/.local/share/claude/sessions.db`), keyed by the session's UUID, via `sessions_db.write_tag`. This lets `ccr <new-name>` resolve the jsonl by UUID immediately — before `/rename` has been run to update the jsonl's `custom-title`. Without this, `ccr <new-name>` would find the cc-sessions directory on disk but `claude --resume <new-name>` would fall back to the picker because the jsonl custom-title still has the old name.
+- **Picker label (tag-changing operations only).** When the operation changes the tag (`RENAME` or `MOVE+RENAME`), the script appends a `custom-title` record and a matching `agent-name` record carrying the new tag to the transcript the session resumes into (the shared jsonl on `RENAME`, the destination copy on `MOVE+RENAME`). These are the records Claude Code's own rename command writes, so the picker and status line show the new tag on first resume with no step inside the session. The append happens after destination verification and before the tombstone, in a single write; the script re-reads it and exits 1 naming the transcript if it does not read back as intended.
+- **Tag mapping update (tag-changing operations only).** When the tag changes, the script upserts the new tag suffix into the `session_tags` table in `sessions.db` (`~/.local/share/claude/sessions.db`), keyed by the session's UUID, via `sessions_db.write_tag`. This keeps `session_tags` coherent with the cc-sessions directory, so `ccr <new-name>` confirms the session through its tag lookup and a later move can tell the session apart from same-date siblings.
 - **Enumeration row re-key (all operations).** Session enumeration for `ccr`/`ccs` is backed by the `sessions` table in `sessions.db`, keyed by `(project_dir, basename)`. Unlike the old `.last-opened`/`.last-active` sentinel files (which lived inside `cc-sessions/<tag>/` and moved with the directory for free), this row does NOT follow a filesystem move. On every successful MOVE / RENAME / MOVE+RENAME the script re-keys the row: it copies the source row's `last_opened`/`last_active` timestamps onto a fresh destination row keyed by the new `(project_dir, basename)`, then deletes the stale source row. A pre-migration session with no source row still gets a destination row created (so it becomes discoverable going forward). Without this step the moved session would vanish from `ccr`/`ccs` at both the old and new locations.
 - **Refuses to clobber.** Aborts if any destination path already exists.
-- **Refuses in-session moves.** If the source session is the *currently running* CC session, the script refuses with exit code 2 and prints a recipe of commands the user must run after exiting CC. There is no override flag - see "In-session refusal" below for why and the detection signals.
+- **Refuses in-session moves, and renames of open sessions.** If the source session is the *currently running* CC session, or (for a tag change) any live Claude Code process has the session open, the script refuses with exit code 2 and prints a recipe of commands the user must run after exiting that session. There is no override flag - see "In-session refusal" below for why and the detection signals.
 
 ## Design decisions
 
@@ -74,16 +74,14 @@ If the user wants old references updated, they can do it manually with
 `sed` / `rg --files-with-matches` — but that is an explicit user action, not
 something the skill takes responsibility for.
 
-### Why the SKILL.md uses `~/.claude/skills/move-session/scripts/...` paths
+### Why the SKILL.md uses `ccst move-session`
 
-All script invocations in this SKILL.md use the path under
-`~/.claude/skills/move-session/scripts/`. That is correct:
-`~/.claude/skills/move-session/` is a symlink (created by
-`ccst skills install`) into the installed `cc-session-tools` source tree, so
-the path resolves to the real script. Documenting it via the symlink rather
-than the source-tree path means the same SKILL.md works regardless of where
-the user installed `cc-session-tools` (pipx prefix, uv tool dir, dev clone,
-etc.).
+All script invocations in this SKILL.md use `ccst move-session <args>`. It runs
+the bundled `scripts/move_session.py` with the arguments unchanged, under the
+Python interpreter that has `cc-session-tools` installed, and exits with the
+script's exit code. Running the script with a bare `python3` fails on a
+`uv tool` or `pipx` install, because that interpreter cannot import
+`cc_session_tools`. `ccst move-session --help` prints the script's own usage.
 
 ## In-session refusal
 
@@ -91,15 +89,16 @@ If a user asks the model to move or rename the session they are currently in, **
 
 **Why no override:** Claude Code's process has its cwd and jsonl path fixed at startup. Moving the session while it is running creates a frozen snapshot at moment T — the live conversation continues writing to the source from T onwards, so the destination silently diverges. There is no in-session use case where this is the right outcome; the model should never pass an override flag and the script does not provide one.
 
-**Detection signals.** Refusal fires if `in_cc` AND **either** (a) **or** (b) is true:
+**Detection signals.** Refusal fires if `in_cc` AND **either** (a) **or** (b) is true, or, for a tag-changing operation (`RENAME` / `MOVE+RENAME`), if (c) **or** (a) is true wherever the script runs:
 - `in_cc`: `$CLAUDECODE=1` or `$CLAUDE_PROJECT_DIR` is set (we are inside CC at all).
 - (a) `recent_write`: the source jsonl mtime is within the last 30 seconds (CC is actively appending to it - this is the running session, by definition).
 - (b) `cwd_match_and_freshest`: `realpath(getcwd()) == src_cwd_abs` AND the source jsonl is the most-recently-modified non-hook-security jsonl in the source project key dir. This catches the case where you're inside the source session but it has been idle for >30s (no recent write); your source jsonl will still be the freshest in its key dir because no other session writes to it. Sibling sessions don't trigger this because *their* jsonl is the freshest in the dir, not the source's.
+- (c) `live_process`: a Claude Code process record `~/.claude/sessions/<pid>.json` has `sessionId` equal to the session's uuid and `<pid>` is alive (the session is open in some terminal). This applies to tag changes even from a plain shell, because the open session re-appends its old title after every prompt and would undo the new picker label. A record whose process has exited is ignored.
 
 **The recipe printed on refusal:**
-1. Exit the current CC session (`Ctrl-D` or `/exit`).
-2. From a normal shell, re-run the script with `--execute`. The recipe preserves the exact flags you passed (`--dst-cwd`, `--rename-tag`, `--uuid`, `--include-memory`, `--no-tombstone`) so it matches your intent - it is NOT a generic move template.
-3. Resume from the new location via `cd <dst-cwd> && claude --resume <uuid>`. If the tag changed (`RENAME` or `MOVE+RENAME`), the recipe also includes a `/rename <new-tag>` line to type in the resumed session so the picker display name matches the new cc-sessions directory.
+1. Exit the CC session that has the source open (`Ctrl-D` or `/exit`).
+2. From a normal shell, re-run `ccst move-session ... --execute`. The recipe preserves the exact flags you passed (`--dst-cwd`, `--rename-tag`, `--uuid`, `--include-memory`, `--no-tombstone`) so it matches your intent - it is NOT a generic move template.
+3. Resume from the new location via `cd <dst-cwd> && claude --resume <uuid>`. A tag change already set the picker label, so there is nothing to type in the resumed session.
 4. (Optional, after verification) clean up the source. The recipe distinguishes between operation types:
    - `MOVE` or `MOVE+RENAME`: delete both the source `cc-sessions/<tag>/` and the source jsonl (the destination jsonl is in a different project-key directory).
    - `RENAME`-only: delete only the source `cc-sessions/<tag>/`. The jsonl is **shared** (same project key, never copied) and must NOT be deleted - doing so would destroy the live transcript.
@@ -107,7 +106,7 @@ If a user asks the model to move or rename the session they are currently in, **
 ## Quick reference
 
 ```
-python3 ~/.claude/skills/move-session/scripts/move_session.py \
+ccst move-session \
     --src-session <path-to-source-cc-sessions-dir> \
     [--dst-cwd    <path-to-destination-cwd>] \
     [--rename-tag <YYYYMMDD-new-tag>] \
@@ -134,7 +133,7 @@ At least one of `--dst-cwd` or `--rename-tag` must be supplied. The combination 
 | `--dst-cwd` | `--rename-tag` | Operation |
 |---|---|---|
 | present, different from src cwd | absent | **MOVE** - copies cc-sessions dir and jsonl to new project key, rewrites paths |
-| absent (or = src cwd) | present | **RENAME** - copies cc-sessions dir to new name in same parent; jsonl is NOT touched (project key unchanged, source dir preserved by copy so old paths still resolve) |
+| absent (or = src cwd) | present | **RENAME** - copies cc-sessions dir to new name in same parent; jsonl is not copied or rewritten (project key unchanged, source dir preserved by copy so old paths still resolve) and gains only the picker-label records |
 | present, different | present | **MOVE+RENAME** - both happen atomically; path rewrites include `cc-sessions/<old-tag>` → `cc-sessions/<new-tag>` |
 
 ## Tag validation
@@ -165,8 +164,8 @@ These rules are defined once in `scripts/cc_session_rules.py` and shared with `c
 3. Picks the jsonl belonging to this session, in priority order:
    1. `--uuid <id>` exact match wins (even hook-security transcripts).
    2. Single non-hook candidate -> use it.
-   3. A `custom-title` record matching the cc-sessions tag (the strongest discriminator when present - written by `claude -n <tag>` at startup or by `/rename`).
-   4. A `.tag` file match: after a RENAME the script writes `<uuid>.tag` with the new tag suffix. `custom_titles` won't be updated until `/rename` runs inside CC, so this step resolves the window between RENAME and `/rename` (e.g. a MOVE that follows a RENAME before the user has run `/rename`).
+   3. A `custom-title` record matching the cc-sessions tag (the strongest discriminator when present - written by `claude -n <tag>` at startup, by Claude Code's rename command, or by this script's RENAME).
+   4. A `session_tags` match in `sessions.db`: a RENAME records the new tag suffix there, keyed by uuid. This resolves a renamed session whose transcript has no title for the current tag, such as one renamed by an earlier version of this script.
    5. Filter remaining candidates by YYYYMMDD prefix in the cc-sessions tag matched against the jsonl's first timestamp.
    6. Otherwise list candidates and require `--uuid`.
 4. **Refuse early** if tombstoning is on (the default) and the source jsonl has no parseable records with a uuid - the tombstone path needs `last_record` and would otherwise crash deep inside the writer. The error names the offending jsonl and tells you to either fix it, pick a different source, or pass `--no-tombstone`.
@@ -182,20 +181,20 @@ These rules are defined once in `scripts/cc_session_rules.py` and shared with `c
        - Tilde form (only if `$HOME` prefixes the src abs): `~/<rel>` → `~/<dst-rel>`
        - Tag substring (MOVE+RENAME only): `cc-sessions/<old-tag>` → `cc-sessions/<new-tag>`
      - Runs jsonl verification (see below).
+     - MOVE+RENAME only: appends the picker-label records for the new tag to the destination jsonl, after verification.
      - Memory: copies `memory/` to dst project key dir if `--include-memory` is passed, OR auto-includes if the source project key contains exactly this one session.
      - Tombstone: appends two records (user + assistant) to the SOURCE jsonl, with proper `parentUuid` chain and the SOURCE `sessionId`/cwd/version preserved, AND writes a `TOMBSTONE.md` into the source `cc-sessions/<tag>/`.
    - **RENAME-only (cwd unchanged):**
-     - Does NOT copy or rewrite the jsonl - project key is unchanged, so the source jsonl IS the destination transcript and continues to serve the resumed session directly.
+     - Does NOT copy or rewrite the jsonl - project key is unchanged, so the source jsonl IS the destination transcript and continues to serve the resumed session directly. Appends the picker-label records for the new tag to it.
      - Does NOT run jsonl verification - there is no destination jsonl to verify.
      - Does NOT touch memory - same project key, same memory; if `--include-memory` was passed it is ignored with a `WARNING` line.
-     - Tombstone: writes a `TOMBSTONE.md` into the source `cc-sessions/<tag>/` only. Does NOT append jsonl records, because that would corrupt the live transcript the user resumes into.
-   - Both branches: drop a `.pending-rename` marker into the destination dir if the tag changed. The bundled SessionStart hook (`hooks/sessionstart-pending-rename.sh`, registered in `settings.json`) surfaces the marker on the next resume with two copy-pastable commands per marker: a `/rename <new-tag>` line (the model runs it inside CC to update the picker label) and an `rm "<marker-path>"` line (the user runs it in a normal shell outside CC to clear the marker). The split is necessary because `bash-hard-deny` blocks local-file `rm` from inside CC. Both commands stay valid until run.
-   - Both branches (tag-changing only): write/update `~/.claude/projects/<encoded-dst-cwd>/<uuid>.tag` with the new tag suffix, so that `ccr <new-name>` can resolve the UUID immediately — before `/rename` updates the jsonl `custom-title`.
+     - Tombstone: writes a `TOMBSTONE.md` into the source `cc-sessions/<tag>/` only. Does NOT append tombstone records to the jsonl: they are conversation content claiming the session has moved, and in the transcript the user resumes into they would corrupt the conversation.
+   - Both branches (tag-changing only): upsert the new tag suffix into `sessions.db`'s `session_tags` table, keyed by uuid.
    - Both branches: write a `/tmp/move-session-cleanup-<tag>-<ts>.sh` script the user can `bash` after verifying the destination resumes (the cleanup script omits the jsonl `rm` for RENAME-only).
 
 ## Verification
 
-Verification only runs on operations that change the project key (MOVE / MOVE+RENAME). Those are the only cases where a destination jsonl is actually written. RENAME-only operations have nothing to verify - the source jsonl IS the destination - and the script skips this block.
+Verification only runs on operations that change the project key (MOVE / MOVE+RENAME). Those are the only cases where a destination jsonl is copied and rewritten. RENAME-only operations have nothing to verify - the source jsonl IS the destination - and the script skips this block. On MOVE+RENAME the picker-label records are appended after verification, so the line counts below compare the copy before that append.
 
 When verification runs, check the script's "VERIFICATION" output block before declaring success. The mandatory checks are:
 
@@ -221,4 +220,4 @@ cd <dst-cwd> && claude --resume <uuid>
 - **Passing the destination's `cc-sessions/` instead of its cwd.** `--dst-cwd` is the project root, not its session-store sub-folder.
 - **Forgetting `--execute`.** Default is dry-run. The user expects something to happen - check that you actually passed `--execute`.
 - **Assuming a single jsonl per session.** A session that has been resumed across multiple invocations can have multiple jsonls under one UUID prefix; the script only moves the one that matches the cc-sessions tag mtime. If the user reports missing earlier conversation, they may have a sub-session in a UUID-named subdirectory under the project key. Check for `~/.claude/projects/<encoded>/<uuid>/` directories matching the chosen UUID and pass them through manually.
-- **Editing the source jsonl other than the tombstone append.** Source must remain a faithful record - the tombstone is an *append*, never a rewrite.
+- **Editing a transcript other than by the script's appends.** The only writes the script makes to an existing transcript are appends: the tombstone records (source jsonl, MOVE / MOVE+RENAME) and the picker-label records (the transcript the session resumes into, tag changes only). A transcript is never rewritten in place - the path rewrites apply only to the destination copy.
