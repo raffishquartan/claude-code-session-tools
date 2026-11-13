@@ -21,6 +21,8 @@ from typing import TYPE_CHECKING
 
 import platformdirs
 
+from cc_session_tools.lib import paths as _paths
+
 from . import (
     __version__,
     cache,
@@ -35,7 +37,6 @@ if TYPE_CHECKING:
     import pandas as pd
 
 
-DEFAULT_PROJECTS = Path.home() / ".claude" / "projects"
 DEFAULT_CACHE = (
     Path(platformdirs.user_cache_dir("claude-code-usage", "raffishquartan"))
     / "parquet"
@@ -45,8 +46,8 @@ DEFAULT_CACHE = (
 def _common_args(p: argparse.ArgumentParser) -> None:
     p.add_argument(
         "--projects-dir",
-        default=str(DEFAULT_PROJECTS),
-        help=f"Path to ~/.claude/projects (default: {DEFAULT_PROJECTS})",
+        default=str(_paths.claude_projects_dir()),
+        help=f"Path to ~/.claude/projects (default: {_paths.claude_projects_dir()})",
     )
     p.add_argument(
         "--cache-dir",
