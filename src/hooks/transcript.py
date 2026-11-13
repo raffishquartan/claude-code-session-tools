@@ -29,6 +29,7 @@ import sys
 import time
 from pathlib import Path
 
+from cc_session_tools.lib.paths import claude_projects_dir
 from cc_session_tools.lib.rules import encode_cwd
 
 _ASSISTANT_OFFER_PATTERN = re.compile(
@@ -52,8 +53,7 @@ class Turn:
 
 
 def _transcript_path(session_id: str, cwd: str) -> Path:
-    home = Path.home()
-    return home / ".claude" / "projects" / encode_cwd(cwd) / f"{session_id}.jsonl"
+    return claude_projects_dir() / encode_cwd(cwd) / f"{session_id}.jsonl"
 
 
 def _extract_text(content: object) -> str:

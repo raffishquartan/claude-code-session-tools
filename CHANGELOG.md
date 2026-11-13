@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [4.1.2] - 2026-11-13
+
+### Changed
+
+- `~/.claude/projects` has one definition: `claude-code-usage`'s `--projects-dir` default and the hook
+  transcript loader now use `lib/paths.claude_projects_dir()`, resolved at call time, instead of building the
+  path themselves. A test fails if a second definition appears under `src/`.
+
 ## [4.1.1] - 2026-11-13
 
 ### Changed
