@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [4.1.1] - 2026-11-13
+
+### Changed
+
+- **`move_session.py --verify-only` now passes after a default MOVE.** The tombstone records appended to
+  the source for the destination being verified (from the tombstone naming that destination to the end of
+  the file) are excluded from the source's length, and the output prints
+  `tombstone lines excluded from src: N`. The exit status after a MOVE with the tombstone enabled is now 0
+  rather than 1, including for both copies of a source moved twice. Other source lines after the copy point
+  still count and are reported as unexplained, with `RESULT : FAIL`.
+- **The move-session liveness refusal ignores a process record whose pid has been reused.** The record's
+  `procStart` is compared with the live process's start time, both read in UTC; a live process that started
+  more than two seconds later is a different process, and the record no longer blocks a rename. A record with
+  no usable start time still refuses while its pid is alive. Every refusal now names the record file and says
+  it may be deleted if no Claude Code session is open.
+- **`ccst move-session` exits 128 plus the signal number** when the script is killed by a signal, instead of
+  a negative status that the shell turned into an unrelated number.
+- One definition per `~/.claude/...` directory: `lib/paths` gains `claude_live_sessions_dir()` and
+  `claude_tasks_dir()`, used by `move_session.py`, `delete_sessions.py` and `claude_code_usage` in place of
+  their own paths. `move_session.py` reads only the last 64 KiB of the transcript to confirm the picker-label
+  append, so an invalid byte earlier in the history no longer turns a successful append into a traceback.
+
 ## [4.1.0] - 2026-11-13
 
 ### Added
