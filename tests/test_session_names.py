@@ -29,6 +29,19 @@ def test_load_live_names_returns_id_to_name(tmp_path: Path) -> None:
     assert out == {"uuid-aaa": "20260509-foo", "uuid-bbb": "20260509-bar"}
 
 
+def test_load_live_names_defaults_to_live_sessions_dir_under_home(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The default directory is resolved when called, so a redirected HOME
+    is honoured."""
+    live = tmp_path / ".claude" / "sessions"
+    live.mkdir(parents=True)
+    _write_live(live, "1001", "uuid-aaa", "20260509-foo")
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
+
+    assert sn.load_live_names() == {"uuid-aaa": "20260509-foo"}
+
+
 def test_load_live_names_missing_directory(tmp_path: Path) -> None:
     assert sn.load_live_names(tmp_path / "does-not-exist") == {}
 

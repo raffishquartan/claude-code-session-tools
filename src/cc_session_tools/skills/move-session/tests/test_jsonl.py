@@ -38,7 +38,7 @@ class TestVerifyDstJsonl:
     def test_strict_passes_on_clean_rewrite(self, ms, tmp_path):
         src, dst = self._make_pair(tmp_path, "/old/cwd", "/new/cwd", 5)
         v = ms.verify_dst_jsonl(src, dst, "/new/cwd", "/old/cwd", "-old-cwd",
-                                strict=True)
+                                strict=True, dst_session_dir=tmp_path / "dst-session")
         assert v["ok"] is True
         assert v["src_lines"] == v["dst_lines"] == 5
         assert v["remaining_long"] == 0
@@ -48,7 +48,7 @@ class TestVerifyDstJsonl:
         # Sneak old path back into dst.
         dst.write_text(dst.read_text() + json.dumps({"cwd": "/old/cwd"}) + "\n")
         v = ms.verify_dst_jsonl(src, dst, "/new/cwd", "/old/cwd", "-old-cwd",
-                                strict=True)
+                                strict=True, dst_session_dir=tmp_path / "dst-session")
         assert v["ok"] is False
         assert v["remaining_long"] >= 1
 
@@ -57,7 +57,7 @@ class TestVerifyDstJsonl:
         # Truncate dst.
         dst.write_text("\n".join(dst.read_text().splitlines()[:3]) + "\n")
         v = ms.verify_dst_jsonl(src, dst, "/new/cwd", "/old/cwd", "-old-cwd",
-                                strict=True)
+                                strict=True, dst_session_dir=tmp_path / "dst-session")
         assert v["ok"] is False
 
     def test_non_strict_allows_destination_growth(self, ms, tmp_path):
@@ -67,9 +67,102 @@ class TestVerifyDstJsonl:
         with dst.open("a") as fh:
             fh.write(json.dumps({"cwd": "/new/cwd", "extra": True}) + "\n")
         v = ms.verify_dst_jsonl(src, dst, "/new/cwd", "/old/cwd", "-old-cwd",
-                                strict=False)
+                                strict=False, dst_session_dir=tmp_path / "dst-session")
         assert v["ok"] is True
         assert v["dst_lines"] > v["src_lines"]
+
+
+LAST_RECORD = {
+    "uuid": "parent-id",
+    "cwd": "/old/cwd",
+    "sessionId": "sess-1",
+    "version": "2.1.126",
+    "gitBranch": "",
+}
+
+
+class TestTombstoneLinesForDestination:
+    """Only the tombstones appended for the destination being verified, and
+    any appended after them, are excluded from the source's length."""
+
+    def _src(self, tmp_path: Path) -> Path:
+        src = tmp_path / "src.jsonl"
+        src.write_text("".join(
+            json.dumps({"cwd": "/old/cwd", "i": i}) + "\n" for i in range(3)))
+        return src
+
+    def _session(self, tmp_path: Path, name: str) -> Path:
+        return tmp_path / name / "cc-sessions" / "20260503-x"
+
+    def _tombstone(self, ms, src: Path, tmp_path: Path, dst: Path) -> None:
+        ms.append_tombstone(src, LAST_RECORD, tmp_path / "src-session", dst)
+
+    def test_no_tombstone_excludes_nothing(self, ms, tmp_path):
+        src = self._src(tmp_path)
+        assert ms.tombstone_lines_for_destination(
+            src, self._session(tmp_path, "b")) == 0
+
+    def test_tombstone_for_destination_is_excluded(self, ms, tmp_path):
+        src = self._src(tmp_path)
+        b = self._session(tmp_path, "b")
+        self._tombstone(ms, src, tmp_path, b)
+        assert ms.tombstone_lines_for_destination(src, b) == 2
+
+    def test_tombstone_for_another_destination_is_not_excluded(self, ms, tmp_path):
+        src = self._src(tmp_path)
+        self._tombstone(ms, src, tmp_path, self._session(tmp_path, "b"))
+        assert ms.tombstone_lines_for_destination(
+            src, self._session(tmp_path, "c")) == 0
+
+    def test_destination_that_prefixes_another_does_not_match(self, ms, tmp_path):
+        src = self._src(tmp_path)
+        b = self._session(tmp_path, "b")
+        self._tombstone(ms, src, tmp_path, b.with_name(b.name + "-later"))
+        assert ms.tombstone_lines_for_destination(src, b) == 0
+
+    def test_moved_twice(self, ms, tmp_path):
+        src = self._src(tmp_path)
+        b = self._session(tmp_path, "b")
+        c = self._session(tmp_path, "c")
+        self._tombstone(ms, src, tmp_path, b)
+        self._tombstone(ms, src, tmp_path, c)
+        assert ms.tombstone_lines_for_destination(src, b) == 4
+        assert ms.tombstone_lines_for_destination(src, c) == 2
+
+    def test_other_lines_after_the_tombstone_stay_counted(self, ms, tmp_path):
+        src = self._src(tmp_path)
+        b = self._session(tmp_path, "b")
+        self._tombstone(ms, src, tmp_path, b)
+        with src.open("a") as fh:
+            fh.write(json.dumps({"type": "user", "uuid": "x"}) + "\n")
+        assert ms.tombstone_lines_for_destination(src, b) == 2
+
+
+class TestVerifyDstJsonlTombstone:
+    def _pair_with_tombstone(self, ms, tmp_path: Path) -> tuple[Path, Path, Path]:
+        src = tmp_path / "src.jsonl"
+        dst = tmp_path / "dst.jsonl"
+        src_text = "".join(
+            json.dumps({"cwd": "/old/cwd", "i": i}) + "\n" for i in range(3))
+        src.write_text(src_text)
+        dst.write_text(src_text.replace("/old/cwd", "/new/cwd"))
+        dst_session = tmp_path / "new" / "cc-sessions" / "20260503-x"
+        ms.append_tombstone(src, LAST_RECORD, tmp_path / "src-session", dst_session)
+        return src, dst, dst_session
+
+    def test_non_strict_excludes_the_destination_tombstone(self, ms, tmp_path):
+        src, dst, dst_session = self._pair_with_tombstone(ms, tmp_path)
+        v = ms.verify_dst_jsonl(src, dst, "/new/cwd", "/old/cwd", "-old-cwd",
+                                strict=False, dst_session_dir=dst_session)
+        assert v["ok"] is True
+        assert v["src_excluded_lines"] == 2
+
+    def test_strict_does_not_exclude_the_tombstone(self, ms, tmp_path):
+        src, dst, dst_session = self._pair_with_tombstone(ms, tmp_path)
+        v = ms.verify_dst_jsonl(src, dst, "/new/cwd", "/old/cwd", "-old-cwd",
+                                strict=True, dst_session_dir=dst_session)
+        assert v["ok"] is False
+        assert v["src_excluded_lines"] == 0
 
 
 class TestMakeTombstoneRecords:

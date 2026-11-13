@@ -74,6 +74,8 @@ ALLOWED: dict[tuple[str, str], str] = {
      "%Y%m%d-%H%M%S"): "backup-stamp",
     ("cc_session_tools/skills/move-session/scripts/move_session.py",
      "%Y-%m-%dT%H:%M:%S.%f"): "machine-iso",
+    ("cc_session_tools/skills/move-session/scripts/move_session.py",
+     "%a %b %d %H:%M:%S %Y"): "detection-parse",
     ("claude_code_usage/query.py", "%Y"): "human-iso",
     ("claude_code_usage/query.py", "%Y-%m"): "human-iso",
     ("claude_code_usage/query.py", "%Y-%m-%d"): "human-iso",

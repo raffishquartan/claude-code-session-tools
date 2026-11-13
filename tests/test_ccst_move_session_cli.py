@@ -120,3 +120,19 @@ def test_runs_install_sync_before_forwarding(
     assert cmd[0] == sys.executable
     assert cmd[1].endswith("skills/move-session/scripts/move_session.py")
     assert cmd[2:] == ["--src-session", "x"]
+
+
+@pytest.mark.parametrize("signum", [2, 9, 15])
+def test_signal_killed_script_exits_128_plus_signal(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, mocker: MockerFixture, signum: int
+) -> None:
+    """A child killed by signal n has returncode -n; the shell convention for
+    that is 128 + n."""
+    from cc_session_tools.lib import install_sync
+
+    monkeypatch.setenv("CCST_SESSIONS_DIR", str(tmp_path))
+    mocker.patch.object(install_sync, "ensure_synced")
+    mocker.patch.object(
+        ccst.subprocess, "run", return_value=subprocess.CompletedProcess([], -signum)
+    )
+    assert ccst._cmd_move_session(["--src-session", "x"]) == 128 + signum

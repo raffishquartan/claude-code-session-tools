@@ -1,6 +1,7 @@
 """Tests for the picker-label append and the liveness check that guards it."""
 from __future__ import annotations
 
+import calendar
 import json
 import os
 import subprocess
@@ -77,6 +78,40 @@ class TestAppendPickerLabel:
         assert str(p) in exc.value.code
 
 
+    def test_invalid_utf8_early_in_transcript_still_appends(self, ms, tmp_path):
+        """Only the appended tail is decoded, so a bad byte anywhere earlier
+        in the history does not turn a successful append into a traceback."""
+        p = tmp_path / f"{UUID}.jsonl"
+        p.write_bytes(b'{"type":"user","text":"\xff\xfe"}\n{"type":"user","uuid":"u1"}\n')
+        ms.append_picker_label(p, UUID, TAG)
+        tail = p.read_bytes().splitlines()[-2:]
+        assert [json.loads(l) for l in tail] == ms.picker_label_records(UUID, TAG)
+
+    def test_final_line_longer_than_tail_window_still_verifies(self, ms, tmp_path):
+        """The tail window starts inside a final line longer than the window
+        (here also holding an invalid byte and multi-byte characters); only
+        the two appended lines are decoded."""
+        p = tmp_path / f"{UUID}.jsonl"
+        long_text = ("\u00e9" * 40_000).encode() + b"\xff"
+        p.write_bytes(b'{"type":"user","text":"' + long_text + b'"}')
+        assert len(p.read_bytes()) > 64 * 1024
+        ms.append_picker_label(p, UUID, TAG)
+        tail = p.read_bytes().splitlines()[-2:]
+        assert [json.loads(l) for l in tail] == ms.picker_label_records(UUID, TAG)
+
+    def test_wrong_records_after_invalid_utf8_history_exit_1(self, ms, tmp_path, monkeypatch):
+        p = tmp_path / f"{UUID}.jsonl"
+        p.write_bytes(b'{"type":"user","text":"\xff"}\n')
+        monkeypatch.setattr(
+            ms, "encode_record",
+            lambda rec: json.dumps({**rec, "sessionId": "someone-else"},
+                                   separators=(",", ":")))
+        with pytest.raises(SystemExit) as exc:
+            ms.append_picker_label(p, UUID, TAG)
+        assert isinstance(exc.value.code, str)
+        assert str(p) in exc.value.code
+
+
 class TestDetectLiveHolder:
     def _record(self, sessions_dir: Path, pid: int, session_uuid: str) -> None:
         sessions_dir.mkdir(parents=True, exist_ok=True)
@@ -117,3 +152,134 @@ class TestDetectLiveHolder:
         (sessions / f"{os.getpid()}.json").write_text("{not json")
         (sessions / "notapid.json").write_text(json.dumps({"sessionId": UUID}))
         assert ms.detect_live_holder(UUID, sessions) == []
+
+
+PROC_START_FORMAT = "%a %b %d %H:%M:%S %Y"
+
+
+def _real_proc_start(pid: int) -> str:
+    """The start time of `pid` in the form Claude Code records as
+    `procStart`, read independently of the code under test."""
+    out = subprocess.run(
+        ["ps", "-o", "lstart=", "-p", str(pid)],
+        capture_output=True, text=True, check=True,
+        env={**os.environ, "LC_ALL": "C", "TZ": "UTC"},
+    ).stdout.strip()
+    assert out, f"ps printed no start time for pid {pid}"
+    return out
+
+
+def _shifted(proc_start: str, seconds: int) -> str:
+    epoch = calendar.timegm(time.strptime(proc_start, PROC_START_FORMAT))
+    return time.strftime(PROC_START_FORMAT, time.gmtime(epoch + seconds))
+
+
+@pytest.fixture
+def non_utc_zone(monkeypatch: pytest.MonkeyPatch):
+    """Run the code under test (and any `ps` it starts) in a +05:30 zone with
+    a non-English locale, so a comparison that depends on the local zone or
+    locale gives the wrong answer."""
+    monkeypatch.setenv("TZ", "Asia/Kolkata")
+    monkeypatch.setenv("LANG", "en_GB.UTF-8")
+    monkeypatch.delenv("LC_ALL", raising=False)
+    time.tzset()
+    yield
+    monkeypatch.undo()
+    time.tzset()
+
+
+class TestDetectLiveHolderPidReuse:
+    def _record(self, sessions_dir: Path, pid: int, **fields: object) -> Path:
+        sessions_dir.mkdir(parents=True, exist_ok=True)
+        record = sessions_dir / f"{pid}.json"
+        record.write_text(json.dumps({"pid": pid, "sessionId": UUID, **fields}))
+        return record
+
+    def _assert_refuses_with_hint(self, reasons: list[str], record: Path) -> None:
+        assert len(reasons) == 1
+        assert str(record) in reasons[0]
+        assert "if no Claude Code session is open" in reasons[0]
+        assert "stale" in reasons[0] and "deleted" in reasons[0]
+
+    def test_record_older_than_live_process_is_ignored(self, ms, tmp_path):
+        """The live process started well after the record's procStart: the pid
+        has been reused by an unrelated process, so the record is stale."""
+        pid = os.getpid()
+        self._record(tmp_path, pid, procStart=_shifted(_real_proc_start(pid), -60))
+        assert ms.detect_live_holder(UUID, tmp_path) == []
+
+    def test_record_with_real_start_refuses(self, ms, tmp_path):
+        pid = os.getpid()
+        record = self._record(tmp_path, pid, procStart=_real_proc_start(pid))
+        self._assert_refuses_with_hint(ms.detect_live_holder(UUID, tmp_path), record)
+
+    def test_record_with_real_start_refuses_in_non_utc_zone(
+            self, ms, tmp_path, non_utc_zone):
+        pid = os.getpid()
+        record = self._record(tmp_path, pid, procStart=_real_proc_start(pid))
+        self._assert_refuses_with_hint(ms.detect_live_holder(UUID, tmp_path), record)
+
+    def test_live_process_within_tolerance_refuses(self, ms, tmp_path):
+        pid = os.getpid()
+        record = self._record(tmp_path, pid, procStart=_shifted(_real_proc_start(pid), -2))
+        self._assert_refuses_with_hint(ms.detect_live_holder(UUID, tmp_path), record)
+
+    def test_live_process_started_before_record_refuses(self, ms, tmp_path):
+        pid = os.getpid()
+        record = self._record(tmp_path, pid, procStart=_shifted(_real_proc_start(pid), 60))
+        self._assert_refuses_with_hint(ms.detect_live_holder(UUID, tmp_path), record)
+
+    def test_record_without_proc_start_refuses(self, ms, tmp_path):
+        record = self._record(tmp_path, os.getpid())
+        self._assert_refuses_with_hint(ms.detect_live_holder(UUID, tmp_path), record)
+
+    @pytest.mark.parametrize("value", ["not a date", "", 1794475503, None])
+    def test_record_with_unusable_proc_start_refuses(self, ms, tmp_path, value):
+        record = self._record(tmp_path, os.getpid(), procStart=value)
+        self._assert_refuses_with_hint(ms.detect_live_holder(UUID, tmp_path), record)
+
+    def test_unreadable_live_start_refuses(self, ms, tmp_path, monkeypatch):
+        """A record that would be stale if the live start were known still
+        refuses when the live start cannot be read."""
+        pid = os.getpid()
+        record = self._record(tmp_path, pid, procStart=_shifted(_real_proc_start(pid), -60))
+        monkeypatch.setattr(ms, "process_start_time", lambda pid: None, raising=False)
+        self._assert_refuses_with_hint(ms.detect_live_holder(UUID, tmp_path), record)
+
+
+class TestProcessStartTime:
+    def test_matches_ps_in_utc_whatever_the_local_zone(self, ms, non_utc_zone):
+        pid = os.getpid()
+        expected = calendar.timegm(time.strptime(_real_proc_start(pid), PROC_START_FORMAT))
+        assert ms.process_start_time(pid) == expected
+
+    def test_dead_pid_is_none(self, ms):
+        assert ms.process_start_time(_dead_pid()) is None
+
+    def _patch_ps(self, ms, monkeypatch, *, raises=None, returncode=0, stdout=""):
+        def fake_run(*args, **kwargs):
+            if raises is not None:
+                raise raises
+            return subprocess.CompletedProcess(args[0], returncode, stdout, "")
+        monkeypatch.setattr(ms.subprocess, "run", fake_run)
+
+    def test_ps_missing_is_none(self, ms, monkeypatch):
+        self._patch_ps(ms, monkeypatch, raises=FileNotFoundError("ps"))
+        assert ms.process_start_time(os.getpid()) is None
+
+    def test_ps_timeout_is_none(self, ms, monkeypatch):
+        self._patch_ps(ms, monkeypatch, raises=subprocess.TimeoutExpired("ps", 1))
+        assert ms.process_start_time(os.getpid()) is None
+
+    def test_ps_unparseable_output_is_none(self, ms, monkeypatch):
+        self._patch_ps(ms, monkeypatch, stdout="lstart: keyword not found\n")
+        assert ms.process_start_time(os.getpid()) is None
+
+    def test_ps_failure_is_none(self, ms, monkeypatch):
+        self._patch_ps(ms, monkeypatch, returncode=1, stdout="Thu Nov 12 09:24:55 2026\n")
+        assert ms.process_start_time(os.getpid()) is None
+
+    def test_single_digit_day_parses(self, ms, monkeypatch):
+        self._patch_ps(ms, monkeypatch, stdout="Wed Nov  4 11:42:34 2026\n")
+        assert ms.process_start_time(os.getpid()) == calendar.timegm(
+            (2026, 11, 4, 11, 42, 34, 0, 0, 0))

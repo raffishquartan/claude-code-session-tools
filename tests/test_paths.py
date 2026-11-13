@@ -20,3 +20,13 @@ def test_data_home_env_override_beats_home(monkeypatch, tmp_path):
     override = tmp_path / "custom-data-home"
     monkeypatch.setenv("CCST_DATA_HOME", str(override))
     assert paths.data_home() == override
+
+
+def test_claude_live_sessions_dir_follows_home(monkeypatch, tmp_path):
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
+    assert paths.claude_live_sessions_dir() == tmp_path / ".claude" / "sessions"
+
+
+def test_claude_tasks_dir_follows_home(monkeypatch, tmp_path):
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
+    assert paths.claude_tasks_dir() == tmp_path / ".claude" / "tasks"

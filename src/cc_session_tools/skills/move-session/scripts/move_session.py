@@ -42,10 +42,12 @@ on (default):
 from __future__ import annotations
 
 import argparse
+import calendar
 import json
 import os
 import re
 import shutil
+import subprocess
 import sys
 import time
 import uuid as uuidlib
@@ -78,6 +80,7 @@ from cc_session_rules import (  # noqa: F401  (re-exported for tests)
     validate_strict_tag_suffix,
     validate_tag_suffix_no_spaces,
 )
+from cc_session_tools.lib import paths
 from cc_session_tools.lib.proc_lock import pid_alive
 
 HOOK_SECURITY_PREFIX = "Review this shell command for security risks"
@@ -97,11 +100,59 @@ def recent_write_reason(src_jsonl: Path) -> str | None:
     return None
 
 
+# Claude Code records a process's start as `procStart`, the output of
+# `ps -o lstart=` under LC_ALL=C and TZ=UTC, e.g. "Thu Nov 12 09:24:55 2026".
+PROC_START_FORMAT = "%a %b %d %H:%M:%S %Y"
+# A live process that started more than this many seconds after its record's
+# procStart is a different process that reused the pid.
+PID_REUSE_TOLERANCE_SECONDS = 2
+
+
+def parse_proc_start(text: str) -> int | None:
+    """Epoch seconds for a UTC `ps -o lstart=` timestamp, or None if `text`
+    is not one."""
+    try:
+        return calendar.timegm(time.strptime(text.strip(), PROC_START_FORMAT))
+    except ValueError:
+        return None
+
+
+def process_start_time(pid: int) -> int | None:
+    """Epoch seconds at which the live process `pid` started, read the way
+    Claude Code reads it for `procStart`, or None if it cannot be read."""
+    try:
+        proc = subprocess.run(
+            ["ps", "-o", "lstart=", "-p", str(pid)],
+            capture_output=True, text=True, timeout=1,
+            env={**os.environ, "LC_ALL": "C", "TZ": "UTC"},
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if proc.returncode != 0:
+        return None
+    return parse_proc_start(proc.stdout)
+
+
+def pid_reused(record: dict, pid: int) -> bool:
+    """True when the live process `pid` started more than
+    PID_REUSE_TOLERANCE_SECONDS after the start time `record` recorded. Any
+    unknown start time counts as not reused, so uncertainty refuses."""
+    recorded = record.get("procStart")
+    if not isinstance(recorded, str):
+        return False
+    recorded_start = parse_proc_start(recorded)
+    if recorded_start is None:
+        return False
+    live_start = process_start_time(pid)
+    return live_start is not None and live_start > recorded_start + PID_REUSE_TOLERANCE_SECONDS
+
+
 def detect_live_holder(session_uuid: str, live_sessions_dir: Path) -> list[str]:
     """Return one refusal reason per live Claude Code process that has the
     session open: a process record <live_sessions_dir>/<pid>.json whose
-    sessionId is session_uuid and whose <pid> is alive. Independent of whether
-    this script itself runs inside Claude Code.
+    sessionId is session_uuid, whose <pid> is alive, and whose pid has not
+    been reused by a later process. Independent of whether this script itself
+    runs inside Claude Code.
 
     Used for tag-changing operations: a live process re-appends its in-memory
     title to the transcript after every prompt, which would undo the new
@@ -118,16 +169,17 @@ def detect_live_holder(session_uuid: str, live_sessions_dir: Path) -> list[str]:
                 # Claude Code rewrites these records in place; a half-written
                 # one is skipped rather than guessed at.
                 continue
-            if (
-                isinstance(data, dict)
-                and data.get("sessionId") == session_uuid
-                and pid_alive(int(record.stem))
-            ):
+            if not (isinstance(data, dict) and data.get("sessionId") == session_uuid):
+                continue
+            pid = int(record.stem)
+            if pid_alive(pid) and not pid_reused(data, pid):
                 reasons.append(
-                    f"live Claude Code process (pid {record.stem}) has this session open "
-                    f"(process record {record})"
+                    f"live Claude Code process (pid {pid}) has this session open "
+                    f"(process record {record}); if no Claude Code session is open, "
+                    f"the record is stale and may be deleted"
                 )
     return reasons
+
 
 def detect_active_source_session(
     src_cwd_abs: str,
@@ -444,25 +496,66 @@ def rewrite_jsonl_paths(dst_jsonl: Path, replacements: list[tuple[str, str]]) ->
     return counts
 
 
-def count_tombstone_lines(jsonl: Path) -> int:
-    """Lines in `jsonl` written by `append_tombstone`: each tombstone is a user
-    record followed by an assistant record whose model is "tombstone"."""
-    assistant_tombstones = 0
-    with jsonl.open() as fh:
+TOMBSTONE_PREFIX = "[TOMBSTONE]"
+TOMBSTONE_MODEL = "tombstone"
+
+
+def _tombstone_destination_marker(dst_session_dir: Path) -> str:
+    """The line in a tombstone notice that names its destination."""
+    return f"cc-sessions: {dst_session_dir}\n"
+
+
+def _is_tombstone_user(rec: dict) -> bool:
+    message = rec.get("message")
+    return (
+        rec.get("type") == "user"
+        and isinstance(message, dict)
+        and isinstance(message.get("content"), str)
+        and message["content"].startswith(TOMBSTONE_PREFIX)
+    )
+
+
+def _is_tombstone_assistant(rec: dict) -> bool:
+    message = rec.get("message")
+    return isinstance(message, dict) and message.get("model") == TOMBSTONE_MODEL
+
+
+def tombstone_lines_for_destination(src_jsonl: Path, dst_session_dir: Path) -> int:
+    """Lines of `src_jsonl` written by `append_tombstone` for `dst_session_dir`
+    or after it: from the first tombstone notice naming `dst_session_dir` to
+    the end of the file, the lines that belong to a tombstone pair. Earlier
+    tombstones were already in the source when the destination was copied,
+    and any other line after that point is not explained by a tombstone."""
+    marker = _tombstone_destination_marker(dst_session_dir)
+    excluded = 0
+    found = False
+    with src_jsonl.open() as fh:
         for line in fh:
-            if '"tombstone"' not in line:
+            if TOMBSTONE_PREFIX not in line and TOMBSTONE_MODEL not in line:
                 continue
             try:
                 rec = json.loads(line)
             except json.JSONDecodeError:
                 continue
-            message = rec.get("message")
-            if isinstance(message, dict) and message.get("model") == "tombstone":
-                assistant_tombstones += 1
-    return 2 * assistant_tombstones
+            if not isinstance(rec, dict):
+                continue
+            if not found:
+                found = _is_tombstone_user(rec) and marker in rec["message"]["content"]
+            if found and (_is_tombstone_user(rec) or _is_tombstone_assistant(rec)):
+                excluded += 1
+    return excluded
 
 
-def verify_dst_jsonl(src_jsonl: Path, dst_jsonl: Path, dst_cwd_abs: str, src_cwd_abs: str, src_key: str, strict: bool) -> dict:
+def verify_dst_jsonl(
+    src_jsonl: Path,
+    dst_jsonl: Path,
+    dst_cwd_abs: str,
+    src_cwd_abs: str,
+    src_key: str,
+    *,
+    strict: bool,
+    dst_session_dir: Path,
+) -> dict:
     """Run verification checks. Returns dict with results and a bool 'ok'.
 
     strict=True (post-move, --execute path): require exact line parity and zero
@@ -470,12 +563,16 @@ def verify_dst_jsonl(src_jsonl: Path, dst_jsonl: Path, dst_cwd_abs: str, src_cwd
     rewrite of the source.
 
     strict=False (--verify-only path): the destination may have grown since the
-    move (further messages appended on resume). Only enforce that every line
-    parses as JSON and every cwd field equals dst_cwd_abs. Line count and
-    residual src-path strings are reported but do not fail.
+    move (further messages appended on resume), and the source carries the
+    tombstone records appended for `dst_session_dir` after the copy. Those
+    tombstone lines are excluded from the source's length; the check then
+    enforces that the source is no longer than the destination, every line
+    parses as JSON and every cwd field equals dst_cwd_abs. Residual src-path
+    strings are reported but do not fail.
     """
     src_lines = sum(1 for _ in src_jsonl.open())
     dst_lines = sum(1 for _ in dst_jsonl.open())
+    excluded = 0 if strict else tombstone_lines_for_destination(src_jsonl, dst_session_dir)
     json_ok = json_err = 0
     cwds = set()
     with dst_jsonl.open() as fh:
@@ -506,13 +603,13 @@ def verify_dst_jsonl(src_jsonl: Path, dst_jsonl: Path, dst_cwd_abs: str, src_cwd
     else:
         ok = (
             json_err == 0
-            and src_lines <= dst_lines
+            and src_lines - excluded <= dst_lines
             and cwds_clean
         )
     return {
         "src_lines": src_lines,
         "dst_lines": dst_lines,
-        "src_tombstone_lines": count_tombstone_lines(src_jsonl),
+        "src_excluded_lines": excluded,
         "json_ok": json_ok,
         "json_err": json_err,
         "remaining_long": remaining_long,
@@ -550,9 +647,9 @@ def make_tombstone_records(last_record: dict | None, src_session_dir: Path, dst_
     ts_user = now_iso()
     ts_asst = now_iso()
     notice = (
-        f"[TOMBSTONE] This session has been copied to a new working directory by the "
+        f"{TOMBSTONE_PREFIX} This session has been copied to a new working directory by the "
         f"move-session skill on {ts_user}. The live transcript is now at:\n"
-        f"  cc-sessions: {dst_session_dir}\n"
+        f"  {_tombstone_destination_marker(dst_session_dir)}"
         f"  jsonl:       ~/.claude/projects/{encode_cwd(str(dst_session_dir.parent.parent.resolve()))}/{Path(last_record.get('sessionId', 'session')).name}.jsonl\n"
         f"Continue work in the new location. This source transcript is preserved as a record.\n"
         f"If the destination listed above has itself been moved, follow the chain of "
@@ -581,7 +678,7 @@ def make_tombstone_records(last_record: dict | None, src_session_dir: Path, dst_
         "parentUuid": user_uuid,
         "isSidechain": False,
         "message": {
-            "model": "tombstone",
+            "model": TOMBSTONE_MODEL,
             "id": f"msg_{asst_uuid}",
             "type": "message",
             "role": "assistant",
@@ -630,6 +727,11 @@ def encode_record(record: dict) -> str:
     return json.dumps(record, ensure_ascii=False, separators=(",", ":"))
 
 
+# How much of the transcript's end append_picker_label reads back to confirm
+# the pair it appended.
+PICKER_LABEL_TAIL_BYTES = 64 * 1024
+
+
 def append_picker_label(jsonl: Path, session_uuid: str, tag: str) -> None:
     """Append the picker-label pair for `tag` to `jsonl` in a single write,
     starting on a fresh line, then re-read the last two lines and confirm they
@@ -645,9 +747,15 @@ def append_picker_label(jsonl: Path, session_uuid: str, tag: str) -> None:
     with jsonl.open("a", encoding="utf-8") as fh:
         fh.write(payload)
 
-    tail = jsonl.read_text(encoding="utf-8").splitlines()[-len(records):]
+    # Only the tail is read and decoded: the appended pair is far smaller than
+    # the window, and earlier history may hold bytes that are not valid UTF-8.
+    with jsonl.open("rb") as fh:
+        fh.seek(0, os.SEEK_END)
+        fh.seek(max(0, fh.tell() - PICKER_LABEL_TAIL_BYTES))
+        window = fh.read()
+    tail = window.splitlines()[-len(records):]
     try:
-        written = [json.loads(line) for line in tail]
+        written = [json.loads(line.decode("utf-8", errors="replace")) for line in tail]
     except json.JSONDecodeError as e:
         raise SystemExit(f"Picker label append did not parse back ({e}): {jsonl}")
     if written != records:
@@ -812,7 +920,7 @@ def main() -> int:
 
     src_key = encode_cwd(src_cwd_abs)
     dst_key = encode_cwd(dst_cwd_abs)
-    projects_root = Path.home() / ".claude" / "projects"
+    projects_root = paths.claude_projects_dir()
     src_key_dir = projects_root / src_key
     dst_key_dir = projects_root / dst_key
     dst_session_dir = dst_cwd_path / "cc-sessions" / dst_tag
@@ -822,7 +930,7 @@ def main() -> int:
     session_uuid = src_jsonl.stem
     dst_jsonl = dst_key_dir / f"{session_uuid}.jsonl"
 
-    tasks_root = Path.home() / ".claude" / "tasks"
+    tasks_root = paths.claude_tasks_dir()
     src_task_key = encode_cwd(str(src_session_dir))
     dst_task_key = encode_cwd(str(dst_session_dir))
     src_task_dir = tasks_root / src_task_key
@@ -851,7 +959,7 @@ def main() -> int:
     # written below. Signals: a live process record naming the session, or a
     # transcript written within RECENT_WRITE_SECONDS.
     if dst_tag != src_tag:
-        holders = detect_live_holder(session_uuid, Path.home() / ".claude" / "sessions")
+        holders = detect_live_holder(session_uuid, paths.claude_live_sessions_dir())
         reasons.extend(holders)
         recent = recent_write_reason(src_jsonl)
         if recent is not None and not any(r.startswith(f"source jsonl {src_jsonl.name} ") for r in reasons):
@@ -961,7 +1069,10 @@ def main() -> int:
     if args.verify_only:
         if not dst_jsonl.exists():
             raise SystemExit(f"--verify-only: destination jsonl not found: {dst_jsonl}")
-        v = verify_dst_jsonl(src_jsonl, dst_jsonl, dst_cwd_abs, src_cwd_abs, src_key, strict=False)
+        v = verify_dst_jsonl(
+            src_jsonl, dst_jsonl, dst_cwd_abs, src_cwd_abs, src_key,
+            strict=False, dst_session_dir=dst_session_dir,
+        )
         print_verify(v)
         return 0 if v["ok"] else 1
 
@@ -1029,7 +1140,10 @@ def main() -> int:
     # Verify (only when we actually wrote a destination jsonl).
     if cwd_changed:
         print()
-        v = verify_dst_jsonl(src_jsonl, dst_jsonl, dst_cwd_abs, src_cwd_abs, src_key, strict=True)
+        v = verify_dst_jsonl(
+            src_jsonl, dst_jsonl, dst_cwd_abs, src_cwd_abs, src_key,
+            strict=True, dst_session_dir=dst_session_dir,
+        )
         print_verify(v)
         if not v["ok"]:
             print()
@@ -1219,21 +1333,14 @@ def print_verify(v: dict) -> None:
     print(f"  remaining_src_key   : {v['remaining_key']}")
     print(f"  cwd_distinct_in_dst : {v['cwds_in_dst']}")
     print(f"  RESULT              : {'PASS' if v['ok'] else 'FAIL'}")
-    extra = v["src_lines"] - v["dst_lines"]
+    excluded = v["src_excluded_lines"]
+    if excluded:
+        print(f"  tombstone lines excluded from src: {excluded}")
+    extra = v["src_lines"] - excluded - v["dst_lines"]
     if extra > 0:
-        print(f"  NOTE: src has {extra} more line(s) than dst.")
-        if v["src_tombstone_lines"] >= extra:
-            print(
-                f"  The FAIL on line count is expected after a move with the tombstone enabled: "
-                f"the tombstone ({v['src_tombstone_lines']} line(s) in src) is appended to the "
-                f"source after the copy, so src is longer than dst by design."
-            )
-            print("  Check the other rows instead: json_invalid_lines 0 and cwd_distinct_in_dst equal to the destination cwd.")
-        else:
-            print(
-                f"  The extra lines are unexplained: only {v['src_tombstone_lines']} tombstone line(s) "
-                f"in src. Treat the FAIL as a real divergence between src and dst."
-            )
+        beyond = " beyond its tombstone lines" if excluded else ""
+        print(f"  NOTE: src has {extra} more line(s) than dst{beyond}.")
+        print("  The extra lines are unexplained. Treat the FAIL as a real divergence between src and dst.")
 
 
 if __name__ == "__main__":

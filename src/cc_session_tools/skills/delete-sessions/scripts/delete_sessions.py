@@ -26,6 +26,7 @@ from pathlib import Path
 
 # cc_session_tools must be on the import path (installed via uv tool install
 # or present via PYTHONPATH from the worktree src/ directory).
+from cc_session_tools.lib import paths
 from cc_session_tools.lib.sessions import (
     SESSION_BASENAME_RE,
     find_jsonl_for_session,
@@ -216,7 +217,7 @@ def _artefacts_for_session(
     # Tasks directory.
     if include_tasks:
         task_key = _encode_path(session_dir.resolve())
-        task_dir = Path.home() / ".claude" / "tasks" / task_key
+        task_dir = paths.claude_tasks_dir() / task_key
         if task_dir.exists():
             artefacts.append(("tasks directory", task_dir))
 
