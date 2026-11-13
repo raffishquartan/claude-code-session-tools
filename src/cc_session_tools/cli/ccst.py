@@ -4042,7 +4042,8 @@ def _cmd_move_session(script_args: list[str]) -> int:
     a subparser could not forward a call whose first argument is an option
     (every real call starts with --src-session), and ``--help`` would print
     ccst's help instead of the script's. A subprocess keeps the script's
-    sys.argv, argparse prog and module state its own.
+    sys.argv, argparse prog and module state its own. A script killed by a
+    signal exits 128 plus the signal number.
 
     Not exempt from install auto-sync, like any ordinary ccst command.
     """
@@ -4052,7 +4053,9 @@ def _cmd_move_session(script_args: list[str]) -> int:
         noun=MOVE_SESSION_NOUN, verb=None, installed_version=__version__
     )
     script = _discover_source_dir() / "move-session" / "scripts" / "move_session.py"
-    return subprocess.run([sys.executable, str(script), *script_args]).returncode
+    returncode = subprocess.run([sys.executable, str(script), *script_args]).returncode
+    # A child killed by signal n reports -n; the shell convention is 128 + n.
+    return 128 - returncode if returncode < 0 else returncode
 
 
 def main() -> None:

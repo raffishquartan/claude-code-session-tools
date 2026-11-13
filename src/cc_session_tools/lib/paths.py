@@ -28,3 +28,17 @@ def claude_projects_dir() -> Path:
     directory per project, holding <uuid>.jsonl and <uuid>/subagents/*.jsonl).
     Resolved on each call so tests that redirect Path.home() see their own."""
     return Path.home() / ".claude" / "projects"
+
+
+def claude_live_sessions_dir() -> Path:
+    """Claude Code's live-process registry, ~/.claude/sessions (one
+    <pid>.json record per running Claude Code process). Resolved on each call
+    so tests that redirect Path.home() see their own."""
+    return Path.home() / ".claude" / "sessions"
+
+
+def claude_tasks_dir() -> Path:
+    """Claude Code's task lists, ~/.claude/tasks (one directory per encoded
+    session-directory key). Resolved on each call so tests that redirect
+    Path.home() see their own."""
+    return Path.home() / ".claude" / "tasks"

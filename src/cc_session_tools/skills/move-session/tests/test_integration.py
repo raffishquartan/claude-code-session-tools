@@ -381,9 +381,12 @@ class TestPickerLabel:
         assert src_jsonl.read_bytes() == src_before
         assert dst_jsonl.read_bytes() == dst_before
 
-    def _move(self, tmp_home, projects_root, make_session, *, tombstone: bool):
-        src_dir, src_jsonl, uuid = make_session("src-proj", "20260503-source")
-        dst_cwd = projects_root / "dst-proj"
+    def _move(self, tmp_home, projects_root, make_session, *, tombstone: bool,
+              dst_name: str = "dst-proj", src=None):
+        """MOVE a session (a new one unless `src` gives (src_dir, src_jsonl,
+        uuid)) into projects_root/<dst_name>; return (src_jsonl, move_args)."""
+        src_dir, src_jsonl, uuid = src or make_session("src-proj", "20260503-source")
+        dst_cwd = projects_root / dst_name
         dst_cwd.mkdir()
         move_args = [
             "--src-session", str(src_dir),
@@ -401,16 +404,31 @@ class TestPickerLabel:
     def _verify_only(self, tmp_home, move_args):
         return _run(*move_args, "--verify-only", env={"HOME": str(tmp_home)})
 
-    def test_verify_only_after_move_explains_the_tombstone_fail(
+    def test_verify_only_after_move_passes_on_the_tombstone(
             self, tmp_home, projects_root, roots_file, make_session):
         _, move_args = self._move(
             tmp_home, projects_root, make_session, tombstone=True)
         rc, out, err = self._verify_only(tmp_home, move_args)
+        assert rc == 0, f"{err}\n{out}"
+        assert "RESULT              : PASS" in out
+        assert "tombstone lines excluded from src: 2" in out
+        assert "expected" not in out
+        assert "unexplained" not in out
+
+    def test_verify_only_flags_conversation_after_the_tombstone(
+            self, tmp_home, projects_root, roots_file, make_session):
+        """A still-live source gained a non-tombstone line after the copy:
+        the tombstone is excluded, the extra line is not."""
+        src_jsonl, move_args = self._move(
+            tmp_home, projects_root, make_session, tombstone=True)
+        with src_jsonl.open("a") as fh:
+            fh.write(json.dumps({"type": "user", "uuid": "x"}) + "\n")
+        rc, out, err = self._verify_only(tmp_home, move_args)
         assert rc != 0, f"{err}\n{out}"
         assert "RESULT              : FAIL" in out
-        assert "2 more line(s) than dst" in out
-        assert "expected" in out and "tombstone" in out
-        assert "unexplained" not in out
+        assert "tombstone lines excluded from src: 2" in out
+        assert "1 more line(s) than dst" in out
+        assert "unexplained" in out
 
     def test_verify_only_flags_extra_source_lines_it_cannot_explain(
             self, tmp_home, projects_root, roots_file, make_session):
@@ -420,9 +438,30 @@ class TestPickerLabel:
             fh.write(json.dumps({"type": "user", "uuid": "x"}) + "\n")
         rc, out, err = self._verify_only(tmp_home, move_args)
         assert rc != 0, f"{err}\n{out}"
+        assert "RESULT              : FAIL" in out
         assert "1 more line(s) than dst" in out
         assert "unexplained" in out
-        assert "expected" not in out
+        assert "tombstone lines excluded" not in out
+
+    def test_verify_only_passes_for_both_copies_of_a_source_moved_twice(
+            self, tmp_home, projects_root, roots_file, make_session):
+        """A to B, then A to C: the C copy already holds B's tombstone, so
+        only C's is excluded for C; both are excluded for B."""
+        src = make_session("src-proj", "20260503-source")
+        _, args_b = self._move(tmp_home, projects_root, make_session,
+                               tombstone=True, dst_name="dst-b", src=src)
+        _, args_c = self._move(tmp_home, projects_root, make_session,
+                               tombstone=True, dst_name="dst-c", src=src)
+
+        rc, out, err = self._verify_only(tmp_home, args_c)
+        assert rc == 0, f"{err}\n{out}"
+        assert "RESULT              : PASS" in out
+        assert "tombstone lines excluded from src: 2" in out
+
+        rc, out, err = self._verify_only(tmp_home, args_b)
+        assert rc == 0, f"{err}\n{out}"
+        assert "RESULT              : PASS" in out
+        assert "tombstone lines excluded from src: 4" in out
 
     def test_verify_only_prints_no_explanation_when_lengths_agree(
             self, tmp_home, projects_root, roots_file, make_session):
@@ -432,6 +471,7 @@ class TestPickerLabel:
         assert rc == 0, f"{err}\n{out}"
         assert "RESULT              : PASS" in out
         assert "more line(s) than dst" not in out
+        assert "tombstone lines excluded" not in out
         assert "expected" not in out and "unexplained" not in out
 
     def test_move_does_append_tombstone_records_to_source(

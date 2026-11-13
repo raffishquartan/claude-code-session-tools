@@ -112,7 +112,8 @@ def test_cli_version_flag_prints_and_exits(capsys) -> None:
 def test_cli_session_format_default_name(tmp_path, capsys, monkeypatch) -> None:
     """Default --session-format=name: shows the human name, hides the UUID."""
     monkeypatch.setattr(
-        "claude_code_usage.session_names.DEFAULT_LIVE_DIR", tmp_path / "no-live"
+        "cc_session_tools.lib.paths.claude_live_sessions_dir",
+        lambda: tmp_path / "no-live",
     )
     projects, cache_dir = _populate_with_session_names(tmp_path)
     rc = cli.main(
@@ -135,7 +136,8 @@ def test_cli_session_format_default_name(tmp_path, capsys, monkeypatch) -> None:
 
 def test_cli_session_format_uuid_keeps_old_behaviour(tmp_path, capsys, monkeypatch) -> None:
     monkeypatch.setattr(
-        "claude_code_usage.session_names.DEFAULT_LIVE_DIR", tmp_path / "no-live"
+        "cc_session_tools.lib.paths.claude_live_sessions_dir",
+        lambda: tmp_path / "no-live",
     )
     projects, cache_dir = _populate_with_session_names(tmp_path)
     rc = cli.main(
@@ -157,7 +159,8 @@ def test_cli_session_format_uuid_keeps_old_behaviour(tmp_path, capsys, monkeypat
 
 def test_cli_session_format_both_shows_name_and_uuid(tmp_path, capsys, monkeypatch) -> None:
     monkeypatch.setattr(
-        "claude_code_usage.session_names.DEFAULT_LIVE_DIR", tmp_path / "no-live"
+        "cc_session_tools.lib.paths.claude_live_sessions_dir",
+        lambda: tmp_path / "no-live",
     )
     projects, cache_dir = _populate_with_session_names(tmp_path)
     rc = cli.main(
@@ -179,7 +182,8 @@ def test_cli_session_format_both_shows_name_and_uuid(tmp_path, capsys, monkeypat
 
 def test_cli_session_filter_accepts_name(tmp_path, capsys, monkeypatch) -> None:
     monkeypatch.setattr(
-        "claude_code_usage.session_names.DEFAULT_LIVE_DIR", tmp_path / "no-live"
+        "cc_session_tools.lib.paths.claude_live_sessions_dir",
+        lambda: tmp_path / "no-live",
     )
     projects, cache_dir = _populate_with_session_names(tmp_path)
     rc = cli.main(
@@ -229,7 +233,8 @@ def _populate_with_hook_children(tmp_path: Path) -> tuple[Path, Path]:
 
 def test_cli_query_include_children_folds_hook_into_parent(tmp_path, capsys, monkeypatch) -> None:
     monkeypatch.setattr(
-        "claude_code_usage.session_names.DEFAULT_LIVE_DIR", tmp_path / "no-live"
+        "cc_session_tools.lib.paths.claude_live_sessions_dir",
+        lambda: tmp_path / "no-live",
     )
     projects, cache_dir = _populate_with_hook_children(tmp_path)
     rc = cli.main(
@@ -251,7 +256,8 @@ def test_cli_query_include_children_folds_hook_into_parent(tmp_path, capsys, mon
 
 def test_cli_children_subcommand_lists_child_sessions(tmp_path, capsys, monkeypatch) -> None:
     monkeypatch.setattr(
-        "claude_code_usage.session_names.DEFAULT_LIVE_DIR", tmp_path / "no-live"
+        "cc_session_tools.lib.paths.claude_live_sessions_dir",
+        lambda: tmp_path / "no-live",
     )
     projects, cache_dir = _populate_with_hook_children(tmp_path)
     rc = cli.main(
@@ -270,7 +276,8 @@ def test_cli_children_subcommand_lists_child_sessions(tmp_path, capsys, monkeypa
 
 def test_cli_children_subcommand_returns_empty_for_unknown_parent(tmp_path, capsys, monkeypatch) -> None:
     monkeypatch.setattr(
-        "claude_code_usage.session_names.DEFAULT_LIVE_DIR", tmp_path / "no-live"
+        "cc_session_tools.lib.paths.claude_live_sessions_dir",
+        lambda: tmp_path / "no-live",
     )
     projects, cache_dir = _populate_with_hook_children(tmp_path)
     rc = cli.main(
@@ -322,7 +329,8 @@ def _populate_with_hook_and_regular(tmp_path: Path) -> tuple[Path, Path]:
 
 def test_cli_query_exclude_hooks_removes_hook_rows(tmp_path, capsys, monkeypatch) -> None:
     monkeypatch.setattr(
-        "claude_code_usage.session_names.DEFAULT_LIVE_DIR", tmp_path / "no-live"
+        "cc_session_tools.lib.paths.claude_live_sessions_dir",
+        lambda: tmp_path / "no-live",
     )
     projects, cache_dir = _populate_with_hook_and_regular(tmp_path)
     rc = cli.main(
@@ -348,7 +356,8 @@ def test_cli_query_exclude_hooks_removes_hook_rows(tmp_path, capsys, monkeypatch
 def test_cli_query_exclude_hooks_affects_total_cost(tmp_path, capsys, monkeypatch) -> None:
     """With hooks excluded, total cost is half of the full total."""
     monkeypatch.setattr(
-        "claude_code_usage.session_names.DEFAULT_LIVE_DIR", tmp_path / "no-live"
+        "cc_session_tools.lib.paths.claude_live_sessions_dir",
+        lambda: tmp_path / "no-live",
     )
     projects, cache_dir = _populate_with_hook_and_regular(tmp_path)
     # Run without filter
@@ -367,7 +376,8 @@ def test_cli_query_exclude_hooks_affects_total_cost(tmp_path, capsys, monkeypatc
 def test_cli_query_include_hooks_default_includes_hooks(tmp_path, capsys, monkeypatch) -> None:
     """Default (no flag) includes hook sessions."""
     monkeypatch.setattr(
-        "claude_code_usage.session_names.DEFAULT_LIVE_DIR", tmp_path / "no-live"
+        "cc_session_tools.lib.paths.claude_live_sessions_dir",
+        lambda: tmp_path / "no-live",
     )
     projects, cache_dir = _populate_with_hook_and_regular(tmp_path)
     rc = cli.main(

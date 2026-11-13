@@ -27,16 +27,15 @@ import logging
 from pathlib import Path
 from typing import Iterable
 
+from cc_session_tools.lib import paths as _paths
+
 from . import parser as _parser
 
 log = logging.getLogger(__name__)
 
-DEFAULT_LIVE_DIR = Path.home() / ".claude" / "sessions"
-
-
 def load_live_names(sessions_dir: Path | str | None = None) -> dict[str, str]:
     """Return {session_uuid: display_name} from ~/.claude/sessions/*.json."""
-    base = Path(sessions_dir) if sessions_dir is not None else DEFAULT_LIVE_DIR
+    base = Path(sessions_dir) if sessions_dir is not None else _paths.claude_live_sessions_dir()
     out: dict[str, str] = {}
     if not base.is_dir():
         return out
