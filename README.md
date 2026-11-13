@@ -363,8 +363,7 @@ These keep the rest of CCST working without any action from you:
 - `messaging-deliver` - delivers `ccmsg` messages at session start and each prompt.
 - `catchup` - catches up missed scheduled jobs and shows the digest.
 - `pdata-sync` - syncs `pdata` databases across your machines (see below).
-- `pending-migration` and `pending-rename` - surface unfinished data migrations and
-  half-finished session renames.
+- `pending-migration` - surfaces unfinished data migrations.
 - `last-screenshot` - type `>lss` in a prompt and Claude gets the path of your newest
   screenshot (set `CCST_SCREENSHOT_DIR`; several directories may be separated by `:`).
 - `marker-allow` - lets skills drop small marker files without a permission prompt.
@@ -501,7 +500,7 @@ flag.
 | `sessions`           | inspect `sessions.db`; one-shot schema migrations                         |
 | `repair`             | repair known `sessions.db` corruption                                     |
 | `gc`                 | `report` and `prune` orphaned per-session data                            |
-| `telemetry`          | `query` and `trim` the hook-invocation log                                |
+| `telemetry`          | `query` and `trim` the hook log; `recover` a command from its hash        |
 | `migrate`            | one-shot migrations from legacy flat-file stores to SQLite                |
 | `context-override`   | toggle the context-window warning for the current session                 |
 
@@ -548,7 +547,9 @@ CCST is deliberately not a server or a shared team tool. It is local infrastruct
 person running Claude Code hard, on one or more of their own machines. Everything is SQLite
 under `~/.local/share/claude/`, one file per subsystem (sessions, messages, scheduler,
 telemetry, command cache), and all of it is inspectable with `ccst telemetry query`,
-`ccst gc report`, `ccst sessions list`, or a plain `sqlite3` shell. `ccst doctor` is the one
+`ccst gc report`, `ccst sessions list`, or a plain `sqlite3` shell. Telemetry stores only a
+hash of each reviewed command; `ccst telemetry recover <hash>` finds the command behind it in
+the firing session's transcripts. `ccst doctor` is the one
 command that checks all of it at once. Run it any time something feels off.
 
 ## Contributing

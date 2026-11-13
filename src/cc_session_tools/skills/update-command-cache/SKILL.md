@@ -22,22 +22,38 @@ The bash-security-review hook records every fire to `telemetry.db`. The cache (`
 
 ### Relationship to bash-hard-deny
 
-This skill and the `bash-hard-deny` hook (`src/hooks/bash_hard_deny.py`) share one convention: `CCST_FIRES_ACCESS=1`. `bash-hard-deny`'s telemetry.db-block section documents this env var as the bypass that lets a legitimate reader touch the telemetry log; this skill's own gate (in `scripts/update_command_cache.py`, `cmd_list`) refuses to read `telemetry.db` unless the same variable is set.
+This skill, `ccst telemetry recover`, and the `bash-hard-deny` hook (`src/hooks/bash_hard_deny.py`) share one convention: `CCST_FIRES_ACCESS=1`. `bash-hard-deny`'s telemetry.db-block section documents this env var as the bypass that lets a legitimate reader touch the telemetry log; this skill's own gate (in `scripts/update_command_cache.py`, `cmd_list`) and `ccst telemetry recover` each refuse to read `telemetry.db` or any transcript unless the same variable is set.
 
-The two are NOT structurally coupled — the hook cannot literally intercept this skill's Python-internal file read, so setting the variable is what actually unlocks the read on both sides. They stay consistent only by discipline: if `bash-hard-deny`'s bypass env var name or semantics ever change, this skill's gate must be updated by hand to match. It is a shared convention that must be kept in sync, not an enforced runtime dependency.
+The gate is a convention, not an enforced runtime dependency. The hook cannot intercept this skill's Python-internal file read, and its rules do not match `ccst telemetry recover` at all, so setting the variable is what unlocks the read, checked by each reader itself. They stay consistent only by discipline: if `bash-hard-deny`'s bypass env var name or semantics ever change, both gates must be updated by hand to match.
 
 This skill:
 
-1. Reads the fires log (gated by `CCST_FIRES_ACCESS=1` so the bash-hard-deny hook permits the read).
+1. Reads the fires log (gated by `CCST_FIRES_ACCESS=1`).
 2. Filters to entries with `verdict == "safe"` and `cache != "hit"` (i.e. ones that escalated to claude).
 3. Cross-references each input hash with the current cache; drops anything already cached.
-4. Prints each remaining candidate's sha, fire count, last-seen timestamp, and a sample session id -
-   **not** the plaintext command: `telemetry_events` only stores a SHA-256 `input_hash`, never the
-   command text itself. Recovering the plaintext to eyeball a candidate before promoting it is a
-   manual step - walk the named sample session's transcript for the command that produced that
-   hash. There is currently no automated command preview.
-5. After you've identified and vetted a candidate's real command by hand, promote it with the
-   `promote` subcommand (or write it directly via `hooks.cache.cache_record()`).
+4. Prints each remaining candidate's sha, fire count, last-seen timestamp, a sample session id and
+   a recovered command preview. `telemetry_events` stores only a SHA-256 `input_hash`, never the
+   command text; the preview comes from `ccst telemetry recover`'s recovery (one batch pass over
+   all candidates), which reports a command only when it re-hashes exactly to the candidate's
+   hash. The preview is for triage only: it is cut to 200 characters, a cut preview ends with
+   `…[+N chars]`, and newlines, tabs and other control characters are shown escaped (`\n`,
+   `\t`, `\uXXXX`). A candidate whose command cannot be confirmed shows `status=session` (the
+   hash fired in a known session but no transcript command matches it), `status=ambiguous` or
+   `status=unknown` instead. `list --no-preview` skips recovery and opens no transcript.
+5. Before promoting any candidate, show the full command:
+
+       CCST_FIRES_ACCESS=1 ccst telemetry recover --max-chars 0 <sha>
+
+   A cache entry approves the whole command, so a truncated preview is never enough to vet it.
+   The output is one tab-separated line: hash as given, status, full 64-character hash, session
+   uuid, `<transcript>:<line>`, command. Only status `command` confirms the plaintext; any other
+   status means it could not be confirmed and the candidate must not be promoted on a guess.
+6. Promote a vetted candidate with its full hash and the recovered command (as printed, escapes
+   included) as the preview, with `$PY` set as under Invocation below:
+
+       "$PY" ~/.claude/skills/update-command-cache/scripts/update_command_cache.py promote <full sha> --preview "<recovered command>"
+
+End to end: `list` -> `ccst telemetry recover --max-chars 0 <sha>` -> `promote <full sha> --preview "<recovered command>"`.
 
 Manual subcommands:
 - `remove <sha>` removes a single entry (after confirmation).
@@ -58,7 +74,8 @@ is already on `PATH` - its console-script shebang line names the exact venv Pyth
 package, regardless of install method (`uv tool install`, `pipx`, `pip --user`):
 
     PY="$(sed -n '1s/^#!//p' "$(command -v ccst)")"
-    CCST_FIRES_ACCESS=1 "$PY" ~/.claude/skills/update-command-cache/scripts/update_command_cache.py list
+    CCST_FIRES_ACCESS=1 "$PY" ~/.claude/skills/update-command-cache/scripts/update_command_cache.py list [--no-preview]
+    CCST_FIRES_ACCESS=1 ccst telemetry recover --max-chars 0 <sha>
     "$PY" ~/.claude/skills/update-command-cache/scripts/update_command_cache.py remove <sha>
     "$PY" ~/.claude/skills/update-command-cache/scripts/update_command_cache.py flip <sha> <safe|suspicious|dangerous>
     "$PY" ~/.claude/skills/update-command-cache/scripts/update_command_cache.py promote <sha> [--verdict safe] [--risks ...] [--preview ...]
@@ -66,7 +83,7 @@ package, regardless of install method (`uv tool install`, `pipx`, `pip --user`):
 In a repo checkout (development), `uv run python3 scripts/update_command_cache.py ...` from this
 skill's source directory works the same way.
 
-Default behaviour (no subcommand) is `list`: show pending candidates and prompt for promotion.
+Default behaviour (no subcommand) is `list` with previews: show pending candidates for triage.
 
 ## Safety notes
 

@@ -21,3 +21,10 @@ def data_home() -> Path:
     if override:
         return Path(override)
     return Path.home() / ".local" / "share" / "claude"
+
+
+def claude_projects_dir() -> Path:
+    """Claude Code's transcript root, ~/.claude/projects (one <encoded-cwd>
+    directory per project, holding <uuid>.jsonl and <uuid>/subagents/*.jsonl).
+    Resolved on each call so tests that redirect Path.home() see their own."""
+    return Path.home() / ".claude" / "projects"

@@ -35,12 +35,12 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from cc_session_tools.lib import db as _db
+from cc_session_tools.lib import paths as _paths
 from cc_session_tools.lib.messaging.store import store_root as _default_messages_root
 from cc_session_tools.lib.scheduler.state import parse_ts_or_none as _parse_ts_or_none
 from cc_session_tools.lib.scheduler.store import scheduler_dir as _default_scheduler_dir
 from cc_session_tools.lib.sessions_db import default_db_path as _default_sessions_db_path
 
-DEFAULT_PROJECTS_DIR = Path.home() / ".claude" / "projects"
 DEFAULT_SESSION_ENV_DIR = Path.home() / ".claude" / "session-env"
 DEFAULT_MIN_AGE_HOURS = 24.0
 
@@ -217,7 +217,7 @@ def build_report(
     override, e.g. ``CC_SCHEDULER_DIR`` / ``CCST_MESSAGES_ROOT`` /
     ``CCST_SESSIONS_DIR``).
     """
-    projects_dir = projects_dir if projects_dir is not None else DEFAULT_PROJECTS_DIR
+    projects_dir = projects_dir if projects_dir is not None else _paths.claude_projects_dir()
     scheduler_dir = scheduler_dir if scheduler_dir is not None else _default_scheduler_dir()
     messages_root = messages_root if messages_root is not None else _default_messages_root()
     session_env_dir = (
@@ -488,7 +488,7 @@ def prune(
     ``only``, when given, restricts processing to that subset of
     ``STORE_NAMES``.
     """
-    projects_dir = projects_dir if projects_dir is not None else DEFAULT_PROJECTS_DIR
+    projects_dir = projects_dir if projects_dir is not None else _paths.claude_projects_dir()
     scheduler_dir = scheduler_dir if scheduler_dir is not None else _default_scheduler_dir()
     messages_root = messages_root if messages_root is not None else _default_messages_root()
     session_env_dir = (

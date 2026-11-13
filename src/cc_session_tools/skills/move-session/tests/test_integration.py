@@ -39,7 +39,7 @@ class TestEndToEnd:
     def test_move_and_rename_creates_all_artifacts(
             self, tmp_home, projects_root, roots_file, make_session, tmp_path):
         """Full MOVE+RENAME: dst dir copied, dst jsonl rewritten, tombstone
-        appended, marker written, cleanup script generated."""
+        appended, cleanup script generated, no pending-rename marker."""
         src_dir, src_jsonl, uuid = make_session("src-proj", "20260503-source")
         dst_cwd = projects_root / "dst-proj"
         dst_cwd.mkdir()
@@ -69,10 +69,8 @@ class TestEndToEnd:
         assert str(src_dir.parent.parent) not in text  # old cwd gone
         assert str(dst_cwd) in text  # new cwd present
 
-        # Pending-rename marker written in dst.
-        marker = dst_dir / ".pending-rename"
-        assert marker.is_file()
-        assert "20260503-renamed" in marker.read_text()
+        # The picker label lives in the transcript; no marker file is written.
+        assert not (dst_dir / ".pending-rename").exists()
 
         # Tombstone written at source.
         assert (src_dir / "TOMBSTONE.md").is_file()
@@ -217,16 +215,34 @@ class TestEndToEnd:
         assert str(projects_root) in out
 
 
-class TestRenameOnlyDoesNotCorruptJsonl:
-    """Item 5.2.1: rename-only must NOT append tombstone records to the jsonl,
-    because src_jsonl == dst_jsonl when the project key is unchanged.
-    Appending would corrupt the live transcript that the user resumes into."""
+def _picker_label_lines(tag: str, uuid: str) -> list[str]:
+    """The exact pair of lines Claude Code's /rename writes, pinned byte for
+    byte (compact separators, key order) because the shape is an undocumented
+    Claude Code internal: a change here should be a deliberate one."""
+    return [
+        '{"type":"custom-title","customTitle":"%s","sessionId":"%s"}' % (tag, uuid),
+        '{"type":"agent-name","agentName":"%s","sessionId":"%s"}' % (tag, uuid),
+    ]
 
-    def test_rename_only_jsonl_line_count_unchanged(
+
+def _title_records(path: Path) -> list[dict]:
+    return [
+        r for r in (json.loads(l) for l in path.read_text().splitlines() if l.strip())
+        if r.get("type") in ("custom-title", "agent-name")
+    ]
+
+
+class TestPickerLabel:
+    """Tag-changing operations append a custom-title + agent-name pair to the
+    transcript the session resumes into, so the picker and status line show
+    the new tag on first resume. RENAME-only appends to the shared transcript
+    (src_jsonl == dst_jsonl) but never tombstone records, which would corrupt
+    the conversation the user resumes into."""
+
+    def test_rename_only_appends_exactly_the_title_pair(
             self, tmp_home, projects_root, roots_file, make_session):
         src_dir, src_jsonl, uuid = make_session("proj", "20260503-old-tag")
-        before_lines = src_jsonl.read_text().count("\n")
-        before_text = src_jsonl.read_text()
+        before = src_jsonl.read_bytes()
 
         rc, out, err = _run(
             "--src-session", str(src_dir),
@@ -237,19 +253,186 @@ class TestRenameOnlyDoesNotCorruptJsonl:
         )
         assert rc == 0, f"{err}\n{out}"
 
-        # The script announces the deliberate skip so future readers understand why.
+        after = src_jsonl.read_bytes()
+        assert after.startswith(before), "original transcript bytes must be a prefix"
+        tail = after[len(before):].decode().splitlines()
+        assert tail == _picker_label_lines("20260503-new-tag", uuid)
+        assert "[TOMBSTONE]" not in after.decode()
         assert "jsonl tombstone records skipped (rename-only" in out
-        # Most importantly: the jsonl is byte-identical to before. Any change
-        # would mean tombstone records leaked into the live transcript.
-        after_text = src_jsonl.read_text()
-        assert after_text == before_text, (
-            "rename-only must not modify the jsonl; it is shared with destination"
-        )
-        after_lines = src_jsonl.read_text().count("\n")
-        assert after_lines == before_lines
-
+        assert "20260503-new-tag" in out and "picker label" in out
         # TOMBSTONE.md still goes into the source dir (preserved as a record).
         assert (src_dir / "TOMBSTONE.md").is_file()
+        assert not (src_dir.parent / "20260503-new-tag" / ".pending-rename").exists()
+
+    def test_move_and_rename_appends_to_destination_only(
+            self, tmp_home, projects_root, roots_file, make_session):
+        src_dir, src_jsonl, uuid = make_session("src-proj", "20260503-source")
+        dst_cwd = projects_root / "dst-proj"
+        dst_cwd.mkdir()
+
+        rc, out, err = _run(
+            "--src-session", str(src_dir),
+            "--dst-cwd", str(dst_cwd),
+            "--rename-tag", "20260503-renamed",
+            "--uuid", uuid,
+            "--execute",
+            env={"HOME": str(tmp_home)},
+        )
+        assert rc == 0, f"{err}\n{out}"
+
+        dst_jsonl = (tmp_home / ".claude" / "projects" /
+                     str(dst_cwd).replace("/", "-") / f"{uuid}.jsonl")
+        assert dst_jsonl.read_text().splitlines()[-2:] == _picker_label_lines(
+            "20260503-renamed", uuid)
+        assert len(_title_records(dst_jsonl)) == 2
+        # The source gets only the tombstone pair.
+        assert _title_records(src_jsonl) == []
+        src_tail = [json.loads(l) for l in src_jsonl.read_text().splitlines()[-2:]]
+        assert [r["type"] for r in src_tail] == ["user", "assistant"]
+        assert "[TOMBSTONE]" in src_tail[0]["message"]["content"]
+
+    def test_move_only_appends_no_title(
+            self, tmp_home, projects_root, roots_file, make_session):
+        src_dir, src_jsonl, uuid = make_session("src-proj", "20260503-source")
+        dst_cwd = projects_root / "dst-proj"
+        dst_cwd.mkdir()
+
+        rc, out, err = _run(
+            "--src-session", str(src_dir),
+            "--dst-cwd", str(dst_cwd),
+            "--uuid", uuid,
+            "--execute",
+            env={"HOME": str(tmp_home)},
+        )
+        assert rc == 0, f"{err}\n{out}"
+
+        dst_jsonl = (tmp_home / ".claude" / "projects" /
+                     str(dst_cwd).replace("/", "-") / f"{uuid}.jsonl")
+        assert _title_records(dst_jsonl) == []
+        assert _title_records(src_jsonl) == []
+
+    def test_transcript_without_trailing_newline(
+            self, tmp_home, projects_root, roots_file, make_session):
+        src_dir, src_jsonl, uuid = make_session("proj", "20260503-old-tag")
+        src_jsonl.write_bytes(src_jsonl.read_bytes().rstrip(b"\n"))
+        idle = os.stat(src_jsonl).st_mtime - 120
+        os.utime(src_jsonl, (idle, idle))
+
+        rc, out, err = _run(
+            "--src-session", str(src_dir),
+            "--rename-tag", "20260503-new-tag",
+            "--uuid", uuid,
+            "--execute",
+            env={"HOME": str(tmp_home)},
+        )
+        assert rc == 0, f"{err}\n{out}"
+
+        lines = src_jsonl.read_text().splitlines()
+        for line in lines:
+            json.loads(line)  # every line still parses
+        assert len(lines) == 4
+        assert lines[-2:] == _picker_label_lines("20260503-new-tag", uuid)
+
+    def test_dry_run_leaves_transcript_untouched(
+            self, tmp_home, projects_root, roots_file, make_session):
+        src_dir, src_jsonl, uuid = make_session("proj", "20260503-old-tag")
+        before = src_jsonl.read_bytes()
+
+        rc, out, err = _run(
+            "--src-session", str(src_dir),
+            "--rename-tag", "20260503-new-tag",
+            "--uuid", uuid,
+            env={"HOME": str(tmp_home)},
+        )
+        assert rc == 0, f"{err}\n{out}"
+        assert "DRY-RUN" in out
+        assert src_jsonl.read_bytes() == before
+
+    def test_verify_only_leaves_transcripts_untouched(
+            self, tmp_home, projects_root, roots_file, make_session):
+        src_dir, src_jsonl, uuid = make_session("src-proj", "20260503-source")
+        dst_cwd = projects_root / "dst-proj"
+        dst_cwd.mkdir()
+        rc, out, err = _run(
+            "--src-session", str(src_dir),
+            "--dst-cwd", str(dst_cwd),
+            "--rename-tag", "20260503-renamed",
+            "--uuid", uuid,
+            "--execute",
+            env={"HOME": str(tmp_home)},
+        )
+        assert rc == 0, f"{err}\n{out}"
+        dst_jsonl = (tmp_home / ".claude" / "projects" /
+                     str(dst_cwd).replace("/", "-") / f"{uuid}.jsonl")
+        src_before = src_jsonl.read_bytes()
+        dst_before = dst_jsonl.read_bytes()
+
+        rc, out, err = _run(
+            "--src-session", str(src_dir),
+            "--dst-cwd", str(dst_cwd),
+            "--rename-tag", "20260503-renamed",
+            "--uuid", uuid,
+            "--verify-only",
+            env={"HOME": str(tmp_home)},
+        )
+        # The verification verdict is not under test here, only that
+        # --verify-only writes nothing.
+        assert "VERIFY-ONLY" in out, f"{err}\n{out}"
+        assert src_jsonl.read_bytes() == src_before
+        assert dst_jsonl.read_bytes() == dst_before
+
+    def _move(self, tmp_home, projects_root, make_session, *, tombstone: bool):
+        src_dir, src_jsonl, uuid = make_session("src-proj", "20260503-source")
+        dst_cwd = projects_root / "dst-proj"
+        dst_cwd.mkdir()
+        move_args = [
+            "--src-session", str(src_dir),
+            "--dst-cwd", str(dst_cwd),
+            "--uuid", uuid,
+        ]
+        rc, out, err = _run(
+            *move_args, "--execute",
+            *([] if tombstone else ["--no-tombstone"]),
+            env={"HOME": str(tmp_home)},
+        )
+        assert rc == 0, f"{err}\n{out}"
+        return src_jsonl, move_args
+
+    def _verify_only(self, tmp_home, move_args):
+        return _run(*move_args, "--verify-only", env={"HOME": str(tmp_home)})
+
+    def test_verify_only_after_move_explains_the_tombstone_fail(
+            self, tmp_home, projects_root, roots_file, make_session):
+        _, move_args = self._move(
+            tmp_home, projects_root, make_session, tombstone=True)
+        rc, out, err = self._verify_only(tmp_home, move_args)
+        assert rc != 0, f"{err}\n{out}"
+        assert "RESULT              : FAIL" in out
+        assert "2 more line(s) than dst" in out
+        assert "expected" in out and "tombstone" in out
+        assert "unexplained" not in out
+
+    def test_verify_only_flags_extra_source_lines_it_cannot_explain(
+            self, tmp_home, projects_root, roots_file, make_session):
+        src_jsonl, move_args = self._move(
+            tmp_home, projects_root, make_session, tombstone=False)
+        with src_jsonl.open("a") as fh:
+            fh.write(json.dumps({"type": "user", "uuid": "x"}) + "\n")
+        rc, out, err = self._verify_only(tmp_home, move_args)
+        assert rc != 0, f"{err}\n{out}"
+        assert "1 more line(s) than dst" in out
+        assert "unexplained" in out
+        assert "expected" not in out
+
+    def test_verify_only_prints_no_explanation_when_lengths_agree(
+            self, tmp_home, projects_root, roots_file, make_session):
+        _, move_args = self._move(
+            tmp_home, projects_root, make_session, tombstone=False)
+        rc, out, err = self._verify_only(tmp_home, move_args)
+        assert rc == 0, f"{err}\n{out}"
+        assert "RESULT              : PASS" in out
+        assert "more line(s) than dst" not in out
+        assert "expected" not in out and "unexplained" not in out
 
     def test_move_does_append_tombstone_records_to_source(
             self, tmp_home, projects_root, roots_file, make_session):
@@ -271,6 +454,141 @@ class TestRenameOnlyDoesNotCorruptJsonl:
         assert "appended 2 tombstone records" in out
         after_lines = sum(1 for _ in src_jsonl.open())
         assert after_lines == before_lines + 2
+
+
+def _dead_pid() -> int:
+    """A pid that belonged to a process which has already exited."""
+    proc = subprocess.Popen([sys.executable, "-c", "pass"])
+    proc.wait()
+    return proc.pid
+
+
+def _write_process_record(tmp_home: Path, pid: int, session_uuid: str) -> None:
+    """Mimic Claude Code's live-process registry, ~/.claude/sessions/<pid>.json."""
+    sessions = tmp_home / ".claude" / "sessions"
+    sessions.mkdir(parents=True, exist_ok=True)
+    (sessions / f"{pid}.json").write_text(
+        json.dumps({"pid": pid, "sessionId": session_uuid, "cwd": "/home/alice"}))
+
+
+class TestLivenessRefusal:
+    """A tag-changing operation refuses (exit 2, transcript untouched) when a
+    live Claude Code process holds the session, even when the script itself
+    runs from a plain shell: that process would re-append its old title after
+    its next prompt and silently undo the rename."""
+
+    def test_live_process_record_refuses_from_plain_shell(
+            self, tmp_home, projects_root, roots_file, make_session):
+        src_dir, src_jsonl, uuid = make_session("proj", "20260503-old-tag")
+        _write_process_record(tmp_home, os.getpid(), uuid)
+        before = src_jsonl.read_bytes()
+
+        rc, out, err = _run(
+            "--src-session", str(src_dir),
+            "--rename-tag", "20260503-new-tag",
+            "--uuid", uuid,
+            "--execute",
+            env={"HOME": str(tmp_home)},
+        )
+        assert rc == 2, f"{err}\n{out}"
+        assert "REFUSED (RENAME)" in out
+        assert f"pid {os.getpid()}" in out
+        assert src_jsonl.read_bytes() == before
+        assert not (src_dir.parent / "20260503-new-tag").exists()
+
+    def test_dead_process_record_does_not_refuse(
+            self, tmp_home, projects_root, roots_file, make_session):
+        src_dir, src_jsonl, uuid = make_session("proj", "20260503-old-tag")
+        _write_process_record(tmp_home, _dead_pid(), uuid)
+
+        rc, out, err = _run(
+            "--src-session", str(src_dir),
+            "--rename-tag", "20260503-new-tag",
+            "--uuid", uuid,
+            "--execute",
+            env={"HOME": str(tmp_home)},
+        )
+        assert rc == 0, f"{err}\n{out}"
+        assert src_jsonl.read_text().splitlines()[-2:] == _picker_label_lines(
+            "20260503-new-tag", uuid)
+
+    def test_live_record_for_another_session_does_not_refuse(
+            self, tmp_home, projects_root, roots_file, make_session):
+        src_dir, _, uuid = make_session("proj", "20260503-old-tag")
+        _write_process_record(tmp_home, os.getpid(), "some-other-session-uuid")
+
+        rc, out, err = _run(
+            "--src-session", str(src_dir),
+            "--rename-tag", "20260503-new-tag",
+            "--uuid", uuid,
+            "--execute",
+            env={"HOME": str(tmp_home)},
+        )
+        assert rc == 0, f"{err}\n{out}"
+
+    def test_recently_written_transcript_refuses_from_plain_shell(
+            self, tmp_home, projects_root, roots_file, make_session):
+        src_dir, src_jsonl, uuid = make_session("proj", "20260503-old-tag")
+        os.utime(src_jsonl)  # written just now
+        before = src_jsonl.read_bytes()
+
+        rc, out, err = _run(
+            "--src-session", str(src_dir),
+            "--rename-tag", "20260503-new-tag",
+            "--uuid", uuid,
+            "--execute",
+            env={"HOME": str(tmp_home)},
+        )
+        assert rc == 2, f"{err}\n{out}"
+        assert "actively appending" in out
+        assert src_jsonl.read_bytes() == before
+
+    def test_move_only_ignores_live_process_record(
+            self, tmp_home, projects_root, roots_file, make_session):
+        """A MOVE without a rename leaves the title alone, so a running
+        process re-appending it is harmless; the liveness check is scoped to
+        tag-changing operations."""
+        src_dir, _, uuid = make_session("src-proj", "20260503-source")
+        _write_process_record(tmp_home, os.getpid(), uuid)
+        dst_cwd = projects_root / "dst-proj"
+        dst_cwd.mkdir()
+
+        rc, out, err = _run(
+            "--src-session", str(src_dir),
+            "--dst-cwd", str(dst_cwd),
+            "--uuid", uuid,
+            "--execute",
+            env={"HOME": str(tmp_home)},
+        )
+        assert rc == 0, f"{err}\n{out}"
+
+
+class TestInSessionRecipe:
+    """The refusal recipe printed when the script runs inside the session it
+    is asked to rename."""
+
+    def test_recipe_uses_ccst_move_session_and_no_rename_step(
+            self, tmp_home, projects_root, roots_file, make_session):
+        src_dir, src_jsonl, uuid = make_session("proj", "20260503-old-tag")
+        os.utime(src_jsonl)  # the running session has just written to it
+        before = src_jsonl.read_bytes()
+
+        proc = subprocess.run(
+            [sys.executable, str(SCRIPT),
+             "--src-session", str(src_dir),
+             "--rename-tag", "20260503-new-tag",
+             "--uuid", uuid,
+             "--execute"],
+            capture_output=True, text=True, cwd=str(src_dir.parent.parent),
+            env={**os.environ, "HOME": str(tmp_home), "CLAUDECODE": "1",
+                 "PYTHONPATH": _REPO_SRC},
+        )
+        out = proc.stdout + proc.stderr
+        assert proc.returncode == 2, out
+        assert src_jsonl.read_bytes() == before
+        assert "ccst move-session" in out
+        assert "python3 " not in out
+        assert "/rename" not in out
 
 
 class TestIncludeMemoryWarnInRenameOnly:
