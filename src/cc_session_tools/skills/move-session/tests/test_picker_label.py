@@ -103,6 +103,12 @@ class TestDetectLiveHolder:
         self._record(sessions, os.getpid(), "another-session")
         assert ms.detect_live_holder(UUID, sessions) == []
 
+    def test_record_that_is_not_a_json_object_is_skipped(self, ms, tmp_path):
+        sessions = tmp_path / "sessions"
+        sessions.mkdir()
+        (sessions / f"{os.getpid()}.json").write_text("[]")
+        assert ms.detect_live_holder(UUID, sessions) == []
+
     def test_unreadable_and_non_pid_files_are_skipped(self, ms, tmp_path):
         """Claude Code may be rewriting a record mid-read, and the directory
         also holds non-record files (e.g. `<pid>.<hash>.key`)."""

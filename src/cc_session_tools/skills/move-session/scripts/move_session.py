@@ -118,7 +118,11 @@ def detect_live_holder(session_uuid: str, live_sessions_dir: Path) -> list[str]:
                 # Claude Code rewrites these records in place; a half-written
                 # one is skipped rather than guessed at.
                 continue
-            if data.get("sessionId") == session_uuid and pid_alive(int(record.stem)):
+            if (
+                isinstance(data, dict)
+                and data.get("sessionId") == session_uuid
+                and pid_alive(int(record.stem))
+            ):
                 reasons.append(
                     f"live Claude Code process (pid {record.stem}) has this session open "
                     f"(process record {record})"

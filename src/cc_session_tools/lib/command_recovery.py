@@ -24,11 +24,12 @@ import glob
 import hashlib
 import json
 import re
+import unicodedata
 from collections.abc import Iterable, Iterator, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
-from cc_session_tools.lib import paths, telemetry_store
+from cc_session_tools.lib import db, paths, telemetry_store
 
 DEFAULT_MAX_CHARS = 200
 MIN_PREFIX_LEN = 8
@@ -38,9 +39,11 @@ _SHA_PREFIX = "sha256:"
 _HEX_RE = re.compile(r"[0-9a-f]+")
 # Claude Code writes transcripts as compact JSON, so every Bash tool_use line
 # contains this substring; lines without it are skipped before json.loads.
-_BASH_MARKER = '"name":"Bash"'
+_BASH_MARKER = b'"name":"Bash"'
 _HOOK = "bash-security-review"
 _SIMPLE_ESCAPES = {"\t": "\\t", "\r": "\\r", "\n": "\\n"}
+# Control characters (C0, DEL, C1) and the line and paragraph separators.
+_ESCAPED_CATEGORIES = frozenset({"Cc", "Zl", "Zp"})
 
 
 class RecoveryStatus(enum.Enum):
@@ -108,14 +111,15 @@ def normalise_args(raws: Iterable[str]) -> list[str]:
 def _escape_char(ch: str) -> str:
     if ch in _SIMPLE_ESCAPES:
         return _SIMPLE_ESCAPES[ch]
-    if ord(ch) < 0x20:
+    if unicodedata.category(ch) in _ESCAPED_CATEGORIES:
         return f"\\u{ord(ch):04x}"
     return ch
 
 
 def escape_command(command: str) -> str:
-    """One-line form of ``command``: tab, CR, LF as ``\\t``, ``\\r``, ``\\n``,
-    other C0 control characters as ``\\uXXXX``; everything else literal."""
+    """One-line form of ``command``: tab, CR, LF as ``\\t``, ``\\r``, ``\\n``;
+    every other control character (C0, DEL, C1) and the Unicode line and
+    paragraph separators as ``\\uXXXX``; everything else literal."""
     return "".join(_escape_char(ch) for ch in command)
 
 
@@ -147,18 +151,23 @@ def format_line(rec: Recovery, max_chars: int) -> str:
 
 def iter_bash_commands(path: Path) -> Iterator[tuple[int, str]]:
     """Yield (1-based line number, command) for every Bash tool_use in one
-    transcript file. Lines that are not valid JSON (a transcript still being
-    written can end mid-record) cannot hold a recoverable command and are
-    skipped."""
-    with path.open(encoding="utf-8") as fh:
-        for lineno, line in enumerate(fh, start=1):
-            if _BASH_MARKER not in line:
+    transcript file. A line that is not valid UTF-8 or JSON (a transcript still
+    being written can end mid-record) or whose command cannot be hashed (a lone
+    surrogate) cannot hold a recoverable command and is skipped."""
+    with path.open("rb") as fh:
+        for lineno, raw in enumerate(fh, start=1):
+            if _BASH_MARKER not in raw:
                 continue
             try:
-                record = json.loads(line)
-            except json.JSONDecodeError:
+                record = json.loads(raw.decode("utf-8"))
+            except (UnicodeDecodeError, json.JSONDecodeError):
                 continue
-            yield from ((lineno, cmd) for cmd in _bash_commands_in(record))
+            for command in _bash_commands_in(record):
+                try:
+                    command.encode()
+                except UnicodeEncodeError:
+                    continue
+                yield lineno, command
 
 
 def _bash_commands_in(record: object) -> Iterator[str]:
@@ -205,7 +214,10 @@ def all_transcripts(projects_dir: Path) -> list[Path]:
 
 def _fired_sessions(hooks_dir: Path | None) -> dict[str, dict[str, str]]:
     """{full hash: {session_id: latest ts}} for every bash-security-review fire."""
-    conn = telemetry_store.connect(hooks_dir)
+    db_file = telemetry_store.db_path(hooks_dir)
+    if not db_file.is_file():
+        return {}
+    conn = db.connect(db_file, readonly=True)
     try:
         rows = conn.execute(
             "SELECT input_hash, session_id, MAX(ts) FROM telemetry_events "

@@ -423,3 +423,68 @@ def test_format_line_truncates_command() -> None:
 def test_claude_projects_dir_follows_home(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
     assert paths.claude_projects_dir() == tmp_path / ".claude" / "projects"
+
+
+def test_recover_creates_no_telemetry_db_or_directory_when_missing(tmp_path: Path) -> None:
+    projects = tmp_path / "projects"
+    projects.mkdir()
+    missing_hooks = tmp_path / "no-such-hooks-dir"
+
+    recs = cr.recover(["a" * 64], projects_dir=projects, hooks_dir=missing_hooks)
+
+    assert [r.status for r in recs] == [cr.RecoveryStatus.UNKNOWN]
+    assert not missing_hooks.exists()
+
+
+def test_recover_skips_transcript_lines_that_are_not_valid_utf8(
+    dirs: tuple[Path, Path],
+) -> None:
+    projects, hooks = dirs
+    command = "echo findme"
+    sha = _sha(command)
+    path = projects / KEY / f"{SESSION_A}.jsonl"
+    path.parent.mkdir(parents=True)
+    path.write_bytes(
+        b'{"type":"user","message":{"content":"half a char \xe2\x82"}}\n'
+        + _bash_line(command).encode("utf-8")
+        + b"\n"
+    )
+    _fire(hooks, sha, SESSION_A)
+
+    (rec,) = cr.recover([sha], projects_dir=projects, hooks_dir=hooks)
+
+    assert rec.status is cr.RecoveryStatus.COMMAND
+    assert rec.command == command
+
+
+def test_recover_skips_commands_that_cannot_be_encoded(dirs: tuple[Path, Path]) -> None:
+    projects, hooks = dirs
+    good = "echo ok"
+    sha = _sha(good)
+    surrogate_record = (
+        '{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Bash",'
+        '"input":{"command":"echo \\ud800"}}]}}'
+    )
+    _main(projects, SESSION_A, [surrogate_record, _bash_line(good)])
+    _fire(hooks, sha, SESSION_A)
+
+    (rec,) = cr.recover([sha], projects_dir=projects, hooks_dir=hooks)
+
+    assert rec.status is cr.RecoveryStatus.COMMAND
+    assert rec.command == good
+
+
+@pytest.mark.parametrize(
+    ("ch", "escaped"),
+    [
+        ("\x7f", "\\u007f"),
+        ("\x85", "\\u0085"),
+        ("\x9b", "\\u009b"),
+        (" ", "\\u2028"),
+        (" ", "\\u2029"),
+    ],
+)
+def test_escape_command_escapes_del_c1_and_line_separators(ch: str, escaped: str) -> None:
+    out = cr.escape_command(f"a{ch}b")
+    assert out == f"a{escaped}b"
+    assert len(out.splitlines()) == 1
