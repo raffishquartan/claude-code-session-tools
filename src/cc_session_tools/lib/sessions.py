@@ -8,6 +8,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Iterator
 
+from cc_session_tools.lib import paths as _paths
 from cc_session_tools.lib.rules import encode_cwd
 
 SESSION_BASENAME_RE = re.compile(r"^(\d{8})(?:-to-\d{8})?-")
@@ -316,7 +317,7 @@ def transcript_dir_for_project(project_dir: Path) -> Path:
     Encoding: each '/' and '.' in the absolute project path is replaced with '-'.
     Does not check whether the directory exists.
     """
-    return Path.home() / ".claude" / "projects" / encode_cwd(str(project_dir))
+    return _paths.claude_projects_dir() / encode_cwd(str(project_dir))
 
 
 def _jsonl_has_custom_title(jsonl: Path, basename: str, suffix: str) -> bool:

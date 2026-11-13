@@ -29,6 +29,10 @@ Current subcommands:
   telemetry trim                 Trim telemetry.db by size / age (see ccst telemetry trim --help).
   telemetry query                Query recent hook fires from telemetry.db (see
                                  ccst telemetry query --help).
+  telemetry recover <hash>...    Recover the Bash command behind each bash-security-review
+                                 input_hash from the firing sessions' transcripts, one
+                                 compact line per hash (requires CCST_FIRES_ACCESS=1; see
+                                 ccst telemetry recover --help).
   gc report                      Report orphaned per-session-uuid entries across the
                                  scheduler, messaging, and session-env stores (never
                                  deletes anything).
@@ -120,7 +124,7 @@ from cc_session_tools.hooks_install import (
     prune_stale_hooks,
     write_json_atomic,
 )
-from cc_session_tools.lib import machine_identity
+from cc_session_tools.lib import command_recovery, machine_identity
 from cc_session_tools.lib.claude_md_install import SECTION_IDS as CLAUDE_MD_SECTION_IDS
 from cc_session_tools.lib.claude_md_install import DRIFT_WARNING_MARKER, MarkdownAction, MarkdownResult
 from cc_session_tools.lib.hook_registry import HOOK_DESCRIPTIONS, HOOK_VERBS
@@ -997,6 +1001,43 @@ def _cmd_telemetry_query(args: argparse.Namespace) -> int:
         argv += ["--hooks-dir", args.hooks_dir]
 
     return query_main(argv)
+
+
+def _non_negative_int(raw: str) -> int:
+    """argparse type for a count that may be 0, else a usage error naming it."""
+    try:
+        value = int(raw)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"{raw!r} is not an integer") from None
+    if value < 0:
+        raise argparse.ArgumentTypeError(f"{raw!r} is negative")
+    return value
+
+
+def _cmd_telemetry_recover(args: argparse.Namespace) -> int:
+    # A self-imposed convention shared with update-command-cache: bash-hard-deny
+    # does not match this verb, so the variable is enforced here alone.
+    if os.environ.get("CCST_FIRES_ACCESS") != "1":
+        print(
+            "Refusing to read telemetry.db and transcripts without CCST_FIRES_ACCESS=1.\n"
+            "Re-run as: CCST_FIRES_ACCESS=1 ccst telemetry recover <hash>...",
+            file=sys.stderr,
+        )
+        return 2
+    try:
+        hashes = command_recovery.normalise_args(args.hashes)
+    except command_recovery.MalformedHashError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    results = command_recovery.recover(
+        hashes,
+        projects_dir=Path(args.projects_dir) if args.projects_dir else None,
+        hooks_dir=Path(args.hooks_dir) if args.hooks_dir else None,
+        scan_all=args.scan_all,
+    )
+    for rec in results:
+        print(command_recovery.format_line(rec, args.max_chars))
+    return 0
 
 
 # ---------- gc report ----------
@@ -3261,6 +3302,40 @@ def _build_parser() -> argparse.ArgumentParser:
         help="telemetry.db directory (default: CCST_HOOKS_DIR or ~/.local/share/claude/)",
     )
 
+    telemetry_recover_parser = telemetry_sub.add_parser(
+        "recover",
+        help="Recover the Bash command behind bash-security-review input hashes",
+        description=(
+            "For each hash (full, or a prefix of at least 8 hex characters; a sha256: "
+            "prefix is accepted) print one tab-separated line: hash as given (normalised), "
+            "status (command|session|ambiguous|unknown), full hash (command only), session "
+            "uuid, <transcript>:<line>, command. A command is printed only when it "
+            "re-hashes to the given hash. Searches the firing sessions' main and subagent "
+            "transcripts. Requires CCST_FIRES_ACCESS=1."
+        ),
+    )
+    telemetry_recover_parser.add_argument(
+        "hashes", nargs="+", metavar="HASH", help="input_hash, full or a prefix of 8+ hex characters",
+    )
+    telemetry_recover_parser.add_argument(
+        "--max-chars", type=_non_negative_int, default=command_recovery.DEFAULT_MAX_CHARS,
+        metavar="N",
+        help="Cut each escaped command to N characters, marking how many were cut "
+             f"(default: {command_recovery.DEFAULT_MAX_CHARS}; 0 for no limit)",
+    )
+    telemetry_recover_parser.add_argument(
+        "--scan-all", action="store_true",
+        help="Search every transcript, not only those of sessions that fired the hash",
+    )
+    telemetry_recover_parser.add_argument(
+        "--projects-dir", default=None, metavar="DIR",
+        help="Transcript root (default: ~/.claude/projects)",
+    )
+    telemetry_recover_parser.add_argument(
+        "--hooks-dir", default=None, metavar="DIR",
+        help="telemetry.db directory (default: CCST_HOOKS_DIR or ~/.local/share/claude/)",
+    )
+
     # ---- gc ----
     gc_parser = sub.add_parser("gc", help="Garbage-collection reports for per-session-uuid stores")
     gc_sub = gc_parser.add_subparsers(dest="verb", metavar="<verb>")
@@ -4050,6 +4125,8 @@ def main() -> None:
             sys.exit(_cmd_telemetry_trim(args))
         if args.verb == "query":
             sys.exit(_cmd_telemetry_query(args))
+        if args.verb == "recover":
+            sys.exit(_cmd_telemetry_recover(args))
 
     if args.noun == "gc":
         if args.verb == "report":

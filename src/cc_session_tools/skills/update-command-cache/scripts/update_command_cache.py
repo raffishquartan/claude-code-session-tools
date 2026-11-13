@@ -2,13 +2,14 @@
 """Curate the bash-security-review command cache.
 
 Reads telemetry.db's telemetry_events table (hook='bash-security-review'),
-surfaces safe-verdict commands not yet in the cache, prompts for approval,
-and records approved ones.
+surfaces safe-verdict commands not yet in the cache with a truncated preview of
+each command recovered from its session transcripts (the same recovery as
+`ccst telemetry recover`), and records approved ones.
 
 Usage:
-    CCST_FIRES_ACCESS=1 python3 update_command_cache.py list
-    python3 update_command_cache.py remove <sha>
-    python3 update_command_cache.py flip <sha> <safe|suspicious|dangerous>
+    CCST_FIRES_ACCESS=1 python3 update_command_cache.py [list] [--no-preview]
+    python3 update_command_cache.py remove <sha> [--yes]
+    python3 update_command_cache.py flip <sha> <safe|suspicious|dangerous> [--yes]
     python3 update_command_cache.py promote <sha> [--verdict safe] [--risks ...] [--preview ...]
 
 Must be run through an interpreter that has cc-session-tools installed (`uv run
@@ -17,13 +18,14 @@ python3 <path>` in a repo checkout, or the venv `uv tool install` creates) -
 not importable from a bare system `python3` that never had the package
 installed.
 
-The CCST_FIRES_ACCESS=1 env var is required to read telemetry.db through the
-bash-hard-deny hook's allowlist.
+`list` refuses to read telemetry.db or transcripts unless CCST_FIRES_ACCESS=1
+is set, a convention shared with the bash-hard-deny hook's telemetry-read rule.
 """
 from __future__ import annotations
 
 import argparse
 import os
+import shlex
 import sys
 from collections import Counter
 from pathlib import Path
@@ -33,9 +35,7 @@ from hooks.cache import (
     cache_lookup,
     cache_record,
 )
-from cc_session_tools.lib import telemetry_store
-
-_DEFAULT_PREVIEW_LIMIT = 200
+from cc_session_tools.lib import command_recovery, telemetry_store
 
 
 def read_telemetry_events(hooks_dir: Path | None = None) -> list[dict[str, object]]:
@@ -102,11 +102,25 @@ def collect_candidates(fires: list[dict[str, object]]) -> list[dict[str, object]
     return rows
 
 
+def _rerun_command() -> str:
+    """The exact invocation that re-runs `list` through this interpreter and script."""
+    script = Path(__file__).resolve()
+    return f"CCST_FIRES_ACCESS=1 {shlex.quote(sys.executable)} {shlex.quote(str(script))} list"
+
+
+def _preview(rec: command_recovery.Recovery) -> str:
+    if rec.status is command_recovery.RecoveryStatus.COMMAND:
+        return "command: " + command_recovery.format_command(
+            rec.command, command_recovery.DEFAULT_MAX_CHARS
+        )
+    return f"status={rec.status.value}"
+
+
 def cmd_list(args: argparse.Namespace) -> int:
     if os.environ.get("CCST_FIRES_ACCESS") != "1":
         sys.stderr.write(
             "Refusing to read telemetry.db without CCST_FIRES_ACCESS=1.\n"
-            "Re-run as: CCST_FIRES_ACCESS=1 python3 update_command_cache.py\n"
+            f"Re-run as: {_rerun_command()}\n"
         )
         return 2
     rows = read_telemetry_events()
@@ -114,18 +128,26 @@ def cmd_list(args: argparse.Namespace) -> int:
     if not candidates:
         print("No safe-verdict fires waiting to be promoted to the cache.")
         return 0
+    previews: dict[str, str] = {}
+    if not args.no_preview:
+        shas = [str(row["sha"]) for row in candidates]
+        previews = {
+            rec.arg: _preview(rec) for rec in command_recovery.recover(shas)
+        }
     print(f"Found {len(candidates)} candidate sha(s) waiting for promotion:\n")
     for row in candidates:
-        print(
+        line = (
             f"  sha={str(row['sha'])[:12]}...  fires={row['fire_count']}  "
             f"last_seen={row['last_seen']}  session={row['sample_session']}"
         )
+        if not args.no_preview:
+            line += f"  {previews[str(row['sha'])]}"
+        print(line)
     print(
-        "\nNote: this script does not yet have the original commands in plain "
-        "text - telemetry.db only stores hashes. The Claude Code skill consumer "
-        "of this script is expected to walk this list, retrieve the originals "
-        "from session transcripts, and call cache_record() for each approved "
-        "entry."
+        "\nPreviews are truncated for triage. Before promoting, show the full command "
+        "with `ccst telemetry recover --max-chars 0 <sha>` and pass it to "
+        "`promote <full sha> --preview ...`; a status other than `command` means the "
+        "plaintext could not be confirmed, so do not promote that candidate on a guess."
     )
     return 0
 
@@ -185,10 +207,16 @@ def cmd_promote(args: argparse.Namespace) -> int:
     return 0
 
 
-def main(argv: list[str] | None = None) -> int:
+def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(description=__doc__)
+    # Defaults for the no-subcommand path, which runs `list` with previews.
+    p.set_defaults(func=cmd_list, no_preview=False)
     sub = p.add_subparsers(dest="cmd")
-    list_p = sub.add_parser("list", help="List safe fires not yet cached")
+    list_p = sub.add_parser("list", help="List safe fires not yet cached, with command previews")
+    list_p.add_argument(
+        "--no-preview", action="store_true",
+        help="Skip recovering command previews (opens no transcript)",
+    )
     list_p.set_defaults(func=cmd_list)
     rm_p = sub.add_parser("remove", help="Remove a cache entry by sha")
     rm_p.add_argument("sha")
@@ -205,9 +233,11 @@ def main(argv: list[str] | None = None) -> int:
     promote_p.add_argument("--risks", default="none")
     promote_p.add_argument("--preview", default="")
     promote_p.set_defaults(func=cmd_promote)
-    args = p.parse_args(argv)
-    if args.cmd is None:
-        return cmd_list(args)
+    return p
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = build_parser().parse_args(argv)
     func = args.func
     rc: int = func(args)
     return rc
