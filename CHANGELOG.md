@@ -24,9 +24,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   it may be deleted if no Claude Code session is open.
 - **`ccst move-session` exits 128 plus the signal number** when the script is killed by a signal, instead of
   a negative status that the shell turned into an unrelated number.
-- One definition per `~/.claude/...` directory: `lib/paths` gains `claude_live_sessions_dir()` and
-  `claude_tasks_dir()`, used by `move_session.py`, `delete_sessions.py` and `claude_code_usage` in place of
-  their own paths. `move_session.py` reads only the last 64 KiB of the transcript to confirm the picker-label
+- `~/.claude/sessions` and `~/.claude/tasks` each have one definition: `lib/paths` gains
+  `claude_live_sessions_dir()` and `claude_tasks_dir()`, used by `move_session.py`, `delete_sessions.py` and
+  `claude_code_usage/session_names.py` in place of their own paths. `move_session.py` reads only the last 64 KiB of the transcript to confirm the picker-label
   append, so an invalid byte earlier in the history no longer turns a successful append into a traceback.
 
 ## [4.1.0] - 2026-11-13

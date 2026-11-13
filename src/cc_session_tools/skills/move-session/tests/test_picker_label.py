@@ -77,7 +77,6 @@ class TestAppendPickerLabel:
         assert isinstance(exc.value.code, str)
         assert str(p) in exc.value.code
 
-
     def test_invalid_utf8_early_in_transcript_still_appends(self, ms, tmp_path):
         """Only the appended tail is decoded, so a bad byte anywhere earlier
         in the history does not turn a successful append into a traceback."""
@@ -177,7 +176,7 @@ def _shifted(proc_start: str, seconds: int) -> str:
 @pytest.fixture
 def non_utc_zone(monkeypatch: pytest.MonkeyPatch):
     """Run the code under test (and any `ps` it starts) in a +05:30 zone with
-    a non-English locale, so a comparison that depends on the local zone or
+    a British-English (day-before-month) locale, so a comparison that depends on the local zone or
     locale gives the wrong answer."""
     monkeypatch.setenv("TZ", "Asia/Kolkata")
     monkeypatch.setenv("LANG", "en_GB.UTF-8")
@@ -243,7 +242,7 @@ class TestDetectLiveHolderPidReuse:
         refuses when the live start cannot be read."""
         pid = os.getpid()
         record = self._record(tmp_path, pid, procStart=_shifted(_real_proc_start(pid), -60))
-        monkeypatch.setattr(ms, "process_start_time", lambda pid: None, raising=False)
+        monkeypatch.setattr(ms, "process_start_time", lambda pid: None)
         self._assert_refuses_with_hint(ms.detect_live_holder(UUID, tmp_path), record)
 
 

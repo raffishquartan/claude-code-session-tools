@@ -300,7 +300,7 @@ tests/                          lib + claude_code_usage tests (pytest tests/)
   test_schema.py                unit tests for claude_code_usage/schema.py
   test_session_names.py         unit tests for claude_code_usage/session_names.py
 
-skills/move-session/tests/      move-session skill tests (156 tests)
+skills/move-session/tests/      move-session skill tests (157 tests)
   conftest.py                   fixtures: tmp_home, roots_file (env-var driven), make_session
   test_detection.py             in-session detection, dry-run flag, CLAUDECODE env var
   test_integration.py           end-to-end subprocess tests of move_session.py

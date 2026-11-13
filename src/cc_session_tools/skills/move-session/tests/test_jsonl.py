@@ -120,6 +120,17 @@ class TestTombstoneLinesForDestination:
         self._tombstone(ms, src, tmp_path, b.with_name(b.name + "-later"))
         assert ms.tombstone_lines_for_destination(src, b) == 0
 
+    def test_lines_that_are_not_json_objects_are_skipped(self, ms, tmp_path):
+        """A half-written line or a JSON value that is not a record cannot be
+        part of a tombstone pair; neither stops the real pair being counted."""
+        src = self._src(tmp_path)
+        b = self._session(tmp_path, "b")
+        with src.open("a") as fh:
+            fh.write(f'{ms.TOMBSTONE_PREFIX} not json\n')
+            fh.write(json.dumps([ms.TOMBSTONE_PREFIX]) + "\n")
+        self._tombstone(ms, src, tmp_path, b)
+        assert ms.tombstone_lines_for_destination(src, b) == 2
+
     def test_moved_twice(self, ms, tmp_path):
         src = self._src(tmp_path)
         b = self._session(tmp_path, "b")
