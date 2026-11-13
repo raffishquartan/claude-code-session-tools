@@ -203,7 +203,9 @@ When verification runs, check the script's "VERIFICATION" output block before de
 - `remaining_src_long_path == 0` and `remaining_src_encoded_key == 0`
 - `cwd_distinct == {<dst-cwd-abs>}` (only the destination cwd appears in any cwd field)
 
-If any check fails, the script prints `VERIFY: FAIL` and exits non-zero. Do not present the move as successful in that case.
+If any check fails during the `--execute` run, the script prints `VERIFY: FAIL` and exits non-zero. Do not present the move as successful in that case.
+
+**Expected FAIL with `--verify-only`.** After a MOVE with the tombstone enabled (the default), `--verify-only` prints `RESULT : FAIL` on `lines src == lines dst`: the tombstone appends two records to the source after the copy, so the source is longer than the destination by design. The output then carries a `NOTE` naming the extra lines and saying the FAIL is expected; check `json_invalid_lines` (0) and `cwd_distinct_in_dst` (only the destination cwd) instead. If the `NOTE` instead says the extra lines are unexplained, the source and destination have really diverged.
 
 ## After moving
 

@@ -381,6 +381,59 @@ class TestPickerLabel:
         assert src_jsonl.read_bytes() == src_before
         assert dst_jsonl.read_bytes() == dst_before
 
+    def _move(self, tmp_home, projects_root, make_session, *, tombstone: bool):
+        src_dir, src_jsonl, uuid = make_session("src-proj", "20260503-source")
+        dst_cwd = projects_root / "dst-proj"
+        dst_cwd.mkdir()
+        move_args = [
+            "--src-session", str(src_dir),
+            "--dst-cwd", str(dst_cwd),
+            "--uuid", uuid,
+        ]
+        rc, out, err = _run(
+            *move_args, "--execute",
+            *([] if tombstone else ["--no-tombstone"]),
+            env={"HOME": str(tmp_home)},
+        )
+        assert rc == 0, f"{err}\n{out}"
+        return src_jsonl, move_args
+
+    def _verify_only(self, tmp_home, move_args):
+        return _run(*move_args, "--verify-only", env={"HOME": str(tmp_home)})
+
+    def test_verify_only_after_move_explains_the_tombstone_fail(
+            self, tmp_home, projects_root, roots_file, make_session):
+        _, move_args = self._move(
+            tmp_home, projects_root, make_session, tombstone=True)
+        rc, out, err = self._verify_only(tmp_home, move_args)
+        assert rc != 0, f"{err}\n{out}"
+        assert "RESULT              : FAIL" in out
+        assert "2 more line(s) than dst" in out
+        assert "expected" in out and "tombstone" in out
+        assert "unexplained" not in out
+
+    def test_verify_only_flags_extra_source_lines_it_cannot_explain(
+            self, tmp_home, projects_root, roots_file, make_session):
+        src_jsonl, move_args = self._move(
+            tmp_home, projects_root, make_session, tombstone=False)
+        with src_jsonl.open("a") as fh:
+            fh.write(json.dumps({"type": "user", "uuid": "x"}) + "\n")
+        rc, out, err = self._verify_only(tmp_home, move_args)
+        assert rc != 0, f"{err}\n{out}"
+        assert "1 more line(s) than dst" in out
+        assert "unexplained" in out
+        assert "expected" not in out
+
+    def test_verify_only_prints_no_explanation_when_lengths_agree(
+            self, tmp_home, projects_root, roots_file, make_session):
+        _, move_args = self._move(
+            tmp_home, projects_root, make_session, tombstone=False)
+        rc, out, err = self._verify_only(tmp_home, move_args)
+        assert rc == 0, f"{err}\n{out}"
+        assert "RESULT              : PASS" in out
+        assert "more line(s) than dst" not in out
+        assert "expected" not in out and "unexplained" not in out
+
     def test_move_does_append_tombstone_records_to_source(
             self, tmp_home, projects_root, roots_file, make_session):
         """Counterpart: confirm that the MOVE path DOES still append records

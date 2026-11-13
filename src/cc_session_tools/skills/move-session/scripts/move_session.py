@@ -440,6 +440,24 @@ def rewrite_jsonl_paths(dst_jsonl: Path, replacements: list[tuple[str, str]]) ->
     return counts
 
 
+def count_tombstone_lines(jsonl: Path) -> int:
+    """Lines in `jsonl` written by `append_tombstone`: each tombstone is a user
+    record followed by an assistant record whose model is "tombstone"."""
+    assistant_tombstones = 0
+    with jsonl.open() as fh:
+        for line in fh:
+            if '"tombstone"' not in line:
+                continue
+            try:
+                rec = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            message = rec.get("message")
+            if isinstance(message, dict) and message.get("model") == "tombstone":
+                assistant_tombstones += 1
+    return 2 * assistant_tombstones
+
+
 def verify_dst_jsonl(src_jsonl: Path, dst_jsonl: Path, dst_cwd_abs: str, src_cwd_abs: str, src_key: str, strict: bool) -> dict:
     """Run verification checks. Returns dict with results and a bool 'ok'.
 
@@ -490,6 +508,7 @@ def verify_dst_jsonl(src_jsonl: Path, dst_jsonl: Path, dst_cwd_abs: str, src_cwd
     return {
         "src_lines": src_lines,
         "dst_lines": dst_lines,
+        "src_tombstone_lines": count_tombstone_lines(src_jsonl),
         "json_ok": json_ok,
         "json_err": json_err,
         "remaining_long": remaining_long,
@@ -1196,6 +1215,21 @@ def print_verify(v: dict) -> None:
     print(f"  remaining_src_key   : {v['remaining_key']}")
     print(f"  cwd_distinct_in_dst : {v['cwds_in_dst']}")
     print(f"  RESULT              : {'PASS' if v['ok'] else 'FAIL'}")
+    extra = v["src_lines"] - v["dst_lines"]
+    if extra > 0:
+        print(f"  NOTE: src has {extra} more line(s) than dst.")
+        if v["src_tombstone_lines"] >= extra:
+            print(
+                f"  The FAIL on line count is expected after a move with the tombstone enabled: "
+                f"the tombstone ({v['src_tombstone_lines']} line(s) in src) is appended to the "
+                f"source after the copy, so src is longer than dst by design."
+            )
+            print("  Check the other rows instead: json_invalid_lines 0 and cwd_distinct_in_dst equal to the destination cwd.")
+        else:
+            print(
+                f"  The extra lines are unexplained: only {v['src_tombstone_lines']} tombstone line(s) "
+                f"in src. Treat the FAIL as a real divergence between src and dst."
+            )
 
 
 if __name__ == "__main__":
