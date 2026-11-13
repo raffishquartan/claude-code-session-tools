@@ -1,0 +1,20 @@
+## 1. Liveness: pid reuse and stale-record hint (tests first, red then green)
+
+- [x] 1.1 Add tests in `skills/move-session/tests/test_picker_label.py` that fail against current code: a live-pid record whose `procStart` is more than two seconds before the real process start (this test process's own pid, start read independently by running `LC_ALL=C TZ=UTC ps -o lstart= -p <pid>` in the test and parsing it) is ignored; a record carrying that real `procStart` refuses, and still refuses when the test runs with `TZ` set to a non-UTC zone (set in the environment of the process under test) so a time-zone-dependent comparison would fail; a record without `procStart` or with an unparseable one refuses; an unreadable live start (helper patched to return None) refuses; every refusal reason names the record file and contains the stale-record hint; run and confirm each fails for the right reason
+- [x] 1.2 Add `process_start_time(pid)` (`LC_ALL=C TZ=UTC`, `strptime`, `timegm`) and the one-sided two-second comparison to `detect_live_holder`, and the hint to the reasons; verify `CCST_NO_AUTO_SYNC=1 uv run pytest -q` and `uv run mypy src` exit 0
+
+## 2. Verify-only passes on the tombstones for this destination
+
+- [x] 2.1 Rewrite the three verify-only tests in `tests/test_integration.py` (about lines 404-435) so they assert the new behaviour, and add the new cases: PASS, exit 0 and `tombstone lines excluded from src: 2` after a default MOVE; FAIL and "unexplained" when a non-tombstone line follows the copy point; a source moved twice (A to B, A to C) passes for both copies with the right exclusion counts; equal lengths with no tombstone prints no exclusion line; strict verification during `--execute` unchanged; the PASS wording does not contain the word "expected"; confirm each fails for the right reason
+- [x] 2.2 Replace `count_tombstone_lines` with the destination-aware counter (finds the first tombstone user record naming the destination session directory and counts tombstone-pair lines from there to the end), pass the destination session directory into non-strict verification, change the comparison and `print_verify`; verify the suite and mypy exit 0
+
+## 3. Smaller fixes
+
+- [x] 3.1 Add `claude_live_sessions_dir()` and `claude_tasks_dir()` to `lib/paths.py` with tests that both follow a redirected `HOME`; use them in `move_session.py`, `skills/delete-sessions` and `claude_code_usage/session_names.py` (resolved at call time, replacing `DEFAULT_LIVE_DIR`), update tests that referenced that constant, and use `claude_projects_dir()` for the projects path in `move_session.py`; verify with `grep -n 'home() / ".claude"' -r src` that no stray definitions of these directories remain, and the suite passes
+- [x] 3.2 Write unit tests for `append_picker_label` itself: a transcript containing an invalid UTF-8 byte early in the file still appends and verifies; a final line longer than 64 KiB still verifies; the function still exits 1 when the tail does not read back as the records (red against the whole-file decode for the first two); change the tail check to read at most the last 64 KiB in binary; verify green
+- [x] 3.3 Write a test that `_cmd_move_session`, with `subprocess.run` patched to return a negative `returncode` `-n`, returns `128 + n` (red), then map negative return codes; verify green
+
+## 4. Documentation and release
+
+- [x] 4.1 Update `SKILL.md` (liveness section: start-time comparison and the stale-record hint, around line 96; Verification section: verify-only passes on the tombstones for the destination, remove the expected-FAIL paragraph, around line 208) and `docs/design.md`'s move-session test count to the real number; verify by re-reading for stale statements
+- [x] 4.2 Add a CHANGELOG `[4.1.1]` entry (Changed: verify-only exit status after a default MOVE now 0, the liveness refusal ignores records for a reused pid and now names the stale record, `ccst move-session` signal exit status, one definition per `~/.claude/...` directory), bump `pyproject.toml` to 4.1.1 (patch, maintainer decision), run `uv lock` and commit `uv.lock` with it; verify `uv run pytest -q` and `uv run mypy src` exit 0
