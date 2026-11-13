@@ -7,6 +7,53 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [4.1.0] - 2026-11-13
+
+### Added
+
+- **`ccst telemetry recover HASH...`** recovers the command behind a `bash-security-review`
+  `input_hash` (full hash, a prefix of at least 8 hex characters, or `sha256:`-prefixed). It re-hashes the Bash
+  commands in the transcripts, main and subagent, of the sessions that fired each hash, and prints one
+  compact tab-separated line per hash: a command only when it re-hashes exactly, otherwise the session and
+  transcript it came from, or `unknown`. Each transcript file is read once per run. `--max-chars N`
+  (default 200, `0` for no limit; a cut command ends in a marker giving how many characters were cut),
+  `--scan-all`, `--projects-dir` and `--hooks-dir` are available. Like `update-command-cache list` it
+  needs `CCST_FIRES_ACCESS=1`; that is a convention, not something bash-hard-deny enforces for this verb.
+- **`update-command-cache list` previews each candidate's command** (truncated, for triage), and
+  `--no-preview` skips the transcript read. `SKILL.md` now requires the full command
+  (`ccst telemetry recover --max-chars 0 <sha>`) to be shown before `promote`, and passes the recovered
+  text to `promote --preview`.
+- **`ccst move-session <args>`** runs the bundled move-session script under the interpreter that has
+  `cc-session-tools` installed, forwarding the arguments and exit code. `SKILL.md` and the in-session
+  refusal recipe use it; the old `python3 <path>` form failed with `ModuleNotFoundError` on a
+  `uv tool` install.
+
+### Changed
+
+- **A RENAME or MOVE+RENAME now sets the session's picker label itself.** `move_session.py` appends the
+  `custom-title` and `agent-name` records for the new tag to the transcript the session resumes into,
+  so the picker and status line show the new name on first resume with no `/rename` step. The record shape
+  is pinned by a test because it is an undocumented Claude Code internal.
+- **A tag-changing move-session operation now refuses while Claude Code holds the session**, even when run
+  from a plain shell: a live process named in `~/.claude/sessions/<pid>.json`, or a transcript written in
+  the last 30 seconds. Claude Code re-appends its own title after every prompt, which would otherwise
+  silently undo the rename.
+- **`move_session.py --verify-only` explains its line-count FAIL after a move.** The tombstone appended to
+  the source makes it longer than the destination by design; the output now names the extra lines and says
+  when the tombstone accounts for them, or that they are unexplained. The result and exit code are unchanged.
+- `update-command-cache` run with no subcommand now behaves as `list` with previews, and its gate refusal
+  prints a re-run command that works.
+- The projects directory (`~/.claude/projects`) is resolved by one function in `lib/paths` instead of
+  separate copies in `session_gc` and `sessions`.
+
+### Removed
+
+- **The `pending-rename` hook and the `.pending-rename` marker**, with its bash script, bats test and
+  dispatcher module. Until the next non-exempt `ccst` command prunes the stale `settings.json` entry,
+  session start prints an "unknown hook 'pending-rename'" warning. A session renamed under an earlier
+  version still shows its old label: run `/rename <tag>` once inside it, then delete its leftover
+  `.pending-rename` file.
+
 ## [4.0.2] - 2026-10-22
 
 ### Fixed
