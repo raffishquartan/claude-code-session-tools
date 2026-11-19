@@ -23,7 +23,10 @@ from cc_session_tools.lib.messaging.message import (
     Status,
     ToKind,
 )
-from cc_session_tools.lib.messaging.repository import MessageNotFoundError
+from cc_session_tools.lib.messaging.repository import (
+    CannotUnarchiveError,
+    MessageNotFoundError,
+)
 from cc_session_tools.lib.messaging.store import (
     GLOBAL_PARTITION,
     generate_id,
@@ -86,6 +89,13 @@ def send(request: SendRequest) -> str:
 class Claimer:
     uuid: str
     session: str
+
+
+def unarchive(message_id: str) -> Message:
+    """Restore an archived, never-claimed message. Takes the claim lock like
+    ``archive`` so it cannot race a concurrent claim."""
+    with claim_lock(message_id):
+        return repository.unarchive_one(message_id)
 
 
 def find_by_id(message_id: str) -> Message | None:

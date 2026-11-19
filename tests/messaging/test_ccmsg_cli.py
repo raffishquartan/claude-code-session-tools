@@ -316,3 +316,29 @@ def test_read_prints_sender_uuid_after_from_line(tmp_path: Path) -> None:
     lines = _run(["read", res.stdout.strip()], tmp_path).stdout.splitlines()
     from_index = next(i for i, line in enumerate(lines) if line.startswith("from:"))
     assert lines[from_index + 1] == f"from_uuid: {sender}"
+
+
+def test_unarchive_reports_each_id_and_fails_if_any_failed(tmp_path: Path) -> None:
+    from cc_session_tools.lib.messaging import repository, service
+    from cc_session_tools.lib.messaging.message import Message
+
+    os.environ["CCST_MESSAGES_ROOT"] = str(tmp_path)
+    try:
+        for mid, read_at in (("20260101T000000Z-0001", "2026-06-05T00:00:00Z"),
+                             ("20260101T000000Z-0002", None)):
+            repository.insert(Message(
+                id=mid, schema=1, from_project="x", from_session="x", from_uuid="s",
+                to_kind="project", to_value="alpha", to_location="projects/alpha",
+                subject="s", sent_at="2026-06-01T00:00:00Z", status="archived",
+                read_at=read_at, read_by_uuid=None, read_by_session=None,
+                claimed_at=None, receipt_shown=False, thread=None, attachments=[], body="b",
+            ))
+        res = _run(["unarchive", "20260101T000000Z-0001", "ghost", "20260101T000000Z-0002"],
+                   tmp_path)
+        assert res.returncode == 1
+        assert "restored 20260101T000000Z-0001 as read" in res.stdout
+        assert "restored 20260101T000000Z-0002 as sent" in res.stdout
+        assert "message not found: ghost" in res.stderr
+        assert service.read_one("20260101T000000Z-0001").status == "read"  # type: ignore[union-attr]
+    finally:
+        del os.environ["CCST_MESSAGES_ROOT"]

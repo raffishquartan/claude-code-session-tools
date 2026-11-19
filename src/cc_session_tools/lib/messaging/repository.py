@@ -343,6 +343,40 @@ def archive_one(message_id: str) -> Message:
         conn.close()
 
 
+class CannotUnarchiveError(Exception):
+    """The message is not archived, or it was claimed (someone took it)."""
+
+
+def unarchive_one(message_id: str) -> Message:
+    """Restore an archived, never-claimed message: to 'read' if it had been read,
+    else 'sent'. Raises MessageNotFoundError for an unknown id and
+    CannotUnarchiveError if the message is not archived or was claimed."""
+    conn = connect()
+    try:
+        with _immediate(conn):
+            row = conn.execute(
+                "SELECT status, read_at, claimed_at FROM messages WHERE id=?",
+                (message_id,),
+            ).fetchone()
+            if row is None:
+                raise MessageNotFoundError(message_id)
+            if row["status"] != "archived":
+                raise CannotUnarchiveError(f"not archived: {message_id}")
+            if row["claimed_at"] is not None:
+                raise CannotUnarchiveError(f"was claimed: {message_id}")
+            restored = "read" if row["read_at"] is not None else "sent"
+            conn.execute(
+                "UPDATE messages SET status=?, updated_at=?, version=version+1 WHERE id=?",
+                (restored, _now_iso(), message_id),
+            )
+            updated = conn.execute(
+                "SELECT * FROM messages WHERE id=?", (message_id,)
+            ).fetchone()
+        return _row_to_message(updated)
+    finally:
+        conn.close()
+
+
 def archive_aged(partition: str, cutoff_iso: str) -> list[str]:
     """Archive every claimed message in ``partition`` whose ``claimed_at`` is at or
     before ``cutoff_iso``, in one atomic statement. Returns the archived ids

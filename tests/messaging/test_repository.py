@@ -307,3 +307,36 @@ def test_connect_creates_migrations_table(root: Path) -> None:
     finally:
         conn.close()
     assert "migrations" in names
+
+
+def test_unarchive_one_restores_read_message_to_read(root: Path) -> None:
+    repo.insert(_msg("20260101T000000Z-0001", status="archived", read_at="2026-06-05T00:00:00Z"))
+    m = repo.unarchive_one("20260101T000000Z-0001")
+    assert m.status == "read"
+    _, version = _row_audit("20260101T000000Z-0001")
+    assert version == 2
+
+
+def test_unarchive_one_restores_never_read_message_to_sent(root: Path) -> None:
+    repo.insert(_msg("20260101T000000Z-0002", status="archived"))
+    assert repo.unarchive_one("20260101T000000Z-0002").status == "sent"
+
+
+def test_unarchive_one_refuses_claimed_message(root: Path) -> None:
+    repo.insert(_msg("20260101T000000Z-0003", status="archived", to_kind="description",
+                     to_value="w", claimed_at="2026-06-05T00:00:00Z"))
+    with pytest.raises(repo.CannotUnarchiveError, match="claimed"):
+        repo.unarchive_one("20260101T000000Z-0003")
+    assert repo.get_by_id("20260101T000000Z-0003").status == "archived"
+
+
+def test_unarchive_one_refuses_message_that_is_not_archived(root: Path) -> None:
+    repo.insert(_msg("20260101T000000Z-0004", status="read", read_at="2026-06-05T00:00:00Z"))
+    with pytest.raises(repo.CannotUnarchiveError, match="not archived"):
+        repo.unarchive_one("20260101T000000Z-0004")
+    assert repo.get_by_id("20260101T000000Z-0004").status == "read"
+
+
+def test_unarchive_one_unknown_id_raises(root: Path) -> None:
+    with pytest.raises(repo.MessageNotFoundError):
+        repo.unarchive_one("ghost")
