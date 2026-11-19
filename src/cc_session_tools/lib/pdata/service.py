@@ -31,6 +31,9 @@ def _parse_where_clause(raw: str) -> tuple[str, str, str]:
     field_name = match.group("field")
     op = match.group("op").upper()
     value = match.group("value")
+    # Shell-style quoting around the value is syntax, not data: `corr_key = 'x'` means x.
+    if len(value) >= 2 and value[0] == value[-1] and value[0] in "'\"":
+        value = value[1:-1]
     if op not in repository._WHERE_OPS:
         raise ValueError(f"invalid --where operator {op!r}: {raw!r}")
     return field_name, op, value
