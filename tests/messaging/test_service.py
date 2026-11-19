@@ -281,6 +281,17 @@ def test_full_deliver_relists_previously_shown_unclaimed_proposal(
     assert mid not in service.deliver(_ctx(), mode="incremental")
 
 
+def test_full_deliver_lists_new_proposal_once_with_age(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("CCST_MESSAGES_ROOT", str(tmp_path))
+    mid = _send_description("task")
+    digest = service.deliver(_ctx(), mode="full")  # new and pending: must not duplicate
+    assert digest.count(mid) == 1
+    line = digest.split(mid, 1)[1].splitlines()[0]
+    assert "just now" in line or "ago" in line
+
+
 def test_full_deliver_does_not_relist_claimed_proposal(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -298,6 +309,8 @@ def test_full_deliver_caps_pending_list_and_reports_omitted(
     ids = [_send_description(f"task {i}") for i in range(service.PENDING_LIST_CAP + 2)]
     service.deliver(_ctx(), mode="full")  # first sight; cursor advances
     digest = service.deliver(_ctx(), mode="full")
-    listed = [i for i in ids if i in digest]
+    listed = [i for i in sorted(ids) if i in digest]
     assert len(listed) == service.PENDING_LIST_CAP
+    # Oldest (lowest id) first; the rest are omitted.
+    assert listed == sorted(ids)[: service.PENDING_LIST_CAP]
     assert "+2 more" in digest and "ccmsg list" in digest

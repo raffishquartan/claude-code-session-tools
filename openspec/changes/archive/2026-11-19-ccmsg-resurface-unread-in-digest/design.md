@@ -15,7 +15,7 @@
 
 ## Decisions
 
-- Add a query for `sent` messages targeting the session (reuse `targets()`), and in `full` mode append them as a "pending" section independent of the cursor. Alternative: stop advancing the cursor for proposals - rejected, it would re-nudge on every prompt.
+- Add a filtered query for `sent` description-addressed messages and, in `full` mode, merge them into the existing unclaimed-proposals section independent of the cursor (recipient-addressed messages are auto-read on delivery, so they are never pending). Alternative: stop advancing the cursor for proposals - rejected, it would re-nudge on every prompt.
 - Cap at 5 lines plus a "+N more" tail. Alternative: unbounded - rejected, a backlog would flood session start.
 - Age marker reuses the existing relative-age formatter used by the digest and `ccmsg list`.
 - Retention keeps its single UPDATE but restricts to `status='claimed'` and `claimed_at`; `read_at` no longer makes a message eligible. Alternative: also exempt claimed messages - rejected, a claim is the explicit signal that someone took the message.

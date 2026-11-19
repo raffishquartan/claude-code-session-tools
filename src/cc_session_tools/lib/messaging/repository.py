@@ -231,6 +231,24 @@ def sweep_new(partitions: list[str], high_water: dict[str, str]) -> list[Message
     return out
 
 
+def pending_proposals(partitions: list[str]) -> list[Message]:
+    """Unclaimed description-addressed messages ('sent') in ``partitions``, oldest
+    first. Narrow filtered query so a session start never loads archived rows."""
+    if not partitions:
+        return []
+    placeholders = ", ".join("?" for _ in partitions)
+    conn = connect()
+    try:
+        rows = conn.execute(
+            f"SELECT * FROM messages WHERE to_location IN ({placeholders}) "
+            "AND status='sent' AND to_kind='description' ORDER BY id",
+            partitions,
+        ).fetchall()
+    finally:
+        conn.close()
+    return [_row_to_message(r) for r in rows]
+
+
 def mark_read(message_id: str, uuid: str, now_iso: str, session_label: str) -> bool:
     """Atomically flip a 'sent' message to 'read', stamping the reader. Returns
     True iff this call was the writer (first-writer-wins under WAL); False if the

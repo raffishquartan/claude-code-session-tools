@@ -56,7 +56,7 @@ def test_concurrent_archive_aged_no_crash_archived_once(root: Path) -> None:
     assert repo.get_by_id("20260101T000000Z-0001").status == "archived"
 
 
-def test_claim_and_retention_race_preserves_claim_metadata(root: Path) -> None:
+def test_claim_beats_concurrent_retention_on_an_old_unclaimed_message(root: Path) -> None:
     # An old unclaimed message: retention never touches it, so a racing claim always
     # wins and keeps its claimer metadata, with no crash.
     repo.insert(_aged("20260101T000000Z-0002", "sent"))

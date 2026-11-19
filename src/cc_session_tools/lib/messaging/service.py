@@ -217,9 +217,8 @@ def deliver(ctx: SessionContext, *, mode: DeliverMode) -> str:
         # Session start: re-list every still-unclaimed description proposal, even ones an
         # earlier digest showed, so an unclaimed hand-off never silently drops out of view.
         listed = {line.split("]", 1)[0] for line in proposals}
-        for message in repository.sweep_new(partitions, {}):
-            if (targets(message, ctx) is MatchKind.CANDIDATE
-                    and f"[{message.id}" not in listed):
+        for message in repository.pending_proposals(partitions):
+            if f"[{message.id}" not in listed:
                 proposals.append(_digest_line(message, now))
         if len(proposals) > PENDING_LIST_CAP:
             omitted = len(proposals) - PENDING_LIST_CAP

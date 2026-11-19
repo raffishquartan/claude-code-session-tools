@@ -29,7 +29,7 @@ Automatic retention SHALL archive only messages whose status is `claimed` and wh
 - **THEN** it is archived
 
 ### Requirement: Session start re-lists pending messages with age
-When a session starts, the delivery digest SHALL list every message in status `sent` that targets that session, whether or not an earlier digest already showed it, each with its relative age. The list SHALL be capped, and when more exist the digest SHALL state how many were omitted and point to `ccmsg list`.
+When a session starts, the delivery digest SHALL list every unclaimed description-addressed message (status `sent`) in that session's partitions, whether or not an earlier digest already showed it, each with its relative age. The list SHALL be capped, and when more exist the digest SHALL state how many were omitted and point to `ccmsg list`.
 
 #### Scenario: Previously shown unclaimed proposal appears again
 - **WHEN** a description-addressed proposal was shown to a session earlier, remains unclaimed, and a new session starts for a matching project

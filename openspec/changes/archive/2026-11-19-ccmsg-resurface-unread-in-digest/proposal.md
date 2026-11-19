@@ -4,8 +4,8 @@ Hand-off messages go unnoticed (request: message 20261119T175849Z-bacf, refined 
 
 ## What Changes
 
-- **BREAKING (behaviour)**: automatic retention archives only `claimed` messages older than the retention window. `sent` and `read` messages are never auto-archived at any age; they leave the live set only via `ccmsg claim` then retention, or an explicit `ccmsg archive`.
-- At session start (`deliver` in `full` mode) the digest also re-lists every still-`sent` message that targets the session, with an age marker, regardless of the cursor. Capped at a fixed number of lines with a "+N more, see `ccmsg list`" tail.
+- **Behaviour change (not breaking per the version policy: no on-disk change)**: automatic retention archives only `claimed` messages older than the retention window. `sent` and `read` messages are never auto-archived at any age; they leave the live set only via `ccmsg claim` then retention, or an explicit `ccmsg archive`.
+- At session start (`deliver` in `full` mode) the digest also re-lists every still-unclaimed description-addressed message, with an age marker, regardless of the cursor. Capped at a fixed number of lines with a "+N more, see `ccmsg list`" tail.
 - Per-prompt (incremental) delivery is unchanged.
 - Minor version bump and CHANGELOG entry.
 
