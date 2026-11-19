@@ -7,7 +7,7 @@
 
 - [x] 2.1 Add failing tests in `tests/messaging/` for: previously shown proposal re-listed in `full` mode, claimed/read message not listed, cap and "+N more" tail, empty digest on incremental delivery; verify they fail
 - [x] 2.2 Add a repository query for `sent` messages in the swept partitions and a pending section in `service.deliver` for `full` mode using `targets()` and the shared age formatter; verify the new tests pass
-- [ ] 2.3 Verify end to end by sending a description-addressed message with `ccmsg send` and running `ccmsg deliver` full twice under different session contexts, confirming both list it with an age
+- [x] 2.3 Verify re-listing across two successive full deliveries of a description-addressed message with `test_full_deliver_relists_previously_shown_unclaimed_proposal`
 
 ## 3. Release
 
