@@ -3530,7 +3530,7 @@ def _build_parser() -> argparse.ArgumentParser:
     pdata_query_parser.add_argument("--group", required=True, metavar="RECORD_GROUP")
     pdata_query_parser.add_argument(
         "--where", action="append", default=[], metavar="'<field> <op> <value>'",
-        help="May repeat; clauses are ANDed. op is one of = != < > <= >= LIKE. Field may be a base or extension field. The value may be wrapped in single or double quotes (optional).",
+        help="May repeat; clauses are ANDed. op is one of = != < > <= >= LIKE. Field may be a base or extension field. The value may be wrapped in single or double quotes (optional); to match a value that itself starts and ends with a quote, wrap it once more, e.g. "'x'".",
     )
     pdata_query_parser.add_argument("--limit", type=int, default=None, metavar="N")
     pdata_query_parser.add_argument("--include-deleted", action="store_true")

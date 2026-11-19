@@ -307,6 +307,10 @@ def test_where_value_with_mismatched_or_lone_quotes_is_kept_as_written(raw):
     assert service._parse_where_clause(f"content = {raw}")[2] == raw
 
 
+def test_where_value_wrapped_twice_matches_a_value_that_has_quotes():
+    assert service._parse_where_clause("content = \"'x'\"")[2] == "'x'"
+
+
 def test_query_records_rejects_bad_where_syntax(monkeypatch, tmp_path):
     # Must be too few whitespace-separated tokens to match _WHERE_CLAUSE_RE at all (a single
     # word, with no op/value) so this actually exercises the "malformed clause" branch — not
