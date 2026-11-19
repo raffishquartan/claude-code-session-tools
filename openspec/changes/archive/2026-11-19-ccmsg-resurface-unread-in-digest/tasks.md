@@ -9,6 +9,11 @@
 - [x] 2.2 Add a repository query for `sent` messages in the swept partitions and a pending section in `service.deliver` for `full` mode using `targets()` and the shared age formatter; verify the new tests pass
 - [x] 2.3 Verify re-listing across two successive full deliveries of a description-addressed message with `test_full_deliver_relists_previously_shown_unclaimed_proposal`
 
-## 3. Release
+## 3. Read-but-unhandled listing
 
-- [x] 3.1 Add a CHANGELOG entry, bump `pyproject.toml` to 4.2.0, run `uv lock`, and verify the full test suite exits 0
+- [x] 3.1 Add tests for: read message listed at next session start and gone after `ccmsg archive`, no duplicate in the delivery that auto-reads it, project message read by another session listed, another session's message not listed, cap tail; verify with `CCST_NO_AUTO_SYNC=1 uv run pytest tests/messaging -q`
+- [x] 3.2 Add the `unhandled_read` query and the separate digest section in `service.deliver`
+
+## 4. Release
+
+- [x] 4.1 Add a CHANGELOG entry, bump `pyproject.toml` to 4.2.0, run `uv lock`, and verify the full test suite exits 0

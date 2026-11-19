@@ -46,3 +46,30 @@ When a session starts, the delivery digest SHALL list every unclaimed descriptio
 #### Scenario: Per-prompt delivery does not repeat the list
 - **WHEN** a session receives an incremental delivery after session start with no new messages
 - **THEN** the digest is empty
+
+### Requirement: Session start lists read-but-unhandled messages until archived
+When a session starts, the delivery digest SHALL also list every message addressed to that session or to its project that was auto-read but has not been archived, each with its relative age, in a section distinct from newly delivered messages. A message auto-read in the same delivery SHALL appear once, as newly delivered, not again in this section. The list SHALL be capped like the pending list. A message SHALL leave this section only when it is archived with `ccmsg archive`.
+
+#### Scenario: Read message is listed at the next session start
+- **WHEN** a session-addressed message was auto-read in an earlier session and is not archived
+- **THEN** the next session start lists it as read but not yet handled, with its age
+
+#### Scenario: Message read by another session of the project is listed
+- **WHEN** a project-addressed message was auto-read by one session and a second session of that project starts
+- **THEN** the second session's digest lists it as read but not yet handled
+
+#### Scenario: Archived message is not listed
+- **WHEN** the message has been archived with `ccmsg archive`
+- **THEN** it no longer appears at session start
+
+#### Scenario: Message auto-read in this delivery is not duplicated
+- **WHEN** a message is auto-read during the current session start
+- **THEN** it appears exactly once, as newly delivered
+
+#### Scenario: Another session's message is not listed
+- **WHEN** a read message is addressed to a different session
+- **THEN** it does not appear
+
+#### Scenario: Per-prompt delivery does not repeat the list
+- **WHEN** a session receives an incremental delivery after session start
+- **THEN** the digest does not include this section

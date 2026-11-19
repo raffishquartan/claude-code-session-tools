@@ -213,17 +213,22 @@ def deliver(ctx: SessionContext, *, mode: DeliverMode) -> str:
             proposals.append(_digest_line(message, now))
             cur = cursor_mod.advance(cur, message)
 
+    unhandled: list[str] = []
     if mode == "full":
-        # Session start: re-list every still-unclaimed description proposal, even ones an
-        # earlier digest showed, so an unclaimed hand-off never silently drops out of view.
+        # Session start: re-list everything still waiting on someone, even if an earlier
+        # digest showed it, so an unhandled hand-off never silently drops out of view.
+        # Unclaimed description proposals stay until claimed or archived; auto-read
+        # session/project messages stay until archived with `ccmsg archive`.
         listed = {line.split("]", 1)[0] for line in proposals}
         for message in repository.pending_proposals(partitions):
             if f"[{message.id}" not in listed:
                 proposals.append(_digest_line(message, now))
-        if len(proposals) > PENDING_LIST_CAP:
-            omitted = len(proposals) - PENDING_LIST_CAP
-            proposals = proposals[:PENDING_LIST_CAP]
-            proposals.append(f"+{omitted} more, see `ccmsg list`")
+        shown_now = {line.split("]", 1)[0] for line in inbound}
+        for message in repository.unhandled_read(partitions, ctx.uuid, ctx.project):
+            if f"[{message.id}" not in shown_now:
+                unhandled.append(_digest_line(message, now))
+        proposals = _cap_lines(proposals)
+        unhandled = _cap_lines(unhandled)
 
     # Retention runs once per swept partition (opportunistic, atomic per R1).
     for partition in partitions:
@@ -231,7 +236,7 @@ def deliver(ctx: SessionContext, *, mode: DeliverMode) -> str:
 
     cursor_mod.save(ctx.uuid, cur)
     receipts = _collect_receipts(ctx, now)
-    return _format_digest(inbound, proposals, receipts)
+    return _format_digest(inbound, proposals, unhandled, receipts)
 
 
 def _collect_receipts(ctx: SessionContext, now: datetime) -> list[str]:
@@ -249,10 +254,17 @@ def _collect_receipts(ctx: SessionContext, now: datetime) -> list[str]:
     return lines
 
 
+def _cap_lines(lines: list[str]) -> list[str]:
+    if len(lines) <= PENDING_LIST_CAP:
+        return lines
+    omitted = len(lines) - PENDING_LIST_CAP
+    return [*lines[:PENDING_LIST_CAP], f"+{omitted} more, see `ccmsg list`"]
+
+
 def _format_digest(
-    inbound: list[str], proposals: list[str], receipts: list[str]
+    inbound: list[str], proposals: list[str], unhandled: list[str], receipts: list[str]
 ) -> str:
-    if not (inbound or proposals or receipts):
+    if not (inbound or proposals or unhandled or receipts):
         return ""
     out: list[str] = ["[cc-messages] You have inter-session messages:"]
     out.extend(inbound)
@@ -262,6 +274,11 @@ def _format_digest(
             "(claim if this session fits):"
         )
         out.extend(proposals)
+    if unhandled:
+        out.append(
+            "Read but not yet handled (run `ccmsg archive <id>` once dealt with):"
+        )
+        out.extend(unhandled)
     if receipts:
         out.extend(receipts)
     out.append(

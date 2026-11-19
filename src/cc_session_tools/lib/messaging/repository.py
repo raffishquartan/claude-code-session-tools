@@ -249,6 +249,26 @@ def pending_proposals(partitions: list[str]) -> list[Message]:
     return [_row_to_message(r) for r in rows]
 
 
+def unhandled_read(partitions: list[str], uuid: str, project: str) -> list[Message]:
+    """Messages addressed to this session (``uuid``) or its ``project`` that were
+    auto-read but never archived or claimed, oldest first. ``ccmsg archive`` is the
+    only way one leaves this set."""
+    if not partitions:
+        return []
+    placeholders = ", ".join("?" for _ in partitions)
+    conn = connect()
+    try:
+        rows = conn.execute(
+            f"SELECT * FROM messages WHERE to_location IN ({placeholders}) "
+            "AND status='read' AND ((to_kind='session' AND to_value=?) "
+            "OR (to_kind='project' AND to_value=?)) ORDER BY id",
+            [*partitions, uuid, project],
+        ).fetchall()
+    finally:
+        conn.close()
+    return [_row_to_message(r) for r in rows]
+
+
 def mark_read(message_id: str, uuid: str, now_iso: str, session_label: str) -> bool:
     """Atomically flip a 'sent' message to 'read', stamping the reader. Returns
     True iff this call was the writer (first-writer-wins under WAL); False if the

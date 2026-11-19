@@ -21,7 +21,9 @@
 - Retention keeps its single UPDATE but restricts to `status='claimed'` and `claimed_at`; `read_at` no longer makes a message eligible. Alternative: also exempt claimed messages - rejected, a claim is the explicit signal that someone took the message.
 - Recipient-addressed messages are auto-read on first delivery, so they leave `sent` and are not re-listed; with retention no longer archiving them they stay visible in `ccmsg list` with age.
 
+- A second filtered query returns `read` messages addressed to the session or its project; lines already shown as newly delivered in the same run are excluded. Separate section and separate cap from the unclaimed proposals, so neither crowds out the other. Alternative: only list `sent` - rejected, an auto-read message is read by a digest line, not handled.
+
 ## Risks / Trade-offs
 
 - Stale unclaimed proposals add noise every session start → the cap bounds it and `ccmsg archive` clears one by hand.
-- Read messages accumulate until archived by hand → `ccmsg list` shows age so they can be cleared; a bulk-archive helper is out of scope.
+- Read messages now stay listed until archived by hand, so a long backlog adds capped noise at every session start → `ccmsg archive <id>` clears one; a bulk-archive helper is out of scope.
