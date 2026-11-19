@@ -7,17 +7,20 @@ from pathlib import Path
 import pytest
 
 from cc_session_tools.lib.messaging import repository as repo
-from cc_session_tools.lib.messaging.lock import AlreadyClaimedError
 from cc_session_tools.lib.messaging.message import Message
 
 
-def _aged_read(mid: str) -> Message:
+def _aged(mid: str, status: str) -> Message:
+    claimed = status == "claimed"
     return Message(
         id=mid, schema=1, from_project="x", from_session="x", from_uuid="s",
         to_kind="project", to_value="alpha", to_location="projects/alpha",
-        subject="s", sent_at="2026-06-01T00:00:00Z", status="read",
-        read_at="2026-06-05T00:00:00Z", read_by_uuid="r", read_by_session="r",
-        claimed_at=None, receipt_shown=False, thread=None, attachments=[], body="b",
+        subject="s", sent_at="2026-06-01T00:00:00Z", status=status,  # type: ignore[arg-type]
+        read_at="2026-06-05T00:00:00Z" if status != "sent" else None,
+        read_by_uuid="r" if status != "sent" else None,
+        read_by_session="r" if status != "sent" else None,
+        claimed_at="2026-06-05T00:00:00Z" if claimed else None,
+        receipt_shown=False, thread=None, attachments=[], body="b",
     )
 
 
@@ -28,7 +31,7 @@ def root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
 
 
 def test_concurrent_archive_aged_no_crash_archived_once(root: Path) -> None:
-    repo.insert(_aged_read("20260101T000000Z-0001"))
+    repo.insert(_aged("20260101T000000Z-0001", "claimed"))
     cutoff = "2026-06-06T00:00:00Z"
     results: list[list[str]] = []
     errors: list[Exception] = []
@@ -54,13 +57,11 @@ def test_concurrent_archive_aged_no_crash_archived_once(root: Path) -> None:
 
 
 def test_claim_and_retention_race_preserves_claim_metadata(root: Path) -> None:
-    # A message that is claimable now AND aged-read: whichever wins, no crash and
-    # no lost metadata. Insert as aged-read so retention is eligible; a claimer
-    # races it. Either the claim wins (message ends claimed, metadata intact) or
-    # retention wins first (claim then sees a terminal status -> AlreadyClaimed).
-    repo.insert(_aged_read("20260101T000000Z-0002"))
-    outcomes: list[str] = []
+    # An old unclaimed message: retention never touches it, so a racing claim always
+    # wins and keeps its claimer metadata, with no crash.
+    repo.insert(_aged("20260101T000000Z-0002", "sent"))
     errors: list[Exception] = []
+    claimed: list[str | None] = []
     barrier = threading.Barrier(2)
 
     def claimer() -> None:
@@ -68,9 +69,7 @@ def test_claim_and_retention_race_preserves_claim_metadata(root: Path) -> None:
         try:
             m = repo.claim("20260101T000000Z-0002", "claimer", "beta",
                            "2026-06-20T00:00:00Z")
-            outcomes.append(f"claimed:{m.read_by_uuid}")
-        except AlreadyClaimedError:
-            outcomes.append("already")
+            claimed.append(m.read_by_uuid)
         except Exception as exc:  # noqa: BLE001
             errors.append(exc)
 
@@ -78,7 +77,6 @@ def test_claim_and_retention_race_preserves_claim_metadata(root: Path) -> None:
         barrier.wait()
         try:
             repo.archive_aged("projects/alpha", "2026-06-06T00:00:00Z")
-            outcomes.append("archived-sweep")
         except Exception as exc:  # noqa: BLE001
             errors.append(exc)
 
@@ -86,12 +84,7 @@ def test_claim_and_retention_race_preserves_claim_metadata(root: Path) -> None:
     t1.start(); t2.start(); t1.join(); t2.join()
 
     assert errors == []
+    assert claimed == ["claimer"]
     final = repo.get_by_id("20260101T000000Z-0002")
-    assert final is not None
-    # Metadata is never partially lost: a claimed row keeps its claimer; an
-    # archived-without-claim row keeps its original reader.
-    if final.status == "claimed":
-        assert final.read_by_uuid == "claimer"
-    else:
-        assert final.status == "archived"
-        assert final.read_by_uuid in ("claimer", "r")
+    assert final is not None and final.status == "claimed"
+    assert final.read_by_uuid == "claimer"

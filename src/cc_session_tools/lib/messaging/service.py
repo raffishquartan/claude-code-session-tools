@@ -31,6 +31,9 @@ from cc_session_tools.lib.messaging.store import (
 
 DeliverMode = Literal["full", "incremental"]
 
+# Max pending (unclaimed) messages listed by a full delivery; the rest are counted.
+PENDING_LIST_CAP = 5
+
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -209,6 +212,19 @@ def deliver(ctx: SessionContext, *, mode: DeliverMode) -> str:
             # wins is unaffected.
             proposals.append(_digest_line(message, now))
             cur = cursor_mod.advance(cur, message)
+
+    if mode == "full":
+        # Session start: re-list every still-unclaimed description proposal, even ones an
+        # earlier digest showed, so an unclaimed hand-off never silently drops out of view.
+        listed = {line.split("]", 1)[0] for line in proposals}
+        for message in repository.sweep_new(partitions, {}):
+            if (targets(message, ctx) is MatchKind.CANDIDATE
+                    and f"[{message.id}" not in listed):
+                proposals.append(_digest_line(message, now))
+        if len(proposals) > PENDING_LIST_CAP:
+            omitted = len(proposals) - PENDING_LIST_CAP
+            proposals = proposals[:PENDING_LIST_CAP]
+            proposals.append(f"+{omitted} more, see `ccmsg list`")
 
     # Retention runs once per swept partition (opportunistic, atomic per R1).
     for partition in partitions:

@@ -1,9 +1,10 @@
 # src/cc_session_tools/lib/messaging/retention.py
-"""Opportunistic retention: archive read/claimed messages older than 14 days.
+"""Opportunistic retention: archive claimed messages claimed more than 14 days ago.
 
 Archiving is a status flip (never a delete), done in one atomic statement so a
 concurrent sweep or claim can neither crash it nor lose claim metadata (R1).
-Unread messages never expire. Called from deliver with bounded per-sweep cost."""
+Messages nobody claimed ('sent' or auto-'read') never expire; only an explicit
+`ccmsg archive` removes them. Called from deliver with bounded per-sweep cost."""
 from __future__ import annotations
 
 from datetime import datetime, timedelta

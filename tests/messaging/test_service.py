@@ -259,3 +259,45 @@ def test_format_sent_at_returns_an_unparseable_value_as_stored(stored: str) -> N
     from cc_session_tools.lib.messaging.service import format_sent_at
 
     assert format_sent_at(stored) == stored
+
+
+def _send_description(subject: str) -> str:
+    return service.send(service.SendRequest(
+        from_project="o", from_session="s", from_uuid="sender",
+        to_kind="description", to_value="whoever works on X",
+        to_partition="_global", subject=subject, body="b", attachments=[], thread=None,
+    ))
+
+
+def test_full_deliver_relists_previously_shown_unclaimed_proposal(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("CCST_MESSAGES_ROOT", str(tmp_path))
+    mid = _send_description("task")
+    assert mid in service.deliver(_ctx(), mode="full")
+    # Cursor has advanced, but a later full delivery (new session start) lists it again.
+    assert mid in service.deliver(_ctx(), mode="full")
+    # An incremental delivery does not repeat it.
+    assert mid not in service.deliver(_ctx(), mode="incremental")
+
+
+def test_full_deliver_does_not_relist_claimed_proposal(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("CCST_MESSAGES_ROOT", str(tmp_path))
+    mid = _send_description("task")
+    service.deliver(_ctx(), mode="full")
+    service.claim(mid, service.Claimer(uuid="claimer", session="s"))
+    assert mid not in service.deliver(_ctx(), mode="full")
+
+
+def test_full_deliver_caps_pending_list_and_reports_omitted(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("CCST_MESSAGES_ROOT", str(tmp_path))
+    ids = [_send_description(f"task {i}") for i in range(service.PENDING_LIST_CAP + 2)]
+    service.deliver(_ctx(), mode="full")  # first sight; cursor advances
+    digest = service.deliver(_ctx(), mode="full")
+    listed = [i for i in ids if i in digest]
+    assert len(listed) == service.PENDING_LIST_CAP
+    assert "+2 more" in digest and "ccmsg list" in digest

@@ -136,21 +136,24 @@ def test_archive_one_missing_raises(root: Path) -> None:
         repo.archive_one("ghost")
 
 
-def test_archive_aged_only_settled_older_than_cutoff(root: Path) -> None:
-    # read 15 days ago -> archived; read 13 days ago -> stays; unread -> stays.
-    repo.insert(_msg("20260101T000000Z-0001", status="read",
-                     read_at="2026-06-05T00:00:00Z"))            # old
-    repo.insert(_msg("20260101T000000Z-0002", status="read",
-                     read_at="2026-06-17T00:00:00Z"))            # recent
+def test_archive_aged_only_claimed_older_than_cutoff(root: Path) -> None:
+    # claimed long ago -> archived; claimed recently, read (any age) and unread -> stay.
+    repo.insert(_msg("20260101T000000Z-0001", status="claimed", read_at=None,
+                     claimed_at="2026-06-05T00:00:00Z"))         # old claim
+    repo.insert(_msg("20260101T000000Z-0002", status="claimed", read_at=None,
+                     claimed_at="2026-06-17T00:00:00Z"))         # recent claim
     repo.insert(_msg("20260101T000000Z-0003", status="sent"))   # unread
+    repo.insert(_msg("20260101T000000Z-0004", status="read",
+                     read_at="2026-06-01T00:00:00Z"))            # old read, never claimed
     cutoff = "2026-06-06T00:00:00Z"  # now(2026-06-20) - 14d
     archived = repo.archive_aged("projects/alpha", cutoff)
     assert archived == ["20260101T000000Z-0001"]
-    assert repo.get_by_id("20260101T000000Z-0002").status == "read"
+    assert repo.get_by_id("20260101T000000Z-0002").status == "claimed"
     assert repo.get_by_id("20260101T000000Z-0003").status == "sent"
+    assert repo.get_by_id("20260101T000000Z-0004").status == "read"
 
 
-def test_archive_aged_uses_claimed_at_when_read_at_null(root: Path) -> None:
+def test_archive_aged_archives_claimed_using_claimed_at_even_when_read_at_null(root: Path) -> None:
     repo.insert(_msg("20260101T000000Z-0004", to_kind="description", to_value="w",
                      to_location="projects/alpha", status="claimed", read_at=None,
                      claimed_at="2026-06-05T00:00:00Z"))
@@ -243,8 +246,8 @@ def test_archive_one_bumps_updated_at_and_version(root: Path) -> None:
 
 
 def test_archive_aged_bumps_updated_at_and_version(root: Path) -> None:
-    repo.insert(_msg("20260101T000000Z-0001", status="read",
-                     read_at="2026-06-05T00:00:00Z"))
+    repo.insert(_msg("20260101T000000Z-0001", status="claimed", read_at=None,
+                     claimed_at="2026-06-05T00:00:00Z"))
     repo.archive_aged("projects/alpha", "2026-06-06T00:00:00Z")
     _, version = _row_audit("20260101T000000Z-0001")
     assert version == 2

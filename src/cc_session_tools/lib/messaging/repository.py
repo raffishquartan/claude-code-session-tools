@@ -306,9 +306,10 @@ def archive_one(message_id: str) -> Message:
 
 
 def archive_aged(partition: str, cutoff_iso: str) -> list[str]:
-    """Archive every read/claimed message in ``partition`` whose settle time
-    (claimed_at, else read_at) is at or before ``cutoff_iso``, in one atomic
-    statement. Returns the archived ids (sorted).
+    """Archive every claimed message in ``partition`` whose ``claimed_at`` is at or
+    before ``cutoff_iso``, in one atomic statement. Returns the archived ids
+    (sorted). Messages that were never claimed ('sent' or auto-'read') are never
+    archived here, at any age.
 
     R1: a second concurrent sweep runs the identical UPDATE, matches 0 rows
     (those messages are already 'archived'), and neither crashes nor double-
@@ -320,9 +321,8 @@ def archive_aged(partition: str, cutoff_iso: str) -> list[str]:
         with _immediate(conn):
             cur = conn.execute(
                 "UPDATE messages SET status='archived', updated_at=?, version=version+1 "
-                "WHERE to_location=? AND status IN ('read','claimed') "
-                "AND COALESCE(claimed_at, read_at) IS NOT NULL "
-                "AND COALESCE(claimed_at, read_at) <= ? "
+                "WHERE to_location=? AND status='claimed' "
+                "AND claimed_at IS NOT NULL AND claimed_at <= ? "
                 "RETURNING id",
                 (_now_iso(), partition, cutoff_iso),
             )
