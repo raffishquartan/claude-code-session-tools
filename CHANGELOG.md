@@ -18,7 +18,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The session-start delivery digest re-lists every still-unclaimed description-addressed message with its age, even if an earlier digest already showed it, capped at 5 lines with a "+N more, see `ccmsg list`" tail.
 - The session-start digest also lists auto-read session- and project-addressed messages that nobody has archived, with age, in a "Read but not yet handled" section until they are archived with `ccmsg archive`.
 
-## [4.1.3] - 2026-11-19
 ## [4.2.1] - 2026-11-21
 
 ### Fixed
