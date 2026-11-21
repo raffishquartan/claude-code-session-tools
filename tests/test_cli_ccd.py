@@ -371,3 +371,127 @@ def test_ccd_does_not_write_a_sessions_db_row(fake_home, tmp_path, monkeypatch, 
     assert "cmd" in captured_launch  # ccd launched claude
     db_path = tmp_path / "db" / "sessions.db"
     assert not db_path.exists() or sessions_db.list_sessions(path=db_path) == []
+
+
+def _write_settings(home: Path, *additional_dirs: str) -> None:
+    (home / ".claude" / "settings.json").write_text(
+        json.dumps({"permissions": {"additionalDirectories": list(additional_dirs)}})
+    )
+
+
+def _hint_lines(err: str) -> list[str]:
+    return [line for line in err.splitlines() if "additionalDirectories" in line]
+
+
+def test_ccd_hints_when_a_root_is_not_covered(
+    fake_home, tmp_path, monkeypatch, captured_launch, capsys
+):
+    repos = tmp_path / "repos"
+    proj = repos / "myproj"
+    proj.mkdir(parents=True)
+    _set_repo_root(monkeypatch, repos)
+    _write_settings(fake_home, str(tmp_path / "elsewhere"))
+    monkeypatch.chdir(proj)
+
+    rc = ccd.main(["mytag"])
+
+    assert rc == 0
+    assert "cmd" in captured_launch
+    hints = _hint_lines(capsys.readouterr().err)
+    assert len(hints) == 1
+    assert str(repos.resolve()) in hints[0]
+
+
+def test_ccd_does_not_hint_when_every_root_is_covered(
+    fake_home, tmp_path, monkeypatch, captured_launch, capsys
+):
+    repos = tmp_path / "repos"
+    proj = repos / "myproj"
+    proj.mkdir(parents=True)
+    _set_repo_root(monkeypatch, repos)
+    _write_settings(fake_home, str(tmp_path))
+    monkeypatch.chdir(proj)
+
+    assert ccd.main(["mytag"]) == 0
+    assert _hint_lines(capsys.readouterr().err) == []
+
+
+def test_ccd_hints_only_for_the_uncovered_one_of_two_roots(
+    fake_home, tmp_path, monkeypatch, captured_launch, capsys
+):
+    repos = tmp_path / "repos"
+    cc = tmp_path / "cc"
+    proj = repos / "myproj"
+    proj.mkdir(parents=True)
+    cc.mkdir()
+    _set_repo_root(monkeypatch, repos)
+    _set_proj_root(monkeypatch, cc)
+    _write_settings(fake_home, str(repos))
+    monkeypatch.chdir(proj)
+
+    assert ccd.main(["mytag"]) == 0
+    hints = _hint_lines(capsys.readouterr().err)
+    assert len(hints) == 1
+    assert str(cc.resolve()) in hints[0]
+
+
+@pytest.mark.parametrize("settings_text", [None, "{not json", "[]"])
+def test_ccd_does_not_hint_when_settings_is_missing_or_unreadable(
+    fake_home, tmp_path, monkeypatch, captured_launch, capsys, settings_text
+):
+    repos = tmp_path / "repos"
+    proj = repos / "myproj"
+    proj.mkdir(parents=True)
+    _set_repo_root(monkeypatch, repos)
+    if settings_text is not None:
+        (fake_home / ".claude" / "settings.json").write_text(settings_text)
+    monkeypatch.chdir(proj)
+
+    assert ccd.main(["mytag"]) == 0
+    assert _hint_lines(capsys.readouterr().err) == []
+
+
+def test_ccd_does_not_hint_when_no_roots_are_configured(
+    fake_home, tmp_path, monkeypatch, captured_launch, capsys
+):
+    monkeypatch.delenv("CLAUDE_SESSION_TOOLS_REPO_ROOT", raising=False)
+    monkeypatch.delenv("CLAUDE_SESSION_TOOLS_PROJ_ROOT", raising=False)
+    _write_settings(fake_home)
+    proj = tmp_path / "myproj"
+    proj.mkdir()
+    monkeypatch.chdir(proj)
+
+    assert ccd.main(["--force", "mytag"]) == 0
+    assert _hint_lines(capsys.readouterr().err) == []
+
+
+def test_ccd_dry_run_prints_no_hint(
+    fake_home, tmp_path, monkeypatch, captured_launch, capsys
+):
+    repos = tmp_path / "repos"
+    proj = repos / "myproj"
+    proj.mkdir(parents=True)
+    _set_repo_root(monkeypatch, repos)
+    _write_settings(fake_home)
+    monkeypatch.chdir(proj)
+
+    assert ccd.main(["--dry-run", "mytag"]) == 0
+    assert _hint_lines(capsys.readouterr().err) == []
+    assert "cmd" not in captured_launch
+
+
+def test_ccd_hint_is_not_printed_when_validation_fails(
+    fake_home, tmp_path, monkeypatch, captured_launch, capsys
+):
+    repos = tmp_path / "repos"
+    repos.mkdir()
+    _set_repo_root(monkeypatch, repos)
+    _write_settings(fake_home)
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    monkeypatch.chdir(outside)
+
+    assert ccd.main(["mytag"]) == 1
+    assert _hint_lines(capsys.readouterr().err) == []
+    assert "cmd" not in captured_launch
+

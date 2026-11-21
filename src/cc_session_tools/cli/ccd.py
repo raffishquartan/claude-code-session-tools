@@ -9,11 +9,13 @@ from pathlib import Path
 
 from cc_session_tools import __version__
 from cc_session_tools.lib import api_keys, prompts, rules
+from cc_session_tools.lib.paths import claude_settings_path
 from cc_session_tools.lib.roots import (
     RootsConfigError,
     is_strict_root,
     load_session_roots,
     matched_session_root,
+    uncovered_session_roots,
 )
 from cc_session_tools.lib.sessions import is_empty_session
 from cc_session_tools.lib.tasklist import id_for_project
@@ -223,6 +225,14 @@ def main(argv: list[str] | None = None, *, api_key: bool = False) -> int:
             return 1
         if key_label is None:
             return 0
+
+    for root in uncovered_session_roots(claude_settings_path()):
+        print(
+            f"{prog}: note: {root} is not under any permissions.additionalDirectories entry in "
+            "~/.claude/settings.json; sessions will be asked for permission to reach sibling "
+            "projects. Add it (or a parent such as your home directory) there, or run 'ccst doctor'.",
+            file=sys.stderr,
+        )
 
     (session_dir / "working").mkdir(parents=True, exist_ok=True)
     (session_dir / "out").mkdir(parents=True, exist_ok=True)

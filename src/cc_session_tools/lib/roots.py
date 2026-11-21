@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import json
 import os
 from pathlib import Path
+from typing import Any
 
 REPO_ROOT_ENV = "CLAUDE_SESSION_TOOLS_REPO_ROOT"
 PROJ_ROOT_ENV = "CLAUDE_SESSION_TOOLS_PROJ_ROOT"
@@ -143,3 +145,47 @@ def strict_root_path() -> Path | None:
     """Alias for proj_root(), preserved for callers that think in
     strict-root terminology."""
     return proj_root()
+
+
+def covering_entry(root: Path, settings_data: dict[str, Any]) -> str | None:
+    """The ``permissions.additionalDirectories`` entry that covers ``root``, or None.
+
+    ``root`` is covered when its resolved path equals or is under the resolved path of an entry
+    (``~`` expanded). That setting is what lets a session read and edit sibling projects without
+    ``--add-dir``. A value that is not a list, entries that are not strings, and entries that are
+    not absolute after ``~`` expansion are ignored (a relative entry would resolve against the
+    working directory). Entries that do not exist are compared lexically.
+    """
+    real_root = root.resolve()
+    permissions = settings_data.get("permissions")
+    entries = permissions.get("additionalDirectories") if isinstance(permissions, dict) else None
+    for entry in entries if isinstance(entries, list) else []:
+        if not isinstance(entry, str):
+            continue
+        expanded = Path(entry).expanduser()
+        if not expanded.is_absolute():
+            continue
+        covering = expanded.resolve()
+        if real_root == covering or covering in real_root.parents:
+            return entry
+    return None
+
+
+def uncovered_session_roots(settings_path: Path) -> list[Path]:
+    """Configured session roots (set, existing) not covered by the settings file's
+    ``additionalDirectories``, deduplicated by resolved path.
+
+    A missing, unparseable or non-object settings file yields no roots: there is nothing to
+    compare against, and ``ccst doctor`` reports an unreadable settings file itself.
+    """
+    try:
+        loaded = json.loads(settings_path.read_text())
+    except (FileNotFoundError, json.JSONDecodeError):
+        return []
+    if not isinstance(loaded, dict):
+        return []
+    out: list[Path] = []
+    for root in (repo_root(), proj_root()):
+        if root is not None and root not in out and covering_entry(root, loaded) is None:
+            out.append(root)
+    return out

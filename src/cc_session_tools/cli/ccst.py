@@ -128,6 +128,7 @@ from cc_session_tools.lib import command_recovery, machine_identity
 from cc_session_tools.lib.claude_md_install import SECTION_IDS as CLAUDE_MD_SECTION_IDS
 from cc_session_tools.lib.claude_md_install import DRIFT_WARNING_MARKER, MarkdownAction, MarkdownResult
 from cc_session_tools.lib.hook_registry import HOOK_DESCRIPTIONS, HOOK_VERBS
+from cc_session_tools.lib.paths import claude_settings_path
 from cc_session_tools.lib.text_wrap import wrap_block
 
 if TYPE_CHECKING:
@@ -734,9 +735,7 @@ def _cmd_doctor(args: argparse.Namespace) -> int:
             print(f"{name}  (muted {mutes[name]})")
         return 0
 
-    settings_path = Path(args.settings) if args.settings else (
-        Path.home() / ".claude" / "settings.json"
-    )
+    settings_path = Path(args.settings) if args.settings else claude_settings_path()
 
     try:
         bundle_path = _discover_bundle()

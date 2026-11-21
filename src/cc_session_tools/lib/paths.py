@@ -23,6 +23,12 @@ def data_home() -> Path:
     return Path.home() / ".local" / "share" / "claude"
 
 
+def claude_settings_path() -> Path:
+    """Claude Code's user-level settings file, ~/.claude/settings.json. Resolved on each
+    call so tests that redirect Path.home() see their own."""
+    return Path.home() / ".claude" / "settings.json"
+
+
 def claude_projects_dir() -> Path:
     """Claude Code's transcript root, ~/.claude/projects (one <encoded-cwd>
     directory per project, holding <uuid>.jsonl and <uuid>/subagents/*.jsonl).

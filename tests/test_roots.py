@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
@@ -9,10 +10,12 @@ from cc_session_tools.lib.roots import (
     PROJ_ROOT_ENV,
     REPO_ROOT_ENV,
     RootsConfigError,
+    covering_entry,
     is_strict_root,
     load_session_roots,
     proj_root,
     repo_root,
+    uncovered_session_roots,
 )
 
 
@@ -187,3 +190,132 @@ class TestMatchedSessionRoot:
         elsewhere = tmp_path / "e"
         elsewhere.mkdir()
         assert roots.matched_session_root(elsewhere, [root]) is None
+
+
+def _settings(*dirs: object) -> dict[str, object]:
+    return {"permissions": {"additionalDirectories": list(dirs)}}
+
+
+class TestCoveringEntry:
+    def test_returns_the_ancestor_entry(self, tmp_path):
+        root = tmp_path / "home" / "repos"
+        root.mkdir(parents=True)
+        entry = str(tmp_path / "home")
+        assert covering_entry(root, _settings(entry)) == entry
+
+    def test_returns_entry_equal_to_root(self, tmp_path):
+        root = tmp_path / "repos"
+        root.mkdir()
+        assert covering_entry(root, _settings(str(root))) == str(root)
+
+    def test_expands_tilde(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("HOME", str(tmp_path))
+        root = tmp_path / "repos"
+        root.mkdir()
+        assert covering_entry(root, _settings("~")) == "~"
+
+    def test_resolves_a_symlinked_root(self, tmp_path):
+        storage = tmp_path / "home" / "storage" / "claude"
+        storage.mkdir(parents=True)
+        link = tmp_path / "outside" / "cc"
+        link.parent.mkdir()
+        link.symlink_to(storage)
+        entry = str(tmp_path / "home")
+        assert covering_entry(link, _settings(entry)) == entry
+
+    def test_none_when_uncovered(self, tmp_path):
+        root = tmp_path / "repos"
+        root.mkdir()
+        other = tmp_path / "elsewhere"
+        other.mkdir()
+        assert covering_entry(root, _settings(str(other))) is None
+
+    def test_does_not_treat_a_sibling_with_a_shared_prefix_as_covering(self, tmp_path):
+        root = tmp_path / "repos"
+        root.mkdir()
+        assert covering_entry(root, _settings(str(tmp_path / "rep"))) is None
+
+    @pytest.mark.parametrize("value", ["/", None, 3, {"/": 1}])
+    def test_none_when_value_is_not_a_list(self, tmp_path, value):
+        root = tmp_path / "repos"
+        root.mkdir()
+        assert covering_entry(root, {"permissions": {"additionalDirectories": value}}) is None
+
+    def test_none_when_key_is_absent(self, tmp_path):
+        root = tmp_path / "repos"
+        root.mkdir()
+        assert covering_entry(root, {"hooks": {}}) is None
+
+    def test_ignores_non_string_entries(self, tmp_path):
+        root = tmp_path / "repos"
+        root.mkdir()
+        assert covering_entry(root, _settings(None, 3)) is None
+
+    @pytest.mark.parametrize("entry", ["", ".", "repos", "../"])
+    def test_ignores_relative_entries(self, tmp_path, monkeypatch, entry):
+        root = tmp_path / "repos"
+        root.mkdir()
+        monkeypatch.chdir(tmp_path)
+        assert covering_entry(root, _settings(entry)) is None
+
+    def test_compares_entries_that_do_not_exist_lexically(self, tmp_path):
+        root = tmp_path / "future" / "repos"
+        root.mkdir(parents=True)
+        entry = str(tmp_path / "future")
+        assert covering_entry(root, _settings(entry)) == entry
+        assert covering_entry(root, _settings(str(tmp_path / "nope"))) is None
+
+
+class TestUncoveredSessionRoots:
+    def _roots(self, tmp_path, monkeypatch):
+        repos = tmp_path / "repos"
+        proj = tmp_path / "cc"
+        repos.mkdir()
+        proj.mkdir()
+        monkeypatch.setenv(REPO_ROOT_ENV, str(repos))
+        monkeypatch.setenv(PROJ_ROOT_ENV, str(proj))
+        return repos.resolve(), proj.resolve()
+
+    def _write(self, tmp_path, data):
+        path = tmp_path / "settings.json"
+        path.write_text(data if isinstance(data, str) else json.dumps(data))
+        return path
+
+    def test_both_uncovered(self, tmp_path, monkeypatch):
+        repos, proj = self._roots(tmp_path, monkeypatch)
+        settings = self._write(tmp_path, _settings())
+        assert uncovered_session_roots(settings) == [repos, proj]
+
+    def test_only_the_uncovered_root_is_returned(self, tmp_path, monkeypatch):
+        repos, proj = self._roots(tmp_path, monkeypatch)
+        settings = self._write(tmp_path, _settings(str(repos)))
+        assert uncovered_session_roots(settings) == [proj]
+
+    def test_empty_when_all_covered(self, tmp_path, monkeypatch):
+        self._roots(tmp_path, monkeypatch)
+        settings = self._write(tmp_path, _settings(str(tmp_path)))
+        assert uncovered_session_roots(settings) == []
+
+    def test_dedups_a_root_set_twice(self, tmp_path, monkeypatch):
+        repos, _ = self._roots(tmp_path, monkeypatch)
+        monkeypatch.setenv(PROJ_ROOT_ENV, str(repos))
+        settings = self._write(tmp_path, _settings())
+        assert uncovered_session_roots(settings) == [repos]
+
+    @pytest.mark.parametrize("text", [None, "{not json", "[]", '"x"'])
+    def test_empty_when_settings_missing_or_not_an_object(self, tmp_path, monkeypatch, text):
+        self._roots(tmp_path, monkeypatch)
+        path = tmp_path / "settings.json"
+        if text is not None:
+            path.write_text(text)
+        assert uncovered_session_roots(path) == []
+
+    def test_empty_when_no_roots_configured(self, tmp_path, monkeypatch):
+        monkeypatch.delenv(REPO_ROOT_ENV, raising=False)
+        monkeypatch.delenv(PROJ_ROOT_ENV, raising=False)
+        assert uncovered_session_roots(self._write(tmp_path, _settings())) == []
+
+    def test_a_missing_root_directory_is_skipped(self, tmp_path, monkeypatch):
+        monkeypatch.setenv(REPO_ROOT_ENV, str(tmp_path / "nope"))
+        monkeypatch.delenv(PROJ_ROOT_ENV, raising=False)
+        assert uncovered_session_roots(self._write(tmp_path, _settings())) == []
