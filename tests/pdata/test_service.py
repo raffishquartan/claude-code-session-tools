@@ -274,6 +274,43 @@ def test_query_records_service_layer(monkeypatch, tmp_path):
     assert [r.content for r in rows] == ["b"]
 
 
+@pytest.mark.parametrize(
+    "clause",
+    [
+        "corr_key = 'gmail:abc'",
+        'corr_key = "gmail:abc"',
+        "corr_key = gmail:abc",
+        "corr_key LIKE 'gmail:%'",
+        'corr_key LIKE "gmail:a%"',
+    ],
+)
+def test_query_where_ignores_surrounding_value_quotes_on_extension_field(
+    monkeypatch, tmp_path, clause,
+):
+    monkeypatch.setenv("CCST_PROJECT_DB_DIR", str(tmp_path))
+    service.schema_add_field(
+        project="testproj", record_group="correspondence", field_name="corr_key",
+        sql_type="TEXT", description=None, default=None,
+    )
+    service.add_record(project="testproj", record_group="correspondence", content="a",
+                        file_path=None, fields={"corr_key": "gmail:abc"}, created_at=1)
+    service.add_record(project="testproj", record_group="correspondence", content="b",
+                        file_path=None, fields={"corr_key": "other"}, created_at=2)
+    rows = service.query_records(
+        project="testproj", record_group="correspondence", where=[clause],
+    )
+    assert [r.content for r in rows] == ["a"]
+
+
+@pytest.mark.parametrize("raw", ["'abc\"", "'abc", "abc'", "'"])
+def test_where_value_with_mismatched_or_lone_quotes_is_kept_as_written(raw):
+    assert service._parse_where_clause(f"content = {raw}")[2] == raw
+
+
+def test_where_value_wrapped_twice_matches_a_value_that_has_quotes():
+    assert service._parse_where_clause("content = \"'x'\"")[2] == "'x'"
+
+
 def test_query_records_rejects_bad_where_syntax(monkeypatch, tmp_path):
     # Must be too few whitespace-separated tokens to match _WHERE_CLAUSE_RE at all (a single
     # word, with no op/value) so this actually exercises the "malformed clause" branch — not

@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [4.2.1] - 2026-11-21
+
+### Fixed
+
+- `ccst pdata query --where` no longer compares a quoted value with its quotes attached, so `--where "corr_key = 'gmail:abc'"` and `LIKE 'x%'` on extension fields match the records they should instead of returning no rows.
+
 ## [4.2.0] - 2026-11-21
 
 ### Added
