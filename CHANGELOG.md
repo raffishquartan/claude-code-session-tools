@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [4.2.0] - 2026-11-21
+
+### Added
+
+- `ccd` prints a one-line note to stderr before launching when a configured session root is not covered by
+  `permissions.additionalDirectories` in `~/.claude/settings.json`, naming the root and the fix. Sessions on such a
+  machine ask permission for each cross-project access, and nothing at launch said why. The launch itself is
+  unchanged, and nothing is printed when every root is covered, when `settings.json` is missing or unreadable,
+  on `--dry-run`, or when validation fails.
+
+### Changed
+
+- The rule for whether a session root is covered by `additionalDirectories` now lives in one place
+  (`lib/roots.covering_entry`), shared by `ccd` and the `ccst doctor` check, so the two cannot drift.
+
 ## [4.1.3] - 2026-11-20
 
 ### Fixed
