@@ -451,6 +451,21 @@ def test_ccd_does_not_hint_when_settings_is_missing_or_unreadable(
     assert _hint_lines(capsys.readouterr().err) == []
 
 
+def test_ccd_launches_without_a_hint_when_settings_path_is_a_directory(
+    fake_home, tmp_path, monkeypatch, captured_launch, capsys
+):
+    repos = tmp_path / "repos"
+    proj = repos / "myproj"
+    proj.mkdir(parents=True)
+    _set_repo_root(monkeypatch, repos)
+    (fake_home / ".claude" / "settings.json").mkdir()
+    monkeypatch.chdir(proj)
+
+    assert ccd.main(["mytag"]) == 0
+    assert "cmd" in captured_launch
+    assert _hint_lines(capsys.readouterr().err) == []
+
+
 def test_ccd_does_not_hint_when_no_roots_are_configured(
     fake_home, tmp_path, monkeypatch, captured_launch, capsys
 ):

@@ -175,12 +175,12 @@ def uncovered_session_roots(settings_path: Path) -> list[Path]:
     """Configured session roots (set, existing) not covered by the settings file's
     ``additionalDirectories``, deduplicated by resolved path.
 
-    A missing, unparseable or non-object settings file yields no roots: there is nothing to
-    compare against, and ``ccst doctor`` reports an unreadable settings file itself.
+    A missing, unreadable, unparseable or non-object settings file yields no roots: there is
+    nothing to compare against, and ``ccst doctor`` reports an unreadable settings file itself.
     """
     try:
-        loaded = json.loads(settings_path.read_text())
-    except (FileNotFoundError, json.JSONDecodeError):
+        loaded = json.loads(settings_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
         return []
     if not isinstance(loaded, dict):
         return []

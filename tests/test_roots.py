@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 
 import pytest
@@ -309,6 +310,28 @@ class TestUncoveredSessionRoots:
         if text is not None:
             path.write_text(text)
         assert uncovered_session_roots(path) == []
+
+    def test_empty_when_settings_path_is_a_directory(self, tmp_path, monkeypatch):
+        self._roots(tmp_path, monkeypatch)
+        path = tmp_path / "settings.json"
+        path.mkdir()
+        assert uncovered_session_roots(path) == []
+
+    def test_empty_when_settings_is_not_utf8(self, tmp_path, monkeypatch):
+        self._roots(tmp_path, monkeypatch)
+        path = tmp_path / "settings.json"
+        path.write_bytes(b"\xff\xfe\x00{")
+        assert uncovered_session_roots(path) == []
+
+    @pytest.mark.skipif(os.geteuid() == 0, reason="root ignores file modes")
+    def test_empty_when_settings_is_not_readable(self, tmp_path, monkeypatch):
+        self._roots(tmp_path, monkeypatch)
+        path = self._write(tmp_path, _settings())
+        path.chmod(0)
+        try:
+            assert uncovered_session_roots(path) == []
+        finally:
+            path.chmod(0o600)
 
     def test_empty_when_no_roots_configured(self, tmp_path, monkeypatch):
         monkeypatch.delenv(REPO_ROOT_ENV, raising=False)
