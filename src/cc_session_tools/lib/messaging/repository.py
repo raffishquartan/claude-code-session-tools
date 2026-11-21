@@ -231,6 +231,44 @@ def sweep_new(partitions: list[str], high_water: dict[str, str]) -> list[Message
     return out
 
 
+def pending_proposals(partitions: list[str]) -> list[Message]:
+    """Unclaimed description-addressed messages ('sent') in ``partitions``, oldest
+    first. Narrow filtered query so a session start never loads archived rows."""
+    if not partitions:
+        return []
+    placeholders = ", ".join("?" for _ in partitions)
+    conn = connect()
+    try:
+        rows = conn.execute(
+            f"SELECT * FROM messages WHERE to_location IN ({placeholders}) "
+            "AND status='sent' AND to_kind='description' ORDER BY id",
+            partitions,
+        ).fetchall()
+    finally:
+        conn.close()
+    return [_row_to_message(r) for r in rows]
+
+
+def unhandled_read(partitions: list[str], uuid: str, project: str) -> list[Message]:
+    """Messages addressed to this session (``uuid``) or its ``project`` that were
+    auto-read but never archived or claimed, oldest first. ``ccmsg archive`` is the
+    only way one leaves this set."""
+    if not partitions:
+        return []
+    placeholders = ", ".join("?" for _ in partitions)
+    conn = connect()
+    try:
+        rows = conn.execute(
+            f"SELECT * FROM messages WHERE to_location IN ({placeholders}) "
+            "AND status='read' AND ((to_kind='session' AND to_value=?) "
+            "OR (to_kind='project' AND to_value=?)) ORDER BY id",
+            [*partitions, uuid, project],
+        ).fetchall()
+    finally:
+        conn.close()
+    return [_row_to_message(r) for r in rows]
+
+
 def mark_read(message_id: str, uuid: str, now_iso: str, session_label: str) -> bool:
     """Atomically flip a 'sent' message to 'read', stamping the reader. Returns
     True iff this call was the writer (first-writer-wins under WAL); False if the
@@ -306,9 +344,10 @@ def archive_one(message_id: str) -> Message:
 
 
 def archive_aged(partition: str, cutoff_iso: str) -> list[str]:
-    """Archive every read/claimed message in ``partition`` whose settle time
-    (claimed_at, else read_at) is at or before ``cutoff_iso``, in one atomic
-    statement. Returns the archived ids (sorted).
+    """Archive every claimed message in ``partition`` whose ``claimed_at`` is at or
+    before ``cutoff_iso``, in one atomic statement. Returns the archived ids
+    (sorted). Messages that were never claimed ('sent' or auto-'read') are never
+    archived here, at any age.
 
     R1: a second concurrent sweep runs the identical UPDATE, matches 0 rows
     (those messages are already 'archived'), and neither crashes nor double-
@@ -320,9 +359,8 @@ def archive_aged(partition: str, cutoff_iso: str) -> list[str]:
         with _immediate(conn):
             cur = conn.execute(
                 "UPDATE messages SET status='archived', updated_at=?, version=version+1 "
-                "WHERE to_location=? AND status IN ('read','claimed') "
-                "AND COALESCE(claimed_at, read_at) IS NOT NULL "
-                "AND COALESCE(claimed_at, read_at) <= ? "
+                "WHERE to_location=? AND status='claimed' "
+                "AND claimed_at IS NOT NULL AND claimed_at <= ? "
                 "RETURNING id",
                 (_now_iso(), partition, cutoff_iso),
             )

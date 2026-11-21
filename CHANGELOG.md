@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [4.3.0] - 2026-11-21
+
+### Changed
+
+- `ccmsg` automatic retention now archives only messages that were claimed more than 14 days ago. A message nobody claimed (still `sent`, or auto-read by a session) is never archived automatically at any age; use `ccmsg archive` to clear one.
+
+### Added
+
+- The session-start delivery digest re-lists every still-unclaimed description-addressed message with its age, even if an earlier digest already showed it, capped at 5 lines with a "+N more, see `ccmsg list`" tail.
+- The session-start digest also lists auto-read session- and project-addressed messages that nobody has archived, with age, in a "Read but not yet handled" section until they are archived with `ccmsg archive`.
+
 ## [4.2.1] - 2026-11-21
 
 ### Fixed

@@ -1,6 +1,7 @@
 # tests/messaging/test_service.py  (send portion)
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
@@ -186,7 +187,8 @@ def test_deliver_project_message_auto_read_by_first_session_only(
     b = _ctx(uuid="sess-B", project="alpha", partition="projects/alpha")
     d_a = service.deliver(a, mode="full")
     d_b = service.deliver(b, mode="full")
-    assert mid in d_a and mid not in d_b          # first reader wins the digest line
+    assert mid in d_a and "not yet handled" not in d_a   # first reader wins the auto-read line
+    assert mid in d_b.split("not yet handled", 1)[1]     # later session sees it as unhandled
     read = service.read_one(mid)
     assert read is not None and read.read_by_uuid == "sess-A"
 
@@ -259,3 +261,127 @@ def test_format_sent_at_returns_an_unparseable_value_as_stored(stored: str) -> N
     from cc_session_tools.lib.messaging.service import format_sent_at
 
     assert format_sent_at(stored) == stored
+
+
+def _send_description(subject: str) -> str:
+    return service.send(service.SendRequest(
+        from_project="o", from_session="s", from_uuid="sender",
+        to_kind="description", to_value="whoever works on X",
+        to_partition="_global", subject=subject, body="b", attachments=[], thread=None,
+    ))
+
+
+def test_full_deliver_relists_previously_shown_unclaimed_proposal(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("CCST_MESSAGES_ROOT", str(tmp_path))
+    mid = _send_description("task")
+    assert mid in service.deliver(_ctx(), mode="full")
+    # Cursor has advanced, but a later full delivery (new session start) lists it again.
+    assert mid in service.deliver(_ctx(), mode="full")
+    # An incremental delivery does not repeat it.
+    assert mid not in service.deliver(_ctx(), mode="incremental")
+
+
+def test_full_deliver_lists_new_proposal_once_with_age(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("CCST_MESSAGES_ROOT", str(tmp_path))
+    mid = _send_description("task")
+    digest = service.deliver(_ctx(), mode="full")  # new and pending: must not duplicate
+    assert digest.count(mid) == 1
+    line = digest.split(mid, 1)[1].splitlines()[0]
+    assert "just now" in line or "ago" in line
+
+
+def test_full_deliver_does_not_relist_claimed_proposal(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("CCST_MESSAGES_ROOT", str(tmp_path))
+    mid = _send_description("task")
+    service.deliver(_ctx(), mode="full")
+    service.claim(mid, service.Claimer(uuid="claimer", session="s"))
+    assert mid not in service.deliver(_ctx(), mode="full")
+
+
+def test_full_deliver_caps_pending_list_and_reports_omitted(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("CCST_MESSAGES_ROOT", str(tmp_path))
+    ids = [_send_description(f"task {i}") for i in range(service.PENDING_LIST_CAP + 2)]
+    service.deliver(_ctx(), mode="full")  # first sight; cursor advances
+    digest = service.deliver(_ctx(), mode="full")
+    listed = [i for i in sorted(ids) if i in digest]
+    assert len(listed) == service.PENDING_LIST_CAP
+    # Oldest (lowest id) first; the rest are omitted.
+    assert listed == sorted(ids)[: service.PENDING_LIST_CAP]
+    assert "+2 more" in digest and "ccmsg list --status sent" in digest
+
+
+def test_full_deliver_cap_keeps_oldest_pending_when_new_proposals_arrive(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from cc_session_tools.lib.messaging import repository
+    from cc_session_tools.lib.messaging.message import Message
+
+    monkeypatch.setenv("CCST_MESSAGES_ROOT", str(tmp_path))
+    old = [f"20260101T000000Z-000{i}" for i in range(3)]
+    for mid in old:
+        repository.insert(Message(
+            id=mid, schema=1, from_project="o", from_session="s", from_uuid="sender",
+            to_kind="description", to_value="whoever works on X", to_location="_global",
+            subject="old", sent_at="2026-01-01T00:00:00Z", status="sent", read_at=None,
+            read_by_uuid=None, read_by_session=None, claimed_at=None,
+            receipt_shown=False, thread=None, attachments=[], body="b",
+        ))
+    service.deliver(_ctx(), mode="full")  # old ones seen once; cursor passes them
+    new = [_send_description(f"new {i}") for i in range(4)]  # ids newer than the old ones
+    digest = service.deliver(_ctx(), mode="full")  # new ones are swept, old ones re-listed
+    # The cap keeps the longest-waiting five: all three old ones and two new ones.
+    assert all(i in digest for i in old)
+    assert sum(i in digest for i in new) == service.PENDING_LIST_CAP - len(old)
+    assert "+2 more" in digest
+
+
+def test_full_deliver_lists_read_message_until_archived(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("CCST_MESSAGES_ROOT", str(tmp_path))
+    mid = _send_to_session("me-uuid")
+    first = service.deliver(_ctx(), mode="full")
+    assert first.count(mid) == 1  # auto-read this run: shown once, not duplicated
+    later = service.deliver(_ctx(), mode="full")  # next session start
+    assert mid in later and "not yet handled" in later
+    assert service.deliver(_ctx(), mode="incremental") == ""
+    service.archive(mid, datetime.now(timezone.utc))
+    assert mid not in service.deliver(_ctx(), mode="full")
+
+
+def test_full_deliver_lists_project_message_read_by_another_session(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("CCST_MESSAGES_ROOT", str(tmp_path))
+    mid = service.send(_sender())  # project=alpha
+    service.deliver(_ctx(uuid="first-session"), mode="full")  # auto-reads it
+    digest = service.deliver(_ctx(uuid="second-session"), mode="full")
+    assert mid in digest and "not yet handled" in digest
+
+
+def test_full_deliver_does_not_list_other_sessions_read_message(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("CCST_MESSAGES_ROOT", str(tmp_path))
+    mid = _send_to_session("someone-else")
+    service.deliver(_ctx(uuid="someone-else"), mode="full")  # recipient reads it
+    assert mid not in service.deliver(_ctx(uuid="me-uuid"), mode="full")
+
+
+def test_full_deliver_caps_unhandled_list(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("CCST_MESSAGES_ROOT", str(tmp_path))
+    for _ in range(service.PENDING_LIST_CAP + 3):
+        service.send(_sender())
+    service.deliver(_ctx(), mode="full")  # auto-reads all
+    digest = service.deliver(_ctx(), mode="full")
+    assert "+3 more" in digest
