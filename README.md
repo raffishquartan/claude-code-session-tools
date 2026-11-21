@@ -276,6 +276,8 @@ ccmsg deliver
 ccmsg list
 ccmsg read <id>
 ccmsg claim <id>      # first session to claim wins, for description-addressed messages
+ccmsg archive <id>    # discard a message from the live set
+ccmsg unarchive <id>  # restore archived messages that were never claimed
 ```
 
 Three ways to address a message:

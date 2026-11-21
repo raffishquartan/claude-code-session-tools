@@ -84,6 +84,12 @@ def _build_parser() -> argparse.ArgumentParser:
     archive_p = sub.add_parser("archive", help="Manually archive a message.")
     archive_p.add_argument("id")
 
+    unarchive_p = sub.add_parser(
+        "unarchive",
+        help="Restore archived, never-claimed messages (read -> read, never read -> sent).",
+    )
+    unarchive_p.add_argument("ids", nargs="+", metavar="id")
+
     return p
 
 
@@ -271,6 +277,25 @@ def _cmd_archive(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_unarchive(args: argparse.Namespace) -> int:
+    failed = 0
+    for message_id in dict.fromkeys(args.ids):
+        try:
+            message = service.unarchive(message_id)
+        except service.MessageNotFoundError:
+            print(f"ccmsg: message not found: {message_id}", file=sys.stderr)
+            failed += 1
+        except service.CannotUnarchiveError as exc:
+            print(f"ccmsg: cannot unarchive, {exc}", file=sys.stderr)
+            failed += 1
+        except AlreadyClaimedError:
+            print(f"ccmsg: message is being claimed, try again: {message_id}", file=sys.stderr)
+            failed += 1
+        else:
+            print(f"restored {message_id} as {message.status}")
+    return 1 if failed else 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = _build_parser()
     args = parser.parse_args(argv)
@@ -286,6 +311,8 @@ def main(argv: list[str] | None = None) -> int:
         return _cmd_claim(args)
     if args.command == "archive":
         return _cmd_archive(args)
+    if args.command == "unarchive":
+        return _cmd_unarchive(args)
     parser.print_help(sys.stderr)
     return 1
 

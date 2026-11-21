@@ -23,7 +23,10 @@ from cc_session_tools.lib.messaging.message import (
     Status,
     ToKind,
 )
-from cc_session_tools.lib.messaging.repository import MessageNotFoundError
+from cc_session_tools.lib.messaging.repository import (
+    CannotUnarchiveError,
+    MessageNotFoundError,
+)
 from cc_session_tools.lib.messaging.store import (
     GLOBAL_PARTITION,
     generate_id,
@@ -86,6 +89,13 @@ def send(request: SendRequest) -> str:
 class Claimer:
     uuid: str
     session: str
+
+
+def unarchive(message_id: str) -> Message:
+    """Restore an archived, never-claimed message. Takes the claim lock like
+    ``archive`` so it cannot race a concurrent claim."""
+    with claim_lock(message_id):
+        return repository.unarchive_one(message_id)
 
 
 def find_by_id(message_id: str) -> Message | None:
@@ -220,6 +230,12 @@ def deliver(ctx: SessionContext, *, mode: DeliverMode) -> str:
 
     unhandled: list[str] = []
     if mode == "full":
+        # A never-read message restored by `ccmsg unarchive` sits behind the cursor, so
+        # the sweep cannot return it. Deliver it now like any new message.
+        for message in repository.unread_for_recipient(partitions, ctx.uuid, ctx.project):
+            if repository.mark_read(message.id, ctx.uuid, now_iso, ctx.project):
+                inbound.append(_digest_line(message, now))
+                delivered_ids.add(message.id)
         # Session start: re-list everything still waiting on someone, even if an earlier
         # digest showed it, so an unhandled hand-off never silently drops out of view.
         # Unclaimed description proposals stay until claimed or archived; auto-read
