@@ -1,3 +1,8 @@
+## RENAMED Requirements
+
+- FROM: `### Requirement: Session start lists read-but-unhandled messages until archived`
+- TO: `### Requirement: Session start lists read-but-unhandled messages until claimed`
+
 ## MODIFIED Requirements
 
 ### Requirement: Session start lists read-but-unhandled messages until claimed
