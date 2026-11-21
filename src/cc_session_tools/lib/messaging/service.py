@@ -181,12 +181,15 @@ def _swept_partitions(ctx: SessionContext) -> list[str]:
 def deliver(ctx: SessionContext, *, mode: DeliverMode) -> str:
     """Sweep relevant partitions, auto-read recipient messages, surface
     description proposals, emit receipts, run opportunistic retention, and
-    return a compact digest (empty if nothing to show). ``mode`` is advisory
-    (``full`` vs ``incremental``); the cursor bounds both identically."""
+    return a compact digest (empty if nothing to show). An ``incremental``
+    delivery shows only what the cursor has not yet passed. A ``full`` delivery
+    (session start) additionally re-lists every unclaimed description proposal and
+    every read-but-unhandled session/project message, whatever the cursor."""
     now = datetime.now(timezone.utc)
     now_iso = now.strftime("%Y-%m-%dT%H:%M:%SZ")
     cur = cursor_mod.load(ctx.uuid)
     inbound: list[str] = []
+    delivered_ids: set[str] = set()
     proposals: list[str] = []
 
     partitions = _swept_partitions(ctx)
@@ -204,12 +207,14 @@ def deliver(ctx: SessionContext, *, mode: DeliverMode) -> str:
             # ``session_tag`` field to SessionContext threaded from the hook stdin.
             if repository.mark_read(message.id, ctx.uuid, now_iso, ctx.project):
                 inbound.append(_digest_line(message, now))
+                delivered_ids.add(message.id)
             cur = cursor_mod.advance(cur, message)
         elif kind is MatchKind.CANDIDATE:
-            # A description proposal is surfaced to this session once, then the
-            # cursor advances so it is not re-nudged every prompt. Other sessions
-            # still see it (their own cursors are independent), so first-claim-
-            # wins is unaffected.
+            # An incremental delivery surfaces a new proposal once, then the cursor
+            # advances so it is not re-nudged every prompt. A full delivery
+            # replaces this list with every pending proposal (below). Other
+            # sessions still see it (their own cursors are independent), so
+            # first-claim-wins is unaffected.
             proposals.append(_digest_line(message, now))
             cur = cursor_mod.advance(cur, message)
 
@@ -218,17 +223,20 @@ def deliver(ctx: SessionContext, *, mode: DeliverMode) -> str:
         # Session start: re-list everything still waiting on someone, even if an earlier
         # digest showed it, so an unhandled hand-off never silently drops out of view.
         # Unclaimed description proposals stay until claimed or archived; auto-read
-        # session/project messages stay until archived with `ccmsg archive`.
-        listed = {line.split("]", 1)[0] for line in proposals}
-        for message in repository.pending_proposals(partitions):
-            if f"[{message.id}" not in listed:
-                proposals.append(_digest_line(message, now))
-        shown_now = {line.split("]", 1)[0] for line in inbound}
-        for message in repository.unhandled_read(partitions, ctx.uuid, ctx.project):
-            if f"[{message.id}" not in shown_now:
-                unhandled.append(_digest_line(message, now))
-        proposals = _cap_lines(proposals)
-        unhandled = _cap_lines(unhandled)
+        # session/project messages stay until archived with `ccmsg archive`. Both
+        # lists are oldest first, so the cap never hides the longest-waiting items.
+        proposals = _cap_lines(
+            [_digest_line(m, now) for m in repository.pending_proposals(partitions)],
+            "sent",
+        )
+        unhandled = _cap_lines(
+            [
+                _digest_line(m, now)
+                for m in repository.unhandled_read(partitions, ctx.uuid, ctx.project)
+                if m.id not in delivered_ids
+            ],
+            "read",
+        )
 
     # Retention runs once per swept partition (opportunistic, atomic per R1).
     for partition in partitions:
@@ -254,11 +262,11 @@ def _collect_receipts(ctx: SessionContext, now: datetime) -> list[str]:
     return lines
 
 
-def _cap_lines(lines: list[str]) -> list[str]:
+def _cap_lines(lines: list[str], status: str) -> list[str]:
     if len(lines) <= PENDING_LIST_CAP:
         return lines
     omitted = len(lines) - PENDING_LIST_CAP
-    return [*lines[:PENDING_LIST_CAP], f"+{omitted} more, see `ccmsg list`"]
+    return [*lines[:PENDING_LIST_CAP], f"+{omitted} more, see `ccmsg list --status {status}`"]
 
 
 def _format_digest(

@@ -315,7 +315,32 @@ def test_full_deliver_caps_pending_list_and_reports_omitted(
     assert len(listed) == service.PENDING_LIST_CAP
     # Oldest (lowest id) first; the rest are omitted.
     assert listed == sorted(ids)[: service.PENDING_LIST_CAP]
-    assert "+2 more" in digest and "ccmsg list" in digest
+    assert "+2 more" in digest and "ccmsg list --status sent" in digest
+
+
+def test_full_deliver_cap_keeps_oldest_pending_when_new_proposals_arrive(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from cc_session_tools.lib.messaging import repository
+    from cc_session_tools.lib.messaging.message import Message
+
+    monkeypatch.setenv("CCST_MESSAGES_ROOT", str(tmp_path))
+    old = [f"20260101T000000Z-000{i}" for i in range(3)]
+    for mid in old:
+        repository.insert(Message(
+            id=mid, schema=1, from_project="o", from_session="s", from_uuid="sender",
+            to_kind="description", to_value="whoever works on X", to_location="_global",
+            subject="old", sent_at="2026-01-01T00:00:00Z", status="sent", read_at=None,
+            read_by_uuid=None, read_by_session=None, claimed_at=None,
+            receipt_shown=False, thread=None, attachments=[], body="b",
+        ))
+    service.deliver(_ctx(), mode="full")  # old ones seen once; cursor passes them
+    new = [_send_description(f"new {i}") for i in range(4)]  # ids newer than the old ones
+    digest = service.deliver(_ctx(), mode="full")  # new ones are swept, old ones re-listed
+    # The cap keeps the longest-waiting five: all three old ones and two new ones.
+    assert all(i in digest for i in old)
+    assert sum(i in digest for i in new) == service.PENDING_LIST_CAP - len(old)
+    assert "+2 more" in digest
 
 
 def test_full_deliver_lists_read_message_until_archived(
@@ -327,7 +352,7 @@ def test_full_deliver_lists_read_message_until_archived(
     assert first.count(mid) == 1  # auto-read this run: shown once, not duplicated
     later = service.deliver(_ctx(), mode="full")  # next session start
     assert mid in later and "not yet handled" in later
-    assert mid not in service.deliver(_ctx(), mode="incremental")
+    assert service.deliver(_ctx(), mode="incremental") == ""
     service.archive(mid, datetime.now(timezone.utc))
     assert mid not in service.deliver(_ctx(), mode="full")
 
