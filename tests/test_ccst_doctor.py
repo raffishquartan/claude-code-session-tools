@@ -30,6 +30,7 @@ from cc_session_tools.lib.doctor import (
     check_pending_data_store_migration,
     check_pending_pdata_migration,
     check_pypi_version,
+    check_session_root_access,
     check_settings_json,
     check_skill_symlink,
     format_drift_report,
@@ -318,6 +319,159 @@ def test_run_all_checks_root_env_hints_name_env_sh_not_ccl_sh(tmp_path: Path) ->
         assert "~/.shellrc.d/env.sh" in r.reason
         assert "ccl.sh" in r.reason
         assert "export" in r.reason
+
+
+# ---------- check_session_root_access ----------
+
+_ROOT_VAR = "CLAUDE_SESSION_TOOLS_REPO_ROOT"
+
+
+def _settings_with_dirs(*dirs: object) -> dict[str, object]:
+    return {"permissions": {"additionalDirectories": list(dirs)}}
+
+
+def test_session_root_access_ok_when_root_is_under_an_entry(tmp_path: Path) -> None:
+    root = tmp_path / "home" / "repos"
+    root.mkdir(parents=True)
+    r = check_session_root_access(_ROOT_VAR, str(root), _settings_with_dirs(str(tmp_path / "home")))
+    assert r is not None
+    assert r.status == Status.OK
+    assert r.name == f"settings:additionalDirectories:{_ROOT_VAR}"
+
+
+def test_session_root_access_ok_when_root_equals_an_entry(tmp_path: Path) -> None:
+    root = tmp_path / "repos"
+    root.mkdir()
+    r = check_session_root_access(_ROOT_VAR, str(root), _settings_with_dirs(str(root)))
+    assert r is not None
+    assert r.status == Status.OK
+
+
+def test_session_root_access_expands_tilde_in_entries(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    root = tmp_path / "repos"
+    root.mkdir()
+    r = check_session_root_access(_ROOT_VAR, str(root), _settings_with_dirs("~"))
+    assert r is not None
+    assert r.status == Status.OK
+
+
+def test_session_root_access_ok_when_root_is_a_symlink_into_an_entry(tmp_path: Path) -> None:
+    storage = tmp_path / "home" / "storage" / "claude"
+    storage.mkdir(parents=True)
+    link = tmp_path / "outside" / "cc"
+    link.parent.mkdir()
+    link.symlink_to(storage)
+    r = check_session_root_access(_ROOT_VAR, str(link), _settings_with_dirs(str(tmp_path / "home")))
+    assert r is not None
+    assert r.status == Status.OK
+
+
+def test_session_root_access_warns_naming_root_when_not_covered(tmp_path: Path) -> None:
+    root = tmp_path / "repos"
+    root.mkdir()
+    other = tmp_path / "elsewhere"
+    other.mkdir()
+    r = check_session_root_access(_ROOT_VAR, str(root), _settings_with_dirs(str(other)))
+    assert r is not None
+    assert r.status == Status.WARN
+    assert str(root) in r.reason
+    assert "permissions.additionalDirectories" in r.reason
+    assert "settings.json" in r.reason
+
+
+def test_session_root_access_warns_when_key_is_absent(tmp_path: Path) -> None:
+    root = tmp_path / "repos"
+    root.mkdir()
+    r = check_session_root_access(_ROOT_VAR, str(root), {"hooks": {}})
+    assert r is not None
+    assert r.status == Status.WARN
+
+
+def test_session_root_access_ignores_non_string_entries(tmp_path: Path) -> None:
+    root = tmp_path / "repos"
+    root.mkdir()
+    r = check_session_root_access(_ROOT_VAR, str(root), _settings_with_dirs(None, 3))
+    assert r is not None
+    assert r.status == Status.WARN
+
+
+@pytest.mark.parametrize("value", ["/", None, 3, {"/": 1}])
+def test_session_root_access_warns_when_additional_directories_is_not_a_list(
+    tmp_path: Path, value: object
+) -> None:
+    root = tmp_path / "repos"
+    root.mkdir()
+    r = check_session_root_access(_ROOT_VAR, str(root), {"permissions": {"additionalDirectories": value}})
+    assert r is not None
+    assert r.status == Status.WARN
+
+
+@pytest.mark.parametrize("entry", ["", ".", "repos", "../"])
+def test_session_root_access_ignores_relative_entries(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, entry: str
+) -> None:
+    root = tmp_path / "repos"
+    root.mkdir()
+    monkeypatch.chdir(tmp_path)
+    r = check_session_root_access(_ROOT_VAR, str(root), _settings_with_dirs(entry))
+    assert r is not None
+    assert r.status == Status.WARN
+
+
+def test_session_root_access_compares_entries_that_do_not_exist_lexically(tmp_path: Path) -> None:
+    root = tmp_path / "future" / "repos"
+    root.mkdir(parents=True)
+    r = check_session_root_access(_ROOT_VAR, str(root), _settings_with_dirs(str(tmp_path / "future")))
+    assert r is not None
+    assert r.status == Status.OK
+    missing = check_session_root_access(_ROOT_VAR, str(root), _settings_with_dirs(str(tmp_path / "nope")))
+    assert missing is not None
+    assert missing.status == Status.WARN
+
+
+@pytest.mark.parametrize("env_value", [None, ""])
+def test_session_root_access_skips_unset_root(env_value: str | None) -> None:
+    assert check_session_root_access(_ROOT_VAR, env_value, _settings_with_dirs("/")) is None
+
+
+def test_session_root_access_skips_missing_root_directory(tmp_path: Path) -> None:
+    assert check_session_root_access(_ROOT_VAR, str(tmp_path / "nope"), _settings_with_dirs("/")) is None
+
+
+def _run_all_for_root_access(tmp_path: Path, settings_text: str | None, root: Path) -> dict[str, CheckResult]:
+    settings = tmp_path / "settings.json"
+    if settings_text is not None:
+        settings.write_text(settings_text)
+    bundle = Path(__file__).parent.parent / "src" / "cc_session_tools" / "config" / "hooks-bundle.json"
+    results = run_all_checks(
+        installed_version="1.4.1",
+        settings_path=settings,
+        bundle_path=bundle,
+        skills_source_dir=None,
+        skills_target_dir=tmp_path / "skills",
+        env={_ROOT_VAR: str(root), "CLAUDE_SESSION_TOOLS_PROJ_ROOT": None},
+        skip_pypi=True,
+    )
+    return {r.name: r for r in results}
+
+
+def test_run_all_checks_reports_session_root_access(tmp_path: Path) -> None:
+    root = tmp_path / "repos"
+    root.mkdir()
+    by_name = _run_all_for_root_access(tmp_path, json.dumps(_settings_with_dirs(str(tmp_path))), root)
+    assert by_name[f"settings:additionalDirectories:{_ROOT_VAR}"].status == Status.OK
+    assert "settings:additionalDirectories:CLAUDE_SESSION_TOOLS_PROJ_ROOT" not in by_name
+
+
+@pytest.mark.parametrize("settings_text", [None, "{not json", "[]", '"x"'])
+def test_run_all_checks_omits_session_root_access_when_settings_unreadable(
+    tmp_path: Path, settings_text: str | None
+) -> None:
+    root = tmp_path / "repos"
+    root.mkdir()
+    by_name = _run_all_for_root_access(tmp_path, settings_text, root)
+    assert f"settings:additionalDirectories:{_ROOT_VAR}" not in by_name
 
 
 # ---------- check_skill_symlink ----------

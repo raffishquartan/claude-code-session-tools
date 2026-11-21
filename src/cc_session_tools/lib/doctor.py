@@ -124,6 +124,46 @@ def check_env_dir(
     return CheckResult(name=name, status=Status.OK, reason=str(p))
 
 
+def check_session_root_access(
+    var_name: str, env_value: str | None, settings_data: dict[str, Any]
+) -> CheckResult | None:
+    """WARN when a configured session root is not covered by settings.json's additionalDirectories.
+
+    A root is covered when its resolved path equals or is under the resolved path of any
+    ``permissions.additionalDirectories`` entry (``~`` expanded). That setting is what lets a
+    session read and edit sibling projects without ``--add-dir``. Entries that are not absolute
+    after ``~`` expansion are ignored, since they would resolve against the working directory.
+    An unset or missing root is reported by the ``ENV:`` checks, so it yields no result here.
+    """
+    if not env_value:
+        return None
+    root = Path(env_value).expanduser()
+    if not root.is_dir():
+        return None
+    real_root = root.resolve()
+    name = f"settings:additionalDirectories:{var_name}"
+    permissions = settings_data.get("permissions")
+    entries = permissions.get("additionalDirectories") if isinstance(permissions, dict) else None
+    for entry in entries if isinstance(entries, list) else []:
+        if not isinstance(entry, str):
+            continue
+        expanded = Path(entry).expanduser()
+        if not expanded.is_absolute():
+            continue
+        covering = expanded.resolve()
+        if real_root == covering or covering in real_root.parents:
+            return CheckResult(name=name, status=Status.OK, reason=f"{root} is covered by {entry}")
+    return CheckResult(
+        name=name,
+        status=Status.WARN,
+        reason=(
+            f"{root} is not under any permissions.additionalDirectories entry in "
+            f"~/.claude/settings.json - add it (or a parent such as your home directory) so "
+            f"sessions can read and edit sibling projects"
+        ),
+    )
+
+
 def _check_bun_tool(
     name: str, *, install_hint: str, bin_dir: Path | None, timeout: float
 ) -> CheckResult:
@@ -1270,12 +1310,24 @@ def run_all_checks(
 
     # Hook registrations (from bundle)
     settings_data: dict[str, Any] = {}
+    settings_readable = False
     if settings_path.exists():
         try:
             with settings_path.open() as f:
-                settings_data = json.load(f)
+                loaded = json.load(f)
+            if isinstance(loaded, dict):
+                settings_data = loaded
+                settings_readable = True
         except (json.JSONDecodeError, OSError):
             pass
+
+    # Session roots must be reachable from every session via additionalDirectories (ccd passes
+    # no --add-dir). An unreadable settings.json is already reported by the check above.
+    if settings_readable:
+        for var in _ROOT_ENV_EXAMPLES:
+            access = check_session_root_access(var, env.get(var), settings_data)
+            if access is not None:
+                results.append(access)
 
     bundle_hooks = _extract_bundle_hook_names(bundle_path)
     for hook_name in bundle_hooks:

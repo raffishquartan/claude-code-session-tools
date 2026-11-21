@@ -14,7 +14,6 @@ from cc_session_tools.lib.roots import (
     is_strict_root,
     load_session_roots,
     matched_session_root,
-    trusted_subdirectories,
 )
 from cc_session_tools.lib.sessions import is_empty_session
 from cc_session_tools.lib.tasklist import id_for_project
@@ -151,16 +150,10 @@ def main(argv: list[str] | None = None, *, api_key: bool = False) -> int:
     session_name = f"{date_str}-{tag}"
     session_dir = real_pwd / "cc-sessions" / session_name
 
-    try:
-        add_dirs = trusted_subdirectories(load_session_roots())
-    except RootsConfigError:
-        add_dirs = []
-
     cmd = [
         "claude",
         "-n", session_name,
         "--remote-control", session_name,
-        *[arg for d in add_dirs for arg in ("--add-dir", str(d))],
         *(args.extra or []),
     ]
 
