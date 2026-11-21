@@ -13,7 +13,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - `ccmsg unarchive <id> [<id> ...]` restores archived messages that were never claimed (to `read` if they had been read, otherwise `sent`) so they are listed again at session start. Claimed, non-archived and unknown ids are reported as failures and make the command exit non-zero.
 
-## [4.2.0] - 2026-11-19
 ## [4.3.0] - 2026-11-21
 
 ### Changed
