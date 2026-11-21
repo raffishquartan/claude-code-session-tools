@@ -76,7 +76,7 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Read session context from a hook JSON payload on stdin.",
     )
 
-    claim_p = sub.add_parser("claim", help="Claim a description-addressed message.")
+    claim_p = sub.add_parser("claim", help="Claim a message: take a description-addressed one, or mark any message handled.")
     claim_p.add_argument("id")
     claim_p.add_argument("--uuid", required=True)
     claim_p.add_argument("--session", required=True)

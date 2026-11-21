@@ -4,6 +4,7 @@
 This module holds business logic; argparse validation stays in the CLI."""
 from __future__ import annotations
 
+import shlex
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Literal
@@ -239,7 +240,7 @@ def deliver(ctx: SessionContext, *, mode: DeliverMode) -> str:
         # Session start: re-list everything still waiting on someone, even if an earlier
         # digest showed it, so an unhandled hand-off never silently drops out of view.
         # Unclaimed description proposals stay until claimed or archived; auto-read
-        # session/project messages stay until archived with `ccmsg archive`. Both
+        # session/project messages stay until claimed (handled) or archived (discarded). Both
         # lists are oldest first, so the cap never hides the longest-waiting items.
         proposals = _cap_lines(
             [_digest_line(m, now) for m in repository.pending_proposals(partitions)],
@@ -260,7 +261,8 @@ def deliver(ctx: SessionContext, *, mode: DeliverMode) -> str:
 
     cursor_mod.save(ctx.uuid, cur)
     receipts = _collect_receipts(ctx, now)
-    return _format_digest(inbound, proposals, unhandled, receipts)
+    claim_hint = _claim_hint(ctx)
+    return _format_digest(inbound, proposals, unhandled, receipts, claim_hint)
 
 
 def _collect_receipts(ctx: SessionContext, now: datetime) -> list[str]:
@@ -278,6 +280,16 @@ def _collect_receipts(ctx: SessionContext, now: datetime) -> list[str]:
     return lines
 
 
+def _claim_hint(ctx: SessionContext) -> str:
+    """The claim command for this session; bare when the session uuid is unknown."""
+    if not ctx.uuid:
+        return "ccmsg claim <id>"
+    return (
+        f"ccmsg claim <id> --uuid {shlex.quote(ctx.uuid)} "
+        f"--session {shlex.quote(ctx.project)}"
+    )
+
+
 def _cap_lines(lines: list[str], status: str) -> list[str]:
     if len(lines) <= PENDING_LIST_CAP:
         return lines
@@ -286,7 +298,11 @@ def _cap_lines(lines: list[str], status: str) -> list[str]:
 
 
 def _format_digest(
-    inbound: list[str], proposals: list[str], unhandled: list[str], receipts: list[str]
+    inbound: list[str],
+    proposals: list[str],
+    unhandled: list[str],
+    receipts: list[str],
+    claim_hint: str,
 ) -> str:
     if not (inbound or proposals or unhandled or receipts):
         return ""
@@ -300,7 +316,7 @@ def _format_digest(
         out.extend(proposals)
     if unhandled:
         out.append(
-            "Read but not yet handled (run `ccmsg archive <id>` once dealt with):"
+            f"Read but not yet handled (run `{claim_hint}` once dealt with):"
         )
         out.extend(unhandled)
     if receipts:

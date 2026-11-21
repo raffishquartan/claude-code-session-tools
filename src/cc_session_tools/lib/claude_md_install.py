@@ -51,7 +51,9 @@ need to coordinate with another session - do not wait to be asked.
   ambiguous recipient with the user, and call `ccmsg send`.
 - Delivered messages arrive automatically as injected context. Read a body with
   `ccmsg read <id>`. For a description-addressed proposal, confirm with the user,
-  then `ccmsg claim <id>` (first claim wins).
+  then `ccmsg claim <id>` (first claim wins). Once any message (session, project or
+  description) has been dealt with, `ccmsg claim <id>` it too; until then it is
+  listed again at every session start.
 
 ## Cross-session task tracking
 

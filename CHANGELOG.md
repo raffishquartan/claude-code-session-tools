@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [4.5.0] - 2026-11-21
+
+### Changed
+
+- `ccmsg claim` now also accepts a message that a session has already auto-read, so session-, project- and description-addressed messages share one lifecycle: `sent`, `read`, `claimed` (dealt with), `archived`. A project message claimed by one session stops listing for every session of the project, and the original reader stays recorded so the sender's receipt is unchanged.
+- The session-start "Read but not yet handled" section now tells the session to run `ccmsg claim <id> --uuid <uuid> --session <label>` once a message is dealt with, with the session's own values filled in. `ccmsg archive` remains available to discard a message without handling it.
+- The bundled `CLAUDE.md` messaging block and the `send-session-message` skill say that every kind of message is claimed once handled.
+
 ## [4.4.0] - 2026-11-21
 
 ### Added

@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 from cc_session_tools.lib.messaging import repository as repo
+from cc_session_tools.lib.messaging.lock import AlreadyClaimedError
 from cc_session_tools.lib.messaging.message import Message
 
 
@@ -88,3 +89,29 @@ def test_claim_beats_concurrent_retention_on_an_old_unclaimed_message(root: Path
     final = repo.get_by_id("20260101T000000Z-0002")
     assert final is not None and final.status == "claimed"
     assert final.read_by_uuid == "claimer"
+
+
+def test_concurrent_claims_of_one_read_message_have_exactly_one_winner(root: Path) -> None:
+    repo.insert(_aged("20260101T000000Z-0003", "read"))
+    wins: list[str] = []
+    losses: list[str] = []
+    barrier = threading.Barrier(2)
+
+    def claimer(uuid: str) -> None:
+        barrier.wait()
+        try:
+            repo.claim("20260101T000000Z-0003", uuid, "s", "2026-06-20T00:00:00Z")
+            wins.append(uuid)
+        except AlreadyClaimedError:
+            losses.append(uuid)
+
+    ts = [threading.Thread(target=claimer, args=(u,)) for u in ("a", "b")]
+    for t in ts:
+        t.start()
+    for t in ts:
+        t.join()
+
+    assert len(wins) == 1 and len(losses) == 1
+    final = repo.get_by_id("20260101T000000Z-0003")
+    assert final is not None and final.status == "claimed"
+    assert final.read_by_uuid == "r"

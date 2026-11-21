@@ -68,4 +68,13 @@ session is the right place to handle it:
 2. On confirmation, run `ccmsg claim <id>`. First claim wins; if another session
    claimed it first you will be told, and you do nothing.
 
+## Marking a message handled
+
+Every kind of message (session, project, description) uses `ccmsg claim <id>` to
+record that it has been dealt with. A session or project message is marked read when
+a digest first shows it, but it is listed again at every session start under "Read
+but not yet handled" until someone claims it. Claim it once the work is done; for a
+project message the first claim hides it from every session of the project. Use
+`ccmsg archive <id>` only to discard a message without handling it.
+
 Read any message body with `ccmsg read <id>`.
