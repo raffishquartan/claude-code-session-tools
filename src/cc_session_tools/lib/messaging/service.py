@@ -4,6 +4,7 @@
 This module holds business logic; argparse validation stays in the CLI."""
 from __future__ import annotations
 
+import shlex
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Literal
@@ -260,7 +261,7 @@ def deliver(ctx: SessionContext, *, mode: DeliverMode) -> str:
 
     cursor_mod.save(ctx.uuid, cur)
     receipts = _collect_receipts(ctx, now)
-    claim_hint = f"ccmsg claim <id> --uuid {ctx.uuid} --session {ctx.project}"
+    claim_hint = _claim_hint(ctx)
     return _format_digest(inbound, proposals, unhandled, receipts, claim_hint)
 
 
@@ -277,6 +278,16 @@ def _collect_receipts(ctx: SessionContext, now: datetime) -> list[str]:
         shown.append(message.id)
     repository.mark_receipts_shown(shown)
     return lines
+
+
+def _claim_hint(ctx: SessionContext) -> str:
+    """The claim command for this session; bare when the session uuid is unknown."""
+    if not ctx.uuid:
+        return "ccmsg claim <id>"
+    return (
+        f"ccmsg claim <id> --uuid {shlex.quote(ctx.uuid)} "
+        f"--session {shlex.quote(ctx.project)}"
+    )
 
 
 def _cap_lines(lines: list[str], status: str) -> list[str]:

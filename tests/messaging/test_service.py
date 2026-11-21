@@ -254,6 +254,12 @@ def test_unhandled_hint_is_a_runnable_claim_command_and_claim_clears_it(
     assert mid not in d_b2
 
 
+def test_claim_hint_quotes_values_and_drops_flags_without_a_uuid() -> None:
+    quoted = service._claim_hint(_ctx(uuid="sess-A", project="my project"))
+    assert quoted == "ccmsg claim <id> --uuid sess-A --session 'my project'"
+    assert service._claim_hint(_ctx(uuid="", project="alpha")) == "ccmsg claim <id>"
+
+
 def _send_to_session_in_tmp(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, target_uuid: str
 ) -> str:
