@@ -396,6 +396,40 @@ def test_session_root_access_ignores_non_string_entries(tmp_path: Path) -> None:
     assert r.status == Status.WARN
 
 
+@pytest.mark.parametrize("value", ["/", None, 3, {"/": 1}])
+def test_session_root_access_warns_when_additional_directories_is_not_a_list(
+    tmp_path: Path, value: object
+) -> None:
+    root = tmp_path / "repos"
+    root.mkdir()
+    r = check_session_root_access(_ROOT_VAR, str(root), {"permissions": {"additionalDirectories": value}})
+    assert r is not None
+    assert r.status == Status.WARN
+
+
+@pytest.mark.parametrize("entry", ["", ".", "repos", "../"])
+def test_session_root_access_ignores_relative_entries(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, entry: str
+) -> None:
+    root = tmp_path / "repos"
+    root.mkdir()
+    monkeypatch.chdir(tmp_path)
+    r = check_session_root_access(_ROOT_VAR, str(root), _settings_with_dirs(entry))
+    assert r is not None
+    assert r.status == Status.WARN
+
+
+def test_session_root_access_compares_entries_that_do_not_exist_lexically(tmp_path: Path) -> None:
+    root = tmp_path / "future" / "repos"
+    root.mkdir(parents=True)
+    r = check_session_root_access(_ROOT_VAR, str(root), _settings_with_dirs(str(tmp_path / "future")))
+    assert r is not None
+    assert r.status == Status.OK
+    missing = check_session_root_access(_ROOT_VAR, str(root), _settings_with_dirs(str(tmp_path / "nope")))
+    assert missing is not None
+    assert missing.status == Status.WARN
+
+
 @pytest.mark.parametrize("env_value", [None, ""])
 def test_session_root_access_skips_unset_root(env_value: str | None) -> None:
     assert check_session_root_access(_ROOT_VAR, env_value, _settings_with_dirs("/")) is None
@@ -430,7 +464,7 @@ def test_run_all_checks_reports_session_root_access(tmp_path: Path) -> None:
     assert "settings:additionalDirectories:CLAUDE_SESSION_TOOLS_PROJ_ROOT" not in by_name
 
 
-@pytest.mark.parametrize("settings_text", [None, "{not json"])
+@pytest.mark.parametrize("settings_text", [None, "{not json", "[]", '"x"'])
 def test_run_all_checks_omits_session_root_access_when_settings_unreadable(
     tmp_path: Path, settings_text: str | None
 ) -> None:

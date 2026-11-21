@@ -11,7 +11,7 @@ of which session roots are configured. Access to sibling projects is provided by
 - **THEN** the launched `claude` command contains no `--add-dir` argument
 
 #### Scenario: Extra arguments are still forwarded
-- **WHEN** the user passes extra arguments after `--` to `ccd`
+- **WHEN** the user passes extra arguments after the tag to `ccd`
 - **THEN** they appear in the launched `claude` command unchanged, and no `--add-dir` is added alongside them
 
 ## REMOVED Requirements

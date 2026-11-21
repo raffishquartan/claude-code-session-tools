@@ -131,8 +131,9 @@ def check_session_root_access(
 
     A root is covered when its resolved path equals or is under the resolved path of any
     ``permissions.additionalDirectories`` entry (``~`` expanded). That setting is what lets a
-    session read and edit sibling projects without ``--add-dir``. An unset or missing root is
-    reported by the ``ENV:`` checks, so it yields no result here.
+    session read and edit sibling projects without ``--add-dir``. Entries that are not absolute
+    after ``~`` expansion are ignored, since they would resolve against the working directory.
+    An unset or missing root is reported by the ``ENV:`` checks, so it yields no result here.
     """
     if not env_value:
         return None
@@ -142,11 +143,14 @@ def check_session_root_access(
     real_root = root.resolve()
     name = f"settings:additionalDirectories:{var_name}"
     permissions = settings_data.get("permissions")
-    entries = permissions.get("additionalDirectories", []) if isinstance(permissions, dict) else []
-    for entry in entries:
+    entries = permissions.get("additionalDirectories") if isinstance(permissions, dict) else None
+    for entry in entries if isinstance(entries, list) else []:
         if not isinstance(entry, str):
             continue
-        covering = Path(entry).expanduser().resolve()
+        expanded = Path(entry).expanduser()
+        if not expanded.is_absolute():
+            continue
+        covering = expanded.resolve()
         if real_root == covering or covering in real_root.parents:
             return CheckResult(name=name, status=Status.OK, reason=f"{root} is covered by {entry}")
     return CheckResult(
@@ -1310,8 +1314,10 @@ def run_all_checks(
     if settings_path.exists():
         try:
             with settings_path.open() as f:
-                settings_data = json.load(f)
-            settings_readable = True
+                loaded = json.load(f)
+            if isinstance(loaded, dict):
+                settings_data = loaded
+                settings_readable = True
         except (json.JSONDecodeError, OSError):
             pass
 
