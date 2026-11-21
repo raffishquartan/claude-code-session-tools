@@ -230,6 +230,12 @@ def deliver(ctx: SessionContext, *, mode: DeliverMode) -> str:
 
     unhandled: list[str] = []
     if mode == "full":
+        # A never-read message restored by `ccmsg unarchive` sits behind the cursor, so
+        # the sweep cannot return it. Deliver it now like any new message.
+        for message in repository.unread_for_recipient(partitions, ctx.uuid, ctx.project):
+            if repository.mark_read(message.id, ctx.uuid, now_iso, ctx.project):
+                inbound.append(_digest_line(message, now))
+                delivered_ids.add(message.id)
         # Session start: re-list everything still waiting on someone, even if an earlier
         # digest showed it, so an unhandled hand-off never silently drops out of view.
         # Unclaimed description proposals stay until claimed or archived; auto-read

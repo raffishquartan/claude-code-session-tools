@@ -269,6 +269,26 @@ def unhandled_read(partitions: list[str], uuid: str, project: str) -> list[Messa
     return [_row_to_message(r) for r in rows]
 
 
+def unread_for_recipient(partitions: list[str], uuid: str, project: str) -> list[Message]:
+    """Messages still ``sent`` that are addressed to this session (``uuid``) or its
+    ``project``, oldest first, regardless of any delivery cursor. A message gets here
+    when it was restored by ``unarchive`` after the recipient's cursor had passed it."""
+    if not partitions:
+        return []
+    placeholders = ", ".join("?" for _ in partitions)
+    conn = connect()
+    try:
+        rows = conn.execute(
+            f"SELECT * FROM messages WHERE to_location IN ({placeholders}) "
+            "AND status='sent' AND ((to_kind='session' AND to_value=?) "
+            "OR (to_kind='project' AND to_value=?)) ORDER BY id",
+            [*partitions, uuid, project],
+        ).fetchall()
+    finally:
+        conn.close()
+    return [_row_to_message(r) for r in rows]
+
+
 def mark_read(message_id: str, uuid: str, now_iso: str, session_label: str) -> bool:
     """Atomically flip a 'sent' message to 'read', stamping the reader. Returns
     True iff this call was the writer (first-writer-wins under WAL); False if the

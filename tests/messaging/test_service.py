@@ -193,6 +193,42 @@ def test_deliver_project_message_auto_read_by_first_session_only(
     assert read is not None and read.read_by_uuid == "sess-A"
 
 
+def _insert_sent(mid: str, to_kind: str, to_value: str, location: str) -> None:
+    from cc_session_tools.lib.messaging import repository
+    from cc_session_tools.lib.messaging.message import Message
+
+    repository.insert(Message(
+        id=mid, schema=1, from_project="o", from_session="s", from_uuid="sender",
+        to_kind=to_kind, to_value=to_value, to_location=location,  # type: ignore[arg-type]
+        subject="s", sent_at="2026-01-01T00:00:00Z", status="sent", read_at=None,
+        read_by_uuid=None, read_by_session=None, claimed_at=None,
+        receipt_shown=False, thread=None, attachments=[], body="b",
+    ))
+
+
+@pytest.mark.parametrize(
+    ("to_kind", "to_value", "location"),
+    [("session", "me-uuid", "_global"), ("project", "alpha", "projects/alpha")],
+)
+def test_unarchived_never_read_message_reaches_a_recipient_whose_cursor_passed_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    to_kind: str, to_value: str, location: str,
+) -> None:
+    monkeypatch.setenv("CCST_MESSAGES_ROOT", str(tmp_path))
+    old, newer = "20260101T000000Z-0001", "20260101T000000Z-0002"
+    _insert_sent(old, to_kind, to_value, location)
+    service.archive(old, datetime.now(timezone.utc))  # archived without ever being read
+    _insert_sent(newer, to_kind, to_value, location)
+    ctx = _ctx(uuid="me-uuid", project="alpha", partition="projects/alpha")
+    service.deliver(ctx, mode="full")  # delivers `newer`; the cursor is now past `old`
+    assert service.unarchive(old).status == "sent"
+    digest = service.deliver(ctx, mode="full")
+    assert old in digest
+    restored = service.read_one(old)
+    assert restored is not None and restored.status == "read"
+    assert restored.read_by_uuid == "me-uuid"
+
+
 def _send_to_session_in_tmp(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, target_uuid: str
 ) -> str:

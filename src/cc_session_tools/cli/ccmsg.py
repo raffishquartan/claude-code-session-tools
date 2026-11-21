@@ -279,7 +279,7 @@ def _cmd_archive(args: argparse.Namespace) -> int:
 
 def _cmd_unarchive(args: argparse.Namespace) -> int:
     failed = 0
-    for message_id in args.ids:
+    for message_id in dict.fromkeys(args.ids):
         try:
             message = service.unarchive(message_id)
         except service.MessageNotFoundError:

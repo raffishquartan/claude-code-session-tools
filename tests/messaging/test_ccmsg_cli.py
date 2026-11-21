@@ -318,27 +318,72 @@ def test_read_prints_sender_uuid_after_from_line(tmp_path: Path) -> None:
     assert lines[from_index + 1] == f"from_uuid: {sender}"
 
 
-def test_unarchive_reports_each_id_and_fails_if_any_failed(tmp_path: Path) -> None:
-    from cc_session_tools.lib.messaging import repository, service
+def _insert_archived(mid: str, *, read_at: str | None, claimed_at: str | None = None) -> None:
+    from cc_session_tools.lib.messaging import repository
     from cc_session_tools.lib.messaging.message import Message
 
-    os.environ["CCST_MESSAGES_ROOT"] = str(tmp_path)
-    try:
-        for mid, read_at in (("20260101T000000Z-0001", "2026-06-05T00:00:00Z"),
-                             ("20260101T000000Z-0002", None)):
-            repository.insert(Message(
-                id=mid, schema=1, from_project="x", from_session="x", from_uuid="s",
-                to_kind="project", to_value="alpha", to_location="projects/alpha",
-                subject="s", sent_at="2026-06-01T00:00:00Z", status="archived",
-                read_at=read_at, read_by_uuid=None, read_by_session=None,
-                claimed_at=None, receipt_shown=False, thread=None, attachments=[], body="b",
-            ))
-        res = _run(["unarchive", "20260101T000000Z-0001", "ghost", "20260101T000000Z-0002"],
-                   tmp_path)
-        assert res.returncode == 1
-        assert "restored 20260101T000000Z-0001 as read" in res.stdout
-        assert "restored 20260101T000000Z-0002 as sent" in res.stdout
-        assert "message not found: ghost" in res.stderr
-        assert service.read_one("20260101T000000Z-0001").status == "read"  # type: ignore[union-attr]
-    finally:
-        del os.environ["CCST_MESSAGES_ROOT"]
+    repository.insert(Message(
+        id=mid, schema=1, from_project="x", from_session="x", from_uuid="s",
+        to_kind="project", to_value="alpha", to_location="projects/alpha",
+        subject="s", sent_at="2026-06-01T00:00:00Z", status="archived",
+        read_at=read_at, read_by_uuid=None, read_by_session=None,
+        claimed_at=claimed_at, receipt_shown=False, thread=None, attachments=[], body="b",
+    ))
+
+
+def test_unarchive_reports_each_id_and_fails_if_any_failed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from cc_session_tools.lib.messaging import service
+
+    monkeypatch.setenv("CCST_MESSAGES_ROOT", str(tmp_path))
+    _insert_archived("20260101T000000Z-0001", read_at="2026-06-05T00:00:00Z")
+    _insert_archived("20260101T000000Z-0002", read_at=None)
+    res = _run(["unarchive", "20260101T000000Z-0001", "ghost", "20260101T000000Z-0002"],
+               tmp_path)
+    assert res.returncode == 1
+    assert "restored 20260101T000000Z-0001 as read" in res.stdout
+    assert "restored 20260101T000000Z-0002 as sent" in res.stdout
+    assert "message not found: ghost" in res.stderr
+    assert service.read_one("20260101T000000Z-0001").status == "read"  # type: ignore[union-attr]
+
+
+def test_unarchive_refuses_claimed_and_not_archived_messages(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from cc_session_tools.lib.messaging import repository, service
+
+    monkeypatch.setenv("CCST_MESSAGES_ROOT", str(tmp_path))
+    _insert_archived("20260101T000000Z-0001", read_at="2026-06-05T00:00:00Z",
+                     claimed_at="2026-06-06T00:00:00Z")
+    _insert_archived("20260101T000000Z-0002", read_at=None)
+    repository.unarchive_one("20260101T000000Z-0002")  # now `sent`, not archived
+    res = _run(["unarchive", "20260101T000000Z-0001", "20260101T000000Z-0002"], tmp_path)
+    assert res.returncode == 1
+    assert "was claimed: 20260101T000000Z-0001" in res.stderr
+    assert "not archived: 20260101T000000Z-0002" in res.stderr
+    assert service.read_one("20260101T000000Z-0001").status == "archived"  # type: ignore[union-attr]
+
+
+def test_unarchive_repeated_id_is_restored_once_without_a_spurious_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("CCST_MESSAGES_ROOT", str(tmp_path))
+    _insert_archived("20260101T000000Z-0001", read_at="2026-06-05T00:00:00Z")
+    res = _run(["unarchive", "20260101T000000Z-0001", "20260101T000000Z-0001"], tmp_path)
+    assert res.returncode == 0, res.stderr
+    assert res.stdout.count("restored 20260101T000000Z-0001") == 1
+
+
+def test_unarchive_reports_a_message_held_by_a_concurrent_claim(
+    capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from cc_session_tools.cli import ccmsg
+    from cc_session_tools.lib.messaging.lock import AlreadyClaimedError
+
+    def busy(message_id: str) -> None:
+        raise AlreadyClaimedError(message_id)
+
+    monkeypatch.setattr(ccmsg.service, "unarchive", busy)
+    assert ccmsg.main(["unarchive", "some-id"]) == 1
+    assert "being claimed, try again: some-id" in capsys.readouterr().err
