@@ -2,32 +2,22 @@
 
 ## Purpose
 
-Defines which directories `ccd` tells Claude Code to trust when it launches a new session, so
-every project under a configured session root is a usable launch target without per-project
-manual configuration.
+Defines what `ccd` passes to Claude Code about directory access when it launches a new session:
+nothing. Claude Code prompts for every untrusted `--add-dir` folder at startup, so access to
+sibling projects comes from the user's `permissions.additionalDirectories` instead.
 
 ## Requirements
 
-### Requirement: `ccd` trusts every project under a configured session root
-When `ccd` launches a new Claude Code session, it SHALL pass every immediate, non-hidden
-subdirectory of each configured session root (`CLAUDE_SESSION_TOOLS_REPO_ROOT`,
-`CLAUDE_SESSION_TOOLS_PROJ_ROOT`) to Claude Code as a `--add-dir <path>` argument, so the user
-does not have to list each project individually in `settings.json`'s `additionalDirectories`.
+### Requirement: `ccd` passes no `--add-dir` arguments
+When `ccd` launches a new Claude Code session, it SHALL NOT pass any `--add-dir` argument to `claude`, regardless
+of which session roots are configured. Access to sibling projects is provided by the user's
+`permissions.additionalDirectories`, which `ccst doctor` checks (see `cli/doctor-session-root-access`).
 
-#### Scenario: Two roots each containing project directories
-- **WHEN** `CLAUDE_SESSION_TOOLS_REPO_ROOT=$HOME/repos` and `CLAUDE_SESSION_TOOLS_PROJ_ROOT=$HOME/cc`
-  are both set, and each contains one or more project directories
-- **THEN** the launched `claude` command includes one `--add-dir <resolved-path>` pair per
-  immediate non-hidden subdirectory of each root, deduplicated by resolved path, with hidden
-  subdirectories (names starting with `.`) and non-directory entries excluded
+#### Scenario: Session roots configured
+- **WHEN** `CLAUDE_SESSION_TOOLS_REPO_ROOT` and `CLAUDE_SESSION_TOOLS_PROJ_ROOT` are set and contain project
+  directories
+- **THEN** the launched `claude` command contains no `--add-dir` argument
 
-#### Scenario: No session roots configured
-- **WHEN** neither `CLAUDE_SESSION_TOOLS_REPO_ROOT` nor `CLAUDE_SESSION_TOOLS_PROJ_ROOT` is set
-  (or the configured roots are otherwise invalid)
-- **THEN** `ccd` launches the session with no `--add-dir` arguments and does not crash - a missing
-  or invalid roots configuration degrades to no extra trust, not an error
-
-#### Scenario: Task-list id lookup also degrades gracefully
-- **WHEN** session-roots configuration is invalid or absent
-- **THEN** `ccd` still launches successfully with no `CLAUDE_CODE_TASK_LIST_ID` environment
-  variable set, rather than crashing while resolving the task-list id for the current project
+#### Scenario: Extra arguments are still forwarded
+- **WHEN** the user passes extra arguments after the tag to `ccd`
+- **THEN** they appear in the launched `claude` command unchanged, and no `--add-dir` is added alongside them

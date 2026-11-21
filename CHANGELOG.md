@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [4.1.3] - 2026-11-20
+
+### Fixed
+
+- **`ccd` no longer stops on a trust prompt for every project under the session roots.** Claude Code 2.1.326
+  and later asks "Adding a new directory" for each `--add-dir` folder that is not yet trusted and never saves the
+  answer, so `ccd`'s `--add-dir` flags for every project cost a prompt per project on every launch. `ccd` now
+  passes no `--add-dir`; sibling-project access comes from `permissions.additionalDirectories` in
+  `~/.claude/settings.json` (a parent such as the home directory covers every project under it).
+
+### Added
+
+- `ccst doctor` warns when a configured session root (`CLAUDE_SESSION_TOOLS_REPO_ROOT`,
+  `CLAUDE_SESSION_TOOLS_PROJ_ROOT`) is not equal to or under any `permissions.additionalDirectories` entry, and
+  names the directory to add (check names `settings:additionalDirectories:<VAR>`).
+
 ## [4.1.2] - 2026-11-13
 
 ### Changed
