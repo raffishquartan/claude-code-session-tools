@@ -24,6 +24,7 @@ from cc_session_tools.lib.claude_md_install import MalformedBlockError, find_han
 from cc_session_tools.lib.db import connect as _db_connect
 from cc_session_tools.lib.db import migration_applied as _migration_applied
 from cc_session_tools.lib.pdata.formats import FORMAT4_RELEASE
+from cc_session_tools.lib.roots import covering_entry
 from cc_session_tools.lib.hook_registry import HOOK_VERBS, hook_name_from_command
 from cc_session_tools.lib.pdata.init_paths import (
     MIGRATED_ARCHIVE_DIRNAME,
@@ -129,30 +130,19 @@ def check_session_root_access(
 ) -> CheckResult | None:
     """WARN when a configured session root is not covered by settings.json's additionalDirectories.
 
-    A root is covered when its resolved path equals or is under the resolved path of any
-    ``permissions.additionalDirectories`` entry (``~`` expanded). That setting is what lets a
-    session read and edit sibling projects without ``--add-dir``. Entries that are not absolute
-    after ``~`` expansion are ignored, since they would resolve against the working directory.
-    An unset or missing root is reported by the ``ENV:`` checks, so it yields no result here.
+    Coverage is decided by ``roots.covering_entry``, the rule ``ccd`` also uses for its launch
+    hint. An unset or missing root is reported by the ``ENV:`` checks, so it yields no result
+    here.
     """
     if not env_value:
         return None
     root = Path(env_value).expanduser()
     if not root.is_dir():
         return None
-    real_root = root.resolve()
     name = f"settings:additionalDirectories:{var_name}"
-    permissions = settings_data.get("permissions")
-    entries = permissions.get("additionalDirectories") if isinstance(permissions, dict) else None
-    for entry in entries if isinstance(entries, list) else []:
-        if not isinstance(entry, str):
-            continue
-        expanded = Path(entry).expanduser()
-        if not expanded.is_absolute():
-            continue
-        covering = expanded.resolve()
-        if real_root == covering or covering in real_root.parents:
-            return CheckResult(name=name, status=Status.OK, reason=f"{root} is covered by {entry}")
+    entry = covering_entry(root, settings_data)
+    if entry is not None:
+        return CheckResult(name=name, status=Status.OK, reason=f"{root} is covered by {entry}")
     return CheckResult(
         name=name,
         status=Status.WARN,
