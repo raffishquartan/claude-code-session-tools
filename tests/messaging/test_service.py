@@ -229,6 +229,31 @@ def test_unarchived_never_read_message_reaches_a_recipient_whose_cursor_passed_i
     assert restored.read_by_uuid == "me-uuid"
 
 
+def test_unhandled_hint_is_a_runnable_claim_command_and_claim_clears_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("CCST_MESSAGES_ROOT", str(tmp_path))
+    mid = service.send(service.SendRequest(
+        from_project="o", from_session="s", from_uuid="sender",
+        to_kind="project", to_value="alpha", to_partition="projects/alpha",
+        subject="team ping", body="b", attachments=[], thread=None,
+    ))
+    a = _ctx(uuid="sess-A", project="alpha", partition="projects/alpha")
+    b = _ctx(uuid="sess-B", project="alpha", partition="projects/alpha")
+    service.deliver(a, mode="full")
+    d_b = service.deliver(b, mode="full")
+    section = d_b.split("not yet handled", 1)[1]
+    assert mid in section
+    assert "ccmsg claim <id> --uuid sess-B --session alpha" in d_b
+    assert "run `ccmsg archive" not in d_b
+
+    service.claim(mid, service.Claimer(uuid="sess-A", session="alpha"))
+
+    d_b2 = service.deliver(_ctx(uuid="sess-C", project="alpha", partition="projects/alpha"),
+                           mode="full")
+    assert mid not in d_b2
+
+
 def _send_to_session_in_tmp(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, target_uuid: str
 ) -> str:

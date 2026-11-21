@@ -124,6 +124,41 @@ def test_second_claim_raises_already_claimed(root: Path) -> None:
         repo.claim("20260620T000000Z-0001", "other", "s2", "2026-06-20T06:00:00Z")
 
 
+def test_claim_accepts_a_read_message_and_keeps_the_original_reader(root: Path) -> None:
+    repo.insert(_msg("20260620T000000Z-0001", status="read",
+                     read_at="2026-06-20T01:00:00Z", read_by_uuid="reader-uuid",
+                     read_by_session="alpha"))
+    m = repo.claim("20260620T000000Z-0001", "claimer-uuid", "beta", "2026-06-20T05:00:00Z")
+    assert m.status == "claimed"
+    assert m.claimed_at == "2026-06-20T05:00:00Z"
+    assert m.read_at == "2026-06-20T01:00:00Z"
+    assert m.read_by_uuid == "reader-uuid"
+    assert m.read_by_session == "alpha"
+
+
+def test_second_claim_of_a_read_message_raises_already_claimed(root: Path) -> None:
+    repo.insert(_msg("20260620T000000Z-0001", status="read",
+                     read_at="2026-06-20T01:00:00Z", read_by_uuid="r", read_by_session="alpha"))
+    repo.claim("20260620T000000Z-0001", "first", "s1", "2026-06-20T05:00:00Z")
+    with pytest.raises(AlreadyClaimedError):
+        repo.claim("20260620T000000Z-0001", "second", "s2", "2026-06-20T06:00:00Z")
+
+
+def test_claim_of_an_archived_message_raises_already_claimed(root: Path) -> None:
+    repo.insert(_msg("20260620T000000Z-0001", status="archived",
+                     read_at="2026-06-20T01:00:00Z"))
+    with pytest.raises(AlreadyClaimedError):
+        repo.claim("20260620T000000Z-0001", "u", "s", "2026-06-20T05:00:00Z")
+
+
+def test_archive_without_claim_leaves_a_read_message_restorable(root: Path) -> None:
+    repo.insert(_msg("20260620T000000Z-0001", status="read",
+                     read_at="2026-06-20T01:00:00Z", read_by_uuid="r", read_by_session="alpha"))
+    archived = repo.archive_one("20260620T000000Z-0001")
+    assert archived.status == "archived" and archived.claimed_at is None
+    assert repo.unarchive_one("20260620T000000Z-0001").status == "read"
+
+
 def test_archive_one_flips_status(root: Path) -> None:
     repo.insert(_msg("20260620T000000Z-0001", status="read",
                      read_at="2026-06-20T00:00:00Z"))

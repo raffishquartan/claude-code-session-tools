@@ -251,8 +251,8 @@ def pending_proposals(partitions: list[str]) -> list[Message]:
 
 def unhandled_read(partitions: list[str], uuid: str, project: str) -> list[Message]:
     """Messages addressed to this session (``uuid``) or its ``project`` that were
-    auto-read but never archived or claimed, oldest first. ``ccmsg archive`` is the
-    only way one leaves this set."""
+    auto-read but never claimed or archived, oldest first. ``ccmsg claim`` (handled)
+    or ``ccmsg archive`` (discarded) removes one from this set."""
     if not partitions:
         return []
     placeholders = ", ".join("?" for _ in partitions)
@@ -309,8 +309,9 @@ def mark_read(message_id: str, uuid: str, now_iso: str, session_label: str) -> b
 
 def claim(message_id: str, uuid: str, session: str, now_iso: str) -> Message:
     """First-claim-wins: inside one BEGIN IMMEDIATE, verify the message is
-    claimable and flip it to 'claimed'. Raises MessageNotFoundError for an
-    unknown id, AlreadyClaimedError if already read/claimed/archived.
+    claimable ('sent' or auto-'read') and flip it to 'claimed'. Raises
+    MessageNotFoundError for an unknown id, AlreadyClaimedError if already
+    claimed/archived. A message that was already read keeps its original reader.
 
     Correctness comes from BEGIN IMMEDIATE serialising concurrent claimers; the
     SELECT and UPDATE see one consistent snapshot."""
@@ -322,11 +323,12 @@ def claim(message_id: str, uuid: str, session: str, now_iso: str) -> Message:
             ).fetchone()
             if row is None:
                 raise MessageNotFoundError(message_id)
-            if row["status"] in ("claimed", "read", "archived"):
+            if row["status"] in ("claimed", "archived"):
                 raise AlreadyClaimedError(message_id)
             conn.execute(
                 "UPDATE messages SET status='claimed', claimed_at=?, "
-                "read_at=COALESCE(read_at, ?), read_by_uuid=?, read_by_session=?, "
+                "read_at=COALESCE(read_at, ?), read_by_uuid=COALESCE(read_by_uuid, ?), "
+                "read_by_session=COALESCE(read_by_session, ?), "
                 "updated_at=?, version=version+1 "
                 "WHERE id=?",
                 (now_iso, now_iso, uuid, session, now_iso, message_id),
