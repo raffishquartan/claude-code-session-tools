@@ -56,7 +56,17 @@ ccmsg send --to-project <name> --subject "<subject>" --body "<body>"
 ```
 
 Subject and body are required (`--body` or `--body-file`); exactly one recipient
-kind is required; attachments are absolute paths. The `--from-*`/`--to-partition`
+kind is required; attachments are absolute paths.
+
+Prefer `--body-file` for anything longer than a sentence or two, or for a body that
+quotes commands or code. PreToolUse Bash hooks match the full command text, so an
+inline `--body` that merely mentions a blocked command can get the whole send
+blocked. Write the body to a file under the session's `working/` folder (when the
+session has one) and pass that path:
+
+```
+ccmsg send --to-project <name> --subject "<subject>" --body-file <working-dir>/msg-body.md
+``` The `--from-*`/`--to-partition`
 flags exist only as overrides for tests or non-Claude-Code callers.
 
 ## Receiving a description-addressed proposal
