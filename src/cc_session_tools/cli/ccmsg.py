@@ -22,15 +22,47 @@ from cc_session_tools.lib.messaging.message import ToKind
 from cc_session_tools.lib.messaging.session_ref import resolve_session_ref
 
 
+STATUS_HELP = """\
+Message statuses:
+  sent      Stored and not yet shown to a recipient. A description-addressed
+            message stays sent until a session claims it.
+  read      A session-start or prompt digest showed a session- or
+            project-addressed message to its recipient (`ccmsg read` does not
+            change status). Read messages are listed again at every session
+            start under "Read but not yet handled" until claimed or archived.
+  claimed   `ccmsg claim` marked the message handled. The first claim wins:
+            a claimed project message stops listing for every session of the
+            project, and a description-addressed message goes to one session.
+  archived  `ccmsg archive` discarded the message, or retention archived a
+            claimed message once 14 days have passed since its claim.
+            Unclaimed (sent or read) messages are never archived
+            automatically.
+
+`ccmsg unarchive` restores an archived message that was never claimed: back to
+read if it had been read, otherwise back to sent. A claimed message cannot be
+restored."""
+
+BODY_FILE_HELP = """\
+For a long or code-like body, write it to a file (for example under the
+session's working/ folder) and pass --body-file instead of --body.
+PreToolUse Bash hooks match the full command text, so an inline --body that
+merely mentions a blocked command can get the whole send blocked."""
+
+
 def _build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="ccmsg",
         description="Send and read messages between Claude Code sessions.",
+        epilog=STATUS_HELP,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     p.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     sub = p.add_subparsers(dest="command", metavar="<command>")
 
-    send_p = sub.add_parser("send", help="Compose and route a message.")
+    send_p = sub.add_parser(
+        "send", help="Compose and route a message.",
+        epilog=BODY_FILE_HELP, formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
     rcpt = send_p.add_argument_group("recipient (exactly one)")
     rcpt.add_argument(
         "--to-session", metavar="UUID|NAME|PREFIX",
@@ -42,7 +74,9 @@ def _build_parser() -> argparse.ArgumentParser:
     send_p.add_argument("--subject", required=True)
     body = send_p.add_mutually_exclusive_group(required=True)
     body.add_argument("--body")
-    body.add_argument("--body-file", type=Path)
+    body.add_argument("--body-file", type=Path,
+                      help="read the body from this file (preferred for long or code-like "
+                           "bodies, see below)")
     send_p.add_argument("--attach", action="append", default=[], metavar="PATH")
     send_p.add_argument("--thread", default=None, metavar="ID")
     # Sender + routing context. All optional: by default the sender uuid comes
@@ -61,7 +95,10 @@ def _build_parser() -> argparse.ArgumentParser:
     read_p = sub.add_parser("read", help="Print one message body and metadata.")
     read_p.add_argument("id")
 
-    list_p = sub.add_parser("list", help="List messages (compact).")
+    list_p = sub.add_parser(
+        "list", help="List messages (compact).",
+        epilog=STATUS_HELP, formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
     list_p.add_argument("--status", default=None)
     list_p.add_argument("--partition", default=None)
     list_p.add_argument("--from-uuid", default=None)

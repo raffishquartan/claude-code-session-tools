@@ -387,3 +387,35 @@ def test_unarchive_reports_a_message_held_by_a_concurrent_claim(
     monkeypatch.setattr(ccmsg.service, "unarchive", busy)
     assert ccmsg.main(["unarchive", "some-id"]) == 1
     assert "being claimed, try again: some-id" in capsys.readouterr().err
+
+
+def _status_block(help_text: str) -> str:
+    start = help_text.index("Message statuses:")
+    return help_text[start:]
+
+
+@pytest.mark.parametrize("args", [["--help"], ["list", "--help"]])
+def test_help_defines_every_status(tmp_path: Path, args: list[str]) -> None:
+    res = _run(args, tmp_path)
+    assert res.returncode == 0, res.stderr
+    block = _status_block(res.stdout)
+    for status in ("sent", "read", "claimed", "archived"):
+        assert f"\n  {status}" in block, status
+    flat = " ".join(block.split())
+    for phrase in ("Read but not yet handled", "first claim wins", "14 days",
+                   "never archived automatically", "ccmsg unarchive"):
+        assert phrase in flat, phrase
+
+
+def test_top_level_and_list_help_share_status_text(tmp_path: Path) -> None:
+    top = _status_block(_run(["--help"], tmp_path).stdout)
+    lst = _status_block(_run(["list", "--help"], tmp_path).stdout)
+    assert top == lst
+
+
+def test_send_help_recommends_body_file(tmp_path: Path) -> None:
+    res = _run(["send", "--help"], tmp_path)
+    assert res.returncode == 0, res.stderr
+    text = " ".join(res.stdout.split())
+    assert "--body-file" in text
+    assert "hooks" in text
