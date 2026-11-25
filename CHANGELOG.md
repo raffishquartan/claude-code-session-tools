@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [4.7.0] - 2026-11-25
+
+### Added
+
+- `ccmsg send --to-project` accepts an absolute or `~`-prefixed folder path as well as a project name. The path, or any folder inside it such as `cc-sessions/<tag>`, resolves to the project a session started in that folder belongs to, using the same rule as the sender side, and the message is stored for that project. A path inside no project under a configured session root exits 2 with an error naming it and stores nothing.
+- `ccmsg --help` and `ccmsg list --help` define the message statuses `sent`, `read`, `claimed` and `archived`: what moves a message into each, the session-start relisting of read messages, first-claim-wins, the 14-day auto-archive of claimed messages (unclaimed ones are never auto-archived) and what `ccmsg unarchive` restores. `ccmsg read` does not change a message's status.
+- `ccmsg send --help` and the `send-session-message` skill recommend `--body-file`, written under the session's `working/` folder, for long or code-like bodies, because PreToolUse Bash hooks match the full command text and can block a send whose inline body only mentions a blocked command.
+- The `manage-recurring-cc-jobs-using-ccsched` skill notes that `ccsched` has no one-shot form and points single future-dated reminders to `/schedule`.
+
 ## [4.6.0] - 2026-11-25
 
 ### Added
