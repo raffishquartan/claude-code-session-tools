@@ -483,15 +483,22 @@ def discover_session_jsonl(src_key_dir: Path, src_session_dir: Path, uuid_hint: 
 
 # ---------- copy + rewrite ----------
 
+def apply_replacements(text: str, replacements: list[tuple[str, str]]) -> str:
+    """Apply the path-string replacements to `text`, in order. The copy's
+    rewrite and verification's expected cwd set both go through this, so the
+    two cannot drift apart."""
+    for old, new in replacements:
+        text = text.replace(old, new)
+    return text
+
+
 def rewrite_jsonl_paths(dst_jsonl: Path, replacements: list[tuple[str, str]]) -> dict:
     """In-place string replace on a jsonl. Returns counts per pattern."""
     counts = {a: 0 for a, _ in replacements}
     text = dst_jsonl.read_text()
     for old, new in replacements:
-        c = text.count(old)
-        counts[old] = c
-        if c:
-            text = text.replace(old, new)
+        counts[old] = text.count(old)
+        text = apply_replacements(text, [(old, new)])
     dst_jsonl.write_text(text)
     return counts
 
@@ -553,10 +560,17 @@ def verify_dst_jsonl(
     src_cwd_abs: str,
     src_key: str,
     *,
+    replacements: list[tuple[str, str]],
     strict: bool,
     dst_session_dir: Path,
 ) -> dict:
     """Run verification checks. Returns dict with results and a bool 'ok'.
+
+    Every cwd in the destination must be dst_cwd_abs or the rewritten form
+    (`replacements` applied) of a cwd in the source. A session can record cwd
+    values other than its project cwd, such as its own transcript directory
+    under ~/.claude/projects/<src-key>, which the key rewrite maps to
+    <dst-key>; those are legitimate.
 
     strict=True (post-move, --execute path): require exact line parity and zero
     remaining src-path strings. The destination should be a byte-identical
@@ -567,7 +581,7 @@ def verify_dst_jsonl(
     tombstone records appended for `dst_session_dir` after the copy. Those
     tombstone lines are excluded from the source's length; the check then
     enforces that the source is no longer than the destination, every line
-    parses as JSON and every cwd field equals dst_cwd_abs. Residual src-path
+    parses as JSON and every cwd is expected. Residual src-path
     strings are reported but do not fail.
     """
     src_lines = sum(1 for _ in src_jsonl.open())
@@ -591,7 +605,11 @@ def verify_dst_jsonl(
     text = dst_jsonl.read_text()
     remaining_long = text.count(src_cwd_abs)
     remaining_key = text.count(src_key)
-    cwds_clean = (cwds == {dst_cwd_abs}) if cwds else True
+    expected_cwds = {dst_cwd_abs} | {
+        apply_replacements(c, replacements) for c in jsonl_summary(src_jsonl)["cwds"]
+    }
+    cwds_unexpected = sorted(cwds - expected_cwds)
+    cwds_clean = not cwds_unexpected
     if strict:
         ok = (
             src_lines == dst_lines
@@ -615,6 +633,7 @@ def verify_dst_jsonl(
         "remaining_long": remaining_long,
         "remaining_key": remaining_key,
         "cwds_in_dst": sorted(cwds),
+        "cwds_unexpected": cwds_unexpected,
         "strict": strict,
         "ok": ok,
     }
@@ -846,6 +865,41 @@ def write_tombstone_md(src_session_dir: Path, dst_session_dir: Path, dst_jsonl: 
     return md
 
 
+# ---------- strict-root tag derivation ----------
+
+def derive_strict_tag(src_tag: str, src_project: str, dst_project: str) -> str:
+    """The tag a MOVE into strict-root project `dst_project` uses when the
+    source tag lacks the `<dst_project>-` prefix: keep the YYYYMMDD- prefix,
+    strip one leading `<src_project>-` from the suffix, then prefix
+    `<dst_project>-` unless the remainder already starts with it. Purely
+    mechanical: `oneshot-make-x` into `making` gives `making-make-x`. The
+    result still has to pass every destination rule."""
+    m = DATE_PREFIX_RE.match(src_tag)
+    date, suffix = (m.group(1), m.group(2)) if m else ("", src_tag)
+    src_prefix = f"{src_project}-"
+    if suffix == src_project:
+        rest = ""
+    elif suffix.startswith(src_prefix):
+        rest = suffix[len(src_prefix):]
+    else:
+        rest = suffix
+    dst_prefix = f"{dst_project}-"
+    if rest.startswith(dst_prefix):
+        new_suffix = rest
+    elif rest:
+        new_suffix = dst_prefix + rest
+    else:
+        new_suffix = dst_project
+    return f"{date}-{new_suffix}" if date else new_suffix
+
+
+def tag_change_note(old_tag: str, new_tag: str, dst_project: str) -> str:
+    return (
+        f"NOTE: tag changed from {old_tag} to {new_tag} (destination project "
+        f"'{dst_project}' requires tag suffix to start with '{dst_project}-')"
+    )
+
+
 # ---------- main ----------
 
 def main() -> int:
@@ -862,6 +916,9 @@ def main() -> int:
                     help="Bypass root-membership and strict-root rules on the destination. "
                          "Tag-format checks (no spaces/underscores/double-dashes/trailing dash, "
                          "immutable YYYYMMDD prefix) still apply.")
+    ap.add_argument("--no-auto-rename", action="store_true",
+                    help="On a MOVE into a strict-root project whose tag lacks the "
+                         "'<project>-' prefix, fail instead of deriving a compliant tag.")
     args = ap.parse_args()
 
     if args.verify_only and not args.dst_cwd:
@@ -904,6 +961,32 @@ def main() -> int:
         src_tag=src_tag,
         force=args.force,
     )
+    # A MOVE that fails the destination strict-root tag-prefix rule retries
+    # with a derived compliant tag and becomes a MOVE+RENAME. That rule's error
+    # is only ever produced for a strict-root destination, so its presence in
+    # `errors` is the trigger; any other error still fails below.
+    tag_note: str | None = None
+    if not ok and not args.rename_tag and not args.no_auto_rename and dst_cwd_abs != src_cwd_abs:
+        dst_project = dst_cwd_path.name
+        src_suffix_m = DATE_PREFIX_RE.match(src_tag)
+        src_suffix = src_suffix_m.group(2) if src_suffix_m else src_tag
+        prefix_error = validate_strict_tag_suffix(src_suffix, dst_project)
+        if prefix_error and prefix_error in errors:
+            derived = derive_strict_tag(src_tag, Path(src_cwd_abs).name, dst_project)
+            derived_ok, derived_errors = check_session_destination(
+                dst_cwd_abs=dst_cwd_path,
+                dst_tag=derived,
+                src_tag=src_tag,
+                force=False,
+            )
+            if derived_ok:
+                ok, dst_tag = True, derived
+                tag_note = tag_change_note(src_tag, derived, dst_project)
+            else:
+                errors.append(
+                    f"automatic tag derivation produced {derived!r}, which also fails:"
+                )
+                errors.extend(f"  {e}" for e in derived_errors)
     if not ok:
         msg = "Destination validation failed:\n" + "\n".join(f"  {e}" for e in errors)
         if not args.force:
@@ -1018,6 +1101,8 @@ def main() -> int:
     print("=" * 72)
     print(f"PLAN ({op_label})")
     print("=" * 72)
+    if tag_note:
+        print(f"  {tag_note}")
     print(f"  src cwd            : {src_cwd_abs}")
     print(f"  dst cwd            : {dst_cwd_abs}{' (same)' if not cwd_changed else ''}")
     if dst_root is not None:
@@ -1071,7 +1156,7 @@ def main() -> int:
             raise SystemExit(f"--verify-only: destination jsonl not found: {dst_jsonl}")
         v = verify_dst_jsonl(
             src_jsonl, dst_jsonl, dst_cwd_abs, src_cwd_abs, src_key,
-            strict=False, dst_session_dir=dst_session_dir,
+            replacements=replacements, strict=False, dst_session_dir=dst_session_dir,
         )
         print_verify(v)
         return 0 if v["ok"] else 1
@@ -1084,18 +1169,48 @@ def main() -> int:
     print("=" * 72)
     print(f"EXECUTING ({op_label})")
     print("=" * 72)
+    if tag_note:
+        print(f"  {tag_note}")
 
+    # Paths this run creates before verification, in creation order, so a
+    # failed verification can remove exactly these and nothing that existed
+    # before. The clobber check above proved the session dir and dst jsonl
+    # did not exist; their parents are recorded only when this run makes them.
+    created: list[Path] = []
+    if not dst_session_dir.parent.exists():
+        created.append(dst_session_dir.parent)
     dst_session_dir.parent.mkdir(parents=True, exist_ok=True)
+    created.append(dst_session_dir)
     shutil.copytree(src_session_dir, dst_session_dir)
     print(f"  copied {src_session_dir} -> {dst_session_dir}")
 
     if cwd_changed:
+        if not dst_key_dir.exists():
+            created.append(dst_key_dir)
         dst_key_dir.mkdir(parents=True, exist_ok=True)
+        created.append(dst_jsonl)
         shutil.copyfile(src_jsonl, dst_jsonl)
         print(f"  copied {src_jsonl} -> {dst_jsonl}")
         counts = rewrite_jsonl_paths(dst_jsonl, replacements)
         for old, new in replacements:
             print(f"  rewrote {counts[old]:>4} occurrences: {old!r} -> {new!r}")
+
+        # Verify before anything else is written (memory, tombstone, labels,
+        # sessions.db), so a failure has only the copies above to undo.
+        print()
+        v = verify_dst_jsonl(
+            src_jsonl, dst_jsonl, dst_cwd_abs, src_cwd_abs, src_key,
+            replacements=replacements, strict=True, dst_session_dir=dst_session_dir,
+        )
+        print_verify(v)
+        if not v["ok"]:
+            print()
+            print("VERIFY: FAIL - destination jsonl did not pass all checks. NOT writing tombstone.")
+            print("Rolling back what this run created (the source is untouched):")
+            if rollback_created(created, dst_session_dir):
+                print("Rollback complete. Fix the cause and re-run the same command.")
+            return 1
+        print()
     else:
         print(f"  jsonl NOT copied (rename-only; same project key)")
 
@@ -1136,19 +1251,6 @@ def main() -> int:
             print(f"  pass --include-memory to copy it.")
         else:
             print(f"  memory NOT copied (default; source memory does not exist anyway).")
-
-    # Verify (only when we actually wrote a destination jsonl).
-    if cwd_changed:
-        print()
-        v = verify_dst_jsonl(
-            src_jsonl, dst_jsonl, dst_cwd_abs, src_cwd_abs, src_key,
-            strict=True, dst_session_dir=dst_session_dir,
-        )
-        print_verify(v)
-        if not v["ok"]:
-            print()
-            print("VERIFY: FAIL - destination jsonl did not pass all checks. NOT writing tombstone.")
-            return 1
 
     # Picker label: on a tag change, append the custom-title + agent-name pair
     # /rename would write to the transcript the session resumes into (the
@@ -1255,6 +1357,8 @@ def main() -> int:
     print("=" * 72)
     print("DONE")
     print("=" * 72)
+    if tag_note:
+        print(f"  {tag_note}")
     print(f"  Resume with:  cd {dst_cwd_abs} && claude --resume {session_uuid}")
     if tag_changed:
         print(f"  The session resumes with picker label {dst_tag!r}.")
@@ -1264,6 +1368,42 @@ def main() -> int:
     print(f"  bash-hard-deny blocks rm of local files from inside CC):")
     print(f"    bash {cleanup_script}")
     return 0
+
+
+def rollback_created(created: list[Path], session_dir: Path) -> bool:
+    """Remove the paths a failed run created, newest first, printing each.
+
+    `session_dir` (the copied cc-sessions/<tag>/ tree) is removed with its
+    contents; any other directory is a parent this run made and is removed
+    only if it is empty again; anything else is a file. Python's own file
+    operations are used, so a shell hook that blocks `rm` does not apply.
+    Returns True when everything was removed; otherwise prints the paths left
+    behind for the user to delete and returns False."""
+    left: list[Path] = []
+    for path in reversed(created):
+        if not path.exists():
+            continue
+        try:
+            if path == session_dir:
+                shutil.rmtree(path)
+            elif path.is_dir():
+                if any(path.iterdir()):
+                    print(f"  kept {path} (not empty)")
+                    continue
+                path.rmdir()
+            else:
+                path.unlink()
+        except OSError as e:
+            print(f"  could not remove {path}: {e}")
+            left.append(path)
+            continue
+        print(f"  removed {path}")
+    if left:
+        print("Rollback incomplete. Delete these paths by hand before re-running:")
+        for path in left:
+            print(f"  {path}")
+        return False
+    return True
 
 
 def write_cleanup_script(
@@ -1332,6 +1472,8 @@ def print_verify(v: dict) -> None:
     print(f"  remaining_src_long  : {v['remaining_long']}")
     print(f"  remaining_src_key   : {v['remaining_key']}")
     print(f"  cwd_distinct_in_dst : {v['cwds_in_dst']}")
+    if v["cwds_unexpected"]:
+        print(f"  cwd_unexpected      : {v['cwds_unexpected']}")
     print(f"  RESULT              : {'PASS' if v['ok'] else 'FAIL'}")
     excluded = v["src_excluded_lines"]
     if excluded:

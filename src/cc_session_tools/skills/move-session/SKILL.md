@@ -113,6 +113,7 @@ ccst move-session \
     [--uuid       <session-uuid>] \
     [--include-memory] \
     [--no-tombstone] \
+    [--no-auto-rename] \
     [--execute]
 ```
 
@@ -126,6 +127,7 @@ ccst move-session \
 | `--no-tombstone` | Skip the source-side tombstone records and `TOMBSTONE.md`. Default: tombstone on. |
 | `--execute` | Actually perform the operation. Without it, the script reports a plan only. |
 | `--verify-only` | Skip copy/rewrite; only re-run verification against existing destination (requires `--dst-cwd`). |
+| `--no-auto-rename` | On a MOVE into a strict-root project whose tag lacks the `<project>-` prefix, fail validation instead of deriving a compliant tag (see "Strict-root rules"). |
 | `--force` | Bypass the destination root-membership check and the strict-root project-name + tag-prefix rules. Tag-format checks (no spaces / underscores / double-dashes / trailing dash, immutable `YYYYMMDD-` prefix when renaming) still apply. Mirrors `ccd --force`. |
 
 At least one of `--dst-cwd` or `--rename-tag` must be supplied. The combination determines the operation:
@@ -151,7 +153,21 @@ At least one of `--dst-cwd` or `--rename-tag` must be supplied. The combination 
 **Strict-root rules.** When the resolved destination root is `~/cc-claude-code` (the "strict" root), two additional rules apply:
 
 - The destination project directory name must match `^[a-z0-9]+$` (no dashes, no uppercase).
-- The destination tag's suffix-after-date (`<suffix>` in `YYYYMMDD-<suffix>`) must equal the project name or start with `<project>-`. So a session moving to `~/cc-claude-code/dea/` must have tag `20260504-dea` or `20260504-dea-<rest>`; if the source tag doesn't satisfy this, you must combine the move with `--rename-tag` to fix it.
+- The destination tag's suffix-after-date (`<suffix>` in `YYYYMMDD-<suffix>`) must equal the project name or start with `<project>-`. So a session moving to `~/cc-claude-code/dea/` must have tag `20260504-dea` or `20260504-dea-<rest>`.
+
+**Automatic tag derivation.** When a MOVE without `--rename-tag` fails only because the tag suffix lacks the `<project>-` prefix, the script derives a compliant tag and carries on as MOVE+RENAME (picker label, `session_tags` row and `cc-sessions/<old-tag>` rewrite included). The rule is mechanical:
+
+1. Keep the `YYYYMMDD-` prefix.
+2. Strip one leading `<src-project>-` from the suffix, where `<src-project>` is the source cwd's directory name.
+3. Prefix `<dst-project>-`, unless the remainder already starts with it.
+
+So `20260101-oneshot-tidy-garage` moved from `oneshot` into `home` becomes `20260101-home-tidy-garage`, and `20260101-tidy-garage` becomes `20260101-home-tidy-garage`. The rule does not merge similar words: `oneshot-make-shelf` moved into `making` becomes `making-make-shelf`; pass `--rename-tag` if you want a different tag. The derived tag is checked against every tag rule and the clobber check; if it fails, the script reports the original errors and the derived tag's errors. The PLAN (dry-run and execute), the EXECUTING output and the DONE block (next to the resume command) all print:
+
+```
+NOTE: tag changed from <old-tag> to <new-tag> (destination project '<p>' requires tag suffix to start with '<p>-')
+```
+
+The derivation never overrides an explicit `--rename-tag`, never masks another validation failure (for example an invalid strict-root project name), and is off with `--force` (which skips the rule) or `--no-auto-rename` (which restores the hard failure).
 
 Strict-root rules and the root-membership check are bypassed by `--force`. Tag-format checks (no spaces / underscores / double-dashes / trailing dash, immutable `YYYYMMDD-` prefix when renaming) are NOT bypassed by `--force`.
 
@@ -180,7 +196,7 @@ These rules are defined once in `scripts/cc_session_rules.py` and shared with `c
        - Project key: `-<src-cwd-encoded>-` → `-<dst-cwd-encoded>-`
        - Tilde form (only if `$HOME` prefixes the src abs): `~/<rel>` → `~/<dst-rel>`
        - Tag substring (MOVE+RENAME only): `cc-sessions/<old-tag>` → `cc-sessions/<new-tag>`
-     - Runs jsonl verification (see below).
+     - Runs jsonl verification (see below) before anything else is written. On failure the run rolls back what it created and exits 1.
      - MOVE+RENAME only: appends the picker-label records for the new tag to the destination jsonl, after verification.
      - Memory: copies `memory/` to dst project key dir if `--include-memory` is passed, OR auto-includes if the source project key contains exactly this one session.
      - Tombstone: appends two records (user + assistant) to the SOURCE jsonl, with proper `parentUuid` chain and the SOURCE `sessionId`/cwd/version preserved, AND writes a `TOMBSTONE.md` into the source `cc-sessions/<tag>/`.
@@ -201,9 +217,9 @@ When verification runs, check the script's "VERIFICATION" output block before de
 - `lines src == lines dst` for the jsonl
 - `json_valid_lines == lines dst`
 - `remaining_src_long_path == 0` and `remaining_src_encoded_key == 0`
-- `cwd_distinct == {<dst-cwd-abs>}` (only the destination cwd appears in any cwd field)
+- every destination `cwd` is the destination cwd or the rewritten form of a `cwd` in the source (the same string replacements the copy applied). A session that changed directory into, say, its own `~/.claude/projects/<src-key>/` directory has that path rewritten to `<dst-key>`, which passes. Any other value is printed as `cwd_unexpected` and fails.
 
-If any check fails during the `--execute` run, the script prints `VERIFY: FAIL` and exits non-zero. Do not present the move as successful in that case.
+If any check fails during the `--execute` run, the script prints `VERIFY: FAIL`, removes what that run created (the destination `cc-sessions/<tag>/`, the destination jsonl, and any destination parent directory it made that is empty again), prints each removed path and exits 1. Nothing that existed before the run is removed and the source is not touched, so the same command can be re-run once the cause is fixed. If a path cannot be removed, the script lists it for you to delete by hand. Do not present the move as successful in that case.
 
 **`--verify-only` and the tombstone.** After a MOVE with the tombstone enabled (the default), the source carries the two tombstone records appended after the copy. `--verify-only` excludes from the source's length the tombstone records for the destination being verified - from the tombstone naming that destination to the end of the file - prints `tombstone lines excluded from src: N`, and passes (exit 0) when the rest of the source is no longer than the destination. After the same source has been moved twice (to B, then to C), verifying C excludes only C's tombstone (B's is already in the C copy) and verifying B excludes both. Any other source line after the copy point stays counted; if the source is still longer, the output says the extra lines are unexplained and the result is `RESULT : FAIL` - the source and destination have really diverged. The line-count check during `--execute` is strict and excludes nothing.
 
