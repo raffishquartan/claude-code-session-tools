@@ -11,7 +11,7 @@
 
 ## 3. Strict-root tag derivation
 
-- [x] 3.1 Failing unit tests for `derive_strict_tag()` covering: src-project prefix stripped, no src prefix, `make-` vs `making-` collision kept, remainder already carrying the destination prefix, suffix equal to the source project
+- [x] 3.1 Failing unit tests for `derive_strict_tag()` covering: src-project prefix stripped, no src prefix, `build-` vs `building-` collision kept, remainder already carrying the destination prefix, suffix equal to the source project
 - [x] 3.2 Failing integration tests with a strict root: dry-run MOVE prints the NOTE and derived tag; `--execute` creates `cc-sessions/<derived>/`, writes the picker label and repeats the NOTE in DONE; `--no-auto-rename` fails with the tag-prefix error; an explicit failing `--rename-tag` is not overridden; a non-tag failure (invalid strict project name) is not masked
 - [x] 3.3 Implement `derive_strict_tag()`, the `--no-auto-rename` flag and the retry in `main()`, plus the NOTE output; verify 3.1 and 3.2 pass
 

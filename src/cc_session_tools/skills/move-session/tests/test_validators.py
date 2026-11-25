@@ -357,12 +357,13 @@ class TestDeriveStrictTag:
     remainder already starts with it. No fuzzy matching."""
 
     @pytest.mark.parametrize(("src_tag", "src_project", "dst_project", "expected"), [
-        ("20260101-oneshot-tidy-garage", "oneshot", "home", "20260101-home-tidy-garage"),
-        ("20260101-tidy-garage", "oneshot", "home", "20260101-home-tidy-garage"),
-        ("20260101-oneshot-make-shelf", "oneshot", "making", "20260101-making-make-shelf"),
-        ("20260101-oneshot-home-tidy", "oneshot", "home", "20260101-home-tidy"),
-        ("20260101-oneshot", "oneshot", "home", "20260101-home"),
-        ("20260101-oneshot-oneshot-x", "oneshot", "home", "20260101-home-oneshot-x"),
+        ("20260101-scratch-tidy-garage", "scratch", "garden", "20260101-garden-tidy-garage"),
+        ("20260101-tidy-garage", "scratch", "garden", "20260101-garden-tidy-garage"),
+        ("20260101-scratch-build-shelf", "scratch", "building", "20260101-building-build-shelf"),
+        ("20260101-scratch-garden-tidy", "scratch", "garden", "20260101-garden-tidy"),
+        ("20260101-scratch", "scratch", "garden", "20260101-garden"),
+        ("20260101-scratch-scratch-x", "scratch", "garden", "20260101-garden-scratch-x"),
+        ("20260101-garden", "scratch", "garden", "20260101-garden"),
     ])
     def test_derivation(self, ms, src_tag, src_project, dst_project, expected):
         assert ms.derive_strict_tag(src_tag, src_project, dst_project) == expected

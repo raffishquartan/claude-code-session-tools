@@ -1267,6 +1267,9 @@ class TestFailedVerifyRollsBack:
         assert src_jsonl.read_bytes() == src_before
         assert sorted(p.relative_to(src_dir) for p in src_dir.rglob("*")) == src_listing
         assert "move-session-cleanup-" not in out
+        from cc_session_tools.lib import sessions_db
+        assert sessions_db.list_sessions(project_dir=dst_cwd) == []
+        assert sessions_db.lookup_tags([uuid]) == {}
 
         rc, out, err = _run(*args, env={"HOME": str(tmp_home)})
         assert rc == 1, f"{err}\n{out}"
@@ -1294,9 +1297,9 @@ class TestStrictRootAutoRename:
     """A MOVE into a strict-root project whose only failure is the tag-prefix
     rule derives a compliant tag and continues as MOVE+RENAME."""
 
-    NOTE = ("NOTE: tag changed from 20260101-oneshot-tidy-garage to "
-            "20260101-home-tidy-garage (destination project 'home' requires tag "
-            "suffix to start with 'home-')")
+    NOTE = ("NOTE: tag changed from 20260101-scratch-tidy-garage to "
+            "20260101-garden-tidy-garage (destination project 'garden' requires tag "
+            "suffix to start with 'garden-')")
 
     @pytest.fixture
     def strict_root(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
@@ -1306,72 +1309,97 @@ class TestStrictRootAutoRename:
         return root
 
     def _src(self, make_session):
-        return make_session("oneshot", "20260101-oneshot-tidy-garage")
+        return make_session("scratch", "20260101-scratch-tidy-garage")
 
     def test_dry_run_reports_derived_tag(
             self, tmp_home, roots_file, strict_root, make_session):
         src_dir, _, uuid = self._src(make_session)
-        dst_cwd = strict_root / "home"
+        dst_cwd = strict_root / "garden"
         dst_cwd.mkdir()
         rc, out, err = _run("--src-session", str(src_dir), "--dst-cwd", str(dst_cwd),
                             "--uuid", uuid, env={"HOME": str(tmp_home)})
         assert rc == 0, f"{err}\n{out}"
         assert "PLAN (MOVE+RENAME)" in out
         assert self.NOTE in out
-        assert "dst tag            : 20260101-home-tidy-garage" in out
+        assert "dst tag            : 20260101-garden-tidy-garage" in out
         assert not (dst_cwd / "cc-sessions").exists()
 
     def test_execute_moves_under_derived_tag(
             self, tmp_home, roots_file, strict_root, make_session):
         src_dir, _, uuid = self._src(make_session)
-        dst_cwd = strict_root / "home"
+        dst_cwd = strict_root / "garden"
         dst_cwd.mkdir()
         rc, out, err = _run("--src-session", str(src_dir), "--dst-cwd", str(dst_cwd),
                             "--uuid", uuid, "--execute", env={"HOME": str(tmp_home)})
         assert rc == 0, f"{err}\n{out}"
-        assert (dst_cwd / "cc-sessions" / "20260101-home-tidy-garage").is_dir()
+        assert (dst_cwd / "cc-sessions" / "20260101-garden-tidy-garage").is_dir()
         executing = out.split("EXECUTING (MOVE+RENAME)", 1)[1]
         assert self.NOTE in executing.split("DONE", 1)[0]
         done = out.split("\nDONE\n", 1)[1]
         assert self.NOTE in done
         assert f"claude --resume {uuid}" in done
-        assert "picker label '20260101-home-tidy-garage'" in done
+        assert "picker label '20260101-garden-tidy-garage'" in done
         dst_jsonl = _key_dir(tmp_home, dst_cwd) / f"{uuid}.jsonl"
         assert dst_jsonl.read_text().splitlines()[-2:] == _picker_label_lines(
-            "20260101-home-tidy-garage", uuid)
+            "20260101-garden-tidy-garage", uuid)
 
     def test_no_auto_rename_restores_hard_failure(
             self, tmp_home, roots_file, strict_root, make_session):
         src_dir, _, uuid = self._src(make_session)
-        dst_cwd = strict_root / "home"
+        dst_cwd = strict_root / "garden"
         dst_cwd.mkdir()
         rc, out, err = _run("--src-session", str(src_dir), "--dst-cwd", str(dst_cwd),
                             "--uuid", uuid, "--no-auto-rename", "--execute",
                             env={"HOME": str(tmp_home)})
         assert rc != 0
-        assert "must start with 'home-'" in out + err
+        assert "must start with 'garden-'" in out + err
         assert "NOTE: tag changed" not in out + err
         assert not (dst_cwd / "cc-sessions").exists()
 
     def test_explicit_rename_tag_is_not_overridden(
             self, tmp_home, roots_file, strict_root, make_session):
         src_dir, _, uuid = self._src(make_session)
-        dst_cwd = strict_root / "home"
+        dst_cwd = strict_root / "garden"
         dst_cwd.mkdir()
         rc, out, err = _run("--src-session", str(src_dir), "--dst-cwd", str(dst_cwd),
                             "--rename-tag", "20260101-garage", "--uuid", uuid,
                             env={"HOME": str(tmp_home)})
         assert rc != 0
-        assert "must start with 'home-'" in out + err
+        assert "must start with 'garden-'" in out + err
         assert "NOTE: tag changed" not in out + err
 
     def test_other_failure_is_not_masked(
             self, tmp_home, roots_file, strict_root, make_session):
         src_dir, _, uuid = self._src(make_session)
-        dst_cwd = strict_root / "my-home"
+        dst_cwd = strict_root / "my-garden"
         dst_cwd.mkdir()
         rc, out, err = _run("--src-session", str(src_dir), "--dst-cwd", str(dst_cwd),
                             "--uuid", uuid, env={"HOME": str(tmp_home)})
         assert rc != 0
         assert "NOTE: tag changed" not in out + err
-        assert "my-home" in out + err
+        assert "automatic tag derivation" not in out + err
+        assert "must match" in out + err
+
+    def test_derived_tag_meets_the_clobber_check(
+            self, tmp_home, roots_file, strict_root, make_session):
+        src_dir, _, uuid = self._src(make_session)
+        dst_cwd = strict_root / "garden"
+        taken = dst_cwd / "cc-sessions" / "20260101-garden-tidy-garage"
+        taken.mkdir(parents=True)
+        rc, out, err = _run("--src-session", str(src_dir), "--dst-cwd", str(dst_cwd),
+                            "--uuid", uuid, "--execute", env={"HOME": str(tmp_home)})
+        assert rc != 0
+        assert f"ABORT: destination already exists: {taken}" in out + err
+        assert list(taken.iterdir()) == []
+
+    def test_refusal_recipe_explains_the_derived_tag(
+            self, tmp_home, roots_file, strict_root, make_session):
+        src_dir, _, uuid = self._src(make_session)
+        dst_cwd = strict_root / "garden"
+        dst_cwd.mkdir()
+        _write_process_record(tmp_home, os.getpid(), uuid)
+        rc, out, err = _run("--src-session", str(src_dir), "--dst-cwd", str(dst_cwd),
+                            "--uuid", uuid, "--execute", env={"HOME": str(tmp_home)})
+        assert rc == 2, f"{err}\n{out}"
+        assert self.NOTE in out
+        assert "--rename-tag  20260101-garden-tidy-garage" in out

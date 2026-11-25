@@ -150,10 +150,10 @@ At least one of `--dst-cwd` or `--rename-tag` must be supplied. The combination 
 
 `--dst-cwd <path>` must be a **direct subdirectory** of a root listed in `~/.claude/cc-session-roots.txt` (after `readlink -f`). This is the same data file `ccd` reads, so the rule is identical. To allow a new root, edit that file (it has comments explaining the format).
 
-**Strict-root rules.** When the resolved destination root is `~/cc-claude-code` (the "strict" root), two additional rules apply:
+**Strict-root rules.** When the resolved destination root is the strict root (the one `CLAUDE_SESSION_TOOLS_PROJ_ROOT` names), two additional rules apply:
 
 - The destination project directory name must match `^[a-z0-9]+$` (no dashes, no uppercase).
-- The destination tag's suffix-after-date (`<suffix>` in `YYYYMMDD-<suffix>`) must equal the project name or start with `<project>-`. So a session moving to `~/cc-claude-code/dea/` must have tag `20260504-dea` or `20260504-dea-<rest>`.
+- The destination tag's suffix-after-date (`<suffix>` in `YYYYMMDD-<suffix>`) must start with `<project>-` followed by a label with at least one alphanumeric character. So a session moving to `<strict-root>/dea/` must have a tag like `20260504-dea-<label>`.
 
 **Automatic tag derivation.** When a MOVE without `--rename-tag` fails only because the tag suffix lacks the `<project>-` prefix, the script derives a compliant tag and carries on as MOVE+RENAME (picker label, `session_tags` row and `cc-sessions/<old-tag>` rewrite included). The rule is mechanical:
 
@@ -161,7 +161,7 @@ At least one of `--dst-cwd` or `--rename-tag` must be supplied. The combination 
 2. Strip one leading `<src-project>-` from the suffix, where `<src-project>` is the source cwd's directory name.
 3. Prefix `<dst-project>-`, unless the remainder already starts with it.
 
-So `20260101-oneshot-tidy-garage` moved from `oneshot` into `home` becomes `20260101-home-tidy-garage`, and `20260101-tidy-garage` becomes `20260101-home-tidy-garage`. The rule does not merge similar words: `oneshot-make-shelf` moved into `making` becomes `making-make-shelf`; pass `--rename-tag` if you want a different tag. The derived tag is checked against every tag rule and the clobber check; if it fails, the script reports the original errors and the derived tag's errors. The PLAN (dry-run and execute), the EXECUTING output and the DONE block (next to the resume command) all print:
+So `20260101-scratch-tidy-garage` moved from `scratch` into `garden` becomes `20260101-garden-tidy-garage`, and `20260101-tidy-garage` becomes `20260101-garden-tidy-garage`. The rule does not merge similar words: `scratch-build-shelf` moved into `building` becomes `building-build-shelf`; pass `--rename-tag` if you want a different tag. The derived tag is checked against every tag rule; if it fails, the script reports the original errors and the derived tag's errors. A suffix with no label beyond a project name (`20260101-scratch` from `scratch`, or `20260101-garden` into `garden`) derives `20260101-garden`, which fails, so pass `--rename-tag`. If the derived `cc-sessions/<tag>/` already exists, the usual clobber check aborts naming it. The PLAN (dry-run and execute), the EXECUTING output, the DONE block (next to the resume command) and the in-session refusal recipe all print:
 
 ```
 NOTE: tag changed from <old-tag> to <new-tag> (destination project '<p>' requires tag suffix to start with '<p>-')

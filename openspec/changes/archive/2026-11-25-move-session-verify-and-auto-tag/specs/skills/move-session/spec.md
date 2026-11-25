@@ -27,23 +27,31 @@ When strict verification fails during `--execute`, the script SHALL remove every
 - **THEN** it still exists after the rollback
 
 ### Requirement: A move into a strict-root project derives a compliant tag
-When a MOVE is run without `--rename-tag`, without `--force` and without `--no-auto-rename`, and the destination validation fails because the tag suffix does not satisfy the destination strict-root project's `<project>-` prefix rule, the script SHALL derive a new tag and continue as MOVE+RENAME. The derived tag SHALL keep the source `YYYYMMDD-` prefix; its suffix SHALL be the source suffix with one leading `<src-project>-` removed (where `<src-project>` is the source cwd's directory name), prefixed with `<dst-project>-` unless the remainder already starts with `<dst-project>-`. The derived tag SHALL be validated against every destination rule and the clobber check; if it fails any of them, the script SHALL fail with the original validation errors and the derived tag's errors. The script SHALL print `NOTE: tag changed from <old-tag> to <new-tag> (destination project '<p>' requires tag suffix to start with '<p>-')` in the PLAN output (dry-run and execute), in the EXECUTING output, and in the DONE block next to the resume command, together with the picker label the session resumes under.
+When a MOVE is run without `--rename-tag`, without `--force` and without `--no-auto-rename`, and the only destination-validation failure is that the tag suffix does not satisfy the destination strict-root project's `<project>-` prefix rule, the script SHALL derive a new tag and continue as MOVE+RENAME. The derived tag SHALL keep the source `YYYYMMDD-` prefix; its suffix SHALL be the source suffix with one leading `<src-project>-` removed (where `<src-project>` is the source cwd's directory name), prefixed with `<dst-project>-` unless the remainder already starts with `<dst-project>-`. A remainder equal to `<dst-project>` gives suffix `<dst-project>`. The derived tag SHALL be validated against every destination rule; if it fails any of them, the script SHALL fail with the original validation errors and the derived tag's errors. The derived tag SHALL then meet the clobber check like any destination tag, aborting with the existing path named. The script SHALL print `NOTE: tag changed from <old-tag> to <new-tag> (destination project '<p>' requires tag suffix to start with '<p>-')` in the PLAN output (dry-run and execute), in the EXECUTING output, and in the DONE block next to the resume command, together with the picker label the session resumes under.
 
 #### Scenario: Source project prefix is replaced
-- **WHEN** session `20260101-oneshot-tidy-garage` in project `oneshot` is moved to strict-root project `home` with no `--rename-tag`
-- **THEN** the tag becomes `20260101-home-tidy-garage`, the PLAN shows the NOTE line, and with `--execute` the destination session directory is `cc-sessions/20260101-home-tidy-garage/` and the DONE block repeats the NOTE
+- **WHEN** session `20260101-scratch-tidy-garage` in project `scratch` is moved to strict-root project `garden` with no `--rename-tag`
+- **THEN** the tag becomes `20260101-garden-tidy-garage`, the PLAN shows the NOTE line, and with `--execute` the destination session directory is `cc-sessions/20260101-garden-tidy-garage/` and the DONE block repeats the NOTE
 
 #### Scenario: Suffix without a source project prefix
-- **WHEN** a session whose suffix does not start with `<src-project>-` is moved to strict-root project `home`
-- **THEN** the derived suffix is `home-<original suffix>`
+- **WHEN** a session whose suffix does not start with `<src-project>-` is moved to strict-root project `garden`
+- **THEN** the derived suffix is `garden-<original suffix>`
 
 #### Scenario: Similar but distinct prefix is not merged
-- **WHEN** session `20260101-oneshot-make-shelf` is moved to strict-root project `making`
-- **THEN** the derived tag is `20260101-making-make-shelf`
+- **WHEN** session `20260101-scratch-build-shelf` is moved to strict-root project `building`
+- **THEN** the derived tag is `20260101-building-build-shelf`
 
 #### Scenario: Remainder already carries the destination prefix
-- **WHEN** session `20260101-oneshot-home-tidy` is moved to strict-root project `home`
-- **THEN** the derived tag is `20260101-home-tidy`
+- **WHEN** session `20260101-scratch-garden-tidy` is moved to strict-root project `garden`
+- **THEN** the derived tag is `20260101-garden-tidy`
+
+#### Scenario: Suffix with no label beyond a project name
+- **WHEN** session `20260101-scratch` or `20260101-garden` is moved from `scratch` to strict-root project `garden`
+- **THEN** the derived tag is `20260101-garden`, which fails validation, and the script fails with both error sets so the user picks a tag with `--rename-tag`
+
+#### Scenario: Derived tag already taken
+- **WHEN** the destination `cc-sessions/<derived-tag>/` already exists
+- **THEN** the script aborts naming that path and writes nothing
 
 #### Scenario: Auto-rename disabled
 - **WHEN** the same move is run with `--no-auto-rename`
@@ -55,4 +63,4 @@ When a MOVE is run without `--rename-tag`, without `--force` and without `--no-a
 
 #### Scenario: Other validation failures are not masked
 - **WHEN** the destination fails a rule other than the tag-prefix rule
-- **THEN** the script fails with that error and no tag is derived
+- **THEN** the script fails with that error, no tag is derived and no derivation is reported

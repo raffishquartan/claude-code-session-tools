@@ -253,6 +253,7 @@ def print_in_session_recipe(
     include_memory: bool,
     no_tombstone: bool,
     uuid_hint: str | None,
+    tag_note: str | None,
 ) -> None:
     cwd_changed = dst_cwd_abs != src_cwd_abs
     tag_changed = dst_tag != src_tag
@@ -278,6 +279,9 @@ def print_in_session_recipe(
     print("  would still land in the SOURCE session, not the new location.")
     print("  The destination would silently diverge from the live conversation.")
     print()
+    if tag_note:
+        print(tag_note)
+        print()
     print("To do this safely:")
     print()
     print("  # 1. Exit the CC session that has it open  (Ctrl-D, or type /exit)")
@@ -494,11 +498,11 @@ def apply_replacements(text: str, replacements: list[tuple[str, str]]) -> str:
 
 def rewrite_jsonl_paths(dst_jsonl: Path, replacements: list[tuple[str, str]]) -> dict:
     """In-place string replace on a jsonl. Returns counts per pattern."""
-    counts = {a: 0 for a, _ in replacements}
+    counts: dict[str, int] = {}
     text = dst_jsonl.read_text()
     for old, new in replacements:
         counts[old] = text.count(old)
-        text = apply_replacements(text, [(old, new)])
+        text = text.replace(old, new)
     dst_jsonl.write_text(text)
     return counts
 
@@ -872,7 +876,7 @@ def derive_strict_tag(src_tag: str, src_project: str, dst_project: str) -> str:
     source tag lacks the `<dst_project>-` prefix: keep the YYYYMMDD- prefix,
     strip one leading `<src_project>-` from the suffix, then prefix
     `<dst_project>-` unless the remainder already starts with it. Purely
-    mechanical: `oneshot-make-x` into `making` gives `making-make-x`. The
+    mechanical: `scratch-build-x` into `building` gives `building-build-x`. The
     result still has to pass every destination rule."""
     m = DATE_PREFIX_RE.match(src_tag)
     date, suffix = (m.group(1), m.group(2)) if m else ("", src_tag)
@@ -884,7 +888,11 @@ def derive_strict_tag(src_tag: str, src_project: str, dst_project: str) -> str:
     else:
         rest = suffix
     dst_prefix = f"{dst_project}-"
-    if rest.startswith(dst_prefix):
+    if rest == dst_project:
+        # No label beyond the project name: the result fails validation and
+        # the user picks a tag with --rename-tag.
+        new_suffix = dst_project
+    elif rest.startswith(dst_prefix):
         new_suffix = rest
     elif rest:
         new_suffix = dst_prefix + rest
@@ -961,17 +969,18 @@ def main() -> int:
         src_tag=src_tag,
         force=args.force,
     )
-    # A MOVE that fails the destination strict-root tag-prefix rule retries
-    # with a derived compliant tag and becomes a MOVE+RENAME. That rule's error
-    # is only ever produced for a strict-root destination, so its presence in
-    # `errors` is the trigger; any other error still fails below.
+    # A MOVE whose only failure is the destination strict-root tag-prefix rule
+    # retries with a derived compliant tag and becomes a MOVE+RENAME. That
+    # rule's error is only ever produced for a strict-root destination, so it
+    # being the sole error is the trigger; any other error fails below with no
+    # derivation. The derived tag then meets the clobber check like any other.
     tag_note: str | None = None
     if not ok and not args.rename_tag and not args.no_auto_rename and dst_cwd_abs != src_cwd_abs:
         dst_project = dst_cwd_path.name
         src_suffix_m = DATE_PREFIX_RE.match(src_tag)
         src_suffix = src_suffix_m.group(2) if src_suffix_m else src_tag
         prefix_error = validate_strict_tag_suffix(src_suffix, dst_project)
-        if prefix_error and prefix_error in errors:
+        if prefix_error and errors == [prefix_error]:
             derived = derive_strict_tag(src_tag, Path(src_cwd_abs).name, dst_project)
             derived_ok, derived_errors = check_session_destination(
                 dst_cwd_abs=dst_cwd_path,
@@ -1062,6 +1071,7 @@ def main() -> int:
             include_memory=args.include_memory,
             no_tombstone=args.no_tombstone,
             uuid_hint=args.uuid,
+            tag_note=tag_note,
         )
         return 2
 
