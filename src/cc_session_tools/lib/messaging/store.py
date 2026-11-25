@@ -109,6 +109,8 @@ def project_dir_for_path(path: Path) -> Path | None:
         return None
     resolved = path.resolve()
     for candidate in (resolved, *resolved.parents):
+        if candidate in roots:
+            return None
         if matched_session_root(candidate, roots) is not None:
             return candidate if candidate.is_dir() else None
     return None

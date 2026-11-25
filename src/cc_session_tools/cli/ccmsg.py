@@ -73,7 +73,8 @@ def _build_parser() -> argparse.ArgumentParser:
     rcpt.add_argument(
         "--to-project", metavar="NAME|PATH",
         help="a project name, or an absolute or ~-prefixed path to a project folder or any "
-             "folder inside one; a path resolves to the project a session started there uses",
+             "folder inside one; a path resolves to the project folder that contains it, "
+             "and reaches sessions started in that project folder",
     )
     rcpt.add_argument("--to-description", metavar="TEXT")
     send_p.add_argument("--subject", required=True)
@@ -145,7 +146,12 @@ class _Recipient:
 
 
 def _project_from_path(raw: str) -> _Recipient:
-    project_dir = store.project_dir_for_path(Path(raw).expanduser())
+    try:
+        project_dir = store.project_dir_for_path(Path(raw).expanduser())
+    except (RuntimeError, OSError) as exc:
+        # expanduser raises RuntimeError for an unknown ~user; resolve can raise on a
+        # symlink loop.
+        raise ValueError(f"cannot resolve --to-project path {raw}: {exc}") from exc
     if project_dir is None:
         raise ValueError(
             f"--to-project path matches no known project: {raw} (a project is a folder "
@@ -174,6 +180,11 @@ def _resolve_recipient(args: argparse.Namespace) -> _Recipient:
         )
     if kind == "project" and val.startswith(("/", "~")):
         return _project_from_path(val)
+    if kind == "project" and "/" in val:
+        raise ValueError(
+            f"--to-project takes a project name or an absolute or ~-prefixed path, "
+            f"not a relative path: {val}"
+        )
     return _Recipient(kind, val)
 
 

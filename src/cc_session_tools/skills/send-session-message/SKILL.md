@@ -32,9 +32,11 @@ is ambiguous**:
    only from a message.
 2. `--to-project <name|path>` - any session in a project. Give the project name, or an
    absolute or `~`-prefixed path to the project folder or any folder inside it (for
-   example a `cc-sessions/<tag>` folder); a path is resolved to the project a session
-   started in that folder belongs to. A path that is not inside any project under a
-   configured session root exits 2 and stores nothing.
+   example a `cc-sessions/<tag>` folder); a path is resolved to the project folder that
+   contains it, and the message reaches sessions started in that project folder (a
+   session started in a subfolder, such as a worktree, is not one of them). A relative
+   path, or a path that is not inside any project under a configured session root, exits
+   2 and stores nothing.
 3. `--to-description "<text>"` - "whoever is working on X". Surfaced to candidate
    sessions; one claims it.
 
@@ -70,8 +72,9 @@ session has one) and pass that path:
 
 ```
 ccmsg send --to-project <name> --subject "<subject>" --body-file <working-dir>/msg-body.md
-``` The `--from-*`/`--to-partition`
-flags exist only as overrides for tests or non-Claude-Code callers.
+```
+
+The `--from-*`/`--to-partition` flags exist only as overrides for tests or non-Claude-Code callers.
 
 ## Receiving a description-addressed proposal
 

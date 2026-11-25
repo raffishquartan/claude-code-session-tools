@@ -430,7 +430,8 @@ def _path_env(tmp_path: Path) -> tuple[dict[str, str], Path]:
     proj = home / "proj"
     (proj / "alpha" / "cc-sessions" / "20260101-alpha-x").mkdir(parents=True)
     (home / "elsewhere").mkdir()
-    return {"HOME": str(home), "CLAUDE_SESSION_TOOLS_PROJ_ROOT": str(proj)}, proj
+    return {"HOME": str(home), "CLAUDE_SESSION_TOOLS_PROJ_ROOT": str(proj),
+            "CLAUDE_SESSION_TOOLS_REPO_ROOT": ""}, proj
 
 
 def _send_to_project(tmp_path: Path, value: str, env: dict[str, str]):
@@ -464,4 +465,45 @@ def test_send_to_project_unknown_path_errors(tmp_path: Path) -> None:
     assert res.returncode == 2
     assert "~/elsewhere" in res.stderr
     assert "no known project" in res.stderr
+    assert _run(["list"], tmp_path / "store", env).stdout == ""
+
+
+def test_send_to_project_path_under_loose_root(tmp_path: Path) -> None:
+    env, _ = _path_env(tmp_path)
+    repos = tmp_path / "home" / "repos"
+    (repos / "beta" / "src").mkdir(parents=True)
+    env["CLAUDE_SESSION_TOOLS_REPO_ROOT"] = str(repos)
+    res = _send_to_project(tmp_path, "~/repos/beta/src", env)
+    assert res.returncode == 0, res.stderr
+    listing = _run(["list", "--partition", "repos/beta"], tmp_path / "store", env)
+    assert "project=beta " in listing.stdout
+
+
+def test_send_to_project_path_picks_the_root_it_names(tmp_path: Path) -> None:
+    env, proj = _path_env(tmp_path)
+    repos = tmp_path / "home" / "repos"
+    (repos / "alpha").mkdir(parents=True)
+    env["CLAUDE_SESSION_TOOLS_REPO_ROOT"] = str(repos)
+    res = _send_to_project(tmp_path, str(repos / "alpha"), env)
+    assert res.returncode == 0, res.stderr
+    listing = _run(["list", "--partition", "repos/alpha"], tmp_path / "store", env)
+    assert "project=alpha " in listing.stdout
+    assert _listing(tmp_path, env) == ""
+
+
+@pytest.mark.parametrize("value", ["~/proj", "~nosuchuser-ccmsg-test/x"])
+def test_send_to_project_rejects_root_or_unexpandable_path(tmp_path: Path, value: str) -> None:
+    env, _ = _path_env(tmp_path)
+    res = _send_to_project(tmp_path, value, env)
+    assert res.returncode == 2, res.stderr
+    assert value in res.stderr
+    assert "Traceback" not in res.stderr
+    assert _run(["list"], tmp_path / "store", env).stdout == ""
+
+
+def test_send_to_project_rejects_relative_path(tmp_path: Path) -> None:
+    env, _ = _path_env(tmp_path)
+    res = _send_to_project(tmp_path, "alpha/sub", env)
+    assert res.returncode == 2
+    assert "alpha/sub" in res.stderr
     assert _run(["list"], tmp_path / "store", env).stdout == ""

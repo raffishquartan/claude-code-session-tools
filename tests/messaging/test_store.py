@@ -150,3 +150,15 @@ def test_project_dir_for_path_no_roots_configured(
     monkeypatch.delenv("CLAUDE_SESSION_TOOLS_PROJ_ROOT", raising=False)
     monkeypatch.delenv("CLAUDE_SESSION_TOOLS_REPO_ROOT", raising=False)
     assert store.project_dir_for_path(tmp_path) is None
+
+
+def test_project_dir_for_path_rejects_nested_root(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repos = tmp_path / "repos"
+    proj = repos / "proj"
+    (proj / "alpha").mkdir(parents=True)
+    monkeypatch.setenv("CLAUDE_SESSION_TOOLS_REPO_ROOT", str(repos))
+    monkeypatch.setenv("CLAUDE_SESSION_TOOLS_PROJ_ROOT", str(proj))
+    assert store.project_dir_for_path(proj) is None
+    assert store.project_dir_for_path(proj / "alpha") == (proj / "alpha").resolve()
