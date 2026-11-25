@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [4.6.0] - 2026-11-25
+
+### Added
+
+- `ccst move-session` derives a compliant tag when a MOVE into a strict-root project fails only because the tag suffix lacks the `<project>-` prefix: one leading `<src-project>-` is stripped and `<dst-project>-` is prefixed, and the move continues as MOVE+RENAME. A `NOTE: tag changed from <old> to <new> ...` line appears in the plan, the execute output and the DONE block. An explicit `--rename-tag` is never overridden and other validation failures are not masked.
+- `ccst move-session --no-auto-rename` restores the hard validation failure for that case.
+
+### Fixed
+
+- `ccst move-session` verification no longer fails a session that changed directory into a path the move rewrites, such as its own `~/.claude/projects/<src-key>/` directory: every destination `cwd` is accepted if it is the destination cwd or the rewritten form of a source `cwd`, and any other value is printed as `cwd_unexpected`.
+- A failed verification during `--execute` now removes what that run created (destination session directory, destination transcript and any parent directory it made that is empty again), lists each removed path and leaves the source untouched, so the same command can be re-run. Verification now runs before the memory copy.
+
 ## [4.5.0] - 2026-11-21
 
 ### Changed
