@@ -94,6 +94,26 @@ def partition_for_cwd(cwd: Path) -> str:
     return f"other-paths/{other_paths_slug(cwd)}"
 
 
+def project_dir_for_path(path: Path) -> Path | None:
+    """The project folder that ``path`` is, or lies inside, or None.
+
+    A project folder is a directory that ``partition_for_cwd`` maps to a project: a direct
+    child of a configured session root. ``path`` (already ``~``-expanded) is resolved and it
+    and its ancestors are tried nearest first, so a subfolder such as ``cc-sessions/<tag>``
+    resolves to the project that contains it. None when no roots are configured, or when the
+    path is outside every root, is a root itself, or names a project folder that does not
+    exist."""
+    try:
+        roots = load_session_roots()
+    except RootsConfigError:
+        return None
+    resolved = path.resolve()
+    for candidate in (resolved, *resolved.parents):
+        if matched_session_root(candidate, roots) is not None:
+            return candidate if candidate.is_dir() else None
+    return None
+
+
 def partition_for_project(name: str) -> str:
     """Partition a project-addressed message routes to.
 

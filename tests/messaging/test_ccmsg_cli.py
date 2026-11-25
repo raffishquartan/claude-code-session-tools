@@ -389,6 +389,10 @@ def test_unarchive_reports_a_message_held_by_a_concurrent_claim(
     assert "being claimed, try again: some-id" in capsys.readouterr().err
 
 
+_SENDER = ["--from-project", "o", "--from-session", "s", "--from-uuid", "u",
+           "--from-partition", "projects/o"]
+
+
 def _status_block(help_text: str) -> str:
     start = help_text.index("Message statuses:")
     return help_text[start:]
@@ -419,3 +423,45 @@ def test_send_help_recommends_body_file(tmp_path: Path) -> None:
     text = " ".join(res.stdout.split())
     assert "--body-file" in text
     assert "hooks" in text
+
+
+def _path_env(tmp_path: Path) -> tuple[dict[str, str], Path]:
+    home = tmp_path / "home"
+    proj = home / "proj"
+    (proj / "alpha" / "cc-sessions" / "20260101-alpha-x").mkdir(parents=True)
+    (home / "elsewhere").mkdir()
+    return {"HOME": str(home), "CLAUDE_SESSION_TOOLS_PROJ_ROOT": str(proj)}, proj
+
+
+def _send_to_project(tmp_path: Path, value: str, env: dict[str, str]):
+    return _run(["send", "--to-project", value, "--subject", "S", "--body", "B", *_SENDER],
+                tmp_path / "store", env)
+
+
+def _listing(tmp_path: Path, env: dict[str, str]) -> str:
+    res = _run(["list", "--partition", "projects/alpha"], tmp_path / "store", env)
+    assert res.returncode == 0, res.stderr
+    return res.stdout
+
+
+@pytest.mark.parametrize("ref", ["abs", "tilde", "subfolder", "name"])
+def test_send_to_project_accepts_path_or_name(tmp_path: Path, ref: str) -> None:
+    env, proj = _path_env(tmp_path)
+    value = {
+        "abs": str(proj / "alpha"),
+        "tilde": "~/proj/alpha",
+        "subfolder": str(proj / "alpha" / "cc-sessions" / "20260101-alpha-x"),
+        "name": "alpha",
+    }[ref]
+    res = _send_to_project(tmp_path, value, env)
+    assert res.returncode == 0, res.stderr
+    assert "project=alpha " in _listing(tmp_path, env)
+
+
+def test_send_to_project_unknown_path_errors(tmp_path: Path) -> None:
+    env, _ = _path_env(tmp_path)
+    res = _send_to_project(tmp_path, "~/elsewhere", env)
+    assert res.returncode == 2
+    assert "~/elsewhere" in res.stderr
+    assert "no known project" in res.stderr
+    assert _run(["list"], tmp_path / "store", env).stdout == ""

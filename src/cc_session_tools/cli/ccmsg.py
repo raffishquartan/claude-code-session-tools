@@ -10,6 +10,7 @@ import json
 import os
 import sqlite3
 import sys
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -69,7 +70,11 @@ def _build_parser() -> argparse.ArgumentParser:
         help="a session uuid, a session name (YYYYMMDD-<tag>) or a uuid prefix of 8+ hex "
              "characters; names and prefixes are resolved in the sessions store",
     )
-    rcpt.add_argument("--to-project", metavar="NAME")
+    rcpt.add_argument(
+        "--to-project", metavar="NAME|PATH",
+        help="a project name, or an absolute or ~-prefixed path to a project folder or any "
+             "folder inside one; a path resolves to the project a session started there uses",
+    )
     rcpt.add_argument("--to-description", metavar="TEXT")
     send_p.add_argument("--subject", required=True)
     body = send_p.add_mutually_exclusive_group(required=True)
@@ -130,7 +135,26 @@ def _build_parser() -> argparse.ArgumentParser:
     return p
 
 
-def _resolve_recipient(args: argparse.Namespace) -> tuple[ToKind, str]:
+@dataclass(frozen=True)
+class _Recipient:
+    kind: ToKind
+    value: str
+    # Set when --to-project was given as a path: the resolved project folder, whose
+    # partition is the one a session started there sweeps.
+    project_dir: Path | None = None
+
+
+def _project_from_path(raw: str) -> _Recipient:
+    project_dir = store.project_dir_for_path(Path(raw).expanduser())
+    if project_dir is None:
+        raise ValueError(
+            f"--to-project path matches no known project: {raw} (a project is a folder "
+            "directly under a configured session root, or any folder inside one)"
+        )
+    return _Recipient("project", project_dir.name, project_dir)
+
+
+def _resolve_recipient(args: argparse.Namespace) -> _Recipient:
     options: list[tuple[ToKind, str | None]] = [
         ("session", args.to_session),
         ("project", args.to_project),
@@ -148,7 +172,9 @@ def _resolve_recipient(args: argparse.Namespace) -> tuple[ToKind, str]:
             val, find_by_name=sessions_db.find_exact,
             find_by_prefix=sessions_db.find_by_uuid_prefix,
         )
-    return kind, val
+    if kind == "project" and val.startswith(("/", "~")):
+        return _project_from_path(val)
+    return _Recipient(kind, val)
 
 
 def _resolve_body(args: argparse.Namespace) -> str:
@@ -190,17 +216,20 @@ def _resolve_sender(args: argparse.Namespace) -> tuple[str, str, str, str]:
     return from_uuid, from_session, from_project, from_partition
 
 
-def _resolve_to_partition(to_kind: ToKind, to_value: str, override: str | None) -> str:
+def _resolve_to_partition(recipient: _Recipient, override: str | None) -> str:
     """Where the message file is written so the recipient's sweep finds it.
 
     Project-addressed messages go to that project's partition (sessions there
-    sweep it). Session- and description-addressed messages go to ``_global``:
-    the sender cannot know a target session's partition, but every session
-    sweeps ``_global`` and ``addressing.targets`` matches by uuid / candidate."""
+    sweep it); for a path recipient that is the partition of the resolved
+    folder. Session- and description-addressed messages go to ``_global``: the
+    sender cannot know a target session's partition, but every session sweeps
+    ``_global`` and ``addressing.targets`` matches by uuid / candidate."""
     if override is not None:
         return override
-    if to_kind == "project":
-        return store.partition_for_project(to_value)
+    if recipient.project_dir is not None:
+        return store.partition_for_cwd(recipient.project_dir)
+    if recipient.kind == "project":
+        return store.partition_for_project(recipient.value)
     return store.GLOBAL_PARTITION
 
 
@@ -208,11 +237,11 @@ def _cmd_send(args: argparse.Namespace) -> int:
     try:
         if not args.subject.strip():
             raise ValueError("subject must not be empty")
-        to_kind, to_value = _resolve_recipient(args)
+        recipient = _resolve_recipient(args)
         body = _resolve_body(args)
         _validate_attachments(args.attach)
         from_uuid, from_session, from_project, from_partition = _resolve_sender(args)
-        to_partition = _resolve_to_partition(to_kind, to_value, args.to_partition)
+        to_partition = _resolve_to_partition(recipient, args.to_partition)
     except ValueError as exc:
         print(f"ccmsg: {exc}", file=sys.stderr)
         return 2
@@ -220,8 +249,8 @@ def _cmd_send(args: argparse.Namespace) -> int:
         from_project=from_project,
         from_session=from_session,
         from_uuid=from_uuid,
-        to_kind=to_kind,
-        to_value=to_value,
+        to_kind=recipient.kind,
+        to_value=recipient.value,
         to_partition=to_partition,
         subject=args.subject,
         body=body,

@@ -30,7 +30,11 @@ is ambiguous**:
    only sessions opened with `ccd`/`ccr`; for any other session pass the full uuid. `ccmsg read`
    prints the sender's full uuid on its `from_uuid:` line, so you can reply to a session you know
    only from a message.
-2. `--to-project <name>` - any session in a named project.
+2. `--to-project <name|path>` - any session in a project. Give the project name, or an
+   absolute or `~`-prefixed path to the project folder or any folder inside it (for
+   example a `cc-sessions/<tag>` folder); a path is resolved to the project a session
+   started in that folder belongs to. A path that is not inside any project under a
+   configured session root exits 2 and stores nothing.
 3. `--to-description "<text>"` - "whoever is working on X". Surfaced to candidate
    sessions; one claims it.
 

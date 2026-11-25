@@ -97,3 +97,56 @@ def test_partition_for_project_unknown_is_global(
     monkeypatch.delenv("CLAUDE_SESSION_TOOLS_PROJ_ROOT", raising=False)
     monkeypatch.delenv("CLAUDE_SESSION_TOOLS_REPO_ROOT", raising=False)
     assert store.partition_for_project("ghost") == "_global"
+
+
+def _two_roots(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[Path, Path]:
+    proj = tmp_path / "proj"
+    repos = tmp_path / "repos"
+    (proj / "alpha" / "cc-sessions" / "20260101-alpha-x").mkdir(parents=True)
+    (repos / "beta").mkdir(parents=True)
+    monkeypatch.setenv("CLAUDE_SESSION_TOOLS_PROJ_ROOT", str(proj))
+    monkeypatch.setenv("CLAUDE_SESSION_TOOLS_REPO_ROOT", str(repos))
+    return proj.resolve(), repos.resolve()
+
+
+def test_project_dir_for_path_project_folder(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    proj, repos = _two_roots(tmp_path, monkeypatch)
+    assert store.project_dir_for_path(proj / "alpha") == proj / "alpha"
+    assert store.project_dir_for_path(repos / "beta") == repos / "beta"
+
+
+def test_project_dir_for_path_subfolder(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    proj, _ = _two_roots(tmp_path, monkeypatch)
+    sub = proj / "alpha" / "cc-sessions" / "20260101-alpha-x"
+    assert store.project_dir_for_path(sub) == proj / "alpha"
+
+
+def test_project_dir_for_path_agrees_with_sender_partition(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    proj, _ = _two_roots(tmp_path, monkeypatch)
+    found = store.project_dir_for_path(proj / "alpha" / "cc-sessions")
+    assert found is not None
+    assert store.partition_for_cwd(found) == store.partition_for_cwd(proj / "alpha")
+
+
+def test_project_dir_for_path_outside_roots_or_root_itself(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    proj, _ = _two_roots(tmp_path, monkeypatch)
+    (tmp_path / "elsewhere").mkdir()
+    assert store.project_dir_for_path(tmp_path / "elsewhere") is None
+    assert store.project_dir_for_path(proj) is None
+    assert store.project_dir_for_path(proj / "missing") is None
+
+
+def test_project_dir_for_path_no_roots_configured(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("CLAUDE_SESSION_TOOLS_PROJ_ROOT", raising=False)
+    monkeypatch.delenv("CLAUDE_SESSION_TOOLS_REPO_ROOT", raising=False)
+    assert store.project_dir_for_path(tmp_path) is None
