@@ -62,7 +62,8 @@ too: don't reinvent EAV by cramming structured data into `content` as a serializ
 avoid a schema call).
 
 Free-text `content` suffices when the data is genuinely prose - a decision's rationale, a
-correspondence transcription, a plan document's body. Don't add a field "just in case it's useful
+correspondence transcription, a plan document's body. Finding prose by what it says needs no field: `ccst pdata
+search --text '<substring>'` (or `--regex`) searches `content` and every TEXT field. Don't add a field "just in case it's useful
 to filter on later" - that's speculative schema, and `schema add-field` is cheap enough to run
 later, the moment an actual query need shows up (idempotent, no migration ceremony: `ALTER TABLE
 ADD COLUMN`, defaults to `NULL` for existing rows, spec §4.3).

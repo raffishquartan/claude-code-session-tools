@@ -43,6 +43,7 @@ _GATED = [
     ("get", "--project", "old", "--id", _SOME_ID),
     ("list", "--project", "old", "--group", "notes"),
     ("query", "--project", "old", "--group", "notes"),
+    ("search", "--project", "old", "--group", "notes", "--text", "x"),
     ("update", "--project", "old", "--id", _SOME_ID, "--version", "1", "--content", "x"),
     ("delete", "--project", "old", "--id", _SOME_ID, "--version", "1"),
     ("restore", "--project", "old", "--id", _SOME_ID),

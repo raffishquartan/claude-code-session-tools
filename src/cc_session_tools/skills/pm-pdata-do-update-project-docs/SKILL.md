@@ -67,7 +67,9 @@ Rewrite each confirmed-stale reference to describe the pdata-backed store:
   command a reader would actually use: `ccst pdata list --project <name> --group <record_group>`
   to browse, `ccst pdata get --project <name> --id <uuid>` for one record (ids are UUIDs, so
   docs name the query that finds a record rather than quoting an id), `ccst pdata query
-  --project <name> --group <record_group> --where '<field> <op> <value>'` to filter.
+  --project <name> --group <record_group> --where '<field> <op> <value>'` to filter, and
+  `ccst pdata search --project <name> --group <record_group> --text '<substring>'` to find
+  records by text.
 - Name the record_group explicitly rather than saying "the pdata store" generically - a reader
   needs to know which group to query.
 - Keep the surrounding sentence's purpose intact. You are changing what it points at, not
