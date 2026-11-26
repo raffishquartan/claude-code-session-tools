@@ -19,6 +19,7 @@ Ages in days are UTC calendar days.
 from __future__ import annotations
 
 import datetime as dt
+import enum
 import os
 import re
 import shutil
@@ -51,6 +52,44 @@ def state_dir() -> Path:
 
 def backlog_path() -> Path:
     return Path.home() / ".claude" / "self-improvement-backlog.md"
+
+
+INBOX_HEADING = "## Inbox"
+
+
+def has_inbox(backlog_text: str) -> bool:
+    """True when a line is exactly ``## Inbox`` (split on LF only, like the bash ``grep -x``)."""
+    return INBOX_HEADING in backlog_text.split("\n")
+
+
+def loop_set_up() -> bool:
+    """True once the user has set up the loop: the backlog can be read and has an Inbox.
+    Until then the nudge, the headless review and the escalation stay quiet."""
+    text = read_text(backlog_path())
+    return text is not None and has_inbox(text)
+
+
+BACKLOG_TEMPLATE = f"# Self-improvement backlog\n\n{INBOX_HEADING}\n\n## Entries\n"
+
+
+class InitResult(enum.Enum):
+    CREATED = "created"
+    ALREADY_SET_UP = "already set up"
+    NO_INBOX = "exists without an Inbox"
+
+
+def init_backlog() -> InitResult:
+    """Create the backlog from BACKLOG_TEMPLATE unless something already exists at its path.
+    Exclusive create: an existing file, or a symlink (even a dangling one), is never followed,
+    truncated or overwritten, including one created concurrently."""
+    path = backlog_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        with path.open("x", encoding="utf-8") as fh:
+            fh.write(BACKLOG_TEMPLATE)
+    except FileExistsError:
+        return InitResult.ALREADY_SET_UP if loop_set_up() else InitResult.NO_INBOX
+    return InitResult.CREATED
 
 
 def today_utc() -> dt.date:

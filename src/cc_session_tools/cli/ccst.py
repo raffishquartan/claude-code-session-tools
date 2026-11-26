@@ -104,11 +104,12 @@ Current subcommands:
   context-override [on|off|status]  Toggle the /context-override flag for the current
                                  session (default: on). See ccst hooks run
                                  context-window-warning.
-  self-improvement collect-signals|auto-review|nudge|status
+  self-improvement collect-signals|auto-review|nudge|status|init
                                  The configuration self-improvement loop: counts-only
                                  signal snapshot, weekly headless proposal-only review
-                                 (subscription login, USD 0.50 cap), nudge preview and
-                                 state summary (see ccst self-improvement --help).
+                                 (subscription login, USD 0.50 cap), nudge preview,
+                                 state summary and init (creates the backlog that turns
+                                 the bundled weekly jobs on; see --help).
 """
 from __future__ import annotations
 
@@ -3008,9 +3009,31 @@ def _cmd_self_improvement(args: argparse.Namespace) -> int:
     if args.verb == "nudge":
         print(nudge.due_message(state.state_dir()) or "no review due")
         return 0
+    if args.verb == "init":
+        return _self_improvement_init()
     for line in report.status_lines(state.state_dir()):
         print(line)
     return 0
+
+
+def _self_improvement_init() -> int:
+    """ccst self-improvement init: create the backlog, never touching an existing one."""
+    from cc_session_tools.lib.self_improvement import state
+
+    path = state.backlog_path()
+    result = state.init_backlog()
+    if result is state.InitResult.CREATED:
+        print(f"created {path} - the self-improvement loop is set up")
+        return 0
+    if result is state.InitResult.ALREADY_SET_UP:
+        print(f"{path} already exists with an Inbox - the loop is set up; nothing changed")
+        return 0
+    print(
+        f"{path} exists but has no `## Inbox` line; add one (nothing was changed) to set up "
+        "the loop",
+        file=sys.stderr,
+    )
+    return 1
 
 
 def _cmd_context_override(args: argparse.Namespace) -> int:
@@ -4204,7 +4227,17 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     si_sub.add_parser(
         "status",
-        help="Print the snapshot, last reviews and headless cost since the last review",
+        help="Print whether the loop is set up, the snapshot, last reviews and headless cost",
+    )
+    si_sub.add_parser(
+        "init",
+        help="Set up the loop: create ~/.claude/self-improvement-backlog.md (never overwrites)",
+        description=(
+            "Create ~/.claude/self-improvement-backlog.md with empty `## Inbox` and `## Entries` "
+            "sections. Until it exists with an Inbox, the bundled weekly jobs make no model call "
+            "and send nothing, and the nudge stays silent. An existing file is never changed; "
+            "exits 1 when it has no `## Inbox` line."
+        ),
     )
 
     # ---- context-override ----

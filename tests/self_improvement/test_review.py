@@ -27,6 +27,7 @@ log = os.environ["STUB_LOG"]
 seen_env = sorted(k for k in (
     "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "CLAUDE_CODE_USE_BEDROCK",
     "CLAUDE_CODE_USE_VERTEX", "CLAUDE_CODE_USE_FOUNDRY", "CLAUDE_CODE_OAUTH_TOKEN",
+    "ANTHROPIC_BASE_URL", "ANTHROPIC_CUSTOM_HEADERS", "CLAUDE_CODE_USE_GATEWAY",
 ) if k in os.environ)
 if args[:2] == ["auth", "status"]:
     with open(log, "a", encoding="utf-8") as fh:
@@ -399,6 +400,16 @@ def test_api_billing_variables_never_reach_claude(h: Harness, transcript: Path, 
     assert os.environ["ANTHROPIC_API_KEY"] == "sk-ant-x"  # the job's own environment is untouched
 
 
+def test_a_gateway_never_receives_the_digest(h: Harness, transcript: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    set_env(
+        monkeypatch, ANTHROPIC_BASE_URL="https://gateway.example", ANTHROPIC_CUSTOM_HEADERS="X-A: b",
+        CLAUDE_CODE_USE_GATEWAY="1",
+    )
+    h.run()
+    assert h.stub_lines("claude-auth-env: ") == ["[]"]
+    assert h.stub_lines("claude-env: ") == ["[]"]
+
+
 @pytest.mark.parametrize("method", ["claude.ai", "oauth_token"])
 def test_subscription_logins_are_accepted(h: Harness, transcript: Path, monkeypatch: pytest.MonkeyPatch, method: str) -> None:
     monkeypatch.setenv("STUB_AUTH", method)
@@ -537,13 +548,32 @@ def test_a_model_that_ignores_sigterm_is_killed_and_logged(h: Harness, transcrip
     assert len(h.si.notify.messages) == 1
 
 
-def test_a_missing_backlog_never_calls_the_model(h: Harness, transcript: Path) -> None:
-    h.si.backlog.unlink()
-    summary = h.run()
+@pytest.mark.parametrize("backlog", [None, "# Backlog\n\n## Entries\n"])
+def test_quiet_skip_until_the_loop_is_set_up(h: Harness, transcript: Path, backlog: str | None) -> None:
+    if backlog is None:
+        h.si.backlog.unlink()
+    else:
+        h.si.backlog.write_text(backlog)
+    summary = h.run(force=True)
     assert h.claude_calls() == 0
-    assert " status=failed sessions=1 proposals=0 cost_usd=0 " in h.si.last_log()
-    assert h.si.notify.messages == ["Self-improvement auto-review failed: no backlog Inbox (cost USD 0)"]
-    assert "no backlog Inbox" in summary
+    assert h.stub_lines("claude-auth-env: ") == []
+    assert h.refresh_calls == 0
+    assert " mode=auto status=skipped sessions=0 proposals=0 cost_usd=0 " in h.si.last_log()
+    assert h.si.notify.messages == []
+    assert summary == (
+        "self-improvement auto-review: skipped (loop not set up: run ccst self-improvement init)"
+    )
+    assert h.si.backlog.exists() is (backlog is not None)
+    assert not (h.si.state / "last-auto-review").exists()
+
+
+def test_a_not_set_up_skip_does_not_block_the_next_run(h: Harness, transcript: Path) -> None:
+    text = h.si.backlog.read_text()
+    h.si.backlog.unlink()
+    h.run()
+    h.si.backlog.write_text(text)
+    h.run()
+    assert h.claude_calls() == 1
 
 
 def test_a_symlinked_backlog_is_updated_at_its_target(h: Harness, transcript: Path) -> None:
@@ -652,8 +682,8 @@ def test_insert_into_an_inbox_at_end_of_file() -> None:
 
 
 def test_has_inbox_needs_the_exact_heading() -> None:
-    assert review.has_inbox("## Inbox\n")
-    assert not review.has_inbox("## Inbox notes\n")
+    assert state.has_inbox("## Inbox\n")
+    assert not state.has_inbox("## Inbox notes\n")
 
 
 

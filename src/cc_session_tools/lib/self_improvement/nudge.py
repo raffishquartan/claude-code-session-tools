@@ -1,6 +1,7 @@
 """Whether a periodic review is due, and the one-line nudge that says so.
 
-Nothing is ever due until the loop is in use (its state directory or the backlog exists).
+Nothing is ever due until the loop is set up (the backlog has an Inbox, see
+``state.loop_set_up``).
 Then a review is due when:
 - no interactive review is recorded, or the last one is at least 30 days old; or
 - the snapshot is valid and its signal total is at least 10; or
@@ -18,7 +19,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from cc_session_tools.lib.self_improvement import state
-from cc_session_tools.lib.self_improvement.signals import COMPONENTS, PERIODIC_REVIEW_COMMAND
+from cc_session_tools.lib.self_improvement.signals import COMPONENTS, review_command
 
 AGE_WITH_SIGNAL_DAYS = 14
 AGE_ALONE_DAYS = 30
@@ -73,20 +74,14 @@ def message(review_age: int | None, snapshot: SnapshotView | None) -> str:
     )
     return (
         f"{MESSAGE_PREFIX} Self-improvement review due: {review_text}, {signals_text} - "
-        f"run {PERIODIC_REVIEW_COMMAND}"
+        f"run {review_command()}"
     )
 
 
-def loop_in_use(state_dir: Path) -> bool:
-    """True once the loop has been set up: its state directory or the backlog exists. An
-    install that never used the loop is never nudged."""
-    return state_dir.is_dir() or state.backlog_path().exists()
-
-
 def due_message(state_dir: Path) -> str | None:
-    """The nudge line when the loop is in use and a review is due, else None. Ignores the
+    """The nudge line when the loop is set up and a review is due, else None. Ignores the
     once-a-day stamp. A last review dated in the future counts as no review recorded."""
-    if not loop_in_use(state_dir):
+    if not state.loop_set_up():
         return None
     last_review = state.last_interactive_review_date(state.read_log_lines(state_dir))
     review_age = None if last_review is None else state.days_since(last_review)

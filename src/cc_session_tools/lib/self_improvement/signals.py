@@ -30,7 +30,11 @@ ESCALATION_INTERVAL_DAYS = 7
 MSG_MIN_AGE_DAYS = 14
 DENY_WINDOW = dt.timedelta(days=7)
 NO_ESCALATE_ENV = "SELF_IMPROVEMENT_NO_ESCALATE"
-PERIODIC_REVIEW_COMMAND = "/review-session-and-improve-claude-setup periodic"
+REVIEW_SKILL = "review-session-and-improve-claude-setup"
+PERIODIC_REVIEW_COMMAND = f"/{REVIEW_SKILL} periodic"
+# What messages point at when the interactive review skill is not installed.
+STATUS_COMMAND = "ccst self-improvement status"
+NOT_SET_UP_SUFFIX = ", loop not set up (run ccst self-improvement init)"
 RELIABILITY_OPEN_PREFIX = "Open - none fixed"
 
 # Snapshot components, in file order, with the label the summary line and nudge use.
@@ -63,6 +67,8 @@ class Snapshot:
     days_since_review: str
     loop_health: str
     auto_review_health: str
+    # Not part of signals.env: whether the backlog has an Inbox (see state.loop_set_up).
+    loop_set_up: bool
 
     def to_env(self) -> str:
         rows = (
@@ -94,7 +100,15 @@ class Snapshot:
             f"{self.backlog_open}, msgs {self.msgs_unclaimed_14d}, denies {self.denies_7d}, "
             f"drift {self.drift_push}, reliability {self.reliability_open}), last review "
             f"{review_text}, health {self.loop_health}, auto-review {self.auto_review_health}"
+            f"{'' if self.loop_set_up else NOT_SET_UP_SUFFIX}"
         )
+
+
+def review_command() -> str:
+    """The command messages point at: the interactive review skill when it is installed,
+    otherwise the status command, so a message never names something the install lacks."""
+    skill = Path.home() / ".claude" / "skills" / REVIEW_SKILL / "SKILL.md"
+    return PERIODIC_REVIEW_COMMAND if skill.is_file() else STATUS_COMMAND
 
 
 # --- sources -----------------------------------------------------------------------------
@@ -265,11 +279,14 @@ def collect(now: dt.datetime | None = None) -> Snapshot:
         days_since_review=days_since_review,
         loop_health=loop_health,
         auto_review_health=auto_health,
+        loop_set_up=backlog_text is not None and state.has_inbox(backlog_text),
     )
 
 
 def escalation_message(snapshot: Snapshot) -> str | None:
-    """The Telegram text for a FAIL, or None when both checks pass."""
+    """The Telegram text for a FAIL, or None when both checks pass or the loop is not set up."""
+    if not snapshot.loop_set_up:
+        return None
     failed = []
     if snapshot.loop_health == "FAIL":
         failed.append("loop health FAIL")
@@ -282,7 +299,7 @@ def escalation_message(snapshot: Snapshot) -> str | None:
     )
     return (
         f"Self-improvement: {', '.join(failed)} - last review {review_text}, "
-        f"{snapshot.signal_total} signals. Run {PERIODIC_REVIEW_COMMAND}"
+        f"{snapshot.signal_total} signals. Run {review_command()}"
     )
 
 

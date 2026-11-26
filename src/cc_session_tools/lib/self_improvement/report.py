@@ -3,11 +3,27 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from cc_session_tools.lib.self_improvement import state
+from cc_session_tools.lib.self_improvement import signals, state
+
+
+def setup_line() -> str:
+    """Whether the loop is set up, and how to set it up when it is not."""
+    backlog = state.backlog_path()
+    if state.loop_set_up():
+        return f"loop: set up (backlog {backlog})"
+    return (
+        f"loop: not set up - run `ccst self-improvement init` to create {backlog} with a "
+        "`## Inbox` section; until then the nudge, the headless review and the FAIL "
+        "notification stay quiet"
+    )
 
 
 def status_lines(state_dir: Path) -> list[str]:
-    out = [f"state directory: {state_dir}"]
+    out = [
+        setup_line(),
+        f"review command: {signals.review_command()}",
+        f"state directory: {state_dir}",
+    ]
     snapshot = state.read_text(state_dir / state.SIGNALS_FILE)
     if snapshot is None:
         out.append("snapshot: none (run `ccst self-improvement collect-signals`)")
