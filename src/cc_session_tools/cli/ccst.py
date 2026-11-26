@@ -1416,7 +1416,7 @@ def _cmd_pdata_search(args: argparse.Namespace) -> int:
             count_only=args.count_only,
         ))
     except ValueError as exc:
-        print(f"ccst pdata search: {exc}", file=sys.stderr)
+        print(f"ccst pdata: {exc}", file=sys.stderr)
         return 2
     if args.count_only:
         sys.stdout.write(
@@ -3620,7 +3620,8 @@ def _build_parser() -> argparse.ArgumentParser:
     pdata_search_parser.add_argument(
         "--fields", default=None, metavar="F1,F2",
         help="Fields --text/--regex searches (default: content, file_path and every TEXT "
-             "extension field)",
+             "extension field). A group with none of the named fields has nothing to match, so "
+             "--not-text returns all of its rows",
     )
     pdata_search_parser.add_argument(
         "--where", action="append", default=[], metavar="'<field> <op> <value>'",

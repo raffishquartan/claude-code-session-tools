@@ -413,3 +413,69 @@ def test_date_field_must_exist():
     with pytest.raises(ValueError, match=r"unknown --date-field field 'nosuch'"):
         search.run(_req(date_field="nosuch", since="2026-01-01"))
 
+
+
+# --- review fixes -----------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "message"),
+    [
+        ({"date_field": "created_at", "until": "9999-12-31"}, "--until 9999-12-31"),
+        ({"date_field": "created_at", "since": "0001-01-01"}, "--since 0001-01-01"),
+    ],
+)
+def test_out_of_range_epoch_dates_are_rejected_naming_the_flag(kwargs, message):
+    _add("notes", "x")
+    with pytest.raises(ValueError, match=message):
+        search.run(_req(**kwargs))
+
+
+def test_far_dates_work_on_text_date_fields():
+    _field("notes", "sent_date:TEXT")
+    _add("notes", "x", sent_date="2026-01-01")
+    result = search.run(_req(date_field="sent_date", since="0001-01-01", until="9999-12-31"))
+    assert _contents(result) == ["x"]
+
+
+def test_empty_regex_is_rejected():
+    with pytest.raises(ValueError, match="--regex"):
+        _req(regex="")
+
+
+def test_search_does_not_write_to_the_store():
+    _add("notes", "alice")
+    path = store.db_path(_PROJECT)
+    import sqlite3
+    conn = sqlite3.connect(path)
+    conn.execute("DROP TABLE pdata_meta")
+    conn.commit()
+    conn.close()
+    assert len(search.run(_req(text="alice")).rows) == 1
+    conn = sqlite3.connect(path)
+    tables = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+    conn.close()
+    assert "pdata_meta" not in tables
+
+
+def test_group_with_schema_but_no_records_is_searchable():
+    _add("notes", "x")
+    _field("letters", "sender:TEXT")
+    assert search.run(_req(groups=("letters",), text="x")).rows == []
+
+
+def test_snippet_cuts_unmatched_numeric_field():
+    _field("notes", "amount:INTEGER")
+    _add("notes", "alice", amount="123456")
+    row = search.run(_req(text="alice", snippet=2, fields=("content", "amount"))).rows[0]
+    assert row["amount"] == "12..."
+
+
+def test_not_text_returns_every_row_of_a_group_without_the_searched_field():
+    _field("notes", "sender:TEXT")
+    _add("notes", "a", sender="alice")
+    _add("letters", "alice")
+    result = search.run(
+        _req(groups=("notes", "letters"), text="alice", fields=("sender",), not_text=True),
+    )
+    assert [r["record_group"] for r in result.rows] == ["letters"]

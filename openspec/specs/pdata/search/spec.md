@@ -17,7 +17,7 @@ Defines `ccst pdata search`, the read-only verb for finding records by text, reg
 - **THEN** the command exits non-zero naming `example`, and no store file exists afterwards
 
 ### Requirement: Groups are searched together and named in each row
-`--group` SHALL be repeatable; every named group is searched in one call, and every result row SHALL carry its `record_group`. A group that does not exist in the store SHALL be rejected with an error listing the groups that do.
+`--group` SHALL be repeatable; every named group is searched in one call, and every result row SHALL carry its `record_group`. A group that has neither records nor an extension table SHALL be rejected with an error listing the groups that have records; a group with a schema but no records is searched and yields nothing.
 
 #### Scenario: Multi-group search
 - **WHEN** groups `notes` and `letters` each have one record mentioning `alice` and the search is `--group notes --group letters --text alice`
@@ -28,7 +28,7 @@ Defines `ccst pdata search`, the read-only verb for finding records by text, reg
 - **THEN** the command exits 2 with an error naming `nosuch` and the existing groups
 
 ### Requirement: Text and regex matching
-`--text S` SHALL match a record when S occurs as a substring of any searched field; `--regex P` SHALL match when the regular expression P finds a match in any searched field. Both SHALL be case-insensitive unless `--case-sensitive` is given. `--not-text` SHALL invert the predicate, matching records where no searched field matches. The searched fields SHALL default to `content`, `file_path` and every TEXT extension field of the group; `--fields f1,f2` SHALL restrict the search to the named fields. Null fields never match.
+`--text S` SHALL match a record when S occurs as a substring of any searched field; `--regex P` SHALL match when the regular expression P finds a match in any searched field. Both SHALL be case-insensitive unless `--case-sensitive` is given. `--not-text` SHALL invert the predicate, matching records where no searched field matches. The searched fields SHALL default to `content`, `file_path` and every TEXT extension field of the group; `--fields f1,f2` SHALL restrict the search to the named fields. Null fields never match. A group that has none of the `--fields` has nothing to match, so a positive search returns none of its rows and `--not-text` returns all of them.
 
 #### Scenario: Case-insensitive substring by default
 - **WHEN** a record's content is `Met Alice today` and the search is `--text alice`
@@ -55,7 +55,7 @@ Defines `ccst pdata search`, the read-only verb for finding records by text, reg
 - **THEN** only the `beta` record is returned
 
 ### Requirement: Structured and date filters
-Repeatable `--where '<field> <op> <value>'` SHALL behave exactly as in `ccst pdata query`, including stripping one pair of surrounding quotes from the value, and is ANDed with every other predicate. `--since D` and `--until D` SHALL keep records whose `--date-field` falls on or after / on or before the ISO date D (yyyy-MM-dd), inclusive. For a TEXT date field the first ten characters are compared as an ISO date; for `created_at`, `updated_at` and INTEGER or REAL extension fields the value is a Unix epoch compared against the local-time start or end of day D.
+Repeatable `--where '<field> <op> <value>'` SHALL behave exactly as in `ccst pdata query`, including stripping one pair of surrounding quotes from the value, and is ANDed with every other predicate. `--since D` and `--until D` SHALL keep records whose `--date-field` falls on or after / on or before the ISO date D (yyyy-MM-dd), inclusive. For a TEXT date field the first ten characters are compared as an ISO date; for `created_at`, `updated_at` and INTEGER or REAL extension fields the value is a Unix epoch compared against the local-time start or end of day D, and a date whose bound cannot be expressed as an epoch SHALL be rejected naming the flag.
 
 #### Scenario: --where reuses query semantics
 - **WHEN** records have extension field `status` `open` and `closed` and the search is `--text invoice --where "status = 'open'"`
@@ -111,7 +111,7 @@ A search that matches nothing SHALL exit 0 and print `[]` for JSON, only the hea
 - **THEN** the output is the header row only and the exit code is 0
 
 ### Requirement: Contradictory or empty requests are rejected
-The verb SHALL exit 2 with a message naming the problem, before reading any record, when: no predicate is given (none of `--text`, `--regex`, `--where`, `--since`, `--until`); `--text` and `--regex` are both given; the regex does not compile; `--case-sensitive`, `--not-text`, `--fields` or `--snippet` are given without `--text` or `--regex`; `--snippet` is combined with `--not-text` or `--count-only`; `--count-only` is combined with `--select`, `--sort`, `--desc` or `--limit`; `--desc` is given without `--sort`; `--since` or `--until` is given without `--date-field`, or `--date-field` without either; `--since` is later than `--until`; `--limit` or `--snippet` is not a positive integer; or a named field is unknown. Unknown-field errors SHALL list the valid fields. A field named in `--where`, `--sort` or `--date-field` SHALL exist in every searched group; a field named in `--fields` or `--select` SHALL exist in at least one.
+The verb SHALL exit 2 with a message naming the problem, before reading any record, when: no predicate is given (none of `--text`, `--regex`, `--where`, `--since`, `--until`); `--text` and `--regex` are both given or either is empty; the regex does not compile; `--case-sensitive`, `--not-text`, `--fields` or `--snippet` are given without `--text` or `--regex`; `--snippet` is combined with `--not-text` or `--count-only`; `--count-only` is combined with `--select`, `--sort`, `--desc` or `--limit`; `--desc` is given without `--sort`; `--since` or `--until` is given without `--date-field`, or `--date-field` without either; `--since` is later than `--until`; `--limit` or `--snippet` is not a positive integer; or a named field is unknown. Unknown-field errors SHALL list the valid fields. A field named in `--where`, `--sort` or `--date-field` SHALL exist in every searched group; a field named in `--fields` or `--select` SHALL exist in at least one.
 
 #### Scenario: No predicate
 - **WHEN** the search is `--project example --group notes` with no other filter

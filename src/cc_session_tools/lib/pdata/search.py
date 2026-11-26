@@ -3,7 +3,7 @@ groups of a project.
 
 Validation lives here in two places only: SearchRequest.__post_init__ checks everything that
 needs no store (conflicting or empty flags, regex syntax, date syntax), so a bad request fails
-before any file is opened; _plan_group checks names against each group's schema. Each group is
+before any file is opened; _plan_groups checks names against each group's schema. Each group is
 then searched with one SQL statement that filters, orders and limits; text and regex matching
 run inside that statement through a Python function registered on the connection, so only
 matching rows are fetched."""
@@ -15,6 +15,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import date, datetime, time, timedelta
 
+from cc_session_tools.lib import db
 from cc_session_tools.lib.pdata import naming, repository, service, store
 
 _MATCH_FUNCTION = "pdata_search_match"
@@ -71,8 +72,8 @@ class SearchRequest:
 
         if self.text is not None and self.regex is not None:
             raise ValueError("give --text or --regex, not both")
-        if self.text == "":
-            raise ValueError("--text must not be empty")
+        if self.text == "" or self.regex == "":
+            raise ValueError("--text and --regex must not be empty")
         has_text = self.text is not None or self.regex is not None
         for flag, given in (
             ("--case-sensitive", self.case_sensitive), ("--not-text", self.not_text),
@@ -172,7 +173,8 @@ def _plan_groups(
 ) -> tuple[list[_GroupPlan], dict[str, dict[str, str]]]:
     existing = sorted(str(g["record_group"]) for g in repository.list_record_groups(conn))
     for group in request.groups:
-        if group not in existing:
+        # A group with a schema but no records yet is empty, not unknown (as for `query`).
+        if group not in existing and not repository.extension_table_exists(conn, group):
             raise ValueError(
                 f"unknown group {group!r} in project {request.project!r}; existing groups: "
                 f"{', '.join(existing) or '(none)'}"
@@ -225,8 +227,17 @@ def _plan_groups(
     return plans, types
 
 
-def _local_midnight(day: date) -> int:
-    return int(datetime.combine(day, time()).timestamp())
+def _local_midnight(flag: str, day: date, *, next_day: bool = False) -> int:
+    """Epoch seconds of local midnight starting `day` (or the day after it), for comparing an
+    epoch date field. Years at the edge of the calendar have no representable bound."""
+    try:
+        start = day + timedelta(days=1) if next_day else day
+        return int(datetime.combine(start, time()).timestamp())
+    except (OverflowError, OSError, ValueError) as exc:
+        raise ValueError(
+            f"{flag} {day.isoformat()} is outside the range an epoch date field can be "
+            f"compared with"
+        ) from exc
 
 
 def _where_sql(
@@ -254,10 +265,10 @@ def _where_sql(
         else:
             if request.since_day is not None:
                 clauses.append(f"{ref} >= ?")
-                params.append(_local_midnight(request.since_day))
+                params.append(_local_midnight("--since", request.since_day))
             if request.until_day is not None:
                 clauses.append(f"{ref} < ?")
-                params.append(_local_midnight(request.until_day + timedelta(days=1)))
+                params.append(_local_midnight("--until", request.until_day, next_day=True))
     return " AND ".join(clauses), params
 
 
@@ -286,8 +297,6 @@ def _snippet(value: object, pattern: re.Pattern[str], width: int) -> object:
     text = str(value)
     match = pattern.search(text)
     if match is None:
-        if not isinstance(value, str):
-            return value
         return text[:width] + _ELLIPSIS if len(text) > width else text
     start = max(0, match.start() - width)
     end = min(len(text), match.end() + width)
@@ -312,7 +321,8 @@ def _match_function(pattern: re.Pattern[str]) -> Callable[..., int]:
 def run(request: SearchRequest) -> SearchResult:
     if not store.db_path(request.project).exists():
         raise ValueError(f"project {request.project!r} has no pdata store")
-    conn = repository.connect(request.project)
+    # Read-only handle: repository.connect would run the schema DDL, a write.
+    conn = db.connect(store.db_path(request.project), readonly=True)
     try:
         if request.pattern is not None:
             conn.create_function(
