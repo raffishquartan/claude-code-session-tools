@@ -29,7 +29,7 @@ The `YYYYMMDD-` start-date prefix is **immutable** in all cases. Every other par
 ## When NOT to use
 
 - Cleaning up old hook-security-check transcripts - that is the `clean-hook-sessions` skill.
-- Moving a session to a *fresh* directory that does not yet exist - first ensure the destination cwd exists on disk and is a direct subdir of one of the roots in `~/.claude/cc-session-roots.txt`.
+- Moving a session to a *fresh* directory that does not yet exist - first ensure the destination cwd exists on disk and is a direct subdir of one of the session roots (`CLAUDE_SESSION_TOOLS_REPO_ROOT` or `CLAUDE_SESSION_TOOLS_PROJ_ROOT`).
 - Changing only the *picker display name* without touching the cc-sessions directory - that is Claude Code's built-in rename command, not this skill.
 
 ## Defaults and safety
@@ -120,7 +120,7 @@ ccst move-session \
 | Flag | Meaning |
 |------|---------|
 | `--src-session` | Path to source `cc-sessions/<tag>/` directory (the one with `working/` and `out/`). Required. |
-| `--dst-cwd` | Path to destination working directory. Optional if `--rename-tag` is given. Must be a direct subdirectory of one of the roots in `~/.claude/cc-session-roots.txt` (same file `ccd` reads). |
+| `--dst-cwd` | Path to destination working directory. Optional if `--rename-tag` is given. Must be a direct subdirectory of one of the session roots (`CLAUDE_SESSION_TOOLS_REPO_ROOT` or `CLAUDE_SESSION_TOOLS_PROJ_ROOT`, the same roots `ccd` uses). |
 | `--rename-tag` | New tag for the cc-sessions directory. Original `YYYYMMDD-` prefix MUST be preserved (immutable). May be combined with `--dst-cwd` to rename and move atomically. |
 | `--uuid` | Disambiguate when multiple jsonls match the source session. Optional. |
 | `--include-memory` | Also copy `memory/` into the destination project key dir (only meaningful when `--dst-cwd` changes the project key). Default: off. |
@@ -148,7 +148,7 @@ At least one of `--dst-cwd` or `--rename-tag` must be supplied. The combination 
 
 ## Destination cwd validation
 
-`--dst-cwd <path>` must be a **direct subdirectory** of a root listed in `~/.claude/cc-session-roots.txt` (after `readlink -f`). This is the same data file `ccd` reads, so the rule is identical. To allow a new root, edit that file (it has comments explaining the format).
+`--dst-cwd <path>` must be a **direct subdirectory** of a session root (after `readlink -f`). The roots are the directories named by the `CLAUDE_SESSION_TOOLS_REPO_ROOT` (loose) and `CLAUDE_SESSION_TOOLS_PROJ_ROOT` (strict) environment variables, the same ones `ccd` reads, so the rule is identical. If neither is set, or one points at a missing path or a file, the script fails with a `[CST-ROOTS-CONFIG-ERROR]` message saying which.
 
 **Strict-root rules.** When the resolved destination root is the strict root (the one `CLAUDE_SESSION_TOOLS_PROJ_ROOT` names), two additional rules apply:
 

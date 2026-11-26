@@ -929,7 +929,7 @@ def tag_change_note(old_tag: str, new_tag: str, dst_project: str) -> str:
 def main() -> int:
     ap = argparse.ArgumentParser(description="Move and/or rename a Claude Code session")
     ap.add_argument("--src-session", required=True, help="Path to source cc-sessions/<tag>/ directory")
-    ap.add_argument("--dst-cwd", help="Path to destination working directory. Optional if --rename-tag is given. Must be a direct subdir of a root listed in ~/.claude/cc-session-roots.txt.")
+    ap.add_argument("--dst-cwd", help="Path to destination working directory. Optional if --rename-tag is given. Must be a direct subdir of a session root ($CLAUDE_SESSION_TOOLS_REPO_ROOT or $CLAUDE_SESSION_TOOLS_PROJ_ROOT).")
     ap.add_argument("--rename-tag", help="New tag for the cc-sessions directory. Original YYYYMMDD- prefix MUST be preserved. May be combined with --dst-cwd to rename and move at once.")
     ap.add_argument("--uuid", help="Disambiguate when multiple jsonls match")
     ap.add_argument("--include-memory", action="store_true", help="Also copy ~/.claude/projects/<src-key>/memory/")
