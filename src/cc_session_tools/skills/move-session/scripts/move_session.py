@@ -1199,28 +1199,42 @@ def main() -> int:
         print(f"  {tag_note}")
 
     # Paths this run creates before verification, in creation order, so a
-    # failed verification can remove exactly these and nothing that existed
-    # before. The clobber check above proved the session dir and dst jsonl
-    # did not exist; their parents are recorded only when this run makes them.
+    # failed copy or verification can remove exactly these and nothing that
+    # existed before. The clobber check above proved the session dir and dst
+    # jsonl did not exist; their parents are recorded only when this run
+    # makes them.
     created: list[Path] = []
-    if not dst_session_dir.parent.exists():
-        created.append(dst_session_dir.parent)
-    dst_session_dir.parent.mkdir(parents=True, exist_ok=True)
-    created.append(dst_session_dir)
-    shutil.copytree(src_session_dir, dst_session_dir)
-    print(f"  copied {src_session_dir} -> {dst_session_dir}")
+    try:
+        if not dst_session_dir.parent.exists():
+            created.append(dst_session_dir.parent)
+        dst_session_dir.parent.mkdir(parents=True, exist_ok=True)
+        created.append(dst_session_dir)
+        shutil.copytree(src_session_dir, dst_session_dir)
+        print(f"  copied {src_session_dir} -> {dst_session_dir}")
+
+        if cwd_changed:
+            if not dst_key_dir.exists():
+                created.append(dst_key_dir)
+            dst_key_dir.mkdir(parents=True, exist_ok=True)
+            created.append(dst_jsonl)
+            shutil.copyfile(src_jsonl, dst_jsonl)
+            print(f"  copied {src_jsonl} -> {dst_jsonl}")
+            counts = rewrite_jsonl_paths(dst_jsonl, replacements)
+            for old, new in replacements:
+                print(f"  rewrote {counts[old]:>4} occurrences: {old!r} -> {new!r}")
+    except BaseException as e:
+        # Includes KeyboardInterrupt, so an interrupted copy is not left half
+        # written either; only an Exception is reported as a plain failure.
+        print()
+        print(f"COPY: FAIL - {type(e).__name__}: {e}")
+        print("Rolling back what this run created (the source is untouched):")
+        if rollback_created(created, dst_session_dir):
+            print("Rollback complete. Fix the cause and re-run the same command.")
+        if not isinstance(e, Exception):
+            raise
+        return 1
 
     if cwd_changed:
-        if not dst_key_dir.exists():
-            created.append(dst_key_dir)
-        dst_key_dir.mkdir(parents=True, exist_ok=True)
-        created.append(dst_jsonl)
-        shutil.copyfile(src_jsonl, dst_jsonl)
-        print(f"  copied {src_jsonl} -> {dst_jsonl}")
-        counts = rewrite_jsonl_paths(dst_jsonl, replacements)
-        for old, new in replacements:
-            print(f"  rewrote {counts[old]:>4} occurrences: {old!r} -> {new!r}")
-
         # Verify before anything else is written (memory, tombstone, labels,
         # sessions.db), so a failure has only the copies above to undo.
         print()

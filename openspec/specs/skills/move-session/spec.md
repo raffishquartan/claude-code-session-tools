@@ -149,6 +149,10 @@ When strict verification fails during `--execute`, the script SHALL remove every
 - **WHEN** strict verification fails during `--execute`
 - **THEN** the exit code is 1, the output lists each removed path, the destination session directory and destination transcript no longer exist, and the source transcript and source session directory are byte-for-byte unchanged
 
+#### Scenario: Copy step raises
+- **WHEN** an exception is raised while `--execute` copies the session directory or the transcript, or rewrites the destination transcript
+- **THEN** the script prints `COPY: FAIL` with the exception, removes every path that run created as for a failed verification, leaves the source untouched and exits with status 1 (an interrupt is re-raised after the rollback)
+
 #### Scenario: Re-run after rollback
 - **WHEN** the same command is run again after a rolled-back failure
 - **THEN** the clobber check does not reject it

@@ -1293,6 +1293,38 @@ class TestFailedVerifyRollsBack:
         assert not _key_dir(tmp_home, dst_cwd).exists()
 
 
+class TestCopyFailureRollsBack:
+    """An exception during the copy (here an unreadable file in the session
+    directory) removes what the run created, exactly as a failed verification
+    does, and leaves the source untouched."""
+
+    @pytest.mark.skipif(os.geteuid() == 0, reason="root can read a mode-000 file")
+    def test_copy_error_rolls_back(
+            self, tmp_home, projects_root, roots_file, make_session):
+        src_dir, src_jsonl, uuid = make_session("src-proj", "20260503-source")
+        unreadable = src_dir / "working" / "locked.txt"
+        unreadable.write_text("x\n")
+        unreadable.chmod(0)
+        src_before = src_jsonl.read_bytes()
+        dst_cwd = projects_root / "dst-proj"
+        dst_cwd.mkdir()
+        try:
+            rc, out, err = _run(
+                "--src-session", str(src_dir), "--dst-cwd", str(dst_cwd),
+                "--uuid", uuid, "--execute", env={"HOME": str(tmp_home)},
+            )
+        finally:
+            unreadable.chmod(0o600)
+        assert rc == 1, f"{err}\n{out}"
+        assert "COPY: FAIL" in out
+        dst_session_dir = dst_cwd / "cc-sessions" / "20260503-source"
+        assert f"removed {dst_session_dir}" in out
+        assert not (dst_cwd / "cc-sessions").exists()
+        assert not _key_dir(tmp_home, dst_cwd).exists()
+        assert src_jsonl.read_bytes() == src_before
+        assert "Traceback" not in err
+
+
 class TestStrictRootAutoRename:
     """A MOVE into a strict-root project whose only failure is the tag-prefix
     rule derives a compliant tag and continues as MOVE+RENAME."""

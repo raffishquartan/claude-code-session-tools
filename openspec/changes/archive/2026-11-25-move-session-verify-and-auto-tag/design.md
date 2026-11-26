@@ -10,7 +10,7 @@ See proposal.md - Why. `move_session.py` builds an ordered list of path-string r
 - A MOVE into a strict-root project with a non-compliant tag succeeds with a clearly reported derived tag.
 
 **Non-Goals:**
-- Rolling back on arbitrary exceptions mid-execute (copy errors, disk full). Only the verification failure path, which is the reported half-done state, is covered.
+- Rolling back on exceptions after verification has passed (memory copy, tombstone, sessions.db). Review follow-up: an exception during the copy and rewrite step (copy errors, disk full, interruption) rolls back like a failed verification.
 - Smarter tag derivation (fuzzy prefix matching, synonyms). The rule is deliberately mechanical.
 - Changing the shared `check_session_destination()` contract used by `ccd`.
 
