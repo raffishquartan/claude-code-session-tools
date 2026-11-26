@@ -30,7 +30,13 @@ is ambiguous**:
    only sessions opened with `ccd`/`ccr`; for any other session pass the full uuid. `ccmsg read`
    prints the sender's full uuid on its `from_uuid:` line, so you can reply to a session you know
    only from a message.
-2. `--to-project <name>` - any session in a named project.
+2. `--to-project <name|path>` - any session in a project. Give the project name, or an
+   absolute or `~`-prefixed path to the project folder or any folder inside it (for
+   example a `cc-sessions/<tag>` folder); a path is resolved to the project folder that
+   contains it, and the message reaches sessions started in that project folder (a
+   session started in a subfolder, such as a worktree, is not one of them). A relative
+   path (including `.` and `..`), or a path that is not inside any project under a configured session root, exits
+   2 and stores nothing.
 3. `--to-description "<text>"` - "whoever is working on X". Surfaced to candidate
    sessions; one claims it.
 
@@ -56,8 +62,19 @@ ccmsg send --to-project <name> --subject "<subject>" --body "<body>"
 ```
 
 Subject and body are required (`--body` or `--body-file`); exactly one recipient
-kind is required; attachments are absolute paths. The `--from-*`/`--to-partition`
-flags exist only as overrides for tests or non-Claude-Code callers.
+kind is required; attachments are absolute paths.
+
+Prefer `--body-file` for anything longer than a sentence or two, or for a body that
+quotes commands or code. PreToolUse Bash hooks match the full command text, so an
+inline `--body` that merely mentions a blocked command can get the whole send
+blocked. Write the body to a file under the session's `working/` folder (when the
+session has one) and pass that path:
+
+```
+ccmsg send --to-project <name> --subject "<subject>" --body-file <working-dir>/msg-body.md
+```
+
+The `--from-*`/`--to-partition` flags exist only as overrides for tests or non-Claude-Code callers.
 
 ## Receiving a description-addressed proposal
 

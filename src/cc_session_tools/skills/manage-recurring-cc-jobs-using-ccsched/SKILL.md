@@ -25,6 +25,9 @@ Disambiguate before doing anything:
 If the user wants away-from-laptop delivery (e.g. a phone push), `ccsched` cannot
 do it - that needs an always-on host. Say so.
 
+`ccsched` has no one-shot form. For a single future-dated reminder use `/schedule`
+with a run-once time: it runs server-side and can email the user.
+
 ## Translate the request into `ccsched add`
 
 Map the natural-language cadence to the grammar:

@@ -282,7 +282,9 @@ ccmsg unarchive <id>  # restore archived messages that were never claimed
 
 Three ways to address a message:
 
-- `--to-project <name>` - any session in that project (by far the most common).
+- `--to-project <name or path>` - any session in that project (by far the most common). A
+  path such as `~/repos/myproject` or a folder inside it resolves to the project; a path
+  inside no known project is rejected and nothing is stored.
 - `--to-session <session name or uuid prefix>` - one specific session, for example
   `--to-session 20261015-fix-login-bug` or `--to-session 3f9c1a2b`. An ambiguous or unknown
   reference is rejected and nothing is stored.

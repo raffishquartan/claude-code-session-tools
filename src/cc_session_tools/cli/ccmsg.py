@@ -10,6 +10,7 @@ import json
 import os
 import sqlite3
 import sys
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -20,29 +21,69 @@ from cc_session_tools.lib.messaging.addressing import SessionContext
 from cc_session_tools.lib.messaging.lock import AlreadyClaimedError
 from cc_session_tools.lib.messaging.message import ToKind
 from cc_session_tools.lib.messaging.session_ref import resolve_session_ref
+from cc_session_tools.lib.roots import RootsConfigError
+
+
+STATUS_HELP = """\
+Message statuses:
+  sent      Stored and not yet shown to a recipient. A description-addressed
+            message stays sent until a session claims it.
+  read      A session-start or prompt digest showed a session- or
+            project-addressed message to its recipient (`ccmsg read` does not
+            change status). Read messages are listed again at every session
+            start under "Read but not yet handled" until claimed or archived.
+  claimed   `ccmsg claim` marked the message handled. The first claim wins:
+            a claimed project message stops listing for every session of the
+            project, and a description-addressed message goes to one session.
+  archived  `ccmsg archive` discarded the message, or retention archived a
+            claimed message once 14 days have passed since its claim.
+            Unclaimed (sent or read) messages are never archived
+            automatically.
+
+`ccmsg unarchive` restores an archived message that was never claimed: back to
+read if it had been read, otherwise back to sent. A claimed message cannot be
+restored."""
+
+BODY_FILE_HELP = """\
+For a long or code-like body, write it to a file (for example under the
+session's working/ folder) and pass --body-file instead of --body.
+PreToolUse Bash hooks match the full command text, so an inline --body that
+merely mentions a blocked command can get the whole send blocked."""
 
 
 def _build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="ccmsg",
         description="Send and read messages between Claude Code sessions.",
+        epilog=STATUS_HELP,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     p.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     sub = p.add_subparsers(dest="command", metavar="<command>")
 
-    send_p = sub.add_parser("send", help="Compose and route a message.")
+    send_p = sub.add_parser(
+        "send", help="Compose and route a message.",
+        epilog=BODY_FILE_HELP, formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
     rcpt = send_p.add_argument_group("recipient (exactly one)")
     rcpt.add_argument(
         "--to-session", metavar="UUID|NAME|PREFIX",
         help="a session uuid, a session name (YYYYMMDD-<tag>) or a uuid prefix of 8+ hex "
              "characters; names and prefixes are resolved in the sessions store",
     )
-    rcpt.add_argument("--to-project", metavar="NAME")
+    rcpt.add_argument(
+        "--to-project", metavar="NAME|PATH",
+        help="a project name, or an absolute or ~-prefixed path to a project folder or any "
+             "folder inside one; a path resolves to the project folder that contains it, "
+             "and reaches sessions started in that project folder",
+    )
     rcpt.add_argument("--to-description", metavar="TEXT")
     send_p.add_argument("--subject", required=True)
     body = send_p.add_mutually_exclusive_group(required=True)
     body.add_argument("--body")
-    body.add_argument("--body-file", type=Path)
+    body.add_argument("--body-file", type=Path,
+                      help="read the body from this file (preferred for long or code-like "
+                           "bodies, see below)")
     send_p.add_argument("--attach", action="append", default=[], metavar="PATH")
     send_p.add_argument("--thread", default=None, metavar="ID")
     # Sender + routing context. All optional: by default the sender uuid comes
@@ -61,7 +102,10 @@ def _build_parser() -> argparse.ArgumentParser:
     read_p = sub.add_parser("read", help="Print one message body and metadata.")
     read_p.add_argument("id")
 
-    list_p = sub.add_parser("list", help="List messages (compact).")
+    list_p = sub.add_parser(
+        "list", help="List messages (compact).",
+        epilog=STATUS_HELP, formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
     list_p.add_argument("--status", default=None)
     list_p.add_argument("--partition", default=None)
     list_p.add_argument("--from-uuid", default=None)
@@ -93,7 +137,31 @@ def _build_parser() -> argparse.ArgumentParser:
     return p
 
 
-def _resolve_recipient(args: argparse.Namespace) -> tuple[ToKind, str]:
+@dataclass(frozen=True)
+class _Recipient:
+    kind: ToKind
+    value: str
+    # Set when --to-project was given as a path: the resolved project folder, whose
+    # partition is the one a session started there sweeps.
+    project_dir: Path | None = None
+
+
+def _project_from_path(raw: str) -> _Recipient:
+    try:
+        project_dir = store.project_dir_for_path(Path(raw).expanduser())
+    except (RuntimeError, OSError, RootsConfigError) as exc:
+        # expanduser raises RuntimeError for an unknown ~user; resolve can raise on a
+        # symlink loop; unset or misconfigured session roots raise RootsConfigError.
+        raise ValueError(f"cannot resolve --to-project path {raw}: {exc}") from exc
+    if project_dir is None:
+        raise ValueError(
+            f"--to-project path matches no known project: {raw} (a project is a folder "
+            "directly under a configured session root, or any folder inside one)"
+        )
+    return _Recipient("project", project_dir.name, project_dir)
+
+
+def _resolve_recipient(args: argparse.Namespace) -> _Recipient:
     options: list[tuple[ToKind, str | None]] = [
         ("session", args.to_session),
         ("project", args.to_project),
@@ -111,7 +179,14 @@ def _resolve_recipient(args: argparse.Namespace) -> tuple[ToKind, str]:
             val, find_by_name=sessions_db.find_exact,
             find_by_prefix=sessions_db.find_by_uuid_prefix,
         )
-    return kind, val
+    if kind == "project" and val.startswith(("/", "~")):
+        return _project_from_path(val)
+    if kind == "project" and ("/" in val or val in (".", "..")):
+        raise ValueError(
+            f"--to-project takes a project name or an absolute or ~-prefixed path, "
+            f"not a relative path: {val}"
+        )
+    return _Recipient(kind, val)
 
 
 def _resolve_body(args: argparse.Namespace) -> str:
@@ -153,17 +228,20 @@ def _resolve_sender(args: argparse.Namespace) -> tuple[str, str, str, str]:
     return from_uuid, from_session, from_project, from_partition
 
 
-def _resolve_to_partition(to_kind: ToKind, to_value: str, override: str | None) -> str:
+def _resolve_to_partition(recipient: _Recipient, override: str | None) -> str:
     """Where the message file is written so the recipient's sweep finds it.
 
     Project-addressed messages go to that project's partition (sessions there
-    sweep it). Session- and description-addressed messages go to ``_global``:
-    the sender cannot know a target session's partition, but every session
-    sweeps ``_global`` and ``addressing.targets`` matches by uuid / candidate."""
+    sweep it); for a path recipient that is the partition of the resolved
+    folder. Session- and description-addressed messages go to ``_global``: the
+    sender cannot know a target session's partition, but every session sweeps
+    ``_global`` and ``addressing.targets`` matches by uuid / candidate."""
     if override is not None:
         return override
-    if to_kind == "project":
-        return store.partition_for_project(to_value)
+    if recipient.project_dir is not None:
+        return store.partition_for_cwd(recipient.project_dir)
+    if recipient.kind == "project":
+        return store.partition_for_project(recipient.value)
     return store.GLOBAL_PARTITION
 
 
@@ -171,11 +249,11 @@ def _cmd_send(args: argparse.Namespace) -> int:
     try:
         if not args.subject.strip():
             raise ValueError("subject must not be empty")
-        to_kind, to_value = _resolve_recipient(args)
+        recipient = _resolve_recipient(args)
         body = _resolve_body(args)
         _validate_attachments(args.attach)
         from_uuid, from_session, from_project, from_partition = _resolve_sender(args)
-        to_partition = _resolve_to_partition(to_kind, to_value, args.to_partition)
+        to_partition = _resolve_to_partition(recipient, args.to_partition)
     except ValueError as exc:
         print(f"ccmsg: {exc}", file=sys.stderr)
         return 2
@@ -183,8 +261,8 @@ def _cmd_send(args: argparse.Namespace) -> int:
         from_project=from_project,
         from_session=from_session,
         from_uuid=from_uuid,
-        to_kind=to_kind,
-        to_value=to_value,
+        to_kind=recipient.kind,
+        to_value=recipient.value,
         to_partition=to_partition,
         subject=args.subject,
         body=body,

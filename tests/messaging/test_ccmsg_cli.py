@@ -387,3 +387,145 @@ def test_unarchive_reports_a_message_held_by_a_concurrent_claim(
     monkeypatch.setattr(ccmsg.service, "unarchive", busy)
     assert ccmsg.main(["unarchive", "some-id"]) == 1
     assert "being claimed, try again: some-id" in capsys.readouterr().err
+
+
+_SENDER = ["--from-project", "o", "--from-session", "s", "--from-uuid", "u",
+           "--from-partition", "projects/o"]
+
+
+def _status_block(help_text: str) -> str:
+    start = help_text.index("Message statuses:")
+    return help_text[start:]
+
+
+@pytest.mark.parametrize("args", [["--help"], ["list", "--help"]])
+def test_help_defines_every_status(tmp_path: Path, args: list[str]) -> None:
+    res = _run(args, tmp_path)
+    assert res.returncode == 0, res.stderr
+    block = _status_block(res.stdout)
+    for status in ("sent", "read", "claimed", "archived"):
+        assert f"\n  {status}" in block, status
+    flat = " ".join(block.split())
+    for phrase in ("Read but not yet handled", "first claim wins", "14 days",
+                   "never archived automatically", "ccmsg unarchive"):
+        assert phrase in flat, phrase
+
+
+def test_top_level_and_list_help_share_status_text(tmp_path: Path) -> None:
+    top = _status_block(_run(["--help"], tmp_path).stdout)
+    lst = _status_block(_run(["list", "--help"], tmp_path).stdout)
+    assert top == lst
+
+
+def test_send_help_recommends_body_file(tmp_path: Path) -> None:
+    res = _run(["send", "--help"], tmp_path)
+    assert res.returncode == 0, res.stderr
+    text = " ".join(res.stdout.split())
+    assert "--body-file" in text
+    assert "hooks" in text
+
+
+def _path_env(tmp_path: Path) -> tuple[dict[str, str], Path]:
+    home = tmp_path / "home"
+    proj = home / "proj"
+    (proj / "alpha" / "cc-sessions" / "20260101-alpha-x").mkdir(parents=True)
+    (home / "elsewhere").mkdir()
+    return {"HOME": str(home), "CLAUDE_SESSION_TOOLS_PROJ_ROOT": str(proj),
+            "CLAUDE_SESSION_TOOLS_REPO_ROOT": ""}, proj
+
+
+def _send_to_project(tmp_path: Path, value: str, env: dict[str, str]):
+    return _run(["send", "--to-project", value, "--subject", "S", "--body", "B", *_SENDER],
+                tmp_path / "store", env)
+
+
+def _listing(tmp_path: Path, env: dict[str, str]) -> str:
+    res = _run(["list", "--partition", "projects/alpha"], tmp_path / "store", env)
+    assert res.returncode == 0, res.stderr
+    return res.stdout
+
+
+@pytest.mark.parametrize("ref", ["abs", "tilde", "subfolder", "name"])
+def test_send_to_project_accepts_path_or_name(tmp_path: Path, ref: str) -> None:
+    env, proj = _path_env(tmp_path)
+    value = {
+        "abs": str(proj / "alpha"),
+        "tilde": "~/proj/alpha",
+        "subfolder": str(proj / "alpha" / "cc-sessions" / "20260101-alpha-x"),
+        "name": "alpha",
+    }[ref]
+    res = _send_to_project(tmp_path, value, env)
+    assert res.returncode == 0, res.stderr
+    assert "project=alpha " in _listing(tmp_path, env)
+
+
+def test_send_to_project_unknown_path_errors(tmp_path: Path) -> None:
+    env, _ = _path_env(tmp_path)
+    res = _send_to_project(tmp_path, "~/elsewhere", env)
+    assert res.returncode == 2
+    assert "~/elsewhere" in res.stderr
+    assert "no known project" in res.stderr
+    assert _run(["list"], tmp_path / "store", env).stdout == ""
+
+
+def test_send_to_project_path_under_loose_root(tmp_path: Path) -> None:
+    env, _ = _path_env(tmp_path)
+    repos = tmp_path / "home" / "repos"
+    (repos / "beta" / "src").mkdir(parents=True)
+    env["CLAUDE_SESSION_TOOLS_REPO_ROOT"] = str(repos)
+    res = _send_to_project(tmp_path, "~/repos/beta/src", env)
+    assert res.returncode == 0, res.stderr
+    listing = _run(["list", "--partition", "repos/beta"], tmp_path / "store", env)
+    assert "project=beta " in listing.stdout
+
+
+def test_send_to_project_path_picks_the_root_it_names(tmp_path: Path) -> None:
+    env, proj = _path_env(tmp_path)
+    repos = tmp_path / "home" / "repos"
+    (repos / "alpha").mkdir(parents=True)
+    env["CLAUDE_SESSION_TOOLS_REPO_ROOT"] = str(repos)
+    res = _send_to_project(tmp_path, str(repos / "alpha"), env)
+    assert res.returncode == 0, res.stderr
+    listing = _run(["list", "--partition", "repos/alpha"], tmp_path / "store", env)
+    assert "project=alpha " in listing.stdout
+    assert _listing(tmp_path, env) == ""
+
+
+@pytest.mark.parametrize("value", ["~/proj", "~nosuchuser-ccmsg-test/x"])
+def test_send_to_project_rejects_root_or_unexpandable_path(tmp_path: Path, value: str) -> None:
+    env, _ = _path_env(tmp_path)
+    res = _send_to_project(tmp_path, value, env)
+    assert res.returncode == 2, res.stderr
+    assert value in res.stderr
+    assert "Traceback" not in res.stderr
+    assert _run(["list"], tmp_path / "store", env).stdout == ""
+
+
+def test_send_to_project_rejects_relative_path(tmp_path: Path) -> None:
+    env, _ = _path_env(tmp_path)
+    res = _send_to_project(tmp_path, "alpha/sub", env)
+    assert res.returncode == 2
+    assert "alpha/sub" in res.stderr
+    assert _run(["list"], tmp_path / "store", env).stdout == ""
+
+
+@pytest.mark.parametrize("value", ["..", "."])
+def test_send_to_project_rejects_dot_names(tmp_path: Path, value: str) -> None:
+    # '..' and '.' are relative paths with no slash, not project names.
+    env, _ = _path_env(tmp_path)
+    res = _send_to_project(tmp_path, value, env)
+    assert res.returncode == 2
+    assert "relative path" in res.stderr
+    assert _run(["list"], tmp_path / "store", env).stdout == ""
+
+
+def test_send_to_project_path_reports_roots_config_error(tmp_path: Path) -> None:
+    env, proj = _path_env(tmp_path)
+    env["CLAUDE_SESSION_TOOLS_REPO_ROOT"] = str(tmp_path / "missing-root")
+    res = _send_to_project(tmp_path, str(proj / "alpha"), env)
+    assert res.returncode == 2
+    assert "[CST-ROOTS-CONFIG-ERROR]" in res.stderr
+    assert "CLAUDE_SESSION_TOOLS_REPO_ROOT" in res.stderr
+    assert "no known project" not in res.stderr
+    assert "Traceback" not in res.stderr
+    assert _run(["list"], tmp_path / "store", env).stdout == ""
