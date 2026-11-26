@@ -1,7 +1,7 @@
 ## 1. Record-review command
 
-- [ ] 1.1 `state.append_log_line` and `state.interactive_line`; the headless logger uses `append_log_line`; verify with state tests
-- [ ] 1.2 `ccst self-improvement record-review --mode B|C --findings N --applied N --deferred N`; verify with CLI tests (line format, `CCST_DATA_HOME`, negative or missing count rejected, line counts as the last interactive review)
+- [x] 1.1 `state.append_log_line` and `state.interactive_line`; the headless logger uses `append_log_line`; verify with state tests
+- [x] 1.2 `ccst self-improvement record-review --mode B|C --findings N --applied N --deferred N`; verify with CLI tests (line format, `CCST_DATA_HOME`, negative or missing count rejected, line counts as the last interactive review)
 
 ## 2. Messages name the skill
 

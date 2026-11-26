@@ -6,7 +6,7 @@ import sys
 
 import pytest
 
-from .conftest import Env, iso_days_ago
+from .conftest import Env, days_ago, iso_days_ago
 
 
 def ccst(*args: str) -> subprocess.CompletedProcess[str]:
@@ -19,7 +19,7 @@ def ccst(*args: str) -> subprocess.CompletedProcess[str]:
 def test_help_lists_every_verb() -> None:
     proc = ccst("--help")
     assert proc.returncode == 0
-    for verb in ("collect-signals", "auto-review", "nudge", "status", "init"):
+    for verb in ("collect-signals", "auto-review", "nudge", "status", "init", "record-review"):
         assert verb in proc.stdout
 
 
@@ -138,3 +138,33 @@ def test_status_names_the_periodic_review_when_the_skill_is_installed(si: Env) -
     si.install_review_skill()
     out = ccst("status").stdout
     assert "interactive review: run /review-session-and-improve-claude-setup periodic" in out
+
+
+def test_record_review_appends_an_interactive_line(si: Env) -> None:
+    si.interactive_review(40)
+    proc = ccst("record-review", "--mode", "C", "--findings", "3", "--applied", "1", "--deferred", "2")
+    assert proc.returncode == 0, proc.stderr
+    last = si.last_log()
+    assert last.startswith(days_ago(0) + "T")
+    assert last.endswith(" mode=C findings=3 applied=1 deferred=2")
+    assert proc.stdout == last + "\n"
+    assert "last interactive review: " + last in ccst("status").stdout
+
+
+def test_record_review_creates_the_state_directory(si: Env) -> None:
+    assert not si.state.exists()
+    proc = ccst("record-review", "--mode", "B", "--findings", "0", "--applied", "0", "--deferred", "0")
+    assert proc.returncode == 0, proc.stderr
+    assert si.last_log().endswith(" mode=B findings=0 applied=0 deferred=0")
+
+
+@pytest.mark.parametrize("args", [
+    ("--mode", "auto", "--findings", "0", "--applied", "0", "--deferred", "0"),
+    ("--mode", "B", "--findings", "-1", "--applied", "0", "--deferred", "0"),
+    ("--mode", "B", "--findings", "x", "--applied", "0", "--deferred", "0"),
+    ("--mode", "B", "--findings", "0", "--applied", "0"),
+])
+def test_record_review_rejects_invalid_input_and_writes_nothing(si: Env, args: tuple[str, ...]) -> None:
+    proc = ccst("record-review", *args)
+    assert proc.returncode == 2
+    assert not si.state.exists()

@@ -86,3 +86,19 @@ def test_atomic_write_failure_leaves_target_and_no_temp(tmp_path: Path) -> None:
 
 def test_parse_env_never_executes_and_last_wins() -> None:
     assert state.parse_env("A=1\nA=$(rm -rf /)\ngarbage\n") == {"A": "$(rm -rf /)"}
+
+
+def test_interactive_line_is_read_back_as_the_last_review(si: Env) -> None:
+    line = state.interactive_line("B", findings=2, applied=1, deferred=0)
+    assert line.endswith(" mode=B findings=2 applied=1 deferred=0")
+    state.append_log_line(si.state, line)
+    lines = state.read_log_lines(si.state)
+    assert lines == [line]
+    assert state.last_interactive_review_date(lines) == dt.date.fromisoformat(days_ago(0))
+
+
+def test_append_log_line_creates_the_directory_and_appends(si: Env) -> None:
+    assert not si.state.exists()
+    state.append_log_line(si.state, "first")
+    state.append_log_line(si.state, "second")
+    assert (si.state / "reviews.log").read_text(encoding="utf-8") == "first\nsecond\n"

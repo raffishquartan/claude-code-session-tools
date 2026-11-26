@@ -141,6 +141,19 @@ def read_text(path: Path) -> str | None:
         return None
 
 
+def interactive_line(mode: str, *, findings: int, applied: int, deferred: int) -> str:
+    """One interactive review line (``mode`` is ``B`` or ``C``), timestamped now."""
+    return f"{now_iso()} mode={mode} findings={findings} applied={applied} deferred={deferred}"
+
+
+def append_log_line(state: Path, line: str) -> None:
+    """Append one line to ``reviews.log``, creating the state directory when missing. The one
+    writer of the log, shared by ``record-review`` and the headless review."""
+    state.mkdir(parents=True, exist_ok=True)
+    with (state / REVIEWS_LOG).open("a", encoding="utf-8") as fh:
+        fh.write(f"{line}\n")
+
+
 def read_log_lines(state: Path) -> list[str]:
     return (read_text(state / REVIEWS_LOG) or "").splitlines()
 
