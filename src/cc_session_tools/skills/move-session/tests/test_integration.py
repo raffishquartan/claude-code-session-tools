@@ -1186,3 +1186,266 @@ class TestTombstoneChainWording:
         assert "follow the chain" in text, (
             f"RENAME TOMBSTONE.md missing chain note:\n{text}"
         )
+
+
+def _key_dir(tmp_home: Path, cwd: Path) -> Path:
+    return tmp_home / ".claude" / "projects" / str(cwd).replace("/", "-")
+
+
+def _append_record(jsonl: Path, record: dict | str) -> None:
+    """Append one line to a transcript and keep it idle for the liveness check."""
+    line = record if isinstance(record, str) else json.dumps(record)
+    with jsonl.open("a") as fh:
+        fh.write(line + "\n")
+    idle_at = jsonl.stat().st_mtime - 120
+    os.utime(jsonl, (idle_at, idle_at))
+
+
+class TestCwdInsideTranscriptDir:
+    """Regression: a session that cd-ed into its own ~/.claude/projects/<src-key>
+    directory records that path as cwd. The key rewrite maps it to <dst-key>,
+    which verification must accept."""
+
+    def test_move_passes_verification(
+            self, tmp_home, projects_root, roots_file, make_session):
+        src_dir, src_jsonl, uuid = make_session("src-proj", "20260503-source")
+        src_key_dir = src_jsonl.parent
+        _append_record(src_jsonl, {
+            "type": "user", "uuid": "u2", "parentUuid": "a1",
+            "timestamp": "2026-05-03T13:01:00.000Z", "cwd": str(src_key_dir),
+            "sessionId": uuid, "message": {"role": "user", "content": "ls"},
+        })
+        dst_cwd = projects_root / "dst-proj"
+        dst_cwd.mkdir()
+
+        rc, out, err = _run(
+            "--src-session", str(src_dir), "--dst-cwd", str(dst_cwd),
+            "--uuid", uuid, "--execute", env={"HOME": str(tmp_home)},
+        )
+        assert rc == 0, f"{err}\n{out}"
+        assert "RESULT              : PASS" in out
+        dst_key_dir = _key_dir(tmp_home, dst_cwd)
+        cwds = {json.loads(l).get("cwd") for l in
+                (dst_key_dir / f"{uuid}.jsonl").read_text().splitlines()}
+        assert str(dst_key_dir) in cwds
+        assert str(src_key_dir) not in cwds
+
+
+class TestFailedVerifyRollsBack:
+    """A strict verification failure removes exactly what the run created, so
+    the same command can be re-run once the cause is fixed."""
+
+    def _broken_source(self, make_session):
+        src_dir, src_jsonl, uuid = make_session("src-proj", "20260503-source")
+        # Copied verbatim, so the destination has an invalid JSON line.
+        _append_record(src_jsonl, "this is not json")
+        return src_dir, src_jsonl, uuid
+
+    def test_rollback_and_rerun(
+            self, tmp_home, projects_root, roots_file, make_session):
+        src_dir, src_jsonl, uuid = self._broken_source(make_session)
+        src_before = src_jsonl.read_bytes()
+        src_listing = sorted(p.relative_to(src_dir) for p in src_dir.rglob("*"))
+        dst_cwd = projects_root / "dst-proj"
+        dst_cwd.mkdir()
+        dst_key_dir = _key_dir(tmp_home, dst_cwd)
+        dst_key_dir.mkdir(parents=True)  # pre-existing: must survive rollback
+        args = ("--src-session", str(src_dir), "--dst-cwd", str(dst_cwd),
+                "--uuid", uuid, "--execute")
+
+        rc, out, err = _run(*args, env={"HOME": str(tmp_home)})
+        assert rc == 1, f"{err}\n{out}"
+        assert "VERIFY: FAIL" in out
+        dst_session_dir = dst_cwd / "cc-sessions" / "20260503-source"
+        dst_jsonl = dst_key_dir / f"{uuid}.jsonl"
+        assert f"removed {dst_jsonl}" in out
+        assert f"removed {dst_session_dir}" in out
+        assert f"removed {dst_cwd / 'cc-sessions'}" in out
+        assert not dst_jsonl.exists()
+        assert not (dst_cwd / "cc-sessions").exists()
+        assert dst_key_dir.is_dir()
+        assert src_jsonl.read_bytes() == src_before
+        assert sorted(p.relative_to(src_dir) for p in src_dir.rglob("*")) == src_listing
+        assert "move-session-cleanup-" not in out
+        from cc_session_tools.lib import sessions_db
+        assert sessions_db.list_sessions(project_dir=dst_cwd) == []
+        assert sessions_db.lookup_tags([uuid]) == {}
+
+        rc, out, err = _run(*args, env={"HOME": str(tmp_home)})
+        assert rc == 1, f"{err}\n{out}"
+        assert "ABORT" not in out + err
+        assert "VERIFY: FAIL" in out
+
+    def test_rollback_keeps_preexisting_cc_sessions_dir(
+            self, tmp_home, projects_root, roots_file, make_session):
+        src_dir, _, uuid = self._broken_source(make_session)
+        dst_cwd = projects_root / "dst-proj"
+        other = dst_cwd / "cc-sessions" / "20260101-other"
+        other.mkdir(parents=True)
+
+        rc, out, err = _run(
+            "--src-session", str(src_dir), "--dst-cwd", str(dst_cwd),
+            "--uuid", uuid, "--execute", env={"HOME": str(tmp_home)},
+        )
+        assert rc == 1, f"{err}\n{out}"
+        assert other.is_dir()
+        assert not (dst_cwd / "cc-sessions" / "20260503-source").exists()
+        assert not _key_dir(tmp_home, dst_cwd).exists()
+
+
+class TestCopyFailureRollsBack:
+    """An exception during the copy (here an unreadable file in the session
+    directory) removes what the run created, exactly as a failed verification
+    does, and leaves the source untouched."""
+
+    @pytest.mark.skipif(os.geteuid() == 0, reason="root can read a mode-000 file")
+    def test_copy_error_rolls_back(
+            self, tmp_home, projects_root, roots_file, make_session):
+        src_dir, src_jsonl, uuid = make_session("src-proj", "20260503-source")
+        unreadable = src_dir / "working" / "locked.txt"
+        unreadable.write_text("x\n")
+        unreadable.chmod(0)
+        src_before = src_jsonl.read_bytes()
+        dst_cwd = projects_root / "dst-proj"
+        dst_cwd.mkdir()
+        try:
+            rc, out, err = _run(
+                "--src-session", str(src_dir), "--dst-cwd", str(dst_cwd),
+                "--uuid", uuid, "--execute", env={"HOME": str(tmp_home)},
+            )
+        finally:
+            unreadable.chmod(0o600)
+        assert rc == 1, f"{err}\n{out}"
+        assert "COPY: FAIL" in out
+        dst_session_dir = dst_cwd / "cc-sessions" / "20260503-source"
+        assert f"removed {dst_session_dir}" in out
+        assert not (dst_cwd / "cc-sessions").exists()
+        assert not _key_dir(tmp_home, dst_cwd).exists()
+        assert src_jsonl.read_bytes() == src_before
+        assert "Traceback" not in err
+
+
+class TestStrictRootAutoRename:
+    """A MOVE into a strict-root project whose only failure is the tag-prefix
+    rule derives a compliant tag and continues as MOVE+RENAME."""
+
+    NOTE = ("NOTE: tag changed from 20260101-scratch-tidy-garage to "
+            "20260101-garden-tidy-garage (destination project 'garden' requires tag "
+            "suffix to start with 'garden-')")
+
+    @pytest.fixture
+    def strict_root(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+        root = tmp_path / "strict-root"
+        root.mkdir()
+        monkeypatch.setenv("CLAUDE_SESSION_TOOLS_PROJ_ROOT", str(root))
+        return root
+
+    def _src(self, make_session):
+        return make_session("scratch", "20260101-scratch-tidy-garage")
+
+    def test_dry_run_reports_derived_tag(
+            self, tmp_home, roots_file, strict_root, make_session):
+        src_dir, _, uuid = self._src(make_session)
+        dst_cwd = strict_root / "garden"
+        dst_cwd.mkdir()
+        rc, out, err = _run("--src-session", str(src_dir), "--dst-cwd", str(dst_cwd),
+                            "--uuid", uuid, env={"HOME": str(tmp_home)})
+        assert rc == 0, f"{err}\n{out}"
+        assert "PLAN (MOVE+RENAME)" in out
+        assert self.NOTE in out
+        assert "dst tag            : 20260101-garden-tidy-garage" in out
+        assert not (dst_cwd / "cc-sessions").exists()
+
+    def test_execute_moves_under_derived_tag(
+            self, tmp_home, roots_file, strict_root, make_session):
+        src_dir, _, uuid = self._src(make_session)
+        dst_cwd = strict_root / "garden"
+        dst_cwd.mkdir()
+        rc, out, err = _run("--src-session", str(src_dir), "--dst-cwd", str(dst_cwd),
+                            "--uuid", uuid, "--execute", env={"HOME": str(tmp_home)})
+        assert rc == 0, f"{err}\n{out}"
+        assert (dst_cwd / "cc-sessions" / "20260101-garden-tidy-garage").is_dir()
+        executing = out.split("EXECUTING (MOVE+RENAME)", 1)[1]
+        assert self.NOTE in executing.split("DONE", 1)[0]
+        done = out.split("\nDONE\n", 1)[1]
+        assert self.NOTE in done
+        assert f"claude --resume {uuid}" in done
+        assert "picker label '20260101-garden-tidy-garage'" in done
+        dst_jsonl = _key_dir(tmp_home, dst_cwd) / f"{uuid}.jsonl"
+        assert dst_jsonl.read_text().splitlines()[-2:] == _picker_label_lines(
+            "20260101-garden-tidy-garage", uuid)
+
+    def test_no_auto_rename_restores_hard_failure(
+            self, tmp_home, roots_file, strict_root, make_session):
+        src_dir, _, uuid = self._src(make_session)
+        dst_cwd = strict_root / "garden"
+        dst_cwd.mkdir()
+        rc, out, err = _run("--src-session", str(src_dir), "--dst-cwd", str(dst_cwd),
+                            "--uuid", uuid, "--no-auto-rename", "--execute",
+                            env={"HOME": str(tmp_home)})
+        assert rc != 0
+        assert "must start with 'garden-'" in out + err
+        assert "NOTE: tag changed" not in out + err
+        assert not (dst_cwd / "cc-sessions").exists()
+
+    def test_explicit_rename_tag_is_not_overridden(
+            self, tmp_home, roots_file, strict_root, make_session):
+        src_dir, _, uuid = self._src(make_session)
+        dst_cwd = strict_root / "garden"
+        dst_cwd.mkdir()
+        rc, out, err = _run("--src-session", str(src_dir), "--dst-cwd", str(dst_cwd),
+                            "--rename-tag", "20260101-garage", "--uuid", uuid,
+                            env={"HOME": str(tmp_home)})
+        assert rc != 0
+        assert "must start with 'garden-'" in out + err
+        assert "NOTE: tag changed" not in out + err
+
+    def test_other_failure_is_not_masked(
+            self, tmp_home, roots_file, strict_root, make_session):
+        src_dir, _, uuid = self._src(make_session)
+        dst_cwd = strict_root / "my-garden"
+        dst_cwd.mkdir()
+        rc, out, err = _run("--src-session", str(src_dir), "--dst-cwd", str(dst_cwd),
+                            "--uuid", uuid, env={"HOME": str(tmp_home)})
+        assert rc != 0
+        assert "NOTE: tag changed" not in out + err
+        assert "automatic tag derivation" not in out + err
+        assert "must match" in out + err
+
+    def test_missing_label_is_not_auto_renamed(
+            self, tmp_home, roots_file, strict_root, make_session):
+        # The suffix already starts with 'garden-' but has no alphanumeric label:
+        # that is the label rule failing, not the prefix rule, so no tag is derived.
+        src_dir, _, uuid = make_session("scratch", "20260101-garden-__")
+        dst_cwd = strict_root / "garden"
+        dst_cwd.mkdir()
+        rc, out, err = _run("--src-session", str(src_dir), "--dst-cwd", str(dst_cwd),
+                            "--uuid", uuid, env={"HOME": str(tmp_home)})
+        assert rc != 0
+        assert "must have a descriptive label" in out + err
+        assert "NOTE: tag changed" not in out + err
+        assert "automatic tag derivation" not in out + err
+
+    def test_derived_tag_meets_the_clobber_check(
+            self, tmp_home, roots_file, strict_root, make_session):
+        src_dir, _, uuid = self._src(make_session)
+        dst_cwd = strict_root / "garden"
+        taken = dst_cwd / "cc-sessions" / "20260101-garden-tidy-garage"
+        taken.mkdir(parents=True)
+        rc, out, err = _run("--src-session", str(src_dir), "--dst-cwd", str(dst_cwd),
+                            "--uuid", uuid, "--execute", env={"HOME": str(tmp_home)})
+        assert rc != 0
+        assert f"ABORT: destination already exists: {taken}" in out + err
+        assert list(taken.iterdir()) == []
+
+    def test_refusal_recipe_explains_the_derived_tag(
+            self, tmp_home, roots_file, strict_root, make_session):
+        src_dir, _, uuid = self._src(make_session)
+        dst_cwd = strict_root / "garden"
+        dst_cwd.mkdir()
+        _write_process_record(tmp_home, os.getpid(), uuid)
+        rc, out, err = _run("--src-session", str(src_dir), "--dst-cwd", str(dst_cwd),
+                            "--uuid", uuid, "--execute", env={"HOME": str(tmp_home)})
+        assert rc == 2, f"{err}\n{out}"
+        assert self.NOTE in out
+        assert "--rename-tag  20260101-garden-tidy-garage" in out

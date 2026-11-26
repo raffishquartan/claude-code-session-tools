@@ -29,7 +29,7 @@ The `YYYYMMDD-` start-date prefix is **immutable** in all cases. Every other par
 ## When NOT to use
 
 - Cleaning up old hook-security-check transcripts - that is the `clean-hook-sessions` skill.
-- Moving a session to a *fresh* directory that does not yet exist - first ensure the destination cwd exists on disk and is a direct subdir of one of the roots in `~/.claude/cc-session-roots.txt`.
+- Moving a session to a *fresh* directory that does not yet exist - first ensure the destination cwd exists on disk and is a direct subdir of one of the session roots (`CLAUDE_SESSION_TOOLS_REPO_ROOT` or `CLAUDE_SESSION_TOOLS_PROJ_ROOT`).
 - Changing only the *picker display name* without touching the cc-sessions directory - that is Claude Code's built-in rename command, not this skill.
 
 ## Defaults and safety
@@ -113,19 +113,21 @@ ccst move-session \
     [--uuid       <session-uuid>] \
     [--include-memory] \
     [--no-tombstone] \
+    [--no-auto-rename] \
     [--execute]
 ```
 
 | Flag | Meaning |
 |------|---------|
 | `--src-session` | Path to source `cc-sessions/<tag>/` directory (the one with `working/` and `out/`). Required. |
-| `--dst-cwd` | Path to destination working directory. Optional if `--rename-tag` is given. Must be a direct subdirectory of one of the roots in `~/.claude/cc-session-roots.txt` (same file `ccd` reads). |
+| `--dst-cwd` | Path to destination working directory. Optional if `--rename-tag` is given. Must be a direct subdirectory of one of the session roots (`CLAUDE_SESSION_TOOLS_REPO_ROOT` or `CLAUDE_SESSION_TOOLS_PROJ_ROOT`, the same roots `ccd` uses). |
 | `--rename-tag` | New tag for the cc-sessions directory. Original `YYYYMMDD-` prefix MUST be preserved (immutable). May be combined with `--dst-cwd` to rename and move atomically. |
 | `--uuid` | Disambiguate when multiple jsonls match the source session. Optional. |
 | `--include-memory` | Also copy `memory/` into the destination project key dir (only meaningful when `--dst-cwd` changes the project key). Default: off. |
 | `--no-tombstone` | Skip the source-side tombstone records and `TOMBSTONE.md`. Default: tombstone on. |
 | `--execute` | Actually perform the operation. Without it, the script reports a plan only. |
 | `--verify-only` | Skip copy/rewrite; only re-run verification against existing destination (requires `--dst-cwd`). |
+| `--no-auto-rename` | On a MOVE into a strict-root project whose tag lacks the `<project>-` prefix, fail validation instead of deriving a compliant tag (see "Strict-root rules"). |
 | `--force` | Bypass the destination root-membership check and the strict-root project-name + tag-prefix rules. Tag-format checks (no spaces / underscores / double-dashes / trailing dash, immutable `YYYYMMDD-` prefix when renaming) still apply. Mirrors `ccd --force`. |
 
 At least one of `--dst-cwd` or `--rename-tag` must be supplied. The combination determines the operation:
@@ -146,12 +148,26 @@ At least one of `--dst-cwd` or `--rename-tag` must be supplied. The combination 
 
 ## Destination cwd validation
 
-`--dst-cwd <path>` must be a **direct subdirectory** of a root listed in `~/.claude/cc-session-roots.txt` (after `readlink -f`). This is the same data file `ccd` reads, so the rule is identical. To allow a new root, edit that file (it has comments explaining the format).
+`--dst-cwd <path>` must be a **direct subdirectory** of a session root (after `readlink -f`). The roots are the directories named by the `CLAUDE_SESSION_TOOLS_REPO_ROOT` (loose) and `CLAUDE_SESSION_TOOLS_PROJ_ROOT` (strict) environment variables, the same ones `ccd` reads, so the rule is identical. If neither is set, or one points at a missing path or a file, the script fails with a `[CST-ROOTS-CONFIG-ERROR]` message saying which.
 
-**Strict-root rules.** When the resolved destination root is `~/cc-claude-code` (the "strict" root), two additional rules apply:
+**Strict-root rules.** When the resolved destination root is the strict root (the one `CLAUDE_SESSION_TOOLS_PROJ_ROOT` names), two additional rules apply:
 
 - The destination project directory name must match `^[a-z0-9]+$` (no dashes, no uppercase).
-- The destination tag's suffix-after-date (`<suffix>` in `YYYYMMDD-<suffix>`) must equal the project name or start with `<project>-`. So a session moving to `~/cc-claude-code/dea/` must have tag `20260504-dea` or `20260504-dea-<rest>`; if the source tag doesn't satisfy this, you must combine the move with `--rename-tag` to fix it.
+- The destination tag's suffix-after-date (`<suffix>` in `YYYYMMDD-<suffix>`) must start with `<project>-` followed by a label with at least one alphanumeric character. So a session moving to `<strict-root>/dea/` must have a tag like `20260504-dea-<label>`.
+
+**Automatic tag derivation.** When a MOVE without `--rename-tag` fails only because the tag suffix lacks the `<project>-` prefix, the script derives a compliant tag and carries on as MOVE+RENAME (picker label, `session_tags` row and `cc-sessions/<old-tag>` rewrite included). The rule is mechanical:
+
+1. Keep the `YYYYMMDD-` prefix.
+2. Strip one leading `<src-project>-` from the suffix, where `<src-project>` is the source cwd's directory name.
+3. Prefix `<dst-project>-`, unless the remainder already starts with it.
+
+So `20260101-scratch-tidy-garage` moved from `scratch` into `garden` becomes `20260101-garden-tidy-garage`, and `20260101-tidy-garage` becomes `20260101-garden-tidy-garage`. The rule does not merge similar words: `scratch-build-shelf` moved into `building` becomes `building-build-shelf`; pass `--rename-tag` if you want a different tag. The derived tag is checked against every tag rule; if it fails, the script reports the original errors and the derived tag's errors. A suffix with no label beyond a project name (`20260101-scratch` from `scratch`, or `20260101-garden` into `garden`) derives `20260101-garden`, which fails, so pass `--rename-tag`. If the derived `cc-sessions/<tag>/` already exists, the usual clobber check aborts naming it. The PLAN (dry-run and execute), the EXECUTING output, the DONE block (next to the resume command) and the in-session refusal recipe all print:
+
+```
+NOTE: tag changed from <old-tag> to <new-tag> (destination project '<p>' requires tag suffix to start with '<p>-')
+```
+
+The derivation never overrides an explicit `--rename-tag`, never masks another validation failure (for example an invalid strict-root project name), and is off with `--force` (which skips the rule) or `--no-auto-rename` (which restores the hard failure).
 
 Strict-root rules and the root-membership check are bypassed by `--force`. Tag-format checks (no spaces / underscores / double-dashes / trailing dash, immutable `YYYYMMDD-` prefix when renaming) are NOT bypassed by `--force`.
 
@@ -180,7 +196,7 @@ These rules are defined once in `scripts/cc_session_rules.py` and shared with `c
        - Project key: `-<src-cwd-encoded>-` → `-<dst-cwd-encoded>-`
        - Tilde form (only if `$HOME` prefixes the src abs): `~/<rel>` → `~/<dst-rel>`
        - Tag substring (MOVE+RENAME only): `cc-sessions/<old-tag>` → `cc-sessions/<new-tag>`
-     - Runs jsonl verification (see below).
+     - Runs jsonl verification (see below) before anything else is written. On failure the run rolls back what it created and exits 1.
      - MOVE+RENAME only: appends the picker-label records for the new tag to the destination jsonl, after verification.
      - Memory: copies `memory/` to dst project key dir if `--include-memory` is passed, OR auto-includes if the source project key contains exactly this one session.
      - Tombstone: appends two records (user + assistant) to the SOURCE jsonl, with proper `parentUuid` chain and the SOURCE `sessionId`/cwd/version preserved, AND writes a `TOMBSTONE.md` into the source `cc-sessions/<tag>/`.
@@ -201,9 +217,9 @@ When verification runs, check the script's "VERIFICATION" output block before de
 - `lines src == lines dst` for the jsonl
 - `json_valid_lines == lines dst`
 - `remaining_src_long_path == 0` and `remaining_src_encoded_key == 0`
-- `cwd_distinct == {<dst-cwd-abs>}` (only the destination cwd appears in any cwd field)
+- every destination `cwd` is the destination cwd, a source `cwd` the copy's string replacements left unchanged, or the rewritten form of one of the session's own source `cwd` values: the source cwd or a path under it, or its `~/.claude/projects/<src-key>/` directory or a path under it. A session that changed directory into its own transcript directory has that path rewritten to `<dst-key>`, which passes. The replacements are plain string replaces, so a sibling such as `<src-cwd>-archive` comes out as a path that never existed; that value, and any other, is printed as `cwd_unexpected` and fails.
 
-If any check fails during the `--execute` run, the script prints `VERIFY: FAIL` and exits non-zero. Do not present the move as successful in that case.
+If any check fails during the `--execute` run, the script prints `VERIFY: FAIL`, removes what that run created (the destination `cc-sessions/<tag>/`, the destination jsonl, and any destination parent directory it made that is empty again), prints each removed path and exits 1. Nothing that existed before the run is removed and the source is not touched, so the same command can be re-run once the cause is fixed. If a path cannot be removed, the script lists it for you to delete by hand. An exception while copying or rewriting (an unreadable file, a full disk, an interrupt) rolls back the same way and prints `COPY: FAIL` with the error. Do not present the move as successful in either case.
 
 **`--verify-only` and the tombstone.** After a MOVE with the tombstone enabled (the default), the source carries the two tombstone records appended after the copy. `--verify-only` excludes from the source's length the tombstone records for the destination being verified - from the tombstone naming that destination to the end of the file - prints `tombstone lines excluded from src: N`, and passes (exit 0) when the rest of the source is no longer than the destination. After the same source has been moved twice (to B, then to C), verifying C excludes only C's tombstone (B's is already in the C copy) and verifying B excludes both. Any other source line after the copy point stays counted; if the source is still longer, the output says the extra lines are unexplained and the result is `RESULT : FAIL` - the source and destination have really diverged. The line-count check during `--execute` is strict and excludes nothing.
 

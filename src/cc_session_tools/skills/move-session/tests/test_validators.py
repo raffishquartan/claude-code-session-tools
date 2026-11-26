@@ -349,3 +349,21 @@ class TestCheckSessionDestination:
             repos_root / "myrepo", "20260504-some_tag_with_underscore", src_tag=None
         )
         assert ok, errors
+
+
+class TestDeriveStrictTag:
+    """MOVE into a strict-root project: one leading <src-project>- is
+    stripped from the suffix and <dst-project>- is prefixed unless the
+    remainder already starts with it. No fuzzy matching."""
+
+    @pytest.mark.parametrize(("src_tag", "src_project", "dst_project", "expected"), [
+        ("20260101-scratch-tidy-garage", "scratch", "garden", "20260101-garden-tidy-garage"),
+        ("20260101-tidy-garage", "scratch", "garden", "20260101-garden-tidy-garage"),
+        ("20260101-scratch-build-shelf", "scratch", "building", "20260101-building-build-shelf"),
+        ("20260101-scratch-garden-tidy", "scratch", "garden", "20260101-garden-tidy"),
+        ("20260101-scratch", "scratch", "garden", "20260101-garden"),
+        ("20260101-scratch-scratch-x", "scratch", "garden", "20260101-garden-scratch-x"),
+        ("20260101-garden", "scratch", "garden", "20260101-garden"),
+    ])
+    def test_derivation(self, ms, src_tag, src_project, dst_project, expected):
+        assert ms.derive_strict_tag(src_tag, src_project, dst_project) == expected

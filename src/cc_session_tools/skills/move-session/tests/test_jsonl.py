@@ -23,6 +23,9 @@ class TestRewriteJsonlPaths:
         assert p.read_text() == "nothing matches\n"
 
 
+REPLACEMENTS = [("/old/cwd", "/new/cwd"), ("-old-cwd", "-new-cwd")]
+
+
 class TestVerifyDstJsonl:
     def _make_pair(self, tmp_path, src_cwd, dst_cwd, src_lines):
         src = tmp_path / "src.jsonl"
@@ -38,7 +41,7 @@ class TestVerifyDstJsonl:
     def test_strict_passes_on_clean_rewrite(self, ms, tmp_path):
         src, dst = self._make_pair(tmp_path, "/old/cwd", "/new/cwd", 5)
         v = ms.verify_dst_jsonl(src, dst, "/new/cwd", "/old/cwd", "-old-cwd",
-                                strict=True, dst_session_dir=tmp_path / "dst-session")
+                                replacements=REPLACEMENTS, strict=True, dst_session_dir=tmp_path / "dst-session")
         assert v["ok"] is True
         assert v["src_lines"] == v["dst_lines"] == 5
         assert v["remaining_long"] == 0
@@ -48,7 +51,7 @@ class TestVerifyDstJsonl:
         # Sneak old path back into dst.
         dst.write_text(dst.read_text() + json.dumps({"cwd": "/old/cwd"}) + "\n")
         v = ms.verify_dst_jsonl(src, dst, "/new/cwd", "/old/cwd", "-old-cwd",
-                                strict=True, dst_session_dir=tmp_path / "dst-session")
+                                replacements=REPLACEMENTS, strict=True, dst_session_dir=tmp_path / "dst-session")
         assert v["ok"] is False
         assert v["remaining_long"] >= 1
 
@@ -57,7 +60,7 @@ class TestVerifyDstJsonl:
         # Truncate dst.
         dst.write_text("\n".join(dst.read_text().splitlines()[:3]) + "\n")
         v = ms.verify_dst_jsonl(src, dst, "/new/cwd", "/old/cwd", "-old-cwd",
-                                strict=True, dst_session_dir=tmp_path / "dst-session")
+                                replacements=REPLACEMENTS, strict=True, dst_session_dir=tmp_path / "dst-session")
         assert v["ok"] is False
 
     def test_non_strict_allows_destination_growth(self, ms, tmp_path):
@@ -67,9 +70,101 @@ class TestVerifyDstJsonl:
         with dst.open("a") as fh:
             fh.write(json.dumps({"cwd": "/new/cwd", "extra": True}) + "\n")
         v = ms.verify_dst_jsonl(src, dst, "/new/cwd", "/old/cwd", "-old-cwd",
-                                strict=False, dst_session_dir=tmp_path / "dst-session")
+                                replacements=REPLACEMENTS, strict=False, dst_session_dir=tmp_path / "dst-session")
         assert v["ok"] is True
         assert v["dst_lines"] > v["src_lines"]
+
+
+class TestVerifyCwdAgainstRewrittenSource:
+    """A source session may record cwd values other than its project cwd,
+    such as its own transcript directory under ~/.claude/projects/<src-key>.
+    Verification accepts each one in its rewritten form."""
+
+    SRC_CWD = "/old/cwd"
+    DST_CWD = "/new/cwd"
+    SRC_KEY_DIR = "/home/alice/.claude/projects/-old-cwd"
+    DST_KEY_DIR = "/home/alice/.claude/projects/-new-cwd"
+
+    def _pair(self, tmp_path: Path, extra_dst_cwd: str | None = None) -> tuple[Path, Path]:
+        src = tmp_path / "src.jsonl"
+        dst = tmp_path / "dst.jsonl"
+        records = [{"cwd": self.SRC_CWD, "i": 0}, {"cwd": self.SRC_KEY_DIR, "i": 1}]
+        src_text = "".join(json.dumps(r) + "\n" for r in records)
+        src.write_text(src_text)
+        dst_text = src_text.replace(self.SRC_CWD, self.DST_CWD).replace("-old-cwd", "-new-cwd")
+        if extra_dst_cwd is not None:
+            dst_text = dst_text.replace(self.DST_KEY_DIR, extra_dst_cwd)
+        dst.write_text(dst_text)
+        return src, dst
+
+    @pytest.mark.parametrize("strict", [True, False])
+    def test_rewritten_transcript_dir_cwd_passes(self, ms, tmp_path, strict):
+        src, dst = self._pair(tmp_path)
+        v = ms.verify_dst_jsonl(src, dst, self.DST_CWD, self.SRC_CWD, "-old-cwd",
+                                replacements=REPLACEMENTS, strict=strict,
+                                dst_session_dir=tmp_path / "dst-session")
+        assert v["ok"] is True
+        assert v["cwds_in_dst"] == sorted([self.DST_CWD, self.DST_KEY_DIR])
+        assert v["cwds_unexpected"] == []
+
+    @pytest.mark.parametrize("strict", [True, False])
+    def test_cwd_not_produced_by_rewrite_fails(self, ms, tmp_path, strict):
+        src, dst = self._pair(tmp_path, extra_dst_cwd="/somewhere/else")
+        v = ms.verify_dst_jsonl(src, dst, self.DST_CWD, self.SRC_CWD, "-old-cwd",
+                                replacements=REPLACEMENTS, strict=strict,
+                                dst_session_dir=tmp_path / "dst-session")
+        assert v["ok"] is False
+        assert v["cwds_unexpected"] == ["/somewhere/else"]
+
+    def test_print_verify_names_unexpected_cwds(self, ms, tmp_path, capsys):
+        src, dst = self._pair(tmp_path, extra_dst_cwd="/somewhere/else")
+        v = ms.verify_dst_jsonl(src, dst, self.DST_CWD, self.SRC_CWD, "-old-cwd",
+                                replacements=REPLACEMENTS, strict=True,
+                                dst_session_dir=tmp_path / "dst-session")
+        ms.print_verify(v)
+        assert "cwd_unexpected      : ['/somewhere/else']" in capsys.readouterr().out
+
+
+    def _pair_with_src_cwds(self, tmp_path: Path, cwds: list[str]) -> tuple[Path, Path]:
+        src = tmp_path / "src.jsonl"
+        dst = tmp_path / "dst.jsonl"
+        src_text = "".join(json.dumps({"cwd": c, "i": i}) + "\n" for i, c in enumerate(cwds))
+        src.write_text(src_text)
+        dst.write_text(src_text.replace(self.SRC_CWD, self.DST_CWD).replace("-old-cwd", "-new-cwd"))
+        return src, dst
+
+    @pytest.mark.parametrize("strict", [True, False])
+    def test_rewritten_sibling_cwd_fails(self, ms, tmp_path, strict):
+        # The boundary-less rewrite turns a sibling of the source cwd, and a sibling of
+        # its transcript directory, into paths that never existed. They are not the
+        # session's own cwds, so verification rejects the rewritten forms.
+        src, dst = self._pair_with_src_cwds(tmp_path, [
+            self.SRC_CWD, self.SRC_CWD + "-archive", self.SRC_KEY_DIR + "-archive",
+        ])
+        v = ms.verify_dst_jsonl(src, dst, self.DST_CWD, self.SRC_CWD, "-old-cwd",
+                                replacements=REPLACEMENTS, strict=strict,
+                                dst_session_dir=tmp_path / "dst-session")
+        assert v["ok"] is False
+        assert v["cwds_unexpected"] == sorted(
+            [self.DST_CWD + "-archive", self.DST_KEY_DIR + "-archive"])
+
+    @pytest.mark.parametrize("strict", [True, False])
+    def test_own_subdirectory_and_untouched_cwds_pass(self, ms, tmp_path, strict):
+        # A subdirectory of the source cwd or of its transcript directory is the
+        # session's own; a cwd the rewrite leaves unchanged is carried over verbatim.
+        src, dst = self._pair_with_src_cwds(tmp_path, [
+            self.SRC_CWD, self.SRC_CWD + "/sub", self.SRC_KEY_DIR + "/memory", "/elsewhere",
+        ])
+        v = ms.verify_dst_jsonl(src, dst, self.DST_CWD, self.SRC_CWD, "-old-cwd",
+                                replacements=REPLACEMENTS, strict=strict,
+                                dst_session_dir=tmp_path / "dst-session")
+        assert v["cwds_unexpected"] == []
+        assert v["ok"] is True
+
+
+class TestApplyReplacements:
+    def test_applies_in_order(self, ms):
+        assert ms.apply_replacements("a/b", [("a", "x"), ("x/b", "y")]) == "y"
 
 
 LAST_RECORD = {
@@ -164,14 +259,14 @@ class TestVerifyDstJsonlTombstone:
     def test_non_strict_excludes_the_destination_tombstone(self, ms, tmp_path):
         src, dst, dst_session = self._pair_with_tombstone(ms, tmp_path)
         v = ms.verify_dst_jsonl(src, dst, "/new/cwd", "/old/cwd", "-old-cwd",
-                                strict=False, dst_session_dir=dst_session)
+                                replacements=REPLACEMENTS, strict=False, dst_session_dir=dst_session)
         assert v["ok"] is True
         assert v["src_excluded_lines"] == 2
 
     def test_strict_does_not_exclude_the_tombstone(self, ms, tmp_path):
         src, dst, dst_session = self._pair_with_tombstone(ms, tmp_path)
         v = ms.verify_dst_jsonl(src, dst, "/new/cwd", "/old/cwd", "-old-cwd",
-                                strict=True, dst_session_dir=dst_session)
+                                replacements=REPLACEMENTS, strict=True, dst_session_dir=dst_session)
         assert v["ok"] is False
         assert v["src_excluded_lines"] == 0
 
@@ -261,3 +356,46 @@ class TestWriteCleanupScript:
         )
         assert str(out).startswith("/tmp/move-session-cleanup-20260503-x-")
         assert out.suffix == ".sh"
+
+
+class TestRollbackCreated:
+    def _layout(self, tmp_path: Path) -> tuple[list[Path], Path]:
+        parent = tmp_path / "cc-sessions"
+        session = parent / "20260101-x"
+        (session / "working").mkdir(parents=True)
+        (session / "working" / "WORKLOG.md").write_text("w\n")
+        key_dir = tmp_path / "key"
+        key_dir.mkdir()
+        jsonl = key_dir / "u.jsonl"
+        jsonl.write_text("{}\n")
+        return [parent, session, key_dir, jsonl], session
+
+    def test_removes_everything_newest_first(self, ms, tmp_path, capsys):
+        created, session = self._layout(tmp_path)
+        assert ms.rollback_created(created, session) is True
+        assert not any(p.exists() for p in created)
+        lines = capsys.readouterr().out.splitlines()
+        assert lines == [f"  removed {p}" for p in reversed(created)]
+
+    def test_keeps_a_parent_that_gained_other_content(self, ms, tmp_path, capsys):
+        created, session = self._layout(tmp_path)
+        (created[0] / "20260101-other").mkdir()
+        assert ms.rollback_created(created, session) is True
+        assert created[0].is_dir()
+        assert not session.exists()
+        assert f"kept {created[0]} (not empty)" in capsys.readouterr().out
+
+    def test_reports_paths_it_could_not_remove(self, ms, tmp_path, capsys, monkeypatch):
+        created, session = self._layout(tmp_path)
+
+        def refuse(self: Path, missing_ok: bool = False) -> None:
+            raise PermissionError("denied")
+
+        monkeypatch.setattr(Path, "unlink", refuse)
+        assert ms.rollback_created(created, session) is False
+        out = capsys.readouterr().out
+        assert f"could not remove {created[3]}: denied" in out
+        assert "Delete these paths by hand" in out
+        assert created[3].exists()
+        # The key dir still holds the jsonl, so it is kept rather than removed.
+        assert f"kept {created[2]} (not empty)" in out

@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [4.6.0] - 2026-11-25
+
+### Added
+
+- `ccst move-session` derives a compliant tag when a MOVE into a strict-root project fails only because the tag suffix lacks the `<project>-` prefix: one leading `<src-project>-` is stripped and `<dst-project>-` is prefixed, and the move continues as MOVE+RENAME. A `NOTE: tag changed from <old> to <new> ...` line appears in the plan, the execute output and the DONE block. An explicit `--rename-tag` is never overridden, other validation failures are not masked, and a suffix that has the `<project>-` prefix but no label fails with the label error rather than triggering a derivation.
+- `ccst move-session --no-auto-rename` restores the hard validation failure for that case.
+
+### Fixed
+
+- `ccst move-session` verification no longer fails a session that changed directory into a path the move rewrites, such as its own `~/.claude/projects/<src-key>/` directory: every destination `cwd` is accepted if it is the destination cwd, a source `cwd` the rewrite left unchanged, or the rewritten form of one of the session's own source `cwd` values (the source cwd or a path under it, or its transcript directory or a path under it). Any other value, including a sibling such as `<src-cwd>-archive` that the plain string rewrite mangled, is printed as `cwd_unexpected`.
+- A failed verification during `--execute` now removes what that run created (destination session directory, destination transcript and any parent directory it made that is empty again), lists each removed path and leaves the source untouched, so the same command can be re-run. Verification now runs before the memory copy. An exception during the copy or rewrite step (an unreadable file, a full disk, an interrupt) rolls back the same way and prints `COPY: FAIL` instead of leaving a half-copied destination.
+- The move-session skill and `--dst-cwd` help now name the `CLAUDE_SESSION_TOOLS_REPO_ROOT` / `CLAUDE_SESSION_TOOLS_PROJ_ROOT` environment variables as the session roots, instead of the retired `~/.claude/cc-session-roots.txt` file.
+
 ## [4.5.0] - 2026-11-21
 
 ### Changed
