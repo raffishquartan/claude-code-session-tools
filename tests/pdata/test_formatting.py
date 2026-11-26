@@ -43,3 +43,16 @@ def test_render_unknown_format_raises():
     import pytest
     with pytest.raises(ValueError, match="format"):
         formatting.render(_ROWS, fmt="xml")
+
+
+def test_render_csv_uses_lf_line_endings():
+    assert "\r" not in formatting.render(_ROWS, fmt="csv")
+
+
+def test_render_csv_with_columns_prints_header_for_empty_result():
+    assert formatting.render([], fmt="csv", columns=["id", "content"]) == "id,content\n"
+
+
+def test_render_csv_with_columns_fills_missing_cells():
+    out = formatting.render([{"id": 1}], fmt="csv", columns=["id", "sender"])
+    assert out == "id,sender\n1,\n"

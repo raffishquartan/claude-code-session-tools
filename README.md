@@ -392,9 +392,15 @@ ccst pdata init --project myproject --write     # migrate (backs up first, verif
 
 ccst pdata add --project myproject --group invoices --content '{"status": "open", "amount": 120}'
 ccst pdata query --project myproject --group invoices --where 'status = "open"'
+ccst pdata search --project myproject --group invoices --group letters --text acme \
+  --date-field created_at --since 2026-01-01 --select content --snippet 40
 ccst pdata schema list --project myproject
 ```
 
+- **Search** - `ccst pdata search` finds records across one or more groups by substring or
+  regex (case-insensitive by default), `--where` clauses and ISO date ranges, with `--select`,
+  `--snippet`, `--sort`, `--limit` and `--count-only`; output is JSON or CSV. Use it rather
+  than dumping a whole group to filter it elsewhere.
 - **Typed fields on demand** - records carry a flexible content field, and
   `ccst pdata schema add-field` adds typed columns when a record shape settles.
 - **Safe edits** - soft deletes, optimistic-concurrency versioning (a stale `update` or

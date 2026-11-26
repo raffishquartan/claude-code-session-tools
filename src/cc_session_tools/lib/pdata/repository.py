@@ -389,12 +389,37 @@ def restore(conn: sqlite3.Connection, *, record_id: str, restored_at: int) -> bo
     return cur.rowcount == 1
 
 
-_WHERE_OPS = frozenset({"=", "!=", "<", ">", "<=", ">=", "LIKE"})
+WHERE_OPS = frozenset({"=", "!=", "<", ">", "<=", ">=", "LIKE"})
 # Deliberately a subset of naming.BASE_RECORD_COLUMNS, not the whole set: id/record_group are
 # already fixed by the surrounding SELECT/WHERE record_group=?, and version/deleted_at are
 # concurrency/soft-delete internals a --where filter has no legitimate reason to target
 # (deleted rows are already excluded by the r.deleted_at IS NULL clause below).
-_BASE_QUERYABLE_COLUMNS = frozenset({"content", "file_path", "created_at", "updated_at"})
+BASE_QUERYABLE_COLUMNS = frozenset({"content", "file_path", "created_at", "updated_at"})
+
+
+def where_sql(
+    conditions: list[tuple[str, str, str]], *, ext_columns: set[str], record_group: str,
+) -> tuple[list[str], list[object]]:
+    """SQL clauses and bound parameters for parsed `--where` conditions, against a query that
+    aliases records as `r` and the group's extension table as `e`. A field resolves to a base
+    column first, then a live extension column; anything else is a ValueError naming the group.
+    Shared by query_records and lib/pdata/search.py so both verbs read --where identically."""
+    clauses: list[str] = []
+    params: list[object] = []
+    for field_name, op, value in conditions:
+        if op not in WHERE_OPS:
+            raise ValueError(f"invalid operator {op!r}")
+        if field_name in BASE_QUERYABLE_COLUMNS:
+            clauses.append(f'r."{field_name}" {op} ?')
+        elif field_name in ext_columns:
+            clauses.append(f'e."{field_name}" {op} ?')
+        else:
+            raise ValueError(
+                f"unknown field {field_name!r} for group {record_group!r} "
+                f"(not a base column or a registered extension field)"
+            )
+        params.append(value)
+    return clauses, params
 
 
 def query_records(
@@ -406,7 +431,7 @@ def query_records(
     include_deleted: bool = False,
 ) -> list[sqlite3.Row]:
     """conditions is a list of (field, op, value) already syntax-checked by
-    service._parse_where_clause; op is guaranteed in _WHERE_OPS. field is resolved against
+    service.parse_where_clause; op is guaranteed in WHERE_OPS. field is resolved against
     base columns first, then live extension columns — auto-LEFT-JOINing ext_<group> so a
     caller never writes a JOIN or names the table (spec §5).
 
@@ -421,19 +446,11 @@ def query_records(
     if not include_deleted:
         clauses.append("r.deleted_at IS NULL")
     params: list[object] = [record_group]
-    for field_name, op, value in conditions:
-        if op not in _WHERE_OPS:
-            raise ValueError(f"invalid operator {op!r}")
-        if field_name in _BASE_QUERYABLE_COLUMNS:
-            clauses.append(f'r."{field_name}" {op} ?')
-        elif field_name in ext_columns:
-            clauses.append(f'e."{field_name}" {op} ?')
-        else:
-            raise ValueError(
-                f"unknown field {field_name!r} for group {record_group!r} "
-                f"(not a base column or a registered extension field)"
-            )
-        params.append(value)
+    where_clauses, where_params = where_sql(
+        conditions, ext_columns=ext_columns, record_group=record_group,
+    )
+    clauses += where_clauses
+    params += where_params
 
     join = f'LEFT JOIN "{table}" e ON e.record_id = r.id' if table else ""
     sql = (
