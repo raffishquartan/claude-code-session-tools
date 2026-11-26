@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [4.11.0] - 2026-11-26
+
+### Added
+
+- Two weekly ccsched jobs are bundled and enabled by default: `self-improvement-signals` (`ccst self-improvement collect-signals`, counts only, no model call) and `self-improvement-auto-review` (`ccst self-improvement auto-review`). Once the loop is set up, the review uses your Claude Code subscription usage: at most one paying run per 7 days, capped at USD 0.50. Both commands call only CCST.
+- `ccst self-improvement init` sets up the loop by creating `~/.claude/self-improvement-backlog.md` with empty `## Inbox` and `## Entries` sections. It never overwrites or follows an existing file or symlink, and exits 1 when an existing backlog has no `## Inbox` line.
+- `ccst ccsched-jobs install` and `ccst doctor` report a registration of either job id that runs another tool's `collect-signals.sh` or `run-headless-review.sh` script, with the migration steps (`ccsched remove <id>`, then `ccst ccsched-jobs install --apply`), and never replace it. Such a registration is not recorded as installed by CCST, so removing it lets the next install register the bundled job.
+- `ccst doctor` check `self-improvement:loop`: WARN when a self-improvement job is enabled but the loop is not set up.
+
+### Changed
+
+- The self-improvement loop stays quiet until it is set up (the backlog exists with a `## Inbox` line). Before that, `auto-review` logs `skipped` with cost 0 and sends nothing instead of logging `failed` and notifying every week, `collect-signals` sends no FAIL message and ends its line with `loop not set up (run ccst self-improvement init)`, and the nudge is silent even when the state directory exists. `status` says whether the loop is set up.
+- The nudge and the FAIL message name `/review-session-and-improve-claude-setup periodic` only when that skill is installed, and `ccst self-improvement status` otherwise.
+
+### Security
+
+- `auto-review` also removes `ANTHROPIC_BASE_URL`, `ANTHROPIC_CUSTOM_HEADERS`, the provider base URLs and the gateway and other third-party provider credentials and switches the `claude` CLI honours, so a gateway cannot receive the digest. `ccdapi`/`ccrapi` are unchanged.
+
 ## [4.10.0] - 2026-11-26
 
 ### Added
