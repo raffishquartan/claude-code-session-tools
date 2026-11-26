@@ -1412,6 +1412,20 @@ class TestStrictRootAutoRename:
         assert "automatic tag derivation" not in out + err
         assert "must match" in out + err
 
+    def test_missing_label_is_not_auto_renamed(
+            self, tmp_home, roots_file, strict_root, make_session):
+        # The suffix already starts with 'garden-' but has no alphanumeric label:
+        # that is the label rule failing, not the prefix rule, so no tag is derived.
+        src_dir, _, uuid = make_session("scratch", "20260101-garden-__")
+        dst_cwd = strict_root / "garden"
+        dst_cwd.mkdir()
+        rc, out, err = _run("--src-session", str(src_dir), "--dst-cwd", str(dst_cwd),
+                            "--uuid", uuid, env={"HOME": str(tmp_home)})
+        assert rc != 0
+        assert "must have a descriptive label" in out + err
+        assert "NOTE: tag changed" not in out + err
+        assert "automatic tag derivation" not in out + err
+
     def test_derived_tag_meets_the_clobber_check(
             self, tmp_home, roots_file, strict_root, make_session):
         src_dir, _, uuid = self._src(make_session)

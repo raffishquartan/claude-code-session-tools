@@ -995,7 +995,12 @@ def main() -> int:
         dst_project = dst_cwd_path.name
         src_suffix_m = DATE_PREFIX_RE.match(src_tag)
         src_suffix = src_suffix_m.group(2) if src_suffix_m else src_tag
-        prefix_error = validate_strict_tag_suffix(src_suffix, dst_project)
+        # validate_strict_tag_suffix also reports a suffix that has the prefix
+        # but no label; only a missing prefix is something derivation fixes.
+        prefix_error = (
+            "" if src_suffix.startswith(f"{dst_project}-")
+            else validate_strict_tag_suffix(src_suffix, dst_project)
+        )
         if prefix_error and errors == [prefix_error]:
             derived = derive_strict_tag(src_tag, Path(src_cwd_abs).name, dst_project)
             derived_ok, derived_errors = check_session_destination(

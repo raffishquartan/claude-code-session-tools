@@ -162,7 +162,7 @@ When strict verification fails during `--execute`, the script SHALL remove every
 - **THEN** it still exists after the rollback
 
 ### Requirement: A move into a strict-root project derives a compliant tag
-When a MOVE is run without `--rename-tag`, without `--force` and without `--no-auto-rename`, and the only destination-validation failure is that the tag suffix does not satisfy the destination strict-root project's `<project>-` prefix rule, the script SHALL derive a new tag and continue as MOVE+RENAME. The derived tag SHALL keep the source `YYYYMMDD-` prefix; its suffix SHALL be the source suffix with one leading `<src-project>-` removed (where `<src-project>` is the source cwd's directory name), prefixed with `<dst-project>-` unless the remainder already starts with `<dst-project>-`. A remainder equal to `<dst-project>` gives suffix `<dst-project>`. The derived tag SHALL be validated against every destination rule; if it fails any of them, the script SHALL fail with the original validation errors and the derived tag's errors. The derived tag SHALL then meet the clobber check like any destination tag, aborting with the existing path named. The script SHALL print `NOTE: tag changed from <old-tag> to <new-tag> (destination project '<p>' requires tag suffix to start with '<p>-')` in the PLAN output (dry-run and execute), in the EXECUTING output, and in the DONE block next to the resume command, together with the picker label the session resumes under.
+When a MOVE is run without `--rename-tag`, without `--force` and without `--no-auto-rename`, and the only destination-validation failure is that the tag suffix does not satisfy the destination strict-root project's `<project>-` prefix rule, the script SHALL derive a new tag and continue as MOVE+RENAME. The derived tag SHALL keep the source `YYYYMMDD-` prefix; its suffix SHALL be the source suffix with one leading `<src-project>-` removed (where `<src-project>` is the source cwd's directory name), prefixed with `<dst-project>-` unless the remainder already starts with `<dst-project>-`. A remainder equal to `<dst-project>` gives suffix `<dst-project>`. The derived tag SHALL be validated against every destination rule; if it fails any of them, the script SHALL fail with the original validation errors and the derived tag's errors. A suffix that already starts with `<dst-project>-` but has no alphanumeric label after it fails the label rule, not the prefix rule, so no tag SHALL be derived for it. The derived tag SHALL then meet the clobber check like any destination tag, aborting with the existing path named. The script SHALL print `NOTE: tag changed from <old-tag> to <new-tag> (destination project '<p>' requires tag suffix to start with '<p>-')` in the PLAN output (dry-run and execute), in the EXECUTING output, and in the DONE block next to the resume command, together with the picker label the session resumes under.
 
 #### Scenario: Source project prefix is replaced
 - **WHEN** session `20260101-scratch-tidy-garage` in project `scratch` is moved to strict-root project `garden` with no `--rename-tag`
@@ -171,6 +171,10 @@ When a MOVE is run without `--rename-tag`, without `--force` and without `--no-a
 #### Scenario: Suffix without a source project prefix
 - **WHEN** a session whose suffix does not start with `<src-project>-` is moved to strict-root project `garden`
 - **THEN** the derived suffix is `garden-<original suffix>`
+
+#### Scenario: Missing label is not auto-renamed
+- **WHEN** session `20260101-garden-__` is moved to strict-root project `garden` with no `--rename-tag`
+- **THEN** validation fails with the label error, no NOTE line is printed and no tag is derived
 
 #### Scenario: Similar but distinct prefix is not merged
 - **WHEN** session `20260101-scratch-build-shelf` is moved to strict-root project `building`
