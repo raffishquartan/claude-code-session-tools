@@ -106,6 +106,7 @@ def test_hooks_install_bundle_all_hooks(tmp_path: Path) -> None:
         "ccst hooks run pending-migration",
         "ccst hooks run context-window-warning",
         "ccst hooks run pdata-sync",
+        "ccst hooks run self-improvement-nudge",
     }
     assert expected == all_cmds, f"Missing: {expected - all_cmds}; extra: {all_cmds - expected}"
 

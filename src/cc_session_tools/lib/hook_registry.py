@@ -33,6 +33,7 @@ HOOK_VERBS: dict[str, str] = {
     "pending-migration": "hooks.pending_migration",
     "context-window-warning": "hooks.context_window_warning",
     "pdata-sync": "hooks.pdata_sync",
+    "self-improvement-nudge": "hooks.self_improvement_nudge",
 }
 
 
@@ -50,6 +51,7 @@ HOOK_DESCRIPTIONS: dict[str, str] = {
     "pending-migration": "Detects legacy pre-1.0.0 flat-file data left unmigrated (ccmsg/ccsched/sessions/telemetry) and surfaces a FAIL digest pointing at `ccst migrate all`, plus pdata project databases still on format 3 (integer ids) pointing at `ccst pdata migrate-uuid` and the runbook; honours `ccst doctor --mute` (SessionStart)",
     "context-window-warning": "Nudges toward /compact when the context window passes 150k/200k tokens; silenced for the session by /context-override (Stop)",
     "pdata-sync": "Multi-laptop `ccst pdata` sync: rehydrates this project's DB from the published dump when it dominates local and the project isn't occupied by another live session (SessionStart), and publishes a fresh dump when local has new writes (SessionEnd); surfaces forks/checksum failures via Telegram + the catch-up digest",
+    "self-improvement-nudge": "Shows one line, at most once a day, when a periodic configuration self-improvement review is due by age or signal count (reads `ccst self-improvement` state only; silent when the config repository's own bash nudge is installed) (SessionStart)",
 }
 
 # Every settings.json hook entry CCST owns is spelled `ccst hooks run <name>`.
