@@ -10,13 +10,36 @@ Exit code 2 = block the tool call; the stderr message is shown to Claude.
 
 Categorically blocked, in file order (checks run in this exact order):
 
-  1. Destructive file operations (rm/rmdir/unlink/shred), anywhere in a compound
-     command (at line start or after ``;`` / ``&`` / ``|``).
-  2. The same destructive ops inside an inline ``python``/``node -c/-e`` script
-     (os.remove, os.unlink, shutil.rmtree, fs.unlinkSync, fs.rmdirSync).
+  1. Destructive file operations (rm/rmdir/unlink/shred and their ``g``-prefixed
+     names, ``find -delete``, ``find -exec rm``, ``xargs rm``) in any real command
+     position. The command is parsed (hooks.shell_parse), so a delete verb inside a
+     quoted argument, an echo/printf body, a commit message, a comment or a data
+     heredoc does not count, while one inside ``bash -c``/``sh -c``, ``eval``,
+     ``$(...)``, backticks, subshells, pipelines, or behind ``env``/``command``/
+     ``nohup``/``timeout``-style wrappers, ``\\rm``, ``/bin/rm``, ``RM`` (case-insensitive
+     filesystems), ``rm${IFS}x``, a ``<<<`` here-string fed to a shell, or a pipe into a
+     bare ``sh``/``bash`` (when the text mentions a delete verb) does. Unparseable input
+     fails closed: any mention of a delete verb blocks.
+     Scratchpad exception: a delete is allowed when every target resolves strictly
+     inside the calling session's own Claude Code scratchpad,
+     ``realpath(CLAUDE_CODE_TMPDIR or /tmp)/claude-<uid>/<encoded project dir>/<session
+     id>/scratchpad``, derived from the payload's ``session_id`` and
+     ``transcript_path``. Targets must be literal (no variables, substitutions, brace
+     expansion or ``~``), must not escape via ``..`` or symlinks, must have an existing
+     parent, and may only be missing for verbs that never follow a final symlink; a
+     glob is allowed only below the scratchpad root; the root itself, ``xargs``
+     deletes, ``rmdir -p``, ``find -L`` and any command that also runs ln/mv/cp/git or
+     similar are blocked; relative targets resolve against the payload ``cwd`` only
+     when the command does not change directory.
+  2. The same destructive ops inside an inline ``python``/``node`` script
+     (os.remove, os.unlink, shutil.rmtree, fs.unlinkSync, fs.rmdirSync), with the same
+     scratchpad exception for a plain string-literal argument, unless the script also
+     links, renames or moves paths.
   3. Delete-by-move: a direct ``mv`` of a non-tmp file into a tmp-like location
-     (/tmp, /var/tmp, ~/.Trash, ~/tmp, $HOME variants). Moving a file that is
-     already inside a tmp-like location is allowed (not a delete).
+     (/tmp, /var/tmp, /private/tmp, /private/var/tmp, ~/.Trash, ~/tmp, $HOME
+     variants) or into Claude Code's per-uid temp root (where scratchpads live), in
+     any parsed command position. Moving a file that is already inside a tmp-like
+     location is allowed (not a delete).
   4. Delete-by-move inside an inline ``python``/``node -c/-e`` script
      (shutil.move / os.rename / os.replace / fs.renameSync / .move / .copy2 with a
      tmp-like destination).
@@ -24,7 +47,9 @@ Categorically blocked, in file order (checks run in this exact order):
      (single level of indirection). ``#``-comment lines are stripped first so the
      hook's own source / documentation cannot self-match, and the python/node
      patterns require a trailing ``(`` so regex-literal declarations don't match.
-  6. The same, but for a heredoc body fed to an interpreter.
+     There is no scratchpad exception here.
+  6. The same, but for a heredoc body fed to an interpreter (also no scratchpad
+     exception).
 
 Self-cleanup exemption (applies within items 2, 5, 6 only): a Python call to
 ``os.remove``, ``os.unlink``, or ``shutil.rmtree`` is NOT flagged if its sole
@@ -55,24 +80,98 @@ Other PreToolUse hooks (e.g. bash-security-review) run after this one.
 """
 from __future__ import annotations
 
+import glob
 import json
 import os
 import re
 import sys
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from cc_session_tools.lib.telemetry_store import db_path as _telemetry_db_path
+from hooks.shell_parse import DYNAMIC, ShellParseError, SimpleCommand, Word, split_commands
 
 # ---- Common guidance suffix for deletion-style blocks ----
-# Repeated verbatim in every deletion / delete-by-move BLOCKED message so Claude
-# sees the rule every time it is blocked: compile a list, do not delete, present
-# to the user at the end of task for manual deletion.
-_DELETION_GUIDANCE = (
+# Repeated in every deletion / delete-by-move BLOCKED message so Claude sees the
+# rule every time it is blocked: compile a list, do not delete, present to the
+# user at the end of task for manual deletion - plus where deletes ARE allowed.
+_DELETION_LIST_GUIDANCE = (
     "Per CLAUDE.md, do NOT delete files mid-task (including by moving to /tmp, "
     "/var/tmp, ~/.Trash or ~/tmp). Compile the file path(s) into a deletion list "
     "in your working notes and present the full list to the user at the end of "
     "task for them to delete manually."
 )
+_SCRATCHPAD_PATTERN = (
+    "<CLAUDE_CODE_TMPDIR or /tmp>/claude-<uid>/<encoded project dir>/<session id>/scratchpad"
+)
+
+
+def _deletion_guidance(scratchpad: Path | None) -> str:
+    where = str(scratchpad) if scratchpad is not None else _SCRATCHPAD_PATTERN
+    return (
+        f"{_DELETION_LIST_GUIDANCE} Exception: rm/rmdir/unlink/shred, find -delete and "
+        "inline python/node deletes are allowed when every target is a literal path "
+        f"strictly inside this session's scratchpad ({where}) - no variables, no globs at "
+        "or above it, no '..' or symlinks leading out of it, and no ln/mv/cp in the same "
+        "command. Script files and heredocs fed to an interpreter may not delete at all."
+    )
+
+
+# ---- Session context from the hook payload ----
+
+_SESSION_ID_RE = re.compile(r"^[A-Za-z0-9_-]+$")
+_ENCODED_DIR_RE = re.compile(r"^[A-Za-z0-9-]+$")
+
+
+@dataclass(frozen=True, slots=True)
+class HookContext:
+    """What the payload tells the hook about the calling session.
+
+    ``scratchpad`` is this session's Claude Code scratchpad (None when the payload
+    does not identify the session). ``temp_root`` is Claude Code's per-uid temp root,
+    which holds every session's scratchpad. ``cwd`` is the shell's working directory.
+    """
+
+    scratchpad: Path | None = None
+    temp_root: Path | None = None
+    cwd: str | None = None
+
+
+def _claude_temp_root() -> Path:
+    """Claude Code's per-uid temp root: ``realpath(CLAUDE_CODE_TMPDIR or /tmp)/claude-<uid>``."""
+    base = os.environ.get("CLAUDE_CODE_TMPDIR") or "/tmp"
+    return Path(os.path.realpath(base)) / f"claude-{os.getuid()}"
+
+
+def derive_scratchpad(session_id: object, transcript_path: object) -> Path | None:
+    """The calling session's scratchpad, or None when the payload cannot pin it.
+
+    The project-dir component is the name of the directory holding the transcript,
+    which Claude Code names with the same encoder it uses for the scratchpad. No
+    component below the temp root may be a symlink, so the directory cannot be
+    redirected elsewhere."""
+    if not isinstance(session_id, str) or not _SESSION_ID_RE.match(session_id):
+        return None
+    if not isinstance(transcript_path, str) or not transcript_path:
+        return None
+    encoded = Path(transcript_path).parent.name
+    if not _ENCODED_DIR_RE.match(encoded):
+        return None
+    path = _claude_temp_root().parent
+    for component in (_claude_temp_root().name, encoded, session_id, "scratchpad"):
+        path = path / component
+        if path.is_symlink():
+            return None
+    return path
+
+
+def context_from_payload(data: dict[str, object]) -> HookContext:
+    cwd = data.get("cwd")
+    return HookContext(
+        scratchpad=derive_scratchpad(data.get("session_id"), data.get("transcript_path")),
+        temp_root=_claude_temp_root(),
+        cwd=cwd if isinstance(cwd, str) and cwd.startswith("/") else None,
+    )
 
 
 # ---- Helpers: tmp-like path detection ----
@@ -93,7 +192,10 @@ def _strip_one_quote_layer(p: str) -> str:
 
 
 # Literal tmp-like bases: a path equal to the base, or a child of it, counts.
-_TMP_LITERAL_BASES = ("/tmp", "/var/tmp", "~/.Trash", "~/tmp", "$HOME/.Trash", "$HOME/tmp")
+_TMP_LITERAL_BASES = (
+    "/tmp", "/var/tmp", "/private/tmp", "/private/var/tmp",
+    "~/.Trash", "~/tmp", "$HOME/.Trash", "$HOME/tmp",
+)
 
 
 def _is_tmp_path(raw: str) -> bool:
@@ -149,39 +251,41 @@ def _mv_segment_violates(seg: str) -> bool:
     # (e.g. `echo "remember to mv foo to /tmp"`).
     if i >= len(tokens) or tokens[i] != "mv":
         return False
-    args: list[str] = []
-    dest_via_t = ""
-    j = i + 1
-    while j < len(tokens):
-        t = tokens[j]
-        if t in ("-t", "--target-directory"):
-            j += 1
-            if j < len(tokens):
-                dest_via_t = tokens[j]
-        elif t.startswith("--target-directory="):
-            dest_via_t = t[len("--target-directory="):]
-        elif t in ("-S", "--suffix"):
-            j += 1
-        elif t.startswith("--suffix=") or t.startswith("--backup="):
-            pass
-        elif t.startswith("-"):
-            pass
-        else:
-            args.append(t)
-        j += 1
-    if dest_via_t:
-        dest = dest_via_t
-        sources = args
-    elif len(args) >= 2:
-        dest = args[-1]
-        sources = args[:-1]
-    else:
+    split = _mv_split(tokens[i + 1:])
+    if split is None:
         return False
+    dest, sources = split
     if _is_tmp_path(dest):
         for src in sources:
             if src and not _is_tmp_path(src):
                 return True
     return False
+
+
+def _mv_split(args: list[str]) -> tuple[str, list[str]] | None:
+    """Split the arguments of an ``mv`` into (destination, sources), or None when
+    there is no destination. ``-t``/``--target-directory`` name the destination."""
+    operands: list[str] = []
+    dest_via_t = ""
+    j = 0
+    while j < len(args):
+        t = args[j]
+        if t in ("-t", "--target-directory"):
+            j += 1
+            if j < len(args):
+                dest_via_t = args[j]
+        elif t.startswith("--target-directory="):
+            dest_via_t = t[len("--target-directory="):]
+        elif t in ("-S", "--suffix"):
+            j += 1
+        elif not t.startswith("-"):
+            operands.append(t)
+        j += 1
+    if dest_via_t:
+        return dest_via_t, operands
+    if len(operands) >= 2:
+        return operands[-1], operands[:-1]
+    return None
 
 
 # Split on shell statement separators: && || ; | (in that precedence, but a
@@ -348,7 +452,7 @@ def _has_unsafe_py_delete(content: str, broad_del_re: "re.Pattern[str]") -> bool
     return False
 
 
-def _check_script_file(command: str) -> str | None:
+def _check_script_file(command: str, guidance: str) -> str | None:
     """Return a BLOCKED message if *command* invokes an interpreter on a readable
     script file whose (comment-stripped) contents contain a destructive op or a
     delete-by-move. Otherwise None.
@@ -384,17 +488,17 @@ def _check_script_file(command: str) -> str | None:
                 if _FILE_RM_RE.search(stripped) or _has_unsafe_py_delete(stripped, _FILE_PY_DEL_RE):
                     return (
                         f"BLOCKED: Script file '{file}' contains a destructive file "
-                        f"operation. {_DELETION_GUIDANCE}"
+                        f"operation. {guidance}"
                     )
                 if _detect_mv_to_tmp(stripped):
                     return (
                         f"BLOCKED: Script file '{file}' contains a delete-by-move "
-                        f"(mv into tmp-like location). {_DELETION_GUIDANCE}"
+                        f"(mv into tmp-like location). {guidance}"
                     )
                 if _detect_script_move_to_tmp(stripped):
                     return (
                         f"BLOCKED: Script file '{file}' contains a delete-by-move in "
-                        f"a python/node call. {_DELETION_GUIDANCE}"
+                        f"a python/node call. {guidance}"
                     )
             break
     return None
@@ -429,7 +533,7 @@ def _scan_heredoc_body(body: str) -> str | None:
     return None
 
 
-def _check_heredoc(command: str) -> str | None:
+def _check_heredoc(command: str, guidance: str) -> str | None:
     """Return a BLOCKED message if a heredoc body fed to an interpreter contains a
     destructive op, delete-by-move, gh delete, or curl DELETE. Otherwise None.
 
@@ -459,7 +563,8 @@ def _check_heredoc(command: str) -> str | None:
                 body = "".join(ln + "\n" for ln in body_lines)
                 kind = _scan_heredoc_body(body)
                 if kind is not None:
-                    return _HEREDOC_MESSAGES[kind]
+                    message = _HEREDOC_MESSAGES[kind]
+                    return f"{message} {guidance}" if kind in _HEREDOC_DELETION_KINDS else message
                 # No hit — reset and keep looking for a further heredoc.
                 in_hd = False
                 delim = ""
@@ -472,18 +577,19 @@ def _check_heredoc(command: str) -> str | None:
     return None
 
 
+_HEREDOC_DELETION_KINDS = frozenset({"del", "mv-direct", "mv-script"})
 _HEREDOC_MESSAGES: dict[str, str] = {
     "del": (
         "BLOCKED: Heredoc body fed to an interpreter contains a destructive file "
-        f"operation. {_DELETION_GUIDANCE}"
+        "operation."
     ),
     "mv-direct": (
         "BLOCKED: Heredoc body fed to an interpreter contains a delete-by-move "
-        f"(mv into tmp-like location). {_DELETION_GUIDANCE}"
+        "(mv into tmp-like location)."
     ),
     "mv-script": (
         "BLOCKED: Heredoc body fed to an interpreter contains a delete-by-move in "
-        f"a python/node call. {_DELETION_GUIDANCE}"
+        "a python/node call."
     ),
     "gh-delete": (
         "BLOCKED: Heredoc body fed to an interpreter contains a gh api DELETE or "
@@ -497,13 +603,541 @@ _HEREDOC_MESSAGES: dict[str, str] = {
 }
 
 
+# ---- Command-position scan (parsed simple commands) ----
+#
+# The command is split into simple commands by hooks.shell_parse, so a delete verb
+# counts only where the shell would run it. Wrappers (env, command, nohup, ...),
+# shells given -c, eval, find and xargs are unwrapped to the command they run.
+
+_DELETE_VERBS = frozenset(
+    {"rm", "rmdir", "unlink", "shred", "grm", "grmdir", "gunlink", "gshred"}
+)
+# Verbs that never follow a final symlink, so a target that does not exist yet is
+# safe: whatever the same command later creates there, only that name is removed.
+_NO_FOLLOW_VERBS = frozenset({"rm", "rmdir", "unlink", "grm", "grmdir", "gunlink"})
+# Commands that can create or swap a path for a symlink before a later delete in
+# the same command runs; their presence disables the scratchpad allowance.
+_LINK_OR_MOVE_COMMANDS = frozenset({
+    "ln", "gln", "link", "glink", "mv", "gmv", "cp", "gcp", "rsync", "tar", "gtar",
+    "unzip", "ditto", "install", "ginstall", "cpio", "git",
+})
+_SHELLS = frozenset({"sh", "bash", "zsh", "dash", "ksh", "mksh"})
+_CWD_CHANGERS = frozenset({"cd", "pushd", "popd"})
+_KEYWORDS = frozenset({"!", "{", "}", "if", "then", "else", "elif", "while", "until", "do"})
+_HEADER_KEYWORDS = frozenset({"for", "case", "select", "in", "esac", "done", "fi"})
+_INTERP_WORD_RE = re.compile(r"^(python[0-9.]*|node|nodejs)$")
+_ASSIGNMENT_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*(\[[^\]]*\])?\+?=")
+
+# Wrapper -> options that take a separate argument. Every other option is a flag.
+_WRAPPERS: dict[str, frozenset[str]] = {
+    "command": frozenset(),
+    "builtin": frozenset(),
+    "exec": frozenset({"-a"}),
+    "nohup": frozenset(),
+    "time": frozenset(),
+    "nice": frozenset({"-n", "--adjustment"}),
+    "gnice": frozenset({"-n", "--adjustment"}),
+    "stdbuf": frozenset({"-i", "-o", "-e", "--input", "--output", "--error"}),
+    "setsid": frozenset(),
+    "busybox": frozenset(),
+    "chronic": frozenset(),
+    "doas": frozenset({"-u", "-C"}),
+    "sudo": frozenset({"-u", "-g", "-C", "-D", "-h", "-p", "-r", "-t", "-U"}),
+}
+_TIMEOUT_ARG_OPTS = frozenset({"-s", "--signal", "-k", "--kill-after"})
+_ENV_ARG_OPTS = frozenset({"-u", "--unset", "-P"})
+_XARGS_ARG_OPTS = frozenset({
+    "-a", "-d", "-E", "-I", "-L", "-n", "-P", "-s", "--arg-file", "--delimiter",
+    "--max-lines", "--max-args", "--max-procs", "--max-chars", "--process-slot-var",
+})
+_FIND_ACTIONS_EXEC = frozenset({"-exec", "-execdir", "-ok", "-okdir"})
+
+
+@dataclass(frozen=True, slots=True)
+class _Delete:
+    """One delete: each target must pass the scratchpad check. ``allow_missing``
+    says whether a not-yet-existing target is safe for this verb. ``overwrites`` marks
+    ``shred``, which destroys file content shared with every hard link."""
+
+    targets: tuple[Word, ...]
+    allow_missing: bool
+    overwrites: bool = False
+
+
+@dataclass(slots=True)
+class _Scan:
+    deletes: list[_Delete] = field(default_factory=list)
+    unresolvable_delete: bool = False
+    command_names: set[str] = field(default_factory=set)
+    cwd_changed: bool = False
+    inline_scripts: list[str] = field(default_factory=list)
+    mv_commands: list[tuple[Word, ...]] = field(default_factory=list)
+    shell_reads_stdin: bool = False
+
+
+_DELETE_VERB_MENTION_RE = re.compile(r"\b(g?rm|g?rmdir|g?unlink|g?shred)\b", re.IGNORECASE)
+
+
+def _skip_options(words: tuple[Word, ...], i: int, arg_opts: frozenset[str]) -> int:
+    """Index of the first word after the options starting at *i*."""
+    while i < len(words):
+        v = words[i].value
+        if v == "--":
+            return i + 1
+        if not v.startswith("-") or v == "-":
+            return i
+        i += 2 if v in arg_opts else 1
+    return i
+
+
+def _scan_text(text: str, scan: _Scan, *, from_xargs: bool = False) -> None:
+    """Parse *text* as a command line (a ``bash -c`` string, ``eval`` args) and scan it.
+    Unparseable text counts as an unresolvable delete if it mentions a delete verb."""
+    try:
+        commands = split_commands(text)
+    except ShellParseError:
+        if _DELETE_VERB_MENTION_RE.search(text):
+            scan.unresolvable_delete = True
+        return
+    for cmd in commands:
+        _scan_command(
+            cmd.words, scan, from_xargs=from_xargs, herestrings=cmd.herestrings,
+            stdin_redirected=cmd.stdin_redirected,
+        )
+
+
+def _scan_command(
+    words: tuple[Word, ...], scan: _Scan, *, from_xargs: bool = False,
+    find_roots: tuple[Word, ...] | None = None, herestrings: tuple[Word, ...] = (),
+    stdin_redirected: bool = False,
+) -> None:
+    """Record what the simple command *words* does that matters to the delete checks.
+
+    ``from_xargs``: the command gets extra arguments from stdin (``xargs``).
+    ``find_roots``: the command runs from ``find -exec``; ``{}`` stands for a match
+    under these start paths. ``herestrings``: ``<<<`` text fed to its stdin;
+    ``stdin_redirected``: stdin comes from a file, heredoc or here-string, not a pipe.
+    Command names are compared case-insensitively, because a case-insensitive
+    filesystem runs ``RM`` as ``rm``."""
+    for k, w in enumerate(words):
+        if _INTERP_WORD_RE.match(os.path.basename(w.value).lower()):
+            scan.inline_scripts.append(
+                " ".join(x.value for x in (*words[k + 1:], *herestrings))
+            )
+            break
+    i = 0
+    while i < len(words):
+        while i < len(words) and (
+            _ASSIGNMENT_RE.match(words[i].value) or words[i].value in _KEYWORDS
+        ):
+            i += 1
+        if i >= len(words):
+            return
+        head = words[i]
+        if head.dynamic:
+            # `rm${IFS}-rf${IFS}/x` word-splits into a delete; an expansion that
+            # yields the whole command name (`$CMD x`) cannot be known statically.
+            if any(
+                os.path.basename(part).lower() in _DELETE_VERBS
+                for part in head.value.split(DYNAMIC)
+            ):
+                scan.unresolvable_delete = True
+            return
+        name = os.path.basename(head.value).lower()
+        scan.command_names.add(name)
+        rest = words[i + 1:]
+        if head.value in _HEADER_KEYWORDS:
+            return
+        if head.value == "function":
+            i += 2
+            continue
+        if name in _CWD_CHANGERS:
+            scan.cwd_changed = True
+            return
+        if name in _WRAPPERS:
+            if name == "command" and any(w.value in ("-v", "-V") for w in rest[:1]):
+                return
+            i = _skip_options(words, i + 1, _WRAPPERS[name])
+            continue
+        if name in ("timeout", "gtimeout"):
+            i = _skip_options(words, i + 1, _TIMEOUT_ARG_OPTS) + 1
+            continue
+        if name == "env":
+            i = _scan_env(words, i + 1, scan)
+            if i < 0:
+                return
+            continue
+        if name in _SHELLS:
+            _scan_shell(
+                rest, scan, from_xargs=from_xargs, herestrings=herestrings,
+                stdin_redirected=stdin_redirected,
+            )
+            return
+        if name == "eval":
+            _scan_text(" ".join(w.value for w in rest), scan, from_xargs=from_xargs)
+            return
+        if name in ("xargs", "gxargs"):
+            j = _skip_options(rest, 0, _XARGS_ARG_OPTS)
+            if j < len(rest):
+                _scan_command(rest[j:], scan, from_xargs=True)
+            return
+        if name in ("find", "gfind"):
+            _scan_find(rest, scan)
+            return
+        if name in ("mv", "gmv"):
+            scan.mv_commands.append(rest)
+            return
+        if name in _DELETE_VERBS:
+            _record_delete(name, rest, scan, from_xargs=from_xargs, find_roots=find_roots)
+        return
+
+
+def _scan_env(words: tuple[Word, ...], i: int, scan: _Scan) -> int:
+    """Skip ``env``'s options and assignments; return the command's index, or -1
+    when ``-S`` handed the rest to a recursive scan."""
+    while i < len(words):
+        v = words[i].value
+        if v == "--":
+            i += 1
+            break
+        if v in ("-S", "--split-string") or v.startswith(("--split-string=", "-S")):
+            if v in ("-S", "--split-string"):
+                split, after = (words[i + 1].value if i + 1 < len(words) else ""), i + 2
+            elif v.startswith("--split-string="):
+                split, after = v.split("=", 1)[1], i + 1
+            else:
+                split, after = v[2:], i + 1
+            _scan_text(" ".join([split, *(w.value for w in words[after:])]), scan)
+            return -1
+        if v in ("-C", "--chdir") or v.startswith("--chdir="):
+            scan.cwd_changed = True
+            i += 1 if "=" in v else 2
+            continue
+        if v.startswith("-") and v != "-":
+            i += 2 if v in _ENV_ARG_OPTS else 1
+            continue
+        if _ASSIGNMENT_RE.match(v):
+            i += 1
+            continue
+        break
+    return i
+
+
+def _scan_shell(
+    args: tuple[Word, ...], scan: _Scan, *, from_xargs: bool, herestrings: tuple[Word, ...],
+    stdin_redirected: bool,
+) -> None:
+    """``bash``/``sh``/... : scan the ``-c`` string or ``<<<`` here-string. A shell with
+    neither and no script operand reads commands from stdin (a pipe); that is recorded
+    so the caller can block when the command text mentions a delete verb at all. A
+    script file is checked elsewhere."""
+    has_c = False
+    has_s = False
+    i = 0
+    while i < len(args):
+        v = args[i].value
+        if v == "--":
+            i += 1
+            break
+        if v in ("-o", "+o", "-O", "+O", "--rcfile", "--init-file"):
+            i += 2
+            continue
+        if v.startswith("--"):
+            i += 1
+            continue
+        if len(v) > 1 and v[0] in "-+":
+            has_c = has_c or "c" in v[1:]
+            has_s = has_s or "s" in v[1:]
+            i += 1
+            continue
+        break
+    if has_c:
+        if i < len(args):
+            _scan_text(args[i].value, scan, from_xargs=from_xargs)
+        return
+    for here in herestrings:
+        _scan_text(here.value, scan, from_xargs=from_xargs)
+    if not stdin_redirected and (has_s or i >= len(args)):
+        scan.shell_reads_stdin = True
+
+
+def _scan_find(args: tuple[Word, ...], scan: _Scan) -> None:
+    i = 0
+    follows = False
+    while i < len(args) and (
+        args[i].value in ("-H", "-L", "-P", "-D") or args[i].value.startswith("-O")
+    ):
+        follows = follows or args[i].value in ("-H", "-L")
+        i += 2 if args[i].value == "-D" else 1
+    roots: list[Word] = []
+    while i < len(args) and not (
+        args[i].value.startswith("-") or args[i].value in ("(", ")", "!", ",")
+    ):
+        roots.append(args[i])
+        i += 1
+    root_words = tuple(roots) or (_literal_word("."),)
+    follows = follows or any(w.value == "-follow" for w in args[i:])
+    deletes_before = len(scan.deletes)
+    while i < len(args):
+        v = args[i].value
+        if v == "-delete":
+            scan.deletes.append(_Delete(root_words, allow_missing=False))
+        elif v in _FIND_ACTIONS_EXEC:
+            if v in ("-execdir", "-okdir"):
+                scan.cwd_changed = True  # the command runs in each match's directory
+            j = i + 1
+            while j < len(args) and args[j].value not in (";", "+"):
+                j += 1
+            _scan_command(args[i + 1:j], scan, find_roots=root_words)
+            i = j
+        i += 1
+    if follows and (len(scan.deletes) > deletes_before):
+        scan.unresolvable_delete = True
+
+
+def _literal_word(text: str) -> Word:
+    return Word(text, text, (False,) * len(text), tilde=False, brace=False)
+
+
+def _record_delete(
+    verb: str, args: tuple[Word, ...], scan: _Scan, *, from_xargs: bool,
+    find_roots: tuple[Word, ...] | None,
+) -> None:
+    # xargs appends targets from stdin; `rmdir -p` also removes every parent it empties.
+    if from_xargs or (
+        verb in ("rmdir", "grmdir")
+        and any(w.value == "--parents" or re.match(r"^-[a-z]*p", w.value) for w in args)
+    ):
+        scan.unresolvable_delete = True
+        return
+    arg_opts = frozenset({"-n", "-s", "--iterations", "--size", "--random-source"}) if (
+        verb in ("shred", "gshred")
+    ) else frozenset()
+    targets: list[Word] = []
+    options_done = False
+    i = 0
+    while i < len(args):
+        w = args[i]
+        if not options_done and w.value == "--":
+            options_done = True
+        elif not options_done and w.value.startswith("-") and w.value != "-":
+            i += 1 if w.value not in arg_opts else 2
+            continue
+        elif w.value == "{}" and find_roots is not None:
+            targets.extend(find_roots)
+        else:
+            targets.append(w)
+        i += 1
+    if not targets:
+        scan.unresolvable_delete = True
+        return
+    scan.deletes.append(_Delete(
+        tuple(targets), allow_missing=verb in _NO_FOLLOW_VERBS,
+        overwrites=verb in ("shred", "gshred"),
+    ))
+
+
+# ---- Scratchpad target checks ----
+
+
+def _inside(path: str, root: str, *, or_equal: bool) -> bool:
+    return (or_equal and path == root) or path.startswith(root.rstrip("/") + "/")
+
+
+def _absolute(path: str, cwd: str | None) -> str | None:
+    if path.startswith("/"):
+        return path
+    return os.path.join(cwd, path) if cwd is not None else None
+
+
+def _link_count(path: str) -> int:
+    """Hard-link count of *path*, or 0 when it vanished since it was seen (fail closed)."""
+    try:
+        return os.stat(path).st_nlink
+    except OSError:
+        return 0
+
+
+def _path_in_scratchpad(
+    path: str, scratchpad: Path, *, allow_missing: bool, overwrites: bool = False
+) -> bool:
+    """True if deleting absolute *path* can only affect something strictly inside
+    *scratchpad*: its parent exists inside (or is) the scratchpad, it is not ``.``/``..``,
+    an existing target resolves inside, and a missing one is allowed for this verb. When
+    *overwrites*, a file with other hard links (which may live outside) is refused."""
+    root = str(scratchpad)
+    stripped = path.rstrip("/")
+    trailing_slash = stripped != path
+    name = os.path.basename(stripped)
+    if name in ("", ".", ".."):
+        return False
+    parent = os.path.realpath(os.path.dirname(stripped))
+    if not os.path.isdir(parent) or not _inside(parent, root, or_equal=True):
+        return False
+    target = os.path.join(parent, name)
+    if os.path.lexists(target):
+        resolved = os.path.realpath(target)
+        if overwrites and os.path.isfile(resolved) and _link_count(resolved) != 1:
+            return False
+        return _inside(resolved, root, or_equal=False)
+    return allow_missing and not trailing_slash
+
+
+def _glob_in_scratchpad(
+    word: Word, cwd: str | None, scratchpad: Path, *, allow_missing: bool, overwrites: bool
+) -> bool:
+    """A glob is safe when its static prefix is the scratchpad or inside it, no ``..``
+    follows the first wildcard, and every current match passes the path check."""
+    chars = list(zip(word.value, word.glob_mask))
+    if not word.value.startswith("/"):
+        if cwd is None:
+            return False
+        chars = [(c, False) for c in cwd.rstrip("/") + "/"] + chars
+    components: list[list[tuple[str, bool]]] = [[]]
+    for c, magic in chars:
+        if c == "/" and not magic:
+            components.append([])
+        else:
+            components[-1].append((c, magic))
+    first_magic = next(i for i, comp in enumerate(components) if any(m for _c, m in comp))
+    static = "/".join("".join(c for c, _m in comp) for comp in components[:first_magic]) or "/"
+    if any("".join(c for c, _m in comp) == ".." for comp in components[first_magic:]):
+        return False
+    if not _inside(os.path.realpath(static), str(scratchpad), or_equal=True):
+        return False
+    pattern = "/".join(
+        "".join(c if m else glob.escape(c) for c, m in comp) for comp in components
+    )
+    suffix = "/" if word.value.endswith("/") else ""
+    return all(
+        _path_in_scratchpad(
+            match + suffix, scratchpad, allow_missing=allow_missing, overwrites=overwrites
+        )
+        for match in glob.glob(pattern)
+    )
+
+
+def _target_in_scratchpad(word: Word, delete: _Delete, ctx: HookContext, scan: _Scan) -> bool:
+    if ctx.scratchpad is None or word.dynamic or word.tilde or word.brace or not word.value:
+        return False
+    cwd = None if scan.cwd_changed else ctx.cwd
+    if word.has_glob:
+        return _glob_in_scratchpad(
+            word, cwd, ctx.scratchpad,
+            allow_missing=delete.allow_missing, overwrites=delete.overwrites,
+        )
+    path = _absolute(word.value, cwd)
+    return path is not None and _path_in_scratchpad(
+        path, ctx.scratchpad, allow_missing=delete.allow_missing, overwrites=delete.overwrites
+    )
+
+
+# Inline python/node delete calls whose first argument is a plain string literal.
+_INLINE_LITERAL_DEL_RE = re.compile(
+    r"(?:os\.remove|os\.unlink|shutil\.rmtree|fs\.unlinkSync|fs\.rmdirSync)\(\s*"
+    r"(?P<q>[\"'])(?P<path>[^\"'\\\n\x00]*)(?P=q)\s*(?:,[^()]*)?\)",
+    re.IGNORECASE,
+)
+# An inline script that also links, renames or moves paths could redirect its own
+# delete through a symlink it just made, so it gets no scratchpad allowance.
+_INLINE_LINK_OR_MOVE_RE = re.compile(
+    r"symlink|(?<!un)link(?:Sync)?\(|rename|(?<![A-Za-z_])(?:replace|move)\(|copytree"
+)
+
+
+def _inline_script_has_unsafe_delete(script: str, ctx: HookContext, scan: _Scan) -> bool:
+    temp_vars = _self_cleanup_temp_vars(script)
+    safe_spans = [
+        m.span() for m in _PY_TEMP_DEL_CALL_RE.finditer(script) if m.group(1) in temp_vars
+    ]
+    allowance = ctx.scratchpad is not None and not _INLINE_LINK_OR_MOVE_RE.search(script)
+    for m in _INLINE_DEL_RE.finditer(script):
+        if any(start <= m.start() < end for start, end in safe_spans):
+            continue
+        literal = _INLINE_LITERAL_DEL_RE.match(script, m.start())
+        # Only an absolute literal: the script could chdir before deleting a relative one.
+        if allowance and literal is not None and ctx.scratchpad is not None:
+            path = literal.group("path")
+            if path.startswith("/") and _path_in_scratchpad(
+                path, ctx.scratchpad, allow_missing=True
+            ):
+                continue
+        return True
+    return False
+
+
+def _mv_into_temp_root(args: tuple[Word, ...], ctx: HookContext, scan: _Scan) -> bool:
+    """A parsed ``mv`` that is a delete-by-move: the plain tmp-like rule, plus moving
+    a file from outside Claude Code's temp root into it (where the scratchpad lives)."""
+    if _mv_segment_violates("mv " + " ".join(w.raw for w in args)):
+        return True
+    split = _mv_split([w.value for w in args])
+    if split is None or ctx.temp_root is None:
+        return False
+    dest, sources = split
+    cwd = None if scan.cwd_changed else ctx.cwd
+    dest_abs = _absolute(dest, cwd)
+    if dest_abs is None or DYNAMIC in dest:
+        return False
+    root = str(ctx.temp_root)
+    if not _inside(os.path.realpath(dest_abs), root, or_equal=True):
+        return False
+    for src in sources:
+        src_abs = _absolute(src, cwd)
+        if src_abs is None or not _inside(os.path.realpath(src_abs), root, or_equal=True):
+            return True
+    return False
+
+
+_DELETE_BLOCK = "BLOCKED: Destructive file operation (rm/rmdir/unlink/shred/find -delete)"
+_INLINE_DELETE_BLOCK = "BLOCKED: Destructive file operation in inline script"
+_MV_BLOCK = "BLOCKED: Delete-by-move detected (mv into tmp-like location)"
+
+
+def _check_parsed_deletes(command: str, ctx: HookContext) -> str | None:
+    """Checks 1-3 (delete, inline delete, delete-by-move) on the parsed command."""
+    guidance = _deletion_guidance(ctx.scratchpad)
+    try:
+        commands: list[SimpleCommand] = split_commands(command)
+    except ShellParseError:
+        # Fail closed: without a parse, any mention of a delete verb blocks.
+        if _DELETE_VERB_MENTION_RE.search(command):
+            return f"{_DELETE_BLOCK}. {guidance}"
+        if _INLINE_INTERP_RE.search(command) and _has_unsafe_py_delete(command, _INLINE_DEL_RE):
+            return f"{_INLINE_DELETE_BLOCK}. {guidance}"
+        if _detect_mv_to_tmp(command):
+            return f"{_MV_BLOCK}. {guidance}"
+        return None
+    scan = _Scan()
+    for cmd in commands:
+        _scan_command(
+            cmd.words, scan, herestrings=cmd.herestrings, stdin_redirected=cmd.stdin_redirected
+        )
+    allowance = not (scan.command_names & _LINK_OR_MOVE_COMMANDS)
+    piped_delete = scan.shell_reads_stdin and _DELETE_VERB_MENTION_RE.search(command)
+    if scan.unresolvable_delete or piped_delete or any(
+        not allowance
+        or not all(
+            _target_in_scratchpad(t, d, ctx, scan) for t in d.targets
+        )
+        for d in scan.deletes
+    ):
+        return f"{_DELETE_BLOCK} outside this session's scratchpad. {guidance}"
+    if any(_inline_script_has_unsafe_delete(s, ctx, scan) for s in scan.inline_scripts):
+        return f"{_INLINE_DELETE_BLOCK}. {guidance}"
+    if _detect_mv_to_tmp(command) or any(
+        _mv_into_temp_root(args, ctx, scan) for args in scan.mv_commands
+    ):
+        return f"{_MV_BLOCK}. {guidance}"
+    return None
+
+
 # ---- Top-level command patterns ----
 # re.MULTILINE so `^`/`$` are line-oriented, matching the bash source's
 # `echo "$COMMAND" | grep` line-by-line processing. Patterns using `.*` remain
 # single-line-scoped because `.` never matches `\n` (no re.DOTALL) — again
 # matching grep.
 
-_DEL_RM_RE = re.compile(r"(^|[;&|]\s*)(rm|rmdir|unlink|shred)\s", re.MULTILINE)
 _INLINE_INTERP_RE = re.compile(r"(python3?|node)\s.*-[ce]\s", re.MULTILINE)
 _INLINE_DEL_RE = re.compile(
     r"(os\.remove|os\.unlink|shutil\.rmtree|fs\.unlinkSync|fs\.rmdirSync)",
@@ -559,38 +1193,29 @@ _ALLOW_PAYLOAD = {
 }
 
 
-def check_command(command: str) -> str | None:
+def check_command(command: str, ctx: HookContext | None = None) -> str | None:
     """Return a BLOCKED message if *command* matches a hard-deny pattern, else
-    None. Checks run in the same order as the bash source."""
-    # 1. Destructive file operations (deletion).
-    if _DEL_RM_RE.search(command):
-        return (
-            "BLOCKED: Destructive file operation (rm/rmdir/unlink/shred). "
-            f"{_DELETION_GUIDANCE}"
-        )
+    None. *ctx* carries the calling session's scratchpad and cwd; without it no
+    delete is allowed anywhere."""
+    ctx = ctx if ctx is not None else HookContext()
+    guidance = _deletion_guidance(ctx.scratchpad)
 
-    # 2. Python/Node destructive file ops in an inline script.
-    if _INLINE_INTERP_RE.search(command) and _has_unsafe_py_delete(command, _INLINE_DEL_RE):
-        return f"BLOCKED: Destructive file operation in inline script. {_DELETION_GUIDANCE}"
-
-    # 3. Delete-by-move (direct mv command to a tmp-like location).
-    if _detect_mv_to_tmp(command):
-        return (
-            "BLOCKED: Delete-by-move detected (mv into tmp-like location). "
-            f"{_DELETION_GUIDANCE}"
-        )
+    # 1-3. Deletes, inline-script deletes and delete-by-move, in command positions.
+    parsed_msg = _check_parsed_deletes(command, ctx)
+    if parsed_msg is not None:
+        return parsed_msg
 
     # 4. Delete-by-move in an inline python/node -c/-e script.
     if _INLINE_INTERP_RE.search(command) and _detect_script_move_to_tmp(command):
-        return f"BLOCKED: Delete-by-move detected in inline script. {_DELETION_GUIDANCE}"
+        return f"BLOCKED: Delete-by-move detected in inline script. {guidance}"
 
     # 5. Destructive op or delete-by-move in a script file passed to an interpreter.
-    script_msg = _check_script_file(command)
+    script_msg = _check_script_file(command, guidance)
     if script_msg is not None:
         return script_msg
 
     # 6. Destructive op or delete-by-move in a heredoc body fed to an interpreter.
-    heredoc_msg = _check_heredoc(command)
+    heredoc_msg = _check_heredoc(command, guidance)
     if heredoc_msg is not None:
         return heredoc_msg
 
@@ -707,7 +1332,7 @@ def main(argv: list[str] | None = None) -> int:
     if not command:
         return 0
 
-    blocked = check_command(command)
+    blocked = check_command(command, context_from_payload(data))
     if blocked is not None:
         print(blocked, file=sys.stderr)
         return 2

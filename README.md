@@ -337,7 +337,13 @@ CCST installs hooks that sit in front of what Claude does. They are on by defaul
   deletes (`rm` and friends, including inside inline scripts), delete-by-move into temp or
   trash locations, force-deleting git branches, deleting remote branches, mutating `gh` and
   `curl` calls, `sudo`, and similar. Everything else is auto-approved so routine compound
-  commands do not stall on prompts.
+  commands do not stall on prompts. Commands are parsed, so a delete verb that only appears
+  in a quoted `grep` pattern, an `echo` body or a commit message is not blocked, while one
+  inside `bash -c`, `$(...)`, `xargs` or `find -exec` is. One exception to the delete rule:
+  a session may delete files inside its own Claude Code scratchpad
+  (`/tmp/claude-<uid>/<encoded project dir>/<session id>/scratchpad`, or under
+  `CLAUDE_CODE_TMPDIR`) when every target is a literal path strictly inside it; the
+  scratchpad itself, other sessions' scratchpads and everything else stay protected.
 - **`bash-security-review`** - a tiered review of shell commands: a fast allowlist and
   command cache, read-only pre-filters and heuristics, and an LLM-backed review only for
   anything unusual. Results are cached so the common case stays fast. Use

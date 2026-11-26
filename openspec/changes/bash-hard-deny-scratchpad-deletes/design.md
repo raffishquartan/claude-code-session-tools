@@ -31,7 +31,9 @@ A sanitiser (blank out quoted strings, heredoc bodies and comments, then regex t
 
 Command words are then unwrapped: leading assignments and keywords (`!`, `{`, `then`, `do`, ...) are skipped; `for`/`case`/`select` headers are not commands; wrappers (`env` with its option arguments and `-S` string, `command`, `builtin`, `exec`, `nohup`, `time`, `nice`, `timeout`, `stdbuf`, `setsid`, `busybox`, `doas`) are skipped to the real command; `bash`/`sh`/`zsh`/`dash`/`ksh -c STRING` and `eval ARGS` are parsed recursively; the command name is compared by basename so `/bin/rm` and `\rm` match. A command word that is dynamic is not treated as a delete (as before).
 
-If the lexer fails (unterminated quote or substitution), the hook falls back to the old line-start regex and blocks if it matches.
+Names are compared case-insensitively (a case-insensitive filesystem runs `RM` as `rm`); a command word glued to an expansion (`rm${IFS}-rf${IFS}/x`) whose literal fragment is a delete verb counts as an unresolvable delete; a `<<<` here-string fed to a shell or to `python`/`node` is scanned like a `-c` string; and a shell reading commands from a pipe (`... | bash`, `sh -s`), whose input the hook cannot see, blocks whenever the command text mentions a delete verb. A pure `$CMD x` command name stays unknowable, as before.
+
+If the lexer fails (unterminated quote or substitution, or nesting deep enough to exhaust recursion), the hook fails closed: any mention of a delete verb blocks. A crash would make Claude Code treat the hook as a non-blocking error and run the command, so the parse must not raise anything but `ShellParseError`.
 
 Alternative considered: `shlex`. Rejected: it does not split on operators inside words, does not handle heredocs, substitutions or ANSI-C quoting.
 
@@ -44,6 +46,8 @@ For each delete target (non-option word, honouring `--`):
 - an existing target must have `realpath(target)` strictly inside the scratchpad, which covers a symlink that would be followed (`link/`, `shred`) and conservatively also one that would only be unlinked;
 - a target that does not exist yet is allowed only for `rm`/`rmdir`/`unlink` without a trailing slash, which never follow a final symlink; so a symlink the same command creates later cannot redirect the delete;
 - glob: the static prefix (components before the first one holding an unquoted metacharacter) must resolve inside or equal to the scratchpad, no `..` may follow, and every current match (`glob.glob`, which like bash skips dotfiles) must pass the non-glob check.
+
+Further refusals close specific escapes: `shred` of a file with more than one hard link (it would destroy content shared with a file outside), `rmdir -p` (it walks up past the scratchpad), relative targets under `find -execdir`/`-okdir` (they run in each match's directory), and relative literals in inline scripts (the script could `chdir` first).
 
 Because the checks run before the command, a command could first replace an existing directory under the scratchpad with a symlink pointing outside (`mv`, `ln`) and then delete through it. A command containing an allowed scratchpad delete therefore also blocks when it runs `ln`, `link`, `mv`, `cp`, `rsync`, `tar`, `unzip`, `ditto`, `install`, `cpio` or `git` anywhere, and an inline script delete is not allowed when the script text mentions `symlink`, `link(`, `rename`, `replace(`, `move(` or `copytree`.
 

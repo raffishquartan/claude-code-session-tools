@@ -24,7 +24,7 @@ The hook SHALL treat `rm`, `rmdir`, `unlink`, `shred` (and their `g`-prefixed na
 - **THEN** the command is allowed
 
 ### Requirement: Nested and wrapped command positions are recognised
-The hook SHALL recognise a delete command at every position the shell executes: after `;`, `&&`, `||`, `|`, `&` and newlines; inside `( ... )` subshells, `$( ... )` and backtick substitutions and process substitutions; inside the string passed to `bash -c`, `sh -c`, `zsh -c` and similar shells, and to `eval`; after `env`, `command`, `builtin`, `exec`, `nohup`, `time`, `nice`, `timeout`, `stdbuf`, `setsid` and `busybox`; as the command run by `xargs` or by `find -exec`; and when written as `\rm`, a quoted `"rm"`, an ANSI-C quoted `$'rm'`, or an absolute path such as `/bin/rm`. When the command cannot be parsed (for example an unterminated quote), the hook SHALL fall back to blocking any delete verb at a line start or after a separator.
+The hook SHALL recognise a delete command at every position the shell executes: after `;`, `&&`, `||`, `|`, `&` and newlines; inside `( ... )` subshells, `$( ... )` and backtick substitutions and process substitutions; inside the string passed to `bash -c`, `sh -c`, `zsh -c` and similar shells, and to `eval`; after `env`, `command`, `builtin`, `exec`, `nohup`, `time`, `nice`, `timeout`, `stdbuf`, `setsid` and `busybox`; as the command run by `xargs` or by `find -exec`; in a `<<<` here-string fed to a shell or to `python`/`node`; and when written as `\rm`, a quoted `"rm"`, an ANSI-C quoted `$'rm'`, an absolute path such as `/bin/rm`, in any letter case (`RM`), or glued to an expansion (`rm${IFS}x`). A shell that reads its commands from a pipe (`... | bash`, `sh -s`) SHALL be treated as running a delete whenever the command text mentions a delete verb. When the command cannot be parsed (for example an unterminated quote or nesting too deep to analyse), the hook SHALL block if the text mentions a delete verb anywhere.
 
 #### Scenario: Shell -c string
 - **WHEN** the command is `bash -c "rm -rf /home/alice/project"`
@@ -36,6 +36,10 @@ The hook SHALL recognise a delete command at every position the shell executes: 
 
 #### Scenario: Wrappers and escapes
 - **WHEN** the command is `env FOO=1 rm x`, `command rm x`, `nohup rm x`, `timeout 5 rm x`, `\rm x` or `/bin/rm x`
+- **THEN** the command is blocked
+
+#### Scenario: Here-strings, pipes into a shell, case and expansion tricks
+- **WHEN** the command is `bash <<< 'rm x'`, `echo 'rm x' | bash`, `RM x` or `rm${IFS}x`
 - **THEN** the command is blocked
 
 #### Scenario: find and xargs
