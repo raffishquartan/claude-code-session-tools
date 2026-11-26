@@ -35,7 +35,7 @@ is ambiguous**:
    example a `cc-sessions/<tag>` folder); a path is resolved to the project folder that
    contains it, and the message reaches sessions started in that project folder (a
    session started in a subfolder, such as a worktree, is not one of them). A relative
-   path, or a path that is not inside any project under a configured session root, exits
+   path (including `.` and `..`), or a path that is not inside any project under a configured session root, exits
    2 and stores nothing.
 3. `--to-description "<text>"` - "whoever is working on X". Surfaced to candidate
    sessions; one claims it.

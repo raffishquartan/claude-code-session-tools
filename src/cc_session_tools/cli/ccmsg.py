@@ -180,7 +180,7 @@ def _resolve_recipient(args: argparse.Namespace) -> _Recipient:
         )
     if kind == "project" and val.startswith(("/", "~")):
         return _project_from_path(val)
-    if kind == "project" and "/" in val:
+    if kind == "project" and ("/" in val or val in (".", "..")):
         raise ValueError(
             f"--to-project takes a project name or an absolute or ~-prefixed path, "
             f"not a relative path: {val}"

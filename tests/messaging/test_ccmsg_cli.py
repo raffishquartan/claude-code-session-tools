@@ -507,3 +507,14 @@ def test_send_to_project_rejects_relative_path(tmp_path: Path) -> None:
     assert res.returncode == 2
     assert "alpha/sub" in res.stderr
     assert _run(["list"], tmp_path / "store", env).stdout == ""
+
+
+@pytest.mark.parametrize("value", ["..", "."])
+def test_send_to_project_rejects_dot_names(tmp_path: Path, value: str) -> None:
+    # '..' and '.' are relative paths with no slash, not project names.
+    env, _ = _path_env(tmp_path)
+    res = _send_to_project(tmp_path, value, env)
+    assert res.returncode == 2
+    assert "relative path" in res.stderr
+    assert _run(["list"], tmp_path / "store", env).stdout == ""
+
