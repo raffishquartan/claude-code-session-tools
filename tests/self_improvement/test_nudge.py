@@ -54,10 +54,9 @@ def system_message(output: str) -> str:
 
 @pytest.fixture
 def hook(si: Env, monkeypatch: pytest.MonkeyPatch) -> Callable[[], str]:
-    """The hook on an install where the loop is set up and the review skill is installed."""
+    """The hook on an install where the loop is set up."""
     si.state.mkdir(parents=True, exist_ok=True)
     si.write_backlog(0)
-    si.install_review_skill()
     return lambda: run_hook(monkeypatch)
 
 
@@ -145,14 +144,14 @@ def test_silent_when_the_backlog_has_no_inbox(si: Env, monkeypatch: pytest.Monke
     assert run_hook(monkeypatch) == ""
 
 
-def test_names_the_status_command_when_the_review_skill_is_missing(
+def test_names_the_periodic_review_even_when_no_skill_directory_exists(
     si: Env, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    # The skill is bundled with CCST: the message never depends on what is on disk.
     si.write_backlog(0)
     si.interactive_review(40)
     msg = system_message(run_hook(monkeypatch))
-    assert msg.endswith(" - run ccst self-improvement status")
-    assert "review-session-and-improve-claude-setup" not in msg
+    assert msg.endswith(" - run /review-session-and-improve-claude-setup periodic")
 
 
 def test_malformed_snapshot_is_missing_when_review_recent(si: Env, hook: Callable[[], str]) -> None:

@@ -128,16 +128,20 @@ def test_status_says_how_to_set_up_the_loop_and_creates_nothing(si: Env) -> None
     assert proc.returncode == 0
     first = proc.stdout.splitlines()[0]
     assert first.startswith("loop: not set up - run `ccst self-improvement init`")
-    assert "interactive review: the review-session-and-improve-claude-setup skill is not installed" in proc.stdout
-    assert "remove the backlog's `## Inbox` line" in proc.stdout
+    assert "interactive review: run /review-session-and-improve-claude-setup periodic" in proc.stdout
     assert not si.backlog.exists()
     assert not si.state.exists()
 
 
-def test_status_names_the_periodic_review_when_the_skill_is_installed(si: Env) -> None:
-    si.install_review_skill()
-    out = ccst("status").stdout
-    assert "interactive review: run /review-session-and-improve-claude-setup periodic" in out
+def test_not_set_up_job_lines_name_init_and_fit_the_digest(si: Env, monkeypatch: pytest.MonkeyPatch) -> None:
+    # The scheduler keeps the first 1000 characters of a job's stdout for the weekly digest.
+    empty = si.root / "empty-bin"
+    empty.mkdir()
+    monkeypatch.setenv("PATH", str(empty))
+    for verb in (("collect-signals", "--no-escalate"), ("auto-review",)):
+        out = ccst(*verb).stdout
+        assert len(out.strip()) <= 1000
+        assert "ccst self-improvement init" in out.strip().splitlines()[-1]
 
 
 def test_record_review_appends_an_interactive_line(si: Env) -> None:

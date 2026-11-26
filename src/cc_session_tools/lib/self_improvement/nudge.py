@@ -19,7 +19,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from cc_session_tools.lib.self_improvement import state
-from cc_session_tools.lib.self_improvement.signals import COMPONENTS, review_command
+from cc_session_tools.lib.self_improvement.signals import COMPONENTS, PERIODIC_REVIEW_COMMAND
 
 AGE_WITH_SIGNAL_DAYS = 14
 AGE_ALONE_DAYS = 30
@@ -74,7 +74,7 @@ def message(review_age: int | None, snapshot: SnapshotView | None) -> str:
     )
     return (
         f"{MESSAGE_PREFIX} Self-improvement review due: {review_text}, {signals_text} - "
-        f"run {review_command()}"
+        f"run {PERIODIC_REVIEW_COMMAND}"
     )
 
 

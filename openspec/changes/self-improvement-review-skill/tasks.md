@@ -5,8 +5,8 @@
 
 ## 2. Messages name the skill
 
-- [ ] 2.1 Remove `review_command()`, `review_skill_installed()` and `STATUS_COMMAND`; the nudge, escalation and `status` always name `/review-session-and-improve-claude-setup periodic`; update the nudge, signals and CLI tests
-- [ ] 2.2 Test that both not-set-up job summary lines name `ccst self-improvement init` and fit the scheduler's 1000-character capture
+- [x] 2.1 Remove `review_command()`, `review_skill_installed()` and `STATUS_COMMAND`; the nudge, escalation and `status` always name `/review-session-and-improve-claude-setup periodic`; update the nudge, signals and CLI tests
+- [x] 2.2 Test that both not-set-up job summary lines name `ccst self-improvement init` and fit the scheduler's 1000-character capture
 
 ## 3. Bundled skill
 
