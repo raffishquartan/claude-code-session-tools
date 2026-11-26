@@ -49,12 +49,6 @@ class Env:
     def projects(self) -> Path:
         return self.home / ".claude" / "projects"
 
-    def install_review_skill(self) -> None:
-        """An installed interactive review skill, so messages name its periodic command."""
-        skill = self.home / ".claude" / "skills" / "review-session-and-improve-claude-setup"
-        skill.mkdir(parents=True, exist_ok=True)
-        (skill / "SKILL.md").write_text("---\nname: review-session-and-improve-claude-setup\n---\n")
-
     def review_line(self, text: str) -> None:
         self.state.mkdir(parents=True, exist_ok=True)
         with (self.state / "reviews.log").open("a", encoding="utf-8") as fh:

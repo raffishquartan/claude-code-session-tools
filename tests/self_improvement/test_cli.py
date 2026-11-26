@@ -6,7 +6,7 @@ import sys
 
 import pytest
 
-from .conftest import Env, iso_days_ago
+from .conftest import Env, days_ago, iso_days_ago
 
 
 def ccst(*args: str) -> subprocess.CompletedProcess[str]:
@@ -19,7 +19,7 @@ def ccst(*args: str) -> subprocess.CompletedProcess[str]:
 def test_help_lists_every_verb() -> None:
     proc = ccst("--help")
     assert proc.returncode == 0
-    for verb in ("collect-signals", "auto-review", "nudge", "status", "init"):
+    for verb in ("collect-signals", "auto-review", "nudge", "status", "init", "record-review"):
         assert verb in proc.stdout
 
 
@@ -128,13 +128,54 @@ def test_status_says_how_to_set_up_the_loop_and_creates_nothing(si: Env) -> None
     assert proc.returncode == 0
     first = proc.stdout.splitlines()[0]
     assert first.startswith("loop: not set up - run `ccst self-improvement init`")
-    assert "interactive review: the review-session-and-improve-claude-setup skill is not installed" in proc.stdout
-    assert "remove the backlog's `## Inbox` line" in proc.stdout
+    assert "interactive review: run /review-session-and-improve-claude-setup periodic" in proc.stdout
     assert not si.backlog.exists()
     assert not si.state.exists()
 
 
-def test_status_names_the_periodic_review_when_the_skill_is_installed(si: Env) -> None:
-    si.install_review_skill()
-    out = ccst("status").stdout
-    assert "interactive review: run /review-session-and-improve-claude-setup periodic" in out
+def test_status_says_how_to_turn_the_loop_off_once_set_up(si: Env) -> None:
+    si.write_backlog(0)
+    first = ccst("status").stdout.splitlines()[0]
+    assert first.startswith("loop: set up (backlog ")
+    assert "remove the backlog's `## Inbox` line" in first
+
+
+def test_not_set_up_job_lines_name_init_and_fit_the_digest(si: Env, monkeypatch: pytest.MonkeyPatch) -> None:
+    # The scheduler keeps the first 1000 characters of a job's stdout for the weekly digest.
+    empty = si.root / "empty-bin"
+    empty.mkdir()
+    monkeypatch.setenv("PATH", str(empty))
+    for verb in (("collect-signals", "--no-escalate"), ("auto-review",)):
+        out = ccst(*verb).stdout
+        assert len(out.strip()) <= 1000
+        assert "ccst self-improvement init" in out.strip().splitlines()[-1]
+
+
+def test_record_review_appends_an_interactive_line(si: Env) -> None:
+    si.interactive_review(40)
+    proc = ccst("record-review", "--mode", "C", "--findings", "3", "--applied", "1", "--deferred", "2")
+    assert proc.returncode == 0, proc.stderr
+    last = si.last_log()
+    assert last.startswith(days_ago(0) + "T")
+    assert last.endswith(" mode=C findings=3 applied=1 deferred=2")
+    assert proc.stdout == last + "\n"
+    assert "last interactive review: " + last in ccst("status").stdout
+
+
+def test_record_review_creates_the_state_directory(si: Env) -> None:
+    assert not si.state.exists()
+    proc = ccst("record-review", "--mode", "B", "--findings", "0", "--applied", "0", "--deferred", "0")
+    assert proc.returncode == 0, proc.stderr
+    assert si.last_log().endswith(" mode=B findings=0 applied=0 deferred=0")
+
+
+@pytest.mark.parametrize("args", [
+    ("--mode", "auto", "--findings", "0", "--applied", "0", "--deferred", "0"),
+    ("--mode", "B", "--findings", "-1", "--applied", "0", "--deferred", "0"),
+    ("--mode", "B", "--findings", "x", "--applied", "0", "--deferred", "0"),
+    ("--mode", "B", "--findings", "0", "--applied", "0"),
+])
+def test_record_review_rejects_invalid_input_and_writes_nothing(si: Env, args: tuple[str, ...]) -> None:
+    proc = ccst("record-review", *args)
+    assert proc.returncode == 2
+    assert not si.state.exists()

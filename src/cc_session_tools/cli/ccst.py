@@ -104,12 +104,14 @@ Current subcommands:
   context-override [on|off|status]  Toggle the /context-override flag for the current
                                  session (default: on). See ccst hooks run
                                  context-window-warning.
-  self-improvement collect-signals|auto-review|nudge|status|init
+  self-improvement collect-signals|auto-review|nudge|status|init|record-review
                                  The configuration self-improvement loop: counts-only
                                  signal snapshot, weekly headless proposal-only review
                                  (subscription login, USD 0.50 cap), nudge preview,
-                                 state summary and init (creates the backlog that turns
-                                 the bundled weekly jobs on; see --help).
+                                 state summary, init (creates the backlog that turns
+                                 the bundled weekly jobs on) and record-review (run by
+                                 the review-session-and-improve-claude-setup skill;
+                                 see --help).
 """
 from __future__ import annotations
 
@@ -3028,6 +3030,13 @@ def _cmd_self_improvement(args: argparse.Namespace) -> int:
         return 0
     if args.verb == "init":
         return _self_improvement_init()
+    if args.verb == "record-review":
+        line = state.interactive_line(
+            args.mode, findings=args.findings, applied=args.applied, deferred=args.deferred
+        )
+        state.append_log_line(state.state_dir(), line)
+        print(line)
+        return 0
     for line in report.status_lines(state.state_dir()):
         print(line)
     return 0
@@ -4210,7 +4219,8 @@ def _build_parser() -> argparse.ArgumentParser:
             "The configuration self-improvement loop. State lives in "
             "~/.local/share/claude/self-improvement/ (signals.env, reviews.log, "
             "drift-push-count, last-nudge, last-escalation, last-auto-review). The SessionStart "
-            "nudge is the hook `ccst hooks run self-improvement-nudge`."
+            "nudge is the hook `ccst hooks run self-improvement-nudge`. The interactive review "
+            "is the bundled skill: /review-session-and-improve-claude-setup periodic."
         ),
     )
     si_sub = si_parser.add_subparsers(dest="verb", metavar="<verb>")
@@ -4264,6 +4274,25 @@ def _build_parser() -> argparse.ArgumentParser:
             "exits 1 when it has no `## Inbox` line."
         ),
     )
+
+    si_record = si_sub.add_parser(
+        "record-review",
+        help="Record a completed interactive review (mode B or C) in reviews.log",
+        description=(
+            "Append one interactive review line to reviews.log. The "
+            "review-session-and-improve-claude-setup skill runs this at the end of every "
+            "Mode B (session) or Mode C (periodic) review, including one with nothing "
+            "actionable; it resets the days since the last review."
+        ),
+    )
+    si_record.add_argument("--mode", required=True, choices=["B", "C"],
+                           help="B: one session reviewed; C: periodic review")
+    for flag, what in (
+        ("--findings", "findings logged to the backlog (new entries plus recurrences)"),
+        ("--applied", "approved changes applied"),
+        ("--deferred", "rows deferred or rejected at the checkpoint"),
+    ):
+        si_record.add_argument(flag, required=True, type=_non_negative_int, metavar="N", help=what)
 
     # ---- context-override ----
     p_context_override = sub.add_parser(

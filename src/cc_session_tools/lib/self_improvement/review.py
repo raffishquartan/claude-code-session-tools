@@ -432,12 +432,11 @@ class _Run:
         return int(time.monotonic() - self.started)
 
     def log(self, outcome: Outcome) -> None:
-        line = (
+        state.append_log_line(
+            self.state_dir,
             f"{state.now_iso()} mode=auto status={outcome.status} sessions={outcome.sessions} "
-            f"proposals={outcome.proposals} cost_usd={outcome.cost} duration_s={self.elapsed()}\n"
+            f"proposals={outcome.proposals} cost_usd={outcome.cost} duration_s={self.elapsed()}",
         )
-        with (self.state_dir / state.REVIEWS_LOG).open("a", encoding="utf-8") as fh:
-            fh.write(line)
 
     def finish(self, outcome: Outcome, reason: str | None = None) -> str:
         """Log, notify on failed or over-budget (a failed send changes nothing), and return

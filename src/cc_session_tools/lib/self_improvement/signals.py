@@ -30,10 +30,9 @@ ESCALATION_INTERVAL_DAYS = 7
 MSG_MIN_AGE_DAYS = 14
 DENY_WINDOW = dt.timedelta(days=7)
 NO_ESCALATE_ENV = "SELF_IMPROVEMENT_NO_ESCALATE"
-REVIEW_SKILL = "review-session-and-improve-claude-setup"
-PERIODIC_REVIEW_COMMAND = f"/{REVIEW_SKILL} periodic"
-# What messages point at when the interactive review skill is not installed.
-STATUS_COMMAND = "ccst self-improvement status"
+# The bundled interactive review skill's periodic review, which the nudge and the FAIL
+# message point at.
+PERIODIC_REVIEW_COMMAND = "/review-session-and-improve-claude-setup periodic"
 NOT_SET_UP_SUFFIX = ", loop not set up (run ccst self-improvement init)"
 RELIABILITY_OPEN_PREFIX = "Open - none fixed"
 
@@ -102,16 +101,6 @@ class Snapshot:
             f"{review_text}, health {self.loop_health}, auto-review {self.auto_review_health}"
             f"{'' if self.loop_set_up else NOT_SET_UP_SUFFIX}"
         )
-
-
-def review_skill_installed() -> bool:
-    return (Path.home() / ".claude" / "skills" / REVIEW_SKILL / "SKILL.md").is_file()
-
-
-def review_command() -> str:
-    """The command messages point at: the interactive review skill when it is installed,
-    otherwise the status command, so a message never names something the install lacks."""
-    return PERIODIC_REVIEW_COMMAND if review_skill_installed() else STATUS_COMMAND
 
 
 # --- sources -----------------------------------------------------------------------------
@@ -302,7 +291,7 @@ def escalation_message(snapshot: Snapshot) -> str | None:
     )
     return (
         f"Self-improvement: {', '.join(failed)} - last review {review_text}, "
-        f"{snapshot.signal_total} signals. Run {review_command()}"
+        f"{snapshot.signal_total} signals. Run {PERIODIC_REVIEW_COMMAND}"
     )
 
 

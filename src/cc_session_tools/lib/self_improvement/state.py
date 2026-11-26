@@ -1,9 +1,11 @@
 """Paths, date helpers and review-log parsing shared by the collector, the nudge and the
 headless review.
 
-The state directory and its flat-file formats are a contract shared with other tools (an
-interactive review skill appends interactive lines to ``reviews.log``; a config-drift hook
-writes ``drift-push-count``), so the formats here must stay byte-compatible:
+The state directory and its flat-file formats are a contract shared with other tools (the
+bundled interactive review skill records its reviews with ``ccst self-improvement
+record-review``, and older copies of it appended interactive lines to ``reviews.log``
+directly; a config-drift hook writes ``drift-push-count``), so the formats here must stay
+byte-compatible:
 
 - ``signals.env``: ``KEY=value`` lines, written by the collector
 - ``reviews.log``: one line per review. Interactive lines look like
@@ -139,6 +141,19 @@ def read_text(path: Path) -> str | None:
         return path.read_text(encoding="utf-8", errors="replace")
     except OSError:
         return None
+
+
+def interactive_line(mode: str, *, findings: int, applied: int, deferred: int) -> str:
+    """One interactive review line (``mode`` is ``B`` or ``C``), timestamped now."""
+    return f"{now_iso()} mode={mode} findings={findings} applied={applied} deferred={deferred}"
+
+
+def append_log_line(state: Path, line: str) -> None:
+    """Append one line to ``reviews.log``, creating the state directory when missing. The one
+    writer of the log, shared by ``record-review`` and the headless review."""
+    state.mkdir(parents=True, exist_ok=True)
+    with (state / REVIEWS_LOG).open("a", encoding="utf-8") as fh:
+        fh.write(f"{line}\n")
 
 
 def read_log_lines(state: Path) -> list[str]:

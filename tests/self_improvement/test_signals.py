@@ -226,7 +226,6 @@ def test_a_sensitive_subject_never_appears_in_state_or_output(si: Env) -> None:
 
 def test_escalates_once_on_loop_health_fail_and_not_again_within_7_days(si: Env) -> None:
     si.write_backlog(0)
-    si.install_review_skill()
     si.interactive_review(40)
     si.review_line(
         f"{iso_days_ago(1)} mode=auto status=ran sessions=1 proposals=0 cost_usd=0.10 duration_s=30"
@@ -241,11 +240,11 @@ def test_escalates_once_on_loop_health_fail_and_not_again_within_7_days(si: Env)
     assert len(si.notify.messages) == 1
 
 
-def test_escalation_names_the_status_command_without_the_review_skill(si: Env) -> None:
+def test_escalation_names_the_periodic_review_even_when_no_skill_directory_exists(si: Env) -> None:
     si.write_backlog(0)
     collect(si)
     assert len(si.notify.messages) == 1
-    assert si.notify.messages[0].endswith(". Run ccst self-improvement status")
+    assert si.notify.messages[0].endswith(". Run /review-session-and-improve-claude-setup periodic")
 
 
 @pytest.mark.parametrize("backlog", [None, "# Backlog\n\n## Entries\n"])
