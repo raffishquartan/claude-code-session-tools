@@ -19,6 +19,7 @@ from cc_session_tools.lib.doctor import (
     Status,
     check_bun,
     check_ccsched_job_registered,
+    check_self_improvement_loop,
     check_ccusage,
     check_cli_on_path,
     check_data_stores,
@@ -2268,3 +2269,99 @@ def test_run_all_checks_reports_pdata_uuid_migration_before_pdata_verify(
     assert names.index("migration-to-4.0.0:pdata-uuid:p") < names.index("pdata-verify:p")
     [check] = [r for r in results if r.name == "migration-to-4.0.0:pdata-uuid:p"]
     assert check.status is Status.FAIL
+
+
+# ---------- self-improvement jobs ----------
+
+
+def _register(job_id: str, command: list[str], *, enabled: bool = True) -> None:
+    from cc_session_tools.lib.scheduler import bundled_jobs, registry
+    from cc_session_tools.lib.scheduler.jobspec import validate_job_fields
+
+    job = next(j for j in bundled_jobs.BUNDLED_CCSCHED_JOBS if j.job_id == job_id)
+    registry.add_job(validate_job_fields(
+        job_id=job.job_id, cadence=job.cadence, coalesce=job.coalesce, command=command,
+        surface=job.surface, enabled=True, catchup_window=job.catchup_window,
+        timeout=job.timeout, success_exit_codes=job.success_exit_codes,
+    ))
+    if not enabled:
+        registry.set_enabled(job_id, False)
+
+
+def test_check_ccsched_job_registered_warns_on_a_replaced_bash_script(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("CCST_DATA_HOME", str(tmp_path))
+    from cc_session_tools.lib.scheduler import bundled_jobs
+
+    _register(
+        "self-improvement-auto-review",
+        ["bash", "/example/scripts/self-improvement/run-headless-review.sh"],
+    )
+    job = next(
+        j for j in bundled_jobs.BUNDLED_CCSCHED_JOBS if j.job_id == "self-improvement-auto-review"
+    )
+    result = check_ccsched_job_registered(job.job_id, expected=job)
+    assert result.status == Status.WARN
+    assert "runs run-headless-review.sh" in result.reason
+    assert "'ccsched remove self-improvement-auto-review'" in result.reason
+    assert "field" not in result.reason
+
+
+def test_self_improvement_loop_warns_when_jobs_are_registered_without_a_backlog(
+    monkeypatch, tmp_path,
+) -> None:
+    monkeypatch.setenv("CCST_DATA_HOME", str(tmp_path))
+    _register("self-improvement-auto-review", ["ccst", "self-improvement", "auto-review"])
+    result = check_self_improvement_loop(tmp_path / "self-improvement-backlog.md")
+    assert result.name == "self-improvement:loop"
+    assert result.status == Status.WARN
+    assert "ccst self-improvement init" in result.reason
+
+
+@pytest.mark.parametrize("text", ["# B\n\n## Entries\n", None])
+def test_self_improvement_loop_warns_for_a_backlog_without_an_inbox(
+    monkeypatch, tmp_path, text: str | None,
+) -> None:
+    monkeypatch.setenv("CCST_DATA_HOME", str(tmp_path))
+    _register("self-improvement-signals", ["ccst", "self-improvement", "collect-signals"])
+    backlog = tmp_path / "backlog.md"
+    if text is not None:
+        backlog.write_text(text)
+    assert check_self_improvement_loop(backlog).status == Status.WARN
+
+
+def test_self_improvement_loop_ok_when_set_up(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("CCST_DATA_HOME", str(tmp_path))
+    _register("self-improvement-signals", ["ccst", "self-improvement", "collect-signals"])
+    backlog = tmp_path / "backlog.md"
+    backlog.write_text("# B\n\n## Inbox\n\n## Entries\n")
+    result = check_self_improvement_loop(backlog)
+    assert result.status == Status.OK
+    assert "set up" in result.reason
+
+
+def test_self_improvement_loop_ok_when_no_job_is_registered_or_enabled(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("CCST_DATA_HOME", str(tmp_path))
+    backlog = tmp_path / "backlog.md"
+    assert check_self_improvement_loop(backlog).status == Status.OK
+    _register(
+        "self-improvement-signals", ["ccst", "self-improvement", "collect-signals"], enabled=False,
+    )
+    assert check_self_improvement_loop(backlog).status == Status.OK
+
+
+def test_run_all_checks_includes_the_loop_check_when_given_a_backlog(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("CCST_DATA_HOME", str(tmp_path))
+    settings = tmp_path / "settings.json"
+    settings.write_text(json.dumps({"hooks": {}}))
+    bundle = Path(__file__).parent.parent / "src" / "cc_session_tools" / "config" / "hooks-bundle.json"
+    results = run_all_checks(
+        installed_version="1.4.1",
+        settings_path=settings,
+        bundle_path=bundle,
+        skills_source_dir=None,
+        skills_target_dir=tmp_path / "skills",
+        env={"CLAUDE_SESSION_TOOLS_REPO_ROOT": None, "CLAUDE_SESSION_TOOLS_PROJ_ROOT": None},
+        skip_pypi=True,
+        self_improvement_backlog=tmp_path / "backlog.md",
+    )
+    assert [r.name for r in results].count("self-improvement:loop") == 1

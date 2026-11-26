@@ -26,6 +26,11 @@ _CLEAN_HOOK_SESSIONS_SCRIPT = str(
 )
 
 
+SELF_IMPROVEMENT_SIGNALS_JOB = "self-improvement-signals"
+SELF_IMPROVEMENT_AUTO_REVIEW_JOB = "self-improvement-auto-review"
+SELF_IMPROVEMENT_JOB_IDS = (SELF_IMPROVEMENT_SIGNALS_JOB, SELF_IMPROVEMENT_AUTO_REVIEW_JOB)
+
+
 @dataclass(frozen=True, slots=True)
 class BundledJob:
     job_id: str
@@ -36,6 +41,10 @@ class BundledJob:
     surface: bool
     command: tuple[str, ...]
     success_exit_codes: tuple[int, ...] = (0,)
+    # Script file names an earlier, non-CCST registration of this job id ran. A registered job
+    # whose command runs one of them is reported as a conflicting definition with migration
+    # steps, never replaced, and never recorded as installed by CCST - see `replaced_script`.
+    replaces_scripts: tuple[str, ...] = ()
 
 
 BUNDLED_CCSCHED_JOBS: tuple[BundledJob, ...] = (
@@ -168,6 +177,32 @@ BUNDLED_CCSCHED_JOBS: tuple[BundledJob, ...] = (
             "--older-than", "28", "--keep-n", "50", "--execute",
         ),
     ),
+    # The self-improvement loop (`ccst self-improvement`). Both stay quiet - no model call, no
+    # notification - until the user runs `ccst self-improvement init`. The ids match the ones a
+    # config repository registered for its bash versions, so such a registration is detected
+    # rather than duplicated.
+    BundledJob(
+        job_id=SELF_IMPROVEMENT_SIGNALS_JOB,
+        cadence="every:7d",
+        coalesce="one",
+        catchup_window="14d",
+        timeout="60s",
+        surface=True,
+        command=("ccst", "self-improvement", "collect-signals"),
+        replaces_scripts=("collect-signals.sh",),
+    ),
+    BundledJob(
+        job_id=SELF_IMPROVEMENT_AUTO_REVIEW_JOB,
+        cadence="every:7d",
+        coalesce="one",
+        catchup_window="14d",
+        # Above the job's own 270 s budget (review.DEFAULT_JOB_BUDGET_S), so a slow run is
+        # logged and notified by the job itself rather than killed here.
+        timeout="300s",
+        surface=True,
+        command=("ccst", "self-improvement", "auto-review"),
+        replaces_scripts=("run-headless-review.sh",),
+    ),
     BundledJob(
         job_id="ccsched-no-op-demoing-job-visibility",
         cadence="every:12h",
@@ -232,6 +267,26 @@ def diff_from_bundled(spec: "JobSpec", job: BundledJob) -> tuple[str, ...]:
     `diff_from_bundled_detail` so both callers stay guaranteed-identical in what counts
     as "changed" — see module docstring."""
     return tuple(fd.field for fd in diff_from_bundled_detail(spec, job))
+
+
+def replaced_script(spec: "JobSpec", job: BundledJob) -> str | None:
+    """The script from `job.replaces_scripts` that the registered `spec` runs, or None. Each
+    command argument is also split on whitespace, so a one-string `bash /x/y.sh` command
+    matches as well as a separate script argument."""
+    for arg in spec.command:
+        for token in arg.split():
+            name = Path(token).name
+            if name in job.replaces_scripts:
+                return name
+    return None
+
+
+def replaced_script_hint(job_id: str, script: str) -> str:
+    """Shared wording for `_cmd_ccsched_jobs_install` and `check_ccsched_job_registered`."""
+    return (
+        f"runs {script}, which the bundled job replaces; to switch to the bundled job run "
+        f"'ccsched remove {job_id}' then 'ccst ccsched-jobs install --apply'"
+    )
 
 
 def render_field_diffs(diffs: tuple[FieldDiff, ...], *, indent: str = "    ") -> str:

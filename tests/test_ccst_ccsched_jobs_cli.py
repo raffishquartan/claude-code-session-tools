@@ -157,3 +157,67 @@ def test_a_never_installed_job_is_not_reported_as_deleted(base_env):
     assert r.returncode == 0, r.stderr
     assert "would register: telemetry-trim-weekly" in r.stdout
     assert "deleted" not in r.stdout
+
+
+# ---------- self-improvement jobs and a bash-script registration of the same id ----------
+
+
+def _ccsched(env: dict, *args: str) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        [sys.executable, "-m", "cc_session_tools.cli.ccsched", *args],
+        capture_output=True, text=True, cwd=str(Path(__file__).parent), env=env,
+    )
+
+
+def _add_bash_version(env: dict, job_id: str, script: str) -> None:
+    r = _ccsched(
+        env, "add", "--id", job_id, "--cadence", "every:7d", "--coalesce", "one",
+        "--catchup-window", "14d", "--timeout", "60s", "--surface", "--command",
+        "bash", f"/example/repos/config/scripts/self-improvement/{script}",
+    )
+    assert r.returncode == 0, r.stderr
+
+
+def test_apply_registers_both_self_improvement_jobs_enabled(base_env):
+    r = _run(base_env, "ccsched-jobs", "install", "--apply")
+    assert r.returncode == 0, r.stderr
+    for job_id, verb in (
+        ("self-improvement-signals", "collect-signals"),
+        ("self-improvement-auto-review", "auto-review"),
+    ):
+        assert f"registered: {job_id}" in r.stdout
+        show = _ccsched(base_env, "show", job_id)
+        assert re.search(rf"command:\s+ccst self-improvement {verb}$", show.stdout, re.M)
+        assert re.search(r"enabled:\s+true", show.stdout)
+
+
+def test_a_bash_script_registration_is_reported_and_kept(base_env):
+    _add_bash_version(base_env, "self-improvement-signals", "collect-signals.sh")
+    r = _run(base_env, "ccsched-jobs", "install", "--apply")
+    assert r.returncode == 0, r.stderr
+    assert (
+        "conflicting definition (not touched): self-improvement-signals - runs "
+        "collect-signals.sh, which the bundled job replaces; to switch to the bundled job run "
+        "'ccsched remove self-improvement-signals' then 'ccst ccsched-jobs install --apply'"
+    ) in r.stdout
+    assert "changed (not touched): self-improvement-signals" not in r.stdout
+    show = _ccsched(base_env, "show", "self-improvement-signals")
+    assert "collect-signals.sh" in show.stdout
+
+
+def test_removing_a_bash_script_registration_lets_install_register_the_bundled_job(base_env):
+    _add_bash_version(base_env, "self-improvement-auto-review", "run-headless-review.sh")
+    _run(base_env, "ccsched-jobs", "install", "--apply")
+    _remove(base_env, "self-improvement-auto-review")
+    r = _run(base_env, "ccsched-jobs", "install", "--apply")
+    assert r.returncode == 0, r.stderr
+    assert "registered: self-improvement-auto-review" in r.stdout
+    assert "deleted (not re-added): self-improvement-auto-review" not in r.stdout
+    show = _ccsched(base_env, "show", "self-improvement-auto-review")
+    assert re.search(r"command:\s+ccst self-improvement auto-review$", show.stdout, re.M)
+
+
+def test_dry_run_reports_a_bash_script_registration_too(base_env):
+    _add_bash_version(base_env, "self-improvement-signals", "collect-signals.sh")
+    r = _run(base_env, "ccsched-jobs", "install")
+    assert "conflicting definition (not touched): self-improvement-signals" in r.stdout
