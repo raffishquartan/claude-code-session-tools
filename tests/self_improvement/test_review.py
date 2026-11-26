@@ -656,3 +656,84 @@ def test_has_inbox_needs_the_exact_heading() -> None:
     assert not review.has_inbox("## Inbox notes\n")
 
 
+
+
+# --- review fixes -------------------------------------------------------------------------
+
+
+def test_a_future_dated_paid_run_does_not_block(h: Harness, transcript: Path) -> None:
+    h.si.review_line(f"{iso_days_ago(-2)} mode=auto status=ran sessions=2 proposals=1 cost_usd=0.10 duration_s=20")
+    h.run()
+    assert h.claude_calls() == 1
+
+
+@pytest.mark.parametrize("value", ["--5", "abc", ""])
+def test_a_malformed_timeout_variable_uses_the_default(h: Harness, transcript: Path, monkeypatch: pytest.MonkeyPatch, value: str) -> None:
+    monkeypatch.setenv("SELF_IMPROVEMENT_MODEL_TIMEOUT_S", value)
+    h.run()
+    assert " status=ran " in h.si.last_log()
+
+
+def test_an_inbox_removed_during_the_run_fails_and_keeps_the_file(h: Harness, transcript: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    real = review.call_model
+
+    def edit_then_call(*args: object, **kwargs: object) -> int:
+        h.si.backlog.write_text("# Backlog without an inbox\n")
+        return real(*args, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(review, "call_model", edit_then_call)
+    h.run()
+    assert " status=failed sessions=1 proposals=0 cost_usd=0.12 " in h.si.last_log()
+    assert h.si.backlog.read_text() == "# Backlog without an inbox\n"
+
+
+def test_an_auth_check_timeout_fails_with_cost_0(h: Harness, transcript: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    import subprocess
+
+    real_run = subprocess.run
+
+    def slow(*args: object, **kwargs: object) -> object:
+        raise subprocess.TimeoutExpired(cmd="claude", timeout=1)
+
+    monkeypatch.setattr(review.subprocess, "run", slow)
+    h.run()
+    monkeypatch.setattr(review.subprocess, "run", real_run)
+    assert h.claude_calls() == 0
+    assert " status=failed sessions=1 proposals=0 cost_usd=0 " in h.si.last_log()
+    assert "no subscription login" in h.si.notify.messages[0]
+
+
+def test_the_auth_check_runs_in_the_private_directory(h: Harness, transcript: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    seen: list[object] = []
+    real = review.subprocess.run
+
+    def spy(*args: object, **kwargs: object) -> object:
+        seen.append(kwargs.get("cwd"))
+        return real(*args, **kwargs)  # type: ignore[call-overload]
+
+    monkeypatch.setattr(review.subprocess, "run", spy)
+    h.run()
+    assert len(seen) == 1 and Path(str(seen[0])).parent.resolve() == (h.si.root / "tmp").resolve()
+
+
+def test_a_failed_signal_refresh_is_not_fatal(h: Harness, transcript: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from cc_session_tools.lib.self_improvement import signals
+
+    def fail(**_: object) -> None:
+        raise OSError("read-only")
+
+    monkeypatch.setattr(signals, "run", fail)
+    h.run(real_refresh=True)
+    assert " status=ran " in h.si.last_log()
+
+
+def test_proposals_split_like_every_backlog_reader() -> None:
+    line = f"- [{days_ago(0)}] [auto-review] skill: a b -> c"
+    assert review.valid_proposals(line, ("skill",), "") == []
+
+
+def test_undecodable_review_log_bytes_are_tolerated(h: Harness, transcript: Path) -> None:
+    h.si.state.mkdir(parents=True, exist_ok=True)
+    (h.si.state / "reviews.log").write_bytes(b"\xff\xfe garbage\n")
+    h.run()
+    assert " status=ran " in h.si.last_log()

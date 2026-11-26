@@ -1,6 +1,7 @@
 """Whether a periodic review is due, and the one-line nudge that says so.
 
-A review is due when:
+Nothing is ever due until the loop is in use (its state directory or the backlog exists).
+Then a review is due when:
 - no interactive review is recorded, or the last one is at least 30 days old; or
 - the snapshot is valid and its signal total is at least 10; or
 - the snapshot is valid, the last review is at least 14 days old and a signal is non-zero.
@@ -35,10 +36,10 @@ class SnapshotView:
 
 def read_snapshot(path: Path) -> SnapshotView | None:
     """The total and component breakdown, or None when the file is missing or malformed."""
-    try:
-        values = state.parse_env(path.read_text(encoding="utf-8"))
-    except (FileNotFoundError, UnicodeDecodeError):
+    text = state.read_text(path)
+    if text is None:
         return None
+    values = state.parse_env(text)
     total = values.get("SIGNAL_TOTAL", "")
     if not state.is_count(total):
         return None
@@ -76,8 +77,17 @@ def message(review_age: int | None, snapshot: SnapshotView | None) -> str:
     )
 
 
+def loop_in_use(state_dir: Path) -> bool:
+    """True once the loop has been set up: its state directory or the backlog exists. An
+    install that never used the loop is never nudged."""
+    return state_dir.is_dir() or state.backlog_path().exists()
+
+
 def due_message(state_dir: Path) -> str | None:
-    """The nudge line when a review is due, else None. Ignores the once-a-day stamp."""
+    """The nudge line when the loop is in use and a review is due, else None. Ignores the
+    once-a-day stamp. A last review dated in the future counts as no review recorded."""
+    if not loop_in_use(state_dir):
+        return None
     last_review = state.last_interactive_review_date(state.read_log_lines(state_dir))
     review_age = None if last_review is None else state.days_since(last_review)
     snapshot = read_snapshot(state_dir / state.SIGNALS_FILE)
@@ -88,8 +98,8 @@ def bash_nudge_installed(settings_path: Path) -> bool:
     """True when the settings file registers a SessionStart command ending in the config
     repository's ``self-improvement-nudge.sh``. An unreadable file counts as not installed."""
     try:
-        settings = json.loads(settings_path.read_text(encoding="utf-8"))
-    except (FileNotFoundError, UnicodeDecodeError, json.JSONDecodeError):
+        settings = json.loads(state.read_text(settings_path) or "null")
+    except json.JSONDecodeError:
         return False
     if not isinstance(settings, dict):
         return False

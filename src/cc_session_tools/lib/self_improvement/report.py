@@ -8,9 +8,8 @@ from cc_session_tools.lib.self_improvement import state
 
 def status_lines(state_dir: Path) -> list[str]:
     out = [f"state directory: {state_dir}"]
-    try:
-        snapshot = (state_dir / state.SIGNALS_FILE).read_text(encoding="utf-8")
-    except (FileNotFoundError, UnicodeDecodeError):
+    snapshot = state.read_text(state_dir / state.SIGNALS_FILE)
+    if snapshot is None:
         out.append("snapshot: none (run `ccst self-improvement collect-signals`)")
     else:
         out.append("snapshot:")

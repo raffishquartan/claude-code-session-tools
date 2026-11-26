@@ -44,7 +44,7 @@ COMPONENTS: tuple[tuple[str, str], ...] = (
 )
 
 _INBOX_LINE_RE = re.compile(r"^- \[(\d{4}-\d{2}-\d{2})\]")
-_OPEN_STATUS_RE = re.compile(r"^- status: (?:open|proposed)\s*$")
+OPEN_STATUS_RE = re.compile(r"^- status: (?:open|proposed)\s*$")
 
 Notifier = Callable[[str], bool]
 
@@ -131,7 +131,7 @@ def count_backlog_open(backlog_text: str) -> int:
     for line in _sections(backlog_text).get("## Entries", []):
         if line.startswith("<!--"):
             in_comment = True
-        if not in_comment and _OPEN_STATUS_RE.match(line):
+        if not in_comment and OPEN_STATUS_RE.match(line):
             count += 1
         if in_comment and "-->" in line:
             in_comment = False
@@ -196,11 +196,7 @@ def count_reliability_open(files: list[Path]) -> int:
     """Table rows with a cell that starts ``Open - none fixed``."""
     count = 0
     for path in files:
-        try:
-            text = path.read_text(encoding="utf-8")
-        except (OSError, UnicodeDecodeError):
-            continue
-        for line in text.splitlines():
+        for line in (state.read_text(path) or "").splitlines():
             if not line.startswith("|"):
                 continue
             cells = line.split("|")[1:-1]
@@ -217,15 +213,13 @@ def collect(now: dt.datetime | None = None) -> Snapshot:
     now = now or dt.datetime.now(dt.timezone.utc)
     state_dir = state.state_dir()
 
-    try:
-        backlog_text: str | None = state.backlog_path().read_text(encoding="utf-8")
-    except (FileNotFoundError, UnicodeDecodeError):
-        backlog_text = None
+    backlog_text = state.read_text(state.backlog_path())
     if backlog_text is None:
         inbox_count = inbox_oldest = backlog_open = state.UNAVAILABLE
     else:
-        ages = [state.days_since(d) for d in inbox_dates(backlog_text)]
-        inbox_count = str(len(ages))
+        dates = inbox_dates(backlog_text)
+        ages = [age for age in map(state.days_since, dates) if age is not None]
+        inbox_count = str(len(dates))
         inbox_oldest = str(max(ages)) if ages else state.NONE
         backlog_open = str(count_backlog_open(backlog_text))
 
@@ -242,23 +236,21 @@ def collect(now: dt.datetime | None = None) -> Snapshot:
 
     lines = state.read_log_lines(state_dir)
     last_review = state.last_interactive_review_date(lines)
-    days_since_review = state.NONE if last_review is None else str(state.days_since(last_review))
+    review_age = None if last_review is None else state.days_since(last_review)
+    days_since_review = state.NONE if review_age is None else str(review_age)
 
     # A review within 21 days and an Inbox no older than 30 days. An empty Inbox passes the
     # second condition; an unreadable one cannot.
     loop_health = "FAIL"
-    if last_review is not None and state.days_since(last_review) <= LOOP_REVIEW_MAX_DAYS:
+    if review_age is not None and review_age <= LOOP_REVIEW_MAX_DAYS:
         if inbox_oldest == state.NONE or (
             state.is_count(inbox_oldest) and int(inbox_oldest) <= LOOP_INBOX_MAX_DAYS
         ):
             loop_health = "PASS"
 
     last_auto = state.last_auto_date(lines, frozenset({"ran", "skipped"}))
-    auto_health = (
-        "PASS"
-        if last_auto is not None and state.days_since(last_auto) <= AUTO_REVIEW_MAX_DAYS
-        else "FAIL"
-    )
+    auto_age = None if last_auto is None else state.days_since(last_auto)
+    auto_health = "PASS" if auto_age is not None and auto_age <= AUTO_REVIEW_MAX_DAYS else "FAIL"
 
     return Snapshot(
         collected_at=now.strftime(state.ISO_FORMAT),
@@ -302,7 +294,8 @@ def escalate(snapshot: Snapshot, notify: Notifier) -> None:
         return
     stamp = state.state_dir() / state.LAST_ESCALATION
     last = state.read_stamp_date(stamp)
-    if last is not None and state.days_since(last) < ESCALATION_INTERVAL_DAYS:
+    since = None if last is None else state.days_since(last)
+    if since is not None and since < ESCALATION_INTERVAL_DAYS:
         return
     if notify(message):
         try:

@@ -75,6 +75,17 @@ When loop health or auto-review health is FAIL, the collector SHALL send one Tel
 - **WHEN** the send fails
 - **THEN** the snapshot is written, no stamp is written, and the command exits 0
 
+### Requirement: Unreadable or future-dated state never stops a run
+A state file, backlog or skill reference that cannot be read SHALL be treated as missing, and undecodable bytes SHALL be replaced rather than fail the read. A date in the future SHALL count as no usable date: it SHALL NOT make a review, a headless run or an escalation count as recent.
+
+#### Scenario: Undecodable byte in the review log
+- **WHEN** `reviews.log` contains an invalid UTF-8 byte next to a valid interactive line 4 days old
+- **THEN** the collector records 4 days since the last review and exits 0
+
+#### Scenario: Future-dated review
+- **WHEN** the only interactive and `auto` lines are dated 2 days in the future
+- **THEN** days since the last review is `none`, both health results are FAIL and the escalation is sent
+
 ### Requirement: Reviews are read from a shared review log
 The review log `reviews.log` SHALL be read as written by the interactive review skill (`<ISO time> mode=<B|C> findings=<n> applied=<n> deferred=<n>`) and by the headless review (`<ISO time> mode=auto status=<ran|skipped|failed|over-budget> sessions=<n> proposals=<n> cost_usd=<x|unknown> duration_s=<n>`). Only `mode=B` and `mode=C` lines SHALL count towards days since the last review; `mode=auto` lines SHALL NOT reset it.
 
@@ -83,7 +94,7 @@ The review log `reviews.log` SHALL be read as written by the interactive review 
 - **THEN** days since the last review is 20
 
 ### Requirement: A review is nudged at session start only when due
-The SessionStart hook `self-improvement-nudge` SHALL decide that a review is due when no interactive review is recorded or the last one is at least 30 days old; or the snapshot is valid and its total is at least 10; or the snapshot is valid, the last review is at least 14 days old and the total is at least 1. A snapshot SHALL be valid only when `SIGNAL_TOTAL` is an integer and every component is an integer or `unavailable`. When due, the hook SHALL emit JSON with the same line as `systemMessage` and as SessionStart `additionalContext`: `[ccst] Self-improvement review due: <last review N days ago|no review recorded>, <total signals (breakdown)|signals unknown (...)> - run /review-session-and-improve-claude-setup periodic`, and SHALL write today's local date to `last-nudge`. It SHALL emit nothing when not due or when `last-nudge` already holds today's local date, and SHALL always exit 0.
+The SessionStart hook `self-improvement-nudge` SHALL never nudge until the loop is in use, meaning its state directory or the backlog exists. Once it is, the hook SHALL decide that a review is due when no interactive review is recorded (a review dated in the future counts as none) or the last one is at least 30 days old; or the snapshot is valid and its total is at least 10; or the snapshot is valid, the last review is at least 14 days old and the total is at least 1. A snapshot SHALL be valid only when `SIGNAL_TOTAL` is an integer and every component is an integer or `unavailable`. When due, the hook SHALL emit JSON with the same line as `systemMessage` and as SessionStart `additionalContext`: `[ccst] Self-improvement review due: <last review N days ago|no review recorded>, <total signals (breakdown)|signals unknown (...)> - run /review-session-and-improve-claude-setup periodic`, and SHALL write today's local date to `last-nudge`. It SHALL emit nothing when not due or when `last-nudge` already holds today's local date, and SHALL always exit 0.
 
 #### Scenario: Review due by age and signals
 - **WHEN** the last review was 20 days ago and the snapshot shows 3 Inbox lines and a total of 3
@@ -92,6 +103,10 @@ The SessionStart hook `self-improvement-nudge` SHALL decide that a review is due
 #### Scenario: Nothing due
 - **WHEN** the last review was 5 days ago and the total is 4, or 14 days ago with a total of 0
 - **THEN** the hook emits nothing
+
+#### Scenario: Loop never used
+- **WHEN** neither the state directory nor the backlog exists
+- **THEN** the hook emits nothing and creates nothing
 
 #### Scenario: Already nudged today
 - **WHEN** a review is due and `last-nudge` holds today's date

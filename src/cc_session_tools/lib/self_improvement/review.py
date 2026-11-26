@@ -31,7 +31,6 @@ from cc_session_tools.lib.self_improvement import prompt, signals, state
 logger = logging.getLogger(__name__)
 
 BUDGET_USD = 0.50
-BUDGET_ARG = "0.50"
 MODEL = "sonnet"
 RUN_LIMIT_DAYS = 7
 FIRST_RUN_WINDOW = dt.timedelta(days=7)
@@ -59,9 +58,6 @@ TIMEOUT_RC = 124
 
 _BODY_PREFIX_RE = re.compile(r"^- \[[0-9-]+\] ")
 _BACKLOG_AUTO_RE = re.compile(r"^- \[[0-9-]+\] \[auto-review\] ")
-_OPEN_STATUS_RE = re.compile(r"^- status: (?:open|proposed)\s*$")
-
-Notifier = Callable[[str], bool]
 Refresher = Callable[[], None]
 
 
@@ -77,8 +73,11 @@ class Outcome:
 
 
 def _env_seconds(name: str, default: int) -> int:
-    raw = os.environ.get(name)
-    return int(raw) if raw is not None and raw.strip().lstrip("-").isdigit() else default
+    """An integer number of seconds from the environment; anything else means the default."""
+    try:
+        return int(os.environ.get(name, ""))
+    except ValueError:
+        return default
 
 
 def subscription_env() -> dict[str, str]:
@@ -172,7 +171,7 @@ def backlog_extract(text: str) -> str:
                 block = [line]
             elif block:
                 block.append(line)
-                if _OPEN_STATUS_RE.match(line):
+                if signals.OPEN_STATUS_RE.match(line):
                     keep = True
     flush()
     return "\n".join(out)
@@ -193,8 +192,8 @@ def facet_extract(facets_dir: Path) -> str:
     out: list[str] = []
     for path in sorted(facets_dir.glob("*.json")):
         try:
-            data = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+            data = json.loads(state.read_text(path) or "null")
+        except json.JSONDecodeError:
             continue
         if isinstance(data, dict):
             out.append(json.dumps(
@@ -218,11 +217,7 @@ def session_extract(path: Path) -> str:
     """User-message text, tool errors and permission denials only. Assistant text, successful
     tool output and system-injected text (anything starting ``<``) are left out."""
     out: list[str] = []
-    try:
-        lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
-    except OSError:
-        return ""
-    for raw in lines:
+    for raw in (state.read_text(path) or "").splitlines():
         try:
             record = json.loads(raw)
         except json.JSONDecodeError:
@@ -255,11 +250,7 @@ def _cut_bytes(text: str, limit: int) -> str:
 
 
 def build_digest(sessions: list[Path], backlog_text: str, now: dt.datetime) -> str:
-    snapshot_path = state.state_dir() / state.SIGNALS_FILE
-    try:
-        snapshot = snapshot_path.read_text(encoding="utf-8")
-    except (FileNotFoundError, UnicodeDecodeError):
-        snapshot = "(no snapshot)\n"
+    snapshot = state.read_text(state.state_dir() / state.SIGNALS_FILE) or "(no snapshot)\n"
     parts = [
         f"Today's date: {now.date().isoformat()}\n\n",
         "## Signal snapshot\n", snapshot, "\n",
@@ -289,7 +280,9 @@ def valid_proposals(result: str, levers: tuple[str, ...], backlog_text: str) -> 
     )
     seen = {_body(line) for line in backlog_text.splitlines() if _BACKLOG_AUTO_RE.match(line)}
     kept: list[str] = []
-    for line in result.replace("\r", "").split("\n"):
+    # splitlines, as every reader of the backlog uses: a line kept here must read back as the
+    # same single line, or the duplicate check would miss it next week.
+    for line in result.splitlines():
         if not line_re.fullmatch(line):
             continue
         body = _body(line)
@@ -343,13 +336,15 @@ def insert_into_inbox(backlog_text: str, new_lines: list[str]) -> str:
 # --- model call --------------------------------------------------------------------------
 
 
-def subscription_login_ok(claude: str, env: dict[str, str], timeout_s: float) -> bool | None:
+def subscription_login_ok(
+    claude: str, work_dir: Path, env: dict[str, str], timeout_s: float,
+) -> bool | None:
     """True for a first-party subscription login, False otherwise, None when ``claude``
-    cannot be run at all."""
+    cannot be run at all. Runs from ``work_dir`` with ``env``, as the model call does."""
     try:
         proc = subprocess.run(
-            [claude, "auth", "status", "--json"], env=env, capture_output=True, text=True,
-            timeout=timeout_s, check=False,
+            [claude, "auth", "status", "--json"], cwd=work_dir, env=env, capture_output=True,
+            text=True, timeout=timeout_s, check=False,
         )
     except FileNotFoundError:
         return None
@@ -369,7 +364,7 @@ def subscription_login_ok(claude: str, env: dict[str, str], timeout_s: float) ->
 
 def model_command(claude: str) -> list[str]:
     return [
-        claude, "-p", "--model", MODEL, "--max-budget-usd", BUDGET_ARG,
+        claude, "-p", "--model", MODEL, "--max-budget-usd", f"{BUDGET_USD:.2f}",
         "--output-format", "json", "--no-session-persistence", "--restricted",
         "--strict-mcp-config", "--tools", "",
     ]
@@ -413,8 +408,8 @@ class ModelResult:
 def parse_result(out_path: Path) -> ModelResult | None:
     """The JSON result when it has a numeric ``total_cost_usd`` and a boolean ``is_error``."""
     try:
-        data = json.loads(out_path.read_text(encoding="utf-8"))
-    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        data = json.loads(state.read_text(out_path) or "null")
+    except json.JSONDecodeError:
         return None
     if not isinstance(data, dict):
         return None
@@ -430,7 +425,7 @@ def parse_result(out_path: Path) -> ModelResult | None:
 
 
 class _Run:
-    def __init__(self, notify: Notifier) -> None:
+    def __init__(self, notify: signals.Notifier) -> None:
         self.started = time.monotonic()
         self.notify = notify
         self.state_dir = state.state_dir()
@@ -463,7 +458,7 @@ class _Run:
         )
 
 
-def _refresh_signals(notify: Notifier) -> None:
+def _refresh_signals(notify: signals.Notifier) -> None:
     try:
         signals.run(escalate_on_fail=False, notify=notify)
     except OSError as exc:
@@ -471,7 +466,7 @@ def _refresh_signals(notify: Notifier) -> None:
 
 
 def run(
-    *, force: bool, notify: Notifier, claude: str = "claude",
+    *, force: bool, notify: signals.Notifier, claude: str = "claude",
     refresh: Refresher | None = None,
 ) -> str:
     """One headless review attempt. Returns the summary line; every outcome is logged."""
@@ -482,12 +477,10 @@ def run(
     # call, so catch-ups can never spend more than once a week.
     if not force:
         last_paid = state.last_paid_run_date(lines)
-        if last_paid is not None and state.days_since(last_paid) < RUN_LIMIT_DAYS:
+        age = None if last_paid is None else state.days_since(last_paid)
+        if age is not None and age < RUN_LIMIT_DAYS:
             job.log(Outcome("skipped", 0, 0, "0"))
-            return (
-                f"self-improvement auto-review: skipped (last run "
-                f"{state.days_since(last_paid)}d ago)"
-            )
+            return f"self-improvement auto-review: skipped (last run {age}d ago)"
 
     # The next run's scan window starts here, so transcripts written while this run is in
     # progress are picked up next time.
@@ -498,10 +491,7 @@ def run(
         _refresh_signals(notify)
     else:
         refresh()
-    try:
-        snapshot = state.parse_env((job.state_dir / state.SIGNALS_FILE).read_text(encoding="utf-8"))
-    except (FileNotFoundError, UnicodeDecodeError):
-        snapshot = {}
+    snapshot = state.parse_env(state.read_text(job.state_dir / state.SIGNALS_FILE) or "")
     signal_total = snapshot.get("SIGNAL_TOTAL")
 
     # 3. Sessions changed since the last completed run (or in the last 7 days before the first).
@@ -517,10 +507,7 @@ def run(
 
     # Proposals have nowhere to go without a backlog Inbox, so do not spend on a call.
     backlog = state.backlog_path().resolve()
-    try:
-        backlog_text = backlog.read_text(encoding="utf-8")
-    except (FileNotFoundError, UnicodeDecodeError):
-        backlog_text = ""
+    backlog_text = state.read_text(backlog) or ""
     if not has_inbox(backlog_text):
         return job.finish(Outcome("failed", n_sessions, 0, "0"), "no backlog Inbox")
 
@@ -543,7 +530,7 @@ def run(
         if budget_s - job.elapsed() < 1:
             return job.finish(Outcome("failed", n_sessions, 0, "0"), "no time left")
         login = subscription_login_ok(
-            claude, env, min(AUTH_CHECK_MAX_S, budget_s - job.elapsed())
+            claude, work, env, min(AUTH_CHECK_MAX_S, budget_s - job.elapsed())
         )
         if login is None:
             return job.finish(Outcome("failed", n_sessions, 0, "0"), "claude not found")
@@ -576,10 +563,7 @@ def run(
         # run and leaves the backlog untouched.
         proposals = 0
         if result is not None and status in ("ran", "over-budget"):
-            try:
-                current = backlog.read_text(encoding="utf-8")
-            except (FileNotFoundError, UnicodeDecodeError):
-                current = ""
+            current = state.read_text(backlog) or ""
             kept = valid_proposals(result.text, prompt.actionable_levers(prompt_text), current)
             if kept and not has_inbox(current):
                 status = "failed"

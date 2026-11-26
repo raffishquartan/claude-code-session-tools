@@ -42,6 +42,8 @@ def test_collect_signals_prints_the_summary_and_writes_the_snapshot(si: Env) -> 
 
 
 def test_nudge_previews_without_stamping(si: Env) -> None:
+    assert ccst("nudge").stdout == "no review due\n"  # loop never used
+    si.write_backlog(0)
     proc = ccst("nudge")
     assert proc.returncode == 0
     assert proc.stdout.startswith("[ccst] Self-improvement review due: no review recorded")

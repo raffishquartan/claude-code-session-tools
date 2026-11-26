@@ -480,8 +480,9 @@ ccst self-improvement status            # snapshot, last reviews, headless cost 
     run per 7 days, capped at USD 0.50 each, and none at all when there are no signals and no
     new transcripts. Every attempt is logged with its cost; a failed or over-budget run sends
     one Telegram message.
-- **The `self-improvement-nudge` hook** shows one line at session start, at most once a day,
-  when a review is due: the last interactive review is 30 or more days old (or none is
+- **The `self-improvement-nudge` hook** stays silent until the loop is in use (its state
+  directory or the backlog exists). Then it shows one line at session start, at most once a
+  day, when a review is due: the last interactive review is 30 or more days old (or none is
   recorded), the signal total is 10 or more, or the last review is 14 or more days old and a
   signal is non-zero.
 

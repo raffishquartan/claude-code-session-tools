@@ -71,8 +71,11 @@ def parse_date(text: str) -> dt.date | None:
         return None
 
 
-def days_since(date: dt.date) -> int:
-    return (today_utc() - date).days
+def days_since(date: dt.date) -> int | None:
+    """Whole UTC days from ``date`` to today, or None for a date in the future (clock skew or
+    a hand-edited line), which counts as no usable date."""
+    days = (today_utc() - date).days
+    return days if days >= 0 else None
 
 
 def is_count(value: str) -> bool:
@@ -80,11 +83,17 @@ def is_count(value: str) -> bool:
     return value.isascii() and value.isdigit()
 
 
-def read_log_lines(state: Path) -> list[str]:
+def read_text(path: Path) -> str | None:
+    """The file's text, or None when it cannot be read. Undecodable bytes are replaced: the
+    state files are shared with other tools, and one bad byte must not stop a run."""
     try:
-        return (state / REVIEWS_LOG).read_text(encoding="utf-8").splitlines()
-    except FileNotFoundError:
-        return []
+        return path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return None
+
+
+def read_log_lines(state: Path) -> list[str]:
+    return (read_text(state / REVIEWS_LOG) or "").splitlines()
 
 
 def last_interactive_review_date(lines: list[str]) -> dt.date | None:
@@ -165,21 +174,19 @@ def headless_cost_since_last_review(lines: list[str]) -> tuple[int, float, int]:
     return attempts, known, unknown
 
 
+def read_first_line(path: Path) -> str | None:
+    """The first line with all whitespace removed, or None when the file cannot be read."""
+    text = read_text(path)
+    if text is None:
+        return None
+    lines = text.splitlines()
+    return "".join(lines[0].split()) if lines else ""
+
+
 def read_stamp_date(path: Path) -> dt.date | None:
     """The ``yyyy-MM-dd`` on the first line of a stamp file, or None."""
-    try:
-        first = path.read_text(encoding="utf-8").splitlines()[:1]
-    except (FileNotFoundError, UnicodeDecodeError):
-        return None
-    return parse_date("".join(first[0].split())) if first else None
-
-
-def read_first_line(path: Path) -> str | None:
-    try:
-        lines = path.read_text(encoding="utf-8").splitlines()
-    except (FileNotFoundError, UnicodeDecodeError):
-        return None
-    return "".join(lines[0].split()) if lines else ""
+    first = read_first_line(path)
+    return parse_date(first) if first else None
 
 
 def parse_env(text: str) -> dict[str, str]:

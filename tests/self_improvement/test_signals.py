@@ -329,3 +329,82 @@ def test_reliability_follows_symlinked_skill_directories(si: Env) -> None:
     si.write_backlog(0)
     collect(si)
     assert si.snapshot_value("RELIABILITY_OPEN") == "1"
+
+
+# --- review fixes -------------------------------------------------------------------------
+
+
+def test_denies_older_than_7_days_are_not_counted(si: Env) -> None:
+    from cc_session_tools.lib import telemetry_store
+
+    seed_denies()
+    old = (dt.datetime.now(dt.timezone.utc) - dt.timedelta(days=7, hours=1)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    conn = telemetry_store.connect()
+    try:
+        conn.execute(
+            "INSERT INTO telemetry_events (ts, hook, event, tool, session_id, cwd_short, decision, "
+            "cache, verdict, input_hash) VALUES (?, 'bash-hard-deny', 'PreToolUse', 'Bash', '', '', "
+            "'deny', 'none', 'blocked', '')",
+            (old,),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    si.write_backlog(0)
+    collect(si)
+    assert si.snapshot_value("DENIES_7D") == "3"
+
+
+@pytest.mark.parametrize(("age_days", "counted"), [(15, True), (14, False)])
+def test_unclaimed_message_age_boundary(si: Env, age_days: int, counted: bool) -> None:
+    repository.insert(_message("20260801T000000Z-aaaa", "sent", dt.timedelta(days=age_days, hours=1)))
+    si.write_backlog(0)
+    collect(si)
+    assert si.snapshot_value("MSGS_UNCLAIMED_14D") == ("1" if counted else "0")
+
+
+def test_an_unreadable_backlog_is_unavailable(si: Env) -> None:
+    si.backlog.mkdir(parents=True)
+    collect(si)
+    assert si.snapshot_value("INBOX_COUNT") == "unavailable"
+
+
+def test_undecodable_review_log_bytes_are_tolerated(si: Env) -> None:
+    si.write_backlog(0)
+    si.state.mkdir(parents=True)
+    (si.state / "reviews.log").write_bytes(
+        f"\xff\n{iso_days_ago(4)} mode=B findings=0 applied=0 deferred=0\n".encode("latin-1")
+    )
+    collect(si)
+    assert si.snapshot_value("DAYS_SINCE_REVIEW") == "4"
+
+
+def test_future_dates_are_not_fresh(si: Env) -> None:
+    si.write_backlog(0)
+    si.review_line(f"{iso_days_ago(-2)} mode=C findings=0 applied=0 deferred=0")
+    si.review_line(f"{iso_days_ago(-2)} mode=auto status=ran sessions=1 proposals=0 cost_usd=0.1 duration_s=1")
+    (si.state / "last-escalation").write_text(f"{days_ago(-2)}\n")
+    collect(si)
+    assert si.snapshot_value("DAYS_SINCE_REVIEW") == "none"
+    assert si.snapshot_value("LOOP_HEALTH") == "FAIL"
+    assert si.snapshot_value("AUTO_REVIEW_HEALTH") == "FAIL"
+    assert len(si.notify.messages) == 1
+
+
+def test_an_escalation_stamp_that_cannot_be_written_is_not_fatal(
+    si: Env, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from cc_session_tools.lib.self_improvement import state
+
+    real = state.atomic_write
+
+    def fail_stamp(target: object, content: str) -> None:
+        if str(target).endswith("last-escalation"):
+            raise OSError("read-only")
+        real(target, content)  # type: ignore[arg-type]
+
+    si.write_backlog(0)
+    monkeypatch.setattr(state, "atomic_write", fail_stamp)
+    collect(si)
+    assert len(si.notify.messages) == 1
+    assert not (si.state / "last-escalation").exists()

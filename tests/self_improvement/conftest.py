@@ -58,7 +58,7 @@ class Env:
         self.review_line(f"{iso_days_ago(age_days)} mode={mode} findings=0 applied=0 deferred=0")
 
     def last_log(self) -> str:
-        return (self.state / "reviews.log").read_text(encoding="utf-8").splitlines()[-1]
+        return (self.state / "reviews.log").read_text(encoding="utf-8", errors="replace").splitlines()[-1]
 
     def snapshot_value(self, key: str) -> str:
         for line in (self.state / "signals.env").read_text(encoding="utf-8").splitlines():
@@ -74,7 +74,7 @@ class Env:
             "<!-- - [YYYY-MM-DD] [session-tag] one-line friction observation -->",
         ]
         lines += [f"- [{days_ago(oldest - i)}] [tag-{i}] friction note {i}" for i in range(inbox)]
-        lines += ["", "## Entries", "<!-- ### [B-001] title", "- status: open | proposed", "-->", ""]
+        lines += ["", "## Entries", "<!-- ### [B-001] title", "- status: open", "-->", ""]
         for i in range(open_entries):
             lines += [f"### [B-{i:03d}] open item", "- lever: skill", "- status: open", ""]
         lines += ["### [B-900] done item", "- lever: skill", "- status: applied"]

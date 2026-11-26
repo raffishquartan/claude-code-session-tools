@@ -115,10 +115,16 @@ def test_signals_unknown_when_snapshot_missing_and_review_overdue(si: Env, hook:
     assert "signals unknown" in msg
 
 
-def test_no_review_recorded_without_log_or_state_dir(si: Env, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_no_review_recorded_when_only_the_backlog_exists(si: Env, monkeypatch: pytest.MonkeyPatch) -> None:
+    si.write_backlog(0)
     msg = system_message(run_hook(monkeypatch))
     assert "no review recorded" in msg
     assert "signals unknown" in msg
+
+
+def test_silent_on_an_install_that_never_used_the_loop(si: Env, monkeypatch: pytest.MonkeyPatch) -> None:
+    assert run_hook(monkeypatch) == ""
+    assert not si.state.exists()
 
 
 def test_malformed_snapshot_is_missing_when_review_recent(si: Env, hook: Callable[[], str]) -> None:
@@ -201,9 +207,54 @@ def test_unparseable_settings_do_not_break_the_hook(si: Env, hook: Callable[[], 
     assert "Self-improvement review due" in system_message(hook())
 
 
-def test_unreadable_review_log_exits_0_silently(si: Env, hook: Callable[[], str]) -> None:
+def test_unreadable_review_log_counts_as_no_review(si: Env, hook: Callable[[], str]) -> None:
     (si.state / "reviews.log").mkdir()
+    assert "no review recorded" in system_message(hook())
+
+
+def test_undecodable_review_log_bytes_are_tolerated(si: Env, hook: Callable[[], str]) -> None:
+    (si.state / "reviews.log").write_bytes(
+        f"{iso_days_ago(20)} mode=C findings=0 applied=0 deferred=0\n\xff\xfe\n".encode("latin-1")
+    )
+    write_snapshot(si, 3, 3)
+    assert "last review 20 days ago" in system_message(hook())
+
+
+def test_an_unexpected_error_exits_0_silently(
+    si: Env, hook: Callable[[], str], monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def boom(*_: object) -> str:
+        raise ValueError("unexpected")
+
+    monkeypatch.setattr(nudge, "session_start_message", boom)
     assert hook() == ""
+
+
+def test_a_stamp_that_cannot_be_written_still_nudges(
+    si: Env, hook: Callable[[], str], monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from cc_session_tools.lib.self_improvement import state
+
+    def fail(*_: object) -> None:
+        raise OSError("read-only")
+
+    si.interactive_review(20)
+    write_snapshot(si, 3, 3)
+    monkeypatch.setattr(state, "atomic_write", fail)
+    assert "Self-improvement review due" in system_message(hook())
+
+
+@pytest.mark.parametrize(("age", "due"), [(13, False), (14, True)])
+def test_age_with_signal_boundary(si: Env, hook: Callable[[], str], age: int, due: bool) -> None:
+    si.interactive_review(age)
+    write_snapshot(si, 1, 1)
+    assert (hook() != "") is due
+
+
+def test_a_future_dated_review_counts_as_no_review(si: Env, hook: Callable[[], str]) -> None:
+    si.review_line(f"{iso_days_ago(-3)} mode=C findings=0 applied=0 deferred=0")
+    write_snapshot(si, 0, 0)
+    assert "no review recorded" in system_message(hook())
 
 
 def test_preview_does_not_consume_the_daily_nudge(si: Env) -> None:
