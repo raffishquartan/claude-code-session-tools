@@ -102,6 +102,20 @@ def test_with_api_key_sets_key_and_drops_competing_auth() -> None:
     assert env == {"ANTHROPIC_API_KEY": SECRET, "X": "1"}
 
 
+def test_without_api_auth_keeps_subscription_token_and_drops_api_billing() -> None:
+    env = {
+        "ANTHROPIC_API_KEY": SECRET,
+        "ANTHROPIC_AUTH_TOKEN": "t2",
+        "CLAUDE_CODE_USE_BEDROCK": "1",
+        "CLAUDE_CODE_USE_VERTEX": "1",
+        "CLAUDE_CODE_USE_FOUNDRY": "1",
+        "CLAUDE_CODE_OAUTH_TOKEN": "sub",
+        "X": "1",
+    }
+    api_keys.without_api_auth(env)
+    assert env == {"CLAUDE_CODE_OAUTH_TOKEN": "sub", "X": "1"}
+
+
 def test_template_parses_to_zero_entries() -> None:
     template = Path(api_keys.__file__).parents[1] / "config" / "api-keys.example"
     assert api_keys.parse_keys(template.read_text()) == {}

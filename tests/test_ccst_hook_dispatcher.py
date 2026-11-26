@@ -76,5 +76,6 @@ def test_hook_verbs_covers_every_shim_module() -> None:
         "pending-migration",
         "context-window-warning",
         "pdata-sync",
+        "self-improvement-nudge",
     }
     assert set(HOOK_VERBS) == expected

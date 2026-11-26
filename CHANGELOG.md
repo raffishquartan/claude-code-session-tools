@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [4.10.0] - 2026-11-26
+
+### Added
+
+- `ccst self-improvement` runs the configuration self-improvement loop without any other repository installed. `collect-signals` writes a counts-only snapshot (backlog Inbox lines and age, open entries, `ccmsg` messages unclaimed for more than 14 days, hook denies in 7 days, the drift push count and "Open - none fixed" reliability rows) to `~/.local/share/claude/self-improvement/signals.env`, computes loop health and auto-review health, prints one summary line and sends at most one Telegram message per 7 days on a FAIL (`--no-escalate` turns it off). It makes no model call, and never creates a missing `ccmsg` or telemetry store. `auto-review` runs one headless, proposal-only `claude -p` review (sonnet, no tools, `--max-budget-usd 0.50`) at most once per 7 days over a digest of at most 120 KB, and appends validated proposal lines to the backlog Inbox; it never edits configuration. It uses the Claude Code subscription login only: API-key and Bedrock/Vertex/Foundry variables are removed from its environment, and a missing subscription login, a missing `claude`, a missing backlog Inbox or no time left is logged as failed with cost 0 and notified, without calling the model. `nudge` previews the session-start nudge without recording it, and `status` prints the snapshot, the last reviews and the headless cost since the last interactive review. File names and formats match the bash implementation, so existing state carries over.
+- `self-improvement-nudge` SessionStart hook, in the default hook bundle: shows one line, at most once a day, when a periodic review is due once the loop is in use (its state directory or `~/.claude/self-improvement-backlog.md` exists; an install that never used it is never nudged) (no interactive review in 30 days, a signal total of 10 or more, or a review 14 or more days old with a non-zero signal). It stays silent when a `self-improvement-nudge.sh` SessionStart hook is also registered, so the two never both show.
+
 ## [4.9.0] - 2026-11-26
 
 ### Added

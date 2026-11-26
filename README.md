@@ -45,6 +45,7 @@ that sustainable.
 - [Safety hooks](#safety-hooks)
 - [Per-project data store: `pdata`](#per-project-data-store-pdata)
 - [Usage and cost analytics: `claude-code-usage`](#usage-and-cost-analytics-claude-code-usage)
+- [Configuration self-improvement loop: `ccst self-improvement`](#configuration-self-improvement-loop-ccst-self-improvement)
 - [Bundled skills](#bundled-skills)
 - [Teaching Claude the conventions: `claude-md`](#teaching-claude-the-conventions-claude-md)
 - [Command reference](#command-reference)
@@ -374,6 +375,8 @@ These keep the rest of CCST working without any action from you:
 - `catchup` - catches up missed scheduled jobs and shows the digest.
 - `pdata-sync` - syncs `pdata` databases across your machines (see below).
 - `pending-migration` - surfaces unfinished data migrations.
+- `self-improvement-nudge` - asks for a periodic configuration review when one is due (see
+  [below](#configuration-self-improvement-loop-ccst-self-improvement)).
 - `last-screenshot` - type `>lss` in a prompt and Claude gets the path of your newest
   screenshot (set `CCST_SCREENSHOT_DIR`; several directories may be separated by `:`).
 - `marker-allow` - lets skills drop small marker files without a permission prompt.
@@ -443,6 +446,65 @@ the parent session, from hook-review cost, billed separately, so totals are neve
 double-counted. Ask Claude _"analyse my Claude Code usage this month"_ and the
 `analyse-cc-usage` skill runs these for you. `cccs-stats` reports the efficiency of the
 command-review cache.
+
+## Configuration self-improvement loop: `ccst self-improvement`
+
+Keeps your Claude Code configuration improving without anyone having to remember to review
+it. The automated parts only count and propose; every change still goes through an
+interactive review you approve item by item.
+
+```sh
+ccst self-improvement collect-signals   # counts-only snapshot, health PASS/FAIL, one summary line
+ccst self-improvement auto-review       # one headless, proposal-only review (at most once a week)
+ccst self-improvement nudge             # would a review be nudged now? (records nothing)
+ccst self-improvement status            # snapshot, last reviews, headless cost since the last review
+```
+
+- **`collect-signals`** counts backlog Inbox lines and their age, open backlog entries,
+  `ccmsg` messages unclaimed for more than 14 days, hook denies in the last 7 days, the drift
+  push count and "Open - none fixed" reliability rows in `~/.claude/skills/*/references/*.md`.
+  It makes no model call. Loop health is PASS when an interactive review happened in the last
+  21 days and the oldest Inbox line is at most 30 days old; auto-review health is PASS when the
+  headless review ran or skipped in the last 8 days. On a FAIL it sends at most one Telegram
+  message per 7 days (`--no-escalate` turns this off).
+- **`auto-review`** builds a digest of at most 120 KB (the snapshot, the backlog, hook denies,
+  any `~/.claude/usage-data/facets/`, and user text and tool errors from up to 15 recently
+  changed transcripts) in a private temporary directory that is always deleted, then runs one
+  `claude -p --model sonnet --max-budget-usd 0.50 --tools ""` call over it and appends the
+  validated `- [date] [auto-review] <lever>: <friction> -> <proposal>` lines to the backlog
+  Inbox. It never edits configuration.
+  - **It uses your Claude Code subscription login only.** `ANTHROPIC_API_KEY`,
+    `ANTHROPIC_AUTH_TOKEN` and the Bedrock/Vertex/Foundry switches are removed from its
+    environment, and the run is logged as failed (cost 0) when `claude auth status` shows no
+    subscription login. Its cost counts against your subscription usage: at most one paying
+    run per 7 days, capped at USD 0.50 each, and none at all when there are no signals and no
+    new transcripts. Every attempt is logged with its cost; a failed or over-budget run sends
+    one Telegram message.
+- **The `self-improvement-nudge` hook** stays silent until the loop is in use (its state
+  directory or the backlog exists). Then it shows one line at session start, at most once a
+  day, when a review is due: the last interactive review is 30 or more days old (or none is
+  recorded), the signal total is 10 or more, or the last review is 14 or more days old and a
+  signal is non-zero.
+
+Neither command is scheduled by default; run them yourself or register them with `ccsched`.
+
+**State** lives in `~/.local/share/claude/self-improvement/` as flat files with a fixed format
+that other tools may also read and write:
+
+| File | Written by | Content |
+| ---- | ---------- | ------- |
+| `signals.env` | `collect-signals` | `KEY=value` counts, health results and the collection time |
+| `reviews.log` | `auto-review`, and your interactive review | one line per review: `<ISO time> mode=<B\|C> findings=<n> applied=<n> deferred=<n>` or `<ISO time> mode=auto status=<ran\|skipped\|failed\|over-budget> sessions=<n> proposals=<n> cost_usd=<x\|unknown> duration_s=<n>` |
+| `drift-push-count` | any tool that tracks unpushed config changes | one integer; `unavailable` in the snapshot when absent |
+| `last-nudge`, `last-escalation` | the hook, `collect-signals` | one `yyyy-MM-dd` date |
+| `last-auto-review` | `auto-review` | modification time = start of the last completed run |
+
+The backlog is `~/.claude/self-improvement-backlog.md` (a symlink is followed). It needs a
+`## Inbox` section for proposals and a `## Entries` section with `- status: <status>` lines;
+without it the Inbox counts are `unavailable` and `auto-review` does not call the model. The
+interactive review that writes `mode=B`/`mode=C` lines and turns proposals into changes is
+not bundled with CCST; the nudge names it as `/review-session-and-improve-claude-setup
+periodic`.
 
 ## Bundled skills
 
@@ -519,6 +581,7 @@ flag.
 | `telemetry`          | `query` and `trim` the hook log; `recover` a command from its hash        |
 | `migrate`            | one-shot migrations from legacy flat-file stores to SQLite                |
 | `context-override`   | toggle the context-window warning for the current session                 |
+| `self-improvement`   | signal snapshot, headless review, nudge preview and status (see above)    |
 
 Other commands: `ccd`, `ccr`, `ccs`/`ccl`, `ccdapi`, `ccrapi`, `ccmsg`, `ccsched`,
 `claude-code-usage`, `cccs-stats`. Every command has `--help` and `--version`.

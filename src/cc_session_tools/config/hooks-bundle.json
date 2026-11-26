@@ -32,6 +32,12 @@
             "command": "ccst hooks run pdata-sync",
             "timeout": 10,
             "statusMessage": "Checking for cross-machine pdata updates..."
+          },
+          {
+            "type": "command",
+            "command": "ccst hooks run self-improvement-nudge",
+            "timeout": 5,
+            "statusMessage": "Checking whether a self-improvement review is due..."
           }
         ]
       }

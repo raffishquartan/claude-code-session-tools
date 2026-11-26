@@ -58,6 +58,7 @@ ALLOWED: dict[tuple[str, str], str] = {
     ("cc_session_tools/lib/pdata/reorganize.py", "%m"): "folder-name",
     ("cc_session_tools/lib/pdata/migrate_uuid.py", _BACKUP_UTC): "backup-stamp",
     ("cc_session_tools/lib/pdata/repository.py", _MACHINE): "machine-iso",
+    ("cc_session_tools/lib/self_improvement/state.py", _MACHINE): "machine-iso",
     ("cc_session_tools/lib/proc_lock.py", _MACHINE): "machine-iso",
     ("cc_session_tools/lib/scheduler/cursor.py", _MACHINE): "machine-iso",
     ("cc_session_tools/lib/scheduler/registry.py", _MACHINE): "machine-iso",

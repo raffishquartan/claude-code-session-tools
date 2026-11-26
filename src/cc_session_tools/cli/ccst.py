@@ -104,6 +104,11 @@ Current subcommands:
   context-override [on|off|status]  Toggle the /context-override flag for the current
                                  session (default: on). See ccst hooks run
                                  context-window-warning.
+  self-improvement collect-signals|auto-review|nudge|status
+                                 The configuration self-improvement loop: counts-only
+                                 signal snapshot, weekly headless proposal-only review
+                                 (subscription login, USD 0.50 cap), nudge preview and
+                                 state summary (see ccst self-improvement --help).
 """
 from __future__ import annotations
 
@@ -2987,6 +2992,27 @@ def _cmd_install_everything(args: argparse.Namespace) -> int:
     )
 
 
+def _cmd_self_improvement(args: argparse.Namespace) -> int:
+    """ccst self-improvement <verb>. Every verb exits 0 on a completed run, whatever it found:
+    outcomes are reported in the output, the state files and (for failures) Telegram."""
+    from cc_session_tools.lib.scheduler.notify import send_telegram
+    from cc_session_tools.lib.self_improvement import nudge, report, review, signals, state
+
+    if args.verb == "collect-signals":
+        snapshot = signals.run(escalate_on_fail=not args.no_escalate, notify=send_telegram)
+        print(snapshot.summary_line())
+        return 0
+    if args.verb == "auto-review":
+        print(review.run(force=args.force, notify=send_telegram))
+        return 0
+    if args.verb == "nudge":
+        print(nudge.due_message(state.state_dir()) or "no review due")
+        return 0
+    for line in report.status_lines(state.state_dir()):
+        print(line)
+    return 0
+
+
 def _cmd_context_override(args: argparse.Namespace) -> int:
     """ccst context-override [on|off|status] - the CLI half of the /context-override
     skill. Reads CLAUDE_CODE_SESSION_ID exactly as the ported bash script did."""
@@ -4129,6 +4155,58 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Override the global CLAUDE.md target (default: ~/.claude/CLAUDE.md)",
     )
 
+    # ---- self-improvement ----
+    si_parser = sub.add_parser(
+        "self-improvement",
+        help="Configuration self-improvement loop: signals, headless review, nudge, status",
+        description=(
+            "The configuration self-improvement loop. State lives in "
+            "~/.local/share/claude/self-improvement/ (signals.env, reviews.log, "
+            "drift-push-count, last-nudge, last-escalation, last-auto-review). The SessionStart "
+            "nudge is the hook `ccst hooks run self-improvement-nudge`."
+        ),
+    )
+    si_sub = si_parser.add_subparsers(dest="verb", metavar="<verb>")
+    si_sub.required = True
+    si_collect = si_sub.add_parser(
+        "collect-signals",
+        help="Write the counts-only signal snapshot and print one summary line (no model call)",
+        description=(
+            "Count backlog Inbox lines and open entries, ccmsg messages unclaimed for 14+ days, "
+            "hook denies in 7 days, the drift push count and open reliability rows; compute "
+            "loop and auto-review health; write signals.env; on a FAIL send at most one "
+            "Telegram message per 7 days."
+        ),
+    )
+    si_collect.add_argument(
+        "--no-escalate", action="store_true",
+        help="Never send the FAIL Telegram message (also: SELF_IMPROVEMENT_NO_ESCALATE=1)",
+    )
+    si_review = si_sub.add_parser(
+        "auto-review",
+        help="One headless, proposal-only review (at most one paying run per 7 days)",
+        description=(
+            "Run one `claude -p` call (sonnet, no tools, --max-budget-usd 0.50) over a digest "
+            "of the signals, backlog, hook denies and recent session extracts, and append "
+            "validated proposal lines to the backlog Inbox. Uses only the Claude Code "
+            "subscription login: API-key and third-party provider variables are removed, and "
+            "the run fails (logged, cost 0) when no subscription login is available. Its cost "
+            "counts against your subscription usage. Never edits configuration."
+        ),
+    )
+    si_review.add_argument(
+        "--force", action="store_true",
+        help="Ignore the one-run-per-7-days limit (manual testing only)",
+    )
+    si_sub.add_parser(
+        "nudge",
+        help="Print the session-start nudge if a review is due (does not record a nudge)",
+    )
+    si_sub.add_parser(
+        "status",
+        help="Print the snapshot, last reviews and headless cost since the last review",
+    )
+
     # ---- context-override ----
     p_context_override = sub.add_parser(
         "context-override",
@@ -4306,6 +4384,9 @@ def main() -> None:
 
     if args.noun == "context-override":
         sys.exit(_cmd_context_override(args))
+
+    if args.noun == "self-improvement":
+        sys.exit(_cmd_self_improvement(args))
 
 
 if __name__ == "__main__":

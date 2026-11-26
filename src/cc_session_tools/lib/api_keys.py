@@ -79,15 +79,19 @@ def choose_label(keys: dict[str, str]) -> str | None:
     return None if idx is None else labels[idx]
 
 
-# Ambient credentials / provider switches that would take precedence over, or reroute billing away
-# from, ANTHROPIC_API_KEY.
-_COMPETING_AUTH_VARS = (
-    "CLAUDE_CODE_OAUTH_TOKEN",
-    "ANTHROPIC_AUTH_TOKEN",
+# Switches that route a launched claude to a third-party provider's billing.
+_PROVIDER_SWITCH_VARS = (
     "CLAUDE_CODE_USE_BEDROCK",
     "CLAUDE_CODE_USE_VERTEX",
     "CLAUDE_CODE_USE_FOUNDRY",
 )
+
+# Ambient credentials / provider switches that would take precedence over, or reroute billing away
+# from, ANTHROPIC_API_KEY.
+_COMPETING_AUTH_VARS = ("CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_AUTH_TOKEN", *_PROVIDER_SWITCH_VARS)
+
+# API-billed credentials / provider switches that would take precedence over a subscription login.
+API_AUTH_VARS = ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", *_PROVIDER_SWITCH_VARS)
 
 
 def with_api_key(env: dict[str, str], key: str) -> None:
@@ -95,3 +99,10 @@ def with_api_key(env: dict[str, str], key: str) -> None:
     for var in _COMPETING_AUTH_VARS:
         env.pop(var, None)
     env["ANTHROPIC_API_KEY"] = key
+
+
+def without_api_auth(env: dict[str, str]) -> None:
+    """Make the launched claude use only the subscription login: the reverse of
+    with_api_key."""
+    for var in API_AUTH_VARS:
+        env.pop(var, None)
