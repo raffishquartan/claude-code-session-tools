@@ -24,6 +24,6 @@ None.
 
 ## Impact
 
-- `src/hooks/bash_hard_deny.py` (new shell parser and scratchpad resolution, `check_command` gains an optional context, `main` reads `session_id`/`transcript_path`/`cwd`), `src/cc_session_tools/lib/hook_registry.py` (description).
-- `tests/test_bash_hard_deny.py`. `README.md`, `docs/data-store-migration-steps.md` (hook description).
+- New `src/hooks/shell_parse.py` (command splitter); `src/hooks/bash_hard_deny.py` (scratchpad resolution and command scan, `check_command` gains an optional context, `main` reads `session_id`/`transcript_path`/`cwd`); `src/cc_session_tools/lib/hook_registry.py` (description).
+- New `tests/test_bash_hard_deny_scratchpad.py` and `tests/test_shell_parse.py`; `README.md` (hook description). `docs/data-store-migration-steps.md` stays accurate: script files are still scanned with no scratchpad exception.
 - `CHANGELOG.md`, `pyproject.toml`, `uv.lock` (minor bump to 4.8.0). No on-disk change.

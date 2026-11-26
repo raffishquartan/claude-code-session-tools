@@ -67,3 +67,16 @@ The text-based `mv` check is kept (it also serves script files and heredoc bodie
 - [Newly blocked `find -delete`, `xargs rm`, `grm`] -> deliberate tightening, called out in the changelog; the scratchpad allowance covers the common cleanup case.
 - [Time-of-check vs time-of-use: a symlink created after the hook runs] -> parents must exist now, a not-yet-existing target is only allowed for verbs that do not follow a final symlink, and link/move/copy commands in the same command disable the allowance. Residual: an arbitrary program or script run earlier in the same command could still swap a scratchpad directory for a symlink; that needs deliberately adversarial command text and is accepted.
 - [Payload fields missing in some host] -> no scratchpad, so deletes block as before.
+
+## Review fixes
+
+A bypass-hunting review of the first implementation found crashes and regressions. The fixes add three rules on top of the parser:
+
+- **Opaque commands.** A parser can only judge the code it can see. Whenever a command runs code the hook cannot read (dynamic, glob or brace command words; dynamic `-c`/`eval`/inline arguments; shells reading stdin or a redirect; `source`, `trap`, `ssh`, `su`, `watch`, `awk`, `perl`, `make`, `let`, `[[` and similar; arithmetic, which expands variables that may hold substitutions; function definitions; a data heredoc next to a code runner), it gets no scratchpad allowance and is blocked when its raw or quote-decoded text mentions a delete - the old text check's behaviour, kept exactly where the parse cannot help. Unparseable text (including an unterminated heredoc, which would otherwise swallow later lines) is opaque.
+- **Crash safety.** `main()` blocks on any exception, unrepresentable `$'\U...'`/surrogate escapes become dynamic, and `xargs`/`find -exec` nesting is bounded.
+- **Exact globs.** Bracket expressions and leading-dot wildcards are refused, because Python's `glob` does not reproduce bash's matching for them.
+
+Also: grouped short options with an argument (`env -iu X`, `xargs -0I {}`), more wrappers (`coproc`, `caffeinate`, `ionice`, `chrt`, `noglob`), zsh `=rm`, more interpreters (`ipython`, `micropython`, `pypy`, `bun`, `deno`), `find -mindepth 1` from the scratchpad root, `-files0-from` as unresolvable, inline allowance off when the command runs `ln`/`mv`/`cp` or the script runs other programs, and `mv` into the temp root through a destination made unknown by `cd` or from a `~`/dynamic source.
+
+Remaining residuals: `$CMD x` or `cat file | bash` where the hidden text never names a delete, `perl -e` style deletes whose text does not mention a delete verb, and unknown wrapper programs in front of `rm` (all pre-existing).
+

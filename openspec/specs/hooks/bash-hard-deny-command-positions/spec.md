@@ -25,7 +25,7 @@ The hook SHALL treat `rm`, `rmdir`, `unlink`, `shred` (and their `g`-prefixed na
 - **THEN** the command is allowed
 
 ### Requirement: Nested and wrapped command positions are recognised
-The hook SHALL recognise a delete command at every position the shell executes: after `;`, `&&`, `||`, `|`, `&` and newlines; inside `( ... )` subshells, `$( ... )` and backtick substitutions and process substitutions; inside the string passed to `bash -c`, `sh -c`, `zsh -c` and similar shells, and to `eval`; after `env`, `command`, `builtin`, `exec`, `nohup`, `time`, `nice`, `timeout`, `stdbuf`, `setsid` and `busybox`; as the command run by `xargs` or by `find -exec`; in a `<<<` here-string fed to a shell or to `python`/`node`; and when written as `\rm`, a quoted `"rm"`, an ANSI-C quoted `$'rm'`, an absolute path such as `/bin/rm`, in any letter case (`RM`), or glued to an expansion (`rm${IFS}x`). A shell that reads its commands from a pipe (`... | bash`, `sh -s`) SHALL be treated as running a delete whenever the command text mentions a delete verb. When the command cannot be parsed (for example an unterminated quote or nesting too deep to analyse), the hook SHALL block if the text mentions a delete verb anywhere.
+The hook SHALL recognise a delete command at every position the shell executes: after `;`, `&&`, `||`, `|`, `&` and newlines; inside `( ... )` subshells, `$( ... )` and backtick substitutions and process substitutions; inside the string passed to `bash -c`, `sh -c`, `zsh -c` and similar shells, and to `eval`; after `env`, `command`, `builtin`, `exec`, `nohup`, `time`, `nice`, `timeout`, `stdbuf`, `setsid` and `busybox`; as the command run by `xargs` or by `find -exec`; in a `<<<` here-string fed to a shell or to `python`/`node`; and when written as `\rm`, a quoted `"rm"`, an ANSI-C quoted `$'rm'`, an absolute path such as `/bin/rm`, in any letter case (`RM`), or glued to an expansion (`rm${IFS}x`). A shell that reads its commands from a pipe (`... | bash`, `sh -s`) SHALL be treated as running a delete whenever the command text mentions a delete verb. When the command cannot be parsed (for example an unterminated quote, an unterminated heredoc, or nesting too deep to analyse), it SHALL be treated as opaque (see below). `<<` inside arithmetic SHALL NOT start a heredoc, and a heredoc delimiter SHALL be matched literally, without expansion.
 
 #### Scenario: Shell -c string
 - **WHEN** the command is `bash -c "rm -rf /home/alice/project"`
@@ -65,3 +65,29 @@ The hook SHALL treat `/private/tmp` and `/private/var/tmp` as tmp-like destinati
 #### Scenario: Move within the scratchpad
 - **WHEN** the command is `mv <scratchpad>/a.txt <scratchpad>/b.txt`
 - **THEN** the command is allowed
+
+### Requirement: Opaque commands block on any delete mention
+When a command runs code the hook cannot read - a command word that is dynamic, a glob or a brace expansion; a dynamic `-c`, `eval` or inline-script argument; a shell reading its commands from stdin, a redirect, `-` or `/dev/stdin`; `source`/`.`, `trap`, `ssh`, `su`, `watch`, `script`, `flock`, `parallel`, `awk`, `perl`, `make`, `let`, `[[`; arithmetic; a function definition; a heredoc written as data in the same command as something that runs code; or text the parser cannot read - the hook SHALL NOT apply the scratchpad allowance and SHALL block the command whenever its text, raw or quote-decoded, mentions a delete verb, a `find` delete action, `xargs` or an inline-script delete call.
+
+#### Scenario: Heredoc fed to a shell through a substitution
+- **WHEN** the command is `bash -c "$(cat <<'EOF'` followed by a line `rm -rf /home/alice/project`, `EOF` and `)"`
+- **THEN** the command is blocked
+
+#### Scenario: Script written by a heredoc and then run
+- **WHEN** the command writes `rm -rf /home/alice/project` into `s.sh` with `cat <<'EOF' > s.sh` and then runs `bash s.sh`
+- **THEN** the command is blocked
+
+#### Scenario: Strings run later or elsewhere
+- **WHEN** the command is `trap 'rm -rf /home/alice/project' EXIT`, `ssh host 'rm -rf x'` or `X='rm x'; eval "$X"`
+- **THEN** the command is blocked
+
+#### Scenario: Opaque command without a delete
+- **WHEN** the command is `echo $((1<<2))`
+- **THEN** the command is allowed
+
+### Requirement: Analysis errors block
+Any error while the hook analyses a command SHALL block the command with a message saying it could not be analysed, because a hook that crashes is treated as non-blocking and the command would run unchecked.
+
+#### Scenario: Unrepresentable escape
+- **WHEN** the command is `rm -rf /home/alice/project $'\UFFFFFFFF'`
+- **THEN** the command is blocked
