@@ -21,6 +21,7 @@ from cc_session_tools.lib.messaging.addressing import SessionContext
 from cc_session_tools.lib.messaging.lock import AlreadyClaimedError
 from cc_session_tools.lib.messaging.message import ToKind
 from cc_session_tools.lib.messaging.session_ref import resolve_session_ref
+from cc_session_tools.lib.roots import RootsConfigError
 
 
 STATUS_HELP = """\
@@ -148,9 +149,9 @@ class _Recipient:
 def _project_from_path(raw: str) -> _Recipient:
     try:
         project_dir = store.project_dir_for_path(Path(raw).expanduser())
-    except (RuntimeError, OSError) as exc:
+    except (RuntimeError, OSError, RootsConfigError) as exc:
         # expanduser raises RuntimeError for an unknown ~user; resolve can raise on a
-        # symlink loop.
+        # symlink loop; unset or misconfigured session roots raise RootsConfigError.
         raise ValueError(f"cannot resolve --to-project path {raw}: {exc}") from exc
     if project_dir is None:
         raise ValueError(

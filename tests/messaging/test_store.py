@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 from cc_session_tools.lib.messaging import store
+from cc_session_tools.lib.roots import RootsConfigError
 
 
 def test_store_root_honours_env_override(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -149,7 +150,8 @@ def test_project_dir_for_path_no_roots_configured(
 ) -> None:
     monkeypatch.delenv("CLAUDE_SESSION_TOOLS_PROJ_ROOT", raising=False)
     monkeypatch.delenv("CLAUDE_SESSION_TOOLS_REPO_ROOT", raising=False)
-    assert store.project_dir_for_path(tmp_path) is None
+    with pytest.raises(RootsConfigError):
+        store.project_dir_for_path(tmp_path)
 
 
 def test_project_dir_for_path_rejects_nested_root(

@@ -26,6 +26,10 @@ When no such project folder exists (the path is outside every configured root, i
 - **WHEN** `--to-project` is a path that is not inside any project folder of a configured root
 - **THEN** `ccmsg send` exits non-zero with an error naming the path and stores no message
 
+#### Scenario: Session roots misconfigured
+- **WHEN** `--to-project` is a path and the session roots are unset or a root environment variable names a missing path or a file
+- **THEN** `ccmsg send` exits 2 with the `[CST-ROOTS-CONFIG-ERROR]` message naming the problem, not a "matches no known project" error, and stores no message
+
 #### Scenario: Relative path
 - **WHEN** `--to-project` is a relative path such as `alpha/sub`, `..` or `.`
 - **THEN** `ccmsg send` exits 2 with an error naming the value and stores no message

@@ -100,13 +100,13 @@ def project_dir_for_path(path: Path) -> Path | None:
     A project folder is a directory that ``partition_for_cwd`` maps to a project: a direct
     child of a configured session root. ``path`` (already ``~``-expanded) is resolved and it
     and its ancestors are tried nearest first, so a subfolder such as ``cc-sessions/<tag>``
-    resolves to the project that contains it. None when no roots are configured, or when the
-    path is outside every root, is a root itself, or names a project folder that does not
-    exist."""
-    try:
-        roots = load_session_roots()
-    except RootsConfigError:
-        return None
+    resolves to the project that contains it. None when the path is outside every root, is a root itself, or names a project folder that does not
+    exist.
+
+    Raises RootsConfigError when the session roots are unset or misconfigured: unlike
+    ``partition_for_cwd``, which degrades so a sender never crashes, an explicit path
+    recipient cannot be resolved without roots, and "no known project" would hide why."""
+    roots = load_session_roots()
     resolved = path.resolve()
     for candidate in (resolved, *resolved.parents):
         if candidate in roots:

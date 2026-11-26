@@ -518,3 +518,14 @@ def test_send_to_project_rejects_dot_names(tmp_path: Path, value: str) -> None:
     assert "relative path" in res.stderr
     assert _run(["list"], tmp_path / "store", env).stdout == ""
 
+
+def test_send_to_project_path_reports_roots_config_error(tmp_path: Path) -> None:
+    env, proj = _path_env(tmp_path)
+    env["CLAUDE_SESSION_TOOLS_REPO_ROOT"] = str(tmp_path / "missing-root")
+    res = _send_to_project(tmp_path, str(proj / "alpha"), env)
+    assert res.returncode == 2
+    assert "[CST-ROOTS-CONFIG-ERROR]" in res.stderr
+    assert "CLAUDE_SESSION_TOOLS_REPO_ROOT" in res.stderr
+    assert "no known project" not in res.stderr
+    assert "Traceback" not in res.stderr
+    assert _run(["list"], tmp_path / "store", env).stdout == ""
