@@ -10,8 +10,8 @@
 
 ## 3. Bundled skill
 
-- [ ] 3.1 Add `src/cc_session_tools/skills/review-session-and-improve-claude-setup/SKILL.md` (ccst commands, no personal or machine-specific details)
-- [ ] 3.2 Tests: the skill is discovered and linked by `ccst skills install --apply` into a temporary target; a real directory of the same name makes it exit 1 and is left untouched; doctor reports it FAIL; the skill names only `ccst` commands that exist and contains no `.sh` script
+- [x] 3.1 Add `src/cc_session_tools/skills/review-session-and-improve-claude-setup/SKILL.md` (ccst commands, no personal or machine-specific details)
+- [x] 3.2 Tests: the skill is discovered and linked by `ccst skills install --apply` into a temporary target; a real directory of the same name makes it exit 1 and is left untouched; doctor reports it FAIL; the skill names only `ccst` commands that exist and contains no `.sh` script
 
 ## 4. Docs and release
 

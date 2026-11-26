@@ -414,3 +414,30 @@ def test_step_output_goes_to_the_stream_not_stdout(
     assert captured.out == ""
     assert "Skills" in buf.getvalue()
     assert "Scheduled jobs" in buf.getvalue()
+
+
+def test_apply_leaves_a_copied_review_skill_directory_alone_and_fails(tmp_path: Path) -> None:
+    """A real (non-symlink) directory with a bundled skill's name - e.g. the
+    review-session-and-improve-claude-setup skill copied there by another tool before CCST
+    bundled it - is never moved or deleted by the sync: the skills step exits 1, so the sync
+    marker is not recorded and the user has to remove the directory once."""
+    from cc_session_tools.lib import install_sync
+
+    copied = tmp_path / "skills" / "review-session-and-improve-claude-setup"
+    copied.mkdir(parents=True)
+    (copied / "SKILL.md").write_text("an older copy\n")
+
+    result = subprocess.run(
+        [sys.executable, "-m", "cc_session_tools.cli.ccst", *_isolated_apply_args(tmp_path)],
+        capture_output=True, text=True, cwd=str(Path(__file__).parent.parent),
+        env=_isolated_apply_env(tmp_path),
+    )
+
+    assert result.returncode == 1
+    assert f"{copied} exists and is not a symlink" in result.stderr
+    assert not copied.is_symlink()
+    assert (copied / "SKILL.md").read_text() == "an older copy\n"
+    assert sorted(p.name for p in copied.parent.glob("review-session-and-improve-claude-setup*")) == [
+        "review-session-and-improve-claude-setup"
+    ]
+    assert install_sync.get_synced_version(path=tmp_path / "data-home" / "sessions.db") is None
