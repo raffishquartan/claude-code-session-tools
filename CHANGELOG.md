@@ -16,7 +16,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- `ccst move-session` verification no longer fails a session that changed directory into a path the move rewrites, such as its own `~/.claude/projects/<src-key>/` directory: every destination `cwd` is accepted if it is the destination cwd or the rewritten form of a source `cwd`, and any other value is printed as `cwd_unexpected`.
+- `ccst move-session` verification no longer fails a session that changed directory into a path the move rewrites, such as its own `~/.claude/projects/<src-key>/` directory: every destination `cwd` is accepted if it is the destination cwd, a source `cwd` the rewrite left unchanged, or the rewritten form of one of the session's own source `cwd` values (the source cwd or a path under it, or its transcript directory or a path under it). Any other value, including a sibling such as `<src-cwd>-archive` that the plain string rewrite mangled, is printed as `cwd_unexpected`.
 - A failed verification during `--execute` now removes what that run created (destination session directory, destination transcript and any parent directory it made that is empty again), lists each removed path and leaves the source untouched, so the same command can be re-run. Verification now runs before the memory copy.
 
 ## [4.5.0] - 2026-11-21

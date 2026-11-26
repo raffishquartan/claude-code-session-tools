@@ -125,6 +125,43 @@ class TestVerifyCwdAgainstRewrittenSource:
         assert "cwd_unexpected      : ['/somewhere/else']" in capsys.readouterr().out
 
 
+    def _pair_with_src_cwds(self, tmp_path: Path, cwds: list[str]) -> tuple[Path, Path]:
+        src = tmp_path / "src.jsonl"
+        dst = tmp_path / "dst.jsonl"
+        src_text = "".join(json.dumps({"cwd": c, "i": i}) + "\n" for i, c in enumerate(cwds))
+        src.write_text(src_text)
+        dst.write_text(src_text.replace(self.SRC_CWD, self.DST_CWD).replace("-old-cwd", "-new-cwd"))
+        return src, dst
+
+    @pytest.mark.parametrize("strict", [True, False])
+    def test_rewritten_sibling_cwd_fails(self, ms, tmp_path, strict):
+        # The boundary-less rewrite turns a sibling of the source cwd, and a sibling of
+        # its transcript directory, into paths that never existed. They are not the
+        # session's own cwds, so verification rejects the rewritten forms.
+        src, dst = self._pair_with_src_cwds(tmp_path, [
+            self.SRC_CWD, self.SRC_CWD + "-archive", self.SRC_KEY_DIR + "-archive",
+        ])
+        v = ms.verify_dst_jsonl(src, dst, self.DST_CWD, self.SRC_CWD, "-old-cwd",
+                                replacements=REPLACEMENTS, strict=strict,
+                                dst_session_dir=tmp_path / "dst-session")
+        assert v["ok"] is False
+        assert v["cwds_unexpected"] == sorted(
+            [self.DST_CWD + "-archive", self.DST_KEY_DIR + "-archive"])
+
+    @pytest.mark.parametrize("strict", [True, False])
+    def test_own_subdirectory_and_untouched_cwds_pass(self, ms, tmp_path, strict):
+        # A subdirectory of the source cwd or of its transcript directory is the
+        # session's own; a cwd the rewrite leaves unchanged is carried over verbatim.
+        src, dst = self._pair_with_src_cwds(tmp_path, [
+            self.SRC_CWD, self.SRC_CWD + "/sub", self.SRC_KEY_DIR + "/memory", "/elsewhere",
+        ])
+        v = ms.verify_dst_jsonl(src, dst, self.DST_CWD, self.SRC_CWD, "-old-cwd",
+                                replacements=REPLACEMENTS, strict=strict,
+                                dst_session_dir=tmp_path / "dst-session")
+        assert v["cwds_unexpected"] == []
+        assert v["ok"] is True
+
+
 class TestApplyReplacements:
     def test_applies_in_order(self, ms):
         assert ms.apply_replacements("a/b", [("a", "x"), ("x/b", "y")]) == "y"

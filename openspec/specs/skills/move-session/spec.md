@@ -124,7 +124,7 @@ When `--verify-only` compares line counts, the tombstone records in the source t
 - **THEN** no exclusion line is printed
 
 ### Requirement: Destination cwd values are checked against the rewritten source cwd values
-Verification of a destination transcript (strict during `--execute`, and `--verify-only`) SHALL accept every `cwd` value in the destination that equals the destination cwd or equals some `cwd` value found in the source transcript after applying the same path-string replacements the copy applied. Verification SHALL fail when a destination `cwd` value is outside that set, and SHALL list each such value in its output. All other verification checks are unchanged.
+Verification of a destination transcript (strict during `--execute`, and `--verify-only`) SHALL accept every `cwd` value in the destination that equals the destination cwd, equals a source `cwd` value the copy's path-string replacements leave unchanged, or equals the rewritten form (the same path-string replacements the copy applied) of one of the session's own source `cwd` values. A source `cwd` is the session's own when it is the source cwd or a path under it, or has the source project key as a whole path component (its transcript directory or a path under it). Verification SHALL fail when a destination `cwd` value is outside that set, and SHALL list each such value in its output. All other verification checks are unchanged.
 
 #### Scenario: Source session changed directory into its own transcript directory
 - **WHEN** a session whose transcript has records with `cwd` equal to the project cwd and other records with `cwd` equal to `~/.claude/projects/<src-key>` is moved with `--execute`
@@ -133,6 +133,14 @@ Verification of a destination transcript (strict during `--execute`, and `--veri
 #### Scenario: Unexpected destination cwd
 - **WHEN** a destination transcript contains a `cwd` value that is neither the destination cwd nor a rewritten source `cwd`
 - **THEN** verification reports `RESULT : FAIL` and names that value as unexpected
+
+#### Scenario: Rewritten sibling cwd
+- **WHEN** a source transcript has a `cwd` value that is a sibling of the source cwd, such as `<src-cwd>-archive`, which the plain string rewrite turns into `<dst-cwd>-archive`
+- **THEN** verification reports `RESULT : FAIL` and names `<dst-cwd>-archive` as unexpected
+
+#### Scenario: Unrelated cwd carried over
+- **WHEN** a source transcript has a `cwd` value the rewrite does not change
+- **THEN** verification accepts that value in the destination
 
 ### Requirement: A failed strict verification leaves no partial destination
 When strict verification fails during `--execute`, the script SHALL remove every file and directory that run created (the destination session directory, the destination transcript, and any destination parent directory the run created that is now empty), SHALL print each removed path, and SHALL exit with status 1. It SHALL NOT remove any path that existed before the run, SHALL NOT modify the source session directory or source transcript, and SHALL NOT write tombstones, picker labels, `sessions.db` rows or a cleanup script. If a removal fails, the script SHALL print every path it could not remove. Verification SHALL run before any memory directory is copied.

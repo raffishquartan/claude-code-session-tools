@@ -217,7 +217,7 @@ When verification runs, check the script's "VERIFICATION" output block before de
 - `lines src == lines dst` for the jsonl
 - `json_valid_lines == lines dst`
 - `remaining_src_long_path == 0` and `remaining_src_encoded_key == 0`
-- every destination `cwd` is the destination cwd or the rewritten form of a `cwd` in the source (the same string replacements the copy applied). A session that changed directory into, say, its own `~/.claude/projects/<src-key>/` directory has that path rewritten to `<dst-key>`, which passes. Any other value is printed as `cwd_unexpected` and fails.
+- every destination `cwd` is the destination cwd, a source `cwd` the copy's string replacements left unchanged, or the rewritten form of one of the session's own source `cwd` values: the source cwd or a path under it, or its `~/.claude/projects/<src-key>/` directory or a path under it. A session that changed directory into its own transcript directory has that path rewritten to `<dst-key>`, which passes. The replacements are plain string replaces, so a sibling such as `<src-cwd>-archive` comes out as a path that never existed; that value, and any other, is printed as `cwd_unexpected` and fails.
 
 If any check fails during the `--execute` run, the script prints `VERIFY: FAIL`, removes what that run created (the destination `cc-sessions/<tag>/`, the destination jsonl, and any destination parent directory it made that is empty again), prints each removed path and exits 1. Nothing that existed before the run is removed and the source is not touched, so the same command can be re-run once the cause is fixed. If a path cannot be removed, the script lists it for you to delete by hand. Do not present the move as successful in that case.
 

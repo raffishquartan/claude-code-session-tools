@@ -557,6 +557,17 @@ def tombstone_lines_for_destination(src_jsonl: Path, dst_session_dir: Path) -> i
     return excluded
 
 
+def is_own_cwd(cwd: str, src_cwd_abs: str, src_key: str) -> bool:
+    """Whether a source `cwd` belongs to the session being moved: the source
+    cwd or a path under it, or a path at or under its transcript directory
+    (a path with the source project key as a whole component)."""
+    return (
+        cwd == src_cwd_abs
+        or cwd.startswith(src_cwd_abs.rstrip("/") + "/")
+        or src_key in Path(cwd).parts
+    )
+
+
 def verify_dst_jsonl(
     src_jsonl: Path,
     dst_jsonl: Path,
@@ -570,11 +581,14 @@ def verify_dst_jsonl(
 ) -> dict:
     """Run verification checks. Returns dict with results and a bool 'ok'.
 
-    Every cwd in the destination must be dst_cwd_abs or the rewritten form
-    (`replacements` applied) of a cwd in the source. A session can record cwd
-    values other than its project cwd, such as its own transcript directory
-    under ~/.claude/projects/<src-key>, which the key rewrite maps to
-    <dst-key>; those are legitimate.
+    Every cwd in the destination must be dst_cwd_abs, a source cwd the
+    rewrite left unchanged, or the rewritten form (`replacements` applied) of
+    one of the session's own source cwds (see `is_own_cwd`). A session can
+    record cwd values other than its project cwd, such as its own transcript
+    directory under ~/.claude/projects/<src-key>, which the key rewrite maps
+    to <dst-key>; those are legitimate. The rewrite is a plain string replace,
+    so it also turns a sibling such as `<src-cwd>-archive` into a path that
+    never existed; that rewritten form is rejected.
 
     strict=True (post-move, --execute path): require exact line parity and zero
     remaining src-path strings. The destination should be a byte-identical
@@ -609,9 +623,11 @@ def verify_dst_jsonl(
     text = dst_jsonl.read_text()
     remaining_long = text.count(src_cwd_abs)
     remaining_key = text.count(src_key)
-    expected_cwds = {dst_cwd_abs} | {
-        apply_replacements(c, replacements) for c in jsonl_summary(src_jsonl)["cwds"]
-    }
+    expected_cwds = {dst_cwd_abs}
+    for c in jsonl_summary(src_jsonl)["cwds"]:
+        rewritten = apply_replacements(c, replacements)
+        if rewritten == c or is_own_cwd(c, src_cwd_abs, src_key):
+            expected_cwds.add(rewritten)
     cwds_unexpected = sorted(cwds - expected_cwds)
     cwds_clean = not cwds_unexpected
     if strict:
