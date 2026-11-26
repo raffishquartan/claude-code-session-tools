@@ -311,6 +311,8 @@ def test_replaced_script_matches_a_separate_or_joined_script_argument():
         ["bash", "/example/repos/config/scripts/self-improvement/collect-signals.sh"],
         ["bash /example/repos/config/scripts/self-improvement/collect-signals.sh"],
         ["/example/scripts/self-improvement/collect-signals.sh", "--flag"],
+        ["bash -c \"/example/scripts/self-improvement/collect-signals.sh\""],
+        ["bash '/example/scripts/self-improvement/collect-signals.sh'"],
     ):
         assert bundled_jobs.replaced_script(_spec_for(job, command=command), job) == "collect-signals.sh"
 

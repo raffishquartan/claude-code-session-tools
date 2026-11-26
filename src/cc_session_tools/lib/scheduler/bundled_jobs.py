@@ -271,11 +271,11 @@ def diff_from_bundled(spec: "JobSpec", job: BundledJob) -> tuple[str, ...]:
 
 def replaced_script(spec: "JobSpec", job: BundledJob) -> str | None:
     """The script from `job.replaces_scripts` that the registered `spec` runs, or None. Each
-    command argument is also split on whitespace, so a one-string `bash /x/y.sh` command
-    matches as well as a separate script argument."""
+    command argument is also split on whitespace and stripped of quotes, so a one-string
+    `bash '/x/y.sh'` command matches as well as a separate script argument."""
     for arg in spec.command:
         for token in arg.split():
-            name = Path(token).name
+            name = Path(token.strip("'\"")).name
             if name in job.replaces_scripts:
                 return name
     return None
