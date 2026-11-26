@@ -24,4 +24,4 @@
 
 ## 6. Release
 
-- [ ] 6.1 CHANGELOG 4.10.0 with today's date, bump `pyproject.toml`, `uv lock`; verify `uv run pytest -q`, `uv run mypy src` and `openspec validate --specs` all exit 0
+- [x] 6.1 CHANGELOG 4.10.0 with today's date, bump `pyproject.toml`, `uv lock`; verify `uv run pytest -q`, `uv run mypy src` and `openspec validate --specs` all exit 0
