@@ -62,12 +62,18 @@ class Word:
 
 @dataclass(frozen=True, slots=True)
 class SimpleCommand:
-    """A command's words, the ``<<<`` here-strings fed to its stdin, and whether any
-    input redirection (``<``, heredoc, here-string) replaces its stdin."""
+    """A command's words, the ``<<<`` here-strings fed to its stdin, whether stdin is
+    redirected from a file or process (``<``, ``<&``, ``<>``), whether it has a
+    heredoc, whether it is the name of a function definition (``f() { ...; }``), and
+    whether it evaluates arithmetic (``((...))``, ``$((...))``), where bash also expands
+    variables whose values may hold command substitutions."""
 
     words: tuple[Word, ...]
     herestrings: tuple[Word, ...] = ()
     stdin_redirected: bool = False
+    has_heredoc: bool = False
+    defines_function: bool = False
+    arithmetic: bool = False
 
 
 def split_commands(text: str) -> list[SimpleCommand]:
@@ -116,6 +122,9 @@ class _Parser:
         self.commands: list[SimpleCommand] = []
         self._pending: list[_PendingHeredoc] = []
         self._stdin_redirected = False
+        self._has_heredoc = False
+        self._defines_function = False
+        self._arithmetic_seen = False
 
     # ---- command lists ----
 
@@ -124,6 +133,7 @@ class _Parser:
         words: list[Word] = []
         here: list[Word] = []
         self._stdin_redirected = False
+        self._has_heredoc = False
         s = self.s
         while self.i < len(s):
             c = s[self.i]
@@ -144,7 +154,12 @@ class _Parser:
                 self._flush(words, here)
                 while self.i < len(s) and s[self.i] in ";&|":
                     self.i += 1
+            elif c == "(" and not words and s.startswith("((", self.i):
+                self.i += 2
+                self._arithmetic()
             elif c == "(":
+                if words and s[self.i + 1:].lstrip(" \t").startswith(")"):
+                    self._defines_function = True
                 self._flush(words, here)
                 self.i += 1
                 self.parse_list(stop=")")
@@ -164,11 +179,17 @@ class _Parser:
             raise ShellParseError("unterminated '('")
 
     def _flush(self, words: list[Word], here: list[Word]) -> None:
-        if words or here:
-            self.commands.append(SimpleCommand(tuple(words), tuple(here), self._stdin_redirected))
+        if words or here or self._arithmetic_seen:
+            self.commands.append(SimpleCommand(
+                tuple(words), tuple(here), self._stdin_redirected, self._has_heredoc,
+                self._defines_function, self._arithmetic_seen,
+            ))
             words.clear()
             here.clear()
+        self._arithmetic_seen = False
         self._stdin_redirected = False
+        self._has_heredoc = False
+        self._defines_function = False
 
     def _redirection(self, words: list[Word], here: list[Word]) -> None:
         s = self.s
@@ -183,7 +204,7 @@ class _Parser:
             if s.startswith(op, self.i):
                 self.i += len(op)
                 break
-        if op.startswith("<"):
+        if op in ("<", "<&", "<>"):
             self._stdin_redirected = True
         while self.i < len(s) and s[self.i] in " \t":
             self.i += 1
@@ -194,17 +215,18 @@ class _Parser:
         if op == "<<<":
             here.append(target.build(s[start:self.i]))
         elif op in ("<<", "<<-"):
+            # bash removes quotes from the delimiter word but never expands it.
             raw = s[start:self.i]
-            quoted = any(q in raw for q in "'\"\\")
-            self._pending.append(
-                _PendingHeredoc("".join(target.chars), op == "<<-", expands=not quoted)
-            )
+            self._has_heredoc = True
+            self._pending.append(_PendingHeredoc(
+                _quote_removed(raw), op == "<<-", expands=not any(q in raw for q in "'\"\\")
+            ))
 
     def _read_heredoc_bodies(self) -> None:
         s = self.s
         for doc in self._pending:
             body_start = self.i
-            body_end = len(s)
+            body_end = -1
             while self.i < len(s):
                 nl = s.find("\n", self.i)
                 line_end = len(s) if nl == -1 else nl
@@ -216,6 +238,10 @@ class _Parser:
                     self.i = line_end + 1 if nl != -1 else line_end
                     break
                 self.i = line_end + 1 if nl != -1 else line_end
+            if body_end == -1:
+                # bash would treat everything after this point as body; a heredoc that
+                # swallows the rest of the command is how later lines get hidden.
+                raise ShellParseError(f"heredoc {doc.delimiter!r} is never terminated")
             if doc.expands:
                 self._scan_expansions(s[body_start:body_end])
         self._pending = []
@@ -326,7 +352,7 @@ class _Parser:
                 width = {"x": 2, "u": 4, "U": 8}[e]
                 digits = _take(s, self.i, "0123456789abcdefABCDEF", width)
                 self.i += len(digits)
-                out.append(chr(int(digits, 16)) if digits else "\\" + e)
+                out.append(_code_point(int(digits, 16)) if digits else "\\" + e)
             elif e == "c" and self.i < len(s):
                 out.append(chr(ord(s[self.i]) & 0x1F))
                 self.i += 1
@@ -337,7 +363,11 @@ class _Parser:
     def _dollar(self, b: _WordBuilder) -> None:
         s = self.s
         nxt = s[self.i + 1] if self.i + 1 < len(s) else ""
-        if nxt == "(":
+        if nxt == "(" and s.startswith("$((", self.i):
+            self.i += 3
+            self._arithmetic()
+            b.add(DYNAMIC)
+        elif nxt == "(":
             self.i += 2
             self.parse_list(stop=")")
             b.add(DYNAMIC)
@@ -356,6 +386,28 @@ class _Parser:
         else:
             b.add("$")
             self.i += 1
+
+    def _arithmetic(self) -> None:
+        """Skip an arithmetic body after ``((`` / ``$((`` up to its ``))``; ``<<`` in it
+        is a shift, not a heredoc. Substitutions inside it are parsed."""
+        s = self.s
+        depth = 0
+        start = self.i
+        self._arithmetic_seen = True
+        while self.i < len(s):
+            c = s[self.i]
+            if c == "(":
+                depth += 1
+            elif c == ")":
+                if depth == 0:
+                    if not s.startswith("))", self.i):
+                        raise ShellParseError("malformed arithmetic")
+                    self._scan_expansions(s[start:self.i])
+                    self.i += 2
+                    return
+                depth -= 1
+            self.i += 1
+        raise ShellParseError("unterminated arithmetic")
 
     def _braced_parameter(self) -> None:
         """Skip a ``${...}`` body, parsing any substitutions inside it."""
@@ -404,6 +456,30 @@ class _Parser:
             inner.append(c)
             j += 1
         raise ShellParseError("unterminated backtick")
+
+
+def _code_point(value: int) -> str:
+    """The character for an ANSI-C escape, or DYNAMIC when Python cannot represent it
+    as a path character (beyond U+10FFFF, or a lone surrogate)."""
+    if value > 0x10FFFF or 0xD800 <= value <= 0xDFFF:
+        return DYNAMIC
+    return chr(value)
+
+
+def _quote_removed(raw: str) -> str:
+    """*raw* with quotes and backslash escapes removed and nothing expanded."""
+    out: list[str] = []
+    i = 0
+    while i < len(raw):
+        c = raw[i]
+        if c == "\\" and i + 1 < len(raw):
+            out.append(raw[i + 1])
+            i += 2
+            continue
+        if c not in "'\"":
+            out.append(c)
+        i += 1
+    return "".join(out)
 
 
 def _take(s: str, start: int, allowed: str, limit: int) -> str:

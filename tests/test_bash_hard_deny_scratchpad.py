@@ -451,3 +451,147 @@ def test_derive_scratchpad_rejects_symlinked_component(env: Env, tmp_path: Path)
     link_session.symlink_to(redirected)
     transcript = env.transcript_path.replace(SESSION_ID, link_session.name)
     assert derive_scratchpad(link_session.name, transcript) is None
+
+
+# --- Review findings: bypasses that must stay blocked ---
+
+
+@pytest.mark.parametrize("command", [
+    "rm -rf {OUT} $'\\UFFFFFFFF'",
+    "echo $((1<<2))\nrm -rf {OUT}",
+    "(( x = 1 << 3 ))\nrm -rf {OUT}",
+    "cat <<$X\nhello\n$X\nrm -rf {OUT}",
+    "bash -c \"$(cat <<'EOF'\nrm -rf {OUT}\nEOF\n)\"",
+    "python3 -c \"$(cat <<'EOF'\nimport shutil; shutil.rmtree('{OUT}')\nEOF\n)\"",
+    "X='true; rm -rf {OUT}'; eval \"$X\"",
+    "source /dev/stdin <<EOF\nrm -rf {OUT}\nEOF",
+    "echo 'rm -rf {OUT}' | bash -",
+    "echo 'rm -rf {OUT}' | bash /dev/stdin",
+    "bash < <(echo rm -rf {OUT})",
+    "trap 'true; rm -rf {OUT}' EXIT",
+    "ssh host 'cd /; rm -rf {OUT}'",
+    "su someone -c 'true; rm {OUT}'",
+    "watch 'true; rm {OUT}'",
+    "awk 'BEGIN{system(\"rm {OUT}\")}'",
+    "fish -c 'rm {OUT}'",
+    "cat <<'EOF' > s.sh\nrm -rf {OUT}\nEOF\nbash s.sh",
+    "/bin/r[m] {OUT}",
+    "env -iu PATH rm {OUT}",
+    "exec -ca name rm {OUT}",
+    "printf x | xargs -0I {} rm -rf {}",
+    "coproc rm {OUT}",
+    "caffeinate rm {OUT}",
+    "ionice -c 3 rm {OUT}",
+    "=rm {OUT}",
+    "ipython -c \"import shutil; shutil.rmtree('{OUT}')\"",
+    "micropython -c \"import os; os.remove('{OUT}')\"",
+    "find /x -name y -delete\necho \"unterminated",
+    "echo " + "$(" * 3000 + "rm x" + ")" * 3000,
+    "xargs " * 1000 + "rm x",
+])
+def test_review_bypasses_are_blocked(
+    monkeypatch: pytest.MonkeyPatch, env: Env, command: str
+) -> None:
+    _blocked(monkeypatch, env, command.replace("{OUT}", f"{env.outside}/notes.txt"))
+
+
+def test_brace_expanded_command_word_is_blocked(monkeypatch: pytest.MonkeyPatch, env: Env) -> None:
+    _blocked(monkeypatch, env, "{rm,-rf," + f"{env.outside}/notes.txt" + "}")
+
+
+def test_crashing_surrogate_target_is_blocked(monkeypatch: pytest.MonkeyPatch, env: Env) -> None:
+    _blocked(monkeypatch, env, f"rm -rf {env.scratchpad}/$'\\ud800'/x {env.outside}/notes.txt")
+
+
+def test_hook_error_blocks(monkeypatch: pytest.MonkeyPatch, env: Env) -> None:
+    def boom(command: str, ctx: object) -> None:
+        raise ValueError("unexpected")
+
+    monkeypatch.setattr("hooks.bash_hard_deny.check_command", boom)
+    err = _blocked(monkeypatch, env, "ls")
+    assert "could not analyse" in err
+
+
+@pytest.mark.parametrize("command", [
+    "C=cd; $C {OUTDIR}; rm -rf notes.txt",
+    "f() {{ cd {OUTDIR}; }}; f; rm -rf notes.txt",
+    "eval \"$(printf 'cd %s' {OUTDIR})\"; rm -rf notes.txt",
+])
+def test_dynamic_directory_change_is_blocked(
+    monkeypatch: pytest.MonkeyPatch, env: Env, command: str
+) -> None:
+    (env.scratchpad / "notes.txt").write_text("x")
+    _blocked(monkeypatch, env, command.format(OUTDIR=env.outside), cwd=str(env.scratchpad))
+
+
+def test_glob_brackets_and_leading_dot_are_blocked(
+    monkeypatch: pytest.MonkeyPatch, env: Env
+) -> None:
+    (env.scratchpad / "link").symlink_to(env.outside)
+    _blocked(monkeypatch, env, f"rm -rf {env.scratchpad}/[[:alpha:]]ink/")
+    _blocked(monkeypatch, env, f"rm -rf {env.scratchpad}/[^z]ink/")
+    _blocked(monkeypatch, env, f"find {env.scratchpad}/.* -delete")
+
+
+def test_inline_delete_with_link_or_process_is_blocked(
+    monkeypatch: pytest.MonkeyPatch, env: Env
+) -> None:
+    _blocked(
+        monkeypatch, env,
+        f"ln -s {env.outside} {env.scratchpad}/d && "
+        f"python3 -c \"import shutil; shutil.rmtree('{env.scratchpad}/build')\"",
+    )
+    _blocked(
+        monkeypatch, env,
+        "python3 -c \"import os, shutil; os.system('true'); "
+        f"shutil.rmtree('{env.scratchpad}/build')\"",
+    )
+
+
+def test_dynamic_link_command_disables_allowance(
+    monkeypatch: pytest.MonkeyPatch, env: Env
+) -> None:
+    _blocked(
+        monkeypatch, env,
+        f"L=ln; $L -sfn {env.outside} {env.scratchpad}/build/tmp; "
+        f"rm -rf {env.scratchpad}/build/tmp/",
+    )
+
+
+def test_mv_into_scratchpad_through_unknown_or_dynamic_paths(
+    monkeypatch: pytest.MonkeyPatch, env: Env
+) -> None:
+    _blocked(monkeypatch, env, f"cd {env.scratchpad} && mv ~/notes.txt .")
+    _blocked(monkeypatch, env, f"mv \"$HOME/notes.txt\" {env.scratchpad}/")
+    _allowed(monkeypatch, env, f"cd {env.scratchpad} && mv a.txt b.txt")
+
+
+def test_allows_find_mindepth_delete_from_scratchpad_root(
+    monkeypatch: pytest.MonkeyPatch, env: Env
+) -> None:
+    _allowed(monkeypatch, env, f"find {env.scratchpad} -mindepth 1 -name '*.o' -delete")
+    _allowed(
+        monkeypatch, env, f"find {env.scratchpad} -mindepth 1 -name '*.o' -exec rm -f {{}} +"
+    )
+
+
+@pytest.mark.parametrize("command", [
+    "echo $((1<<2))",
+    "cat > notes.md <<'EOF'\nrm -rf /\nEOF\ngit add notes.md",
+    "python3 -c 'import os; print(os.getcwd())'",
+])
+def test_review_fixes_keep_ordinary_commands_allowed(
+    monkeypatch: pytest.MonkeyPatch, env: Env, command: str
+) -> None:
+    _allowed(monkeypatch, env, command)
+
+
+@pytest.mark.parametrize("command", [
+    "make -f /dev/stdin <<<$'x:\\n\\trm -rf {OUT}'",
+    "x='a[$(rm -rf {OUT})]'; (( x ))",
+    "x='a[$(rm -rf {OUT})]'; [[ x -eq 0 ]]",
+])
+def test_opaque_code_with_hidden_delete_is_blocked(
+    monkeypatch: pytest.MonkeyPatch, env: Env, command: str
+) -> None:
+    _blocked(monkeypatch, env, command.replace("{OUT}", f"{env.outside}/notes.txt"))

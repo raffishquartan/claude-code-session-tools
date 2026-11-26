@@ -62,8 +62,38 @@ def test_glob_mask_marks_only_unquoted_metacharacters() -> None:
 
 
 @pytest.mark.parametrize("text", [
-    "echo 'a", 'echo "a', "echo $(a", "echo `a", "echo ${a", "(" * 5000 + "rm x" + ")" * 5000,
+    "echo 'a", 'echo "a', "echo $(a", "echo `a", "echo ${a",
+    "echo " + "$(" * 5000 + "rm x" + ")" * 5000,
+    "cat <<EOF\nbody never ends\nrm x",
+    "echo $((1 + 2)",
 ])
 def test_unterminated_input_raises(text: str) -> None:
     with pytest.raises(ShellParseError):
         split_commands(text)
+
+
+def test_arithmetic_shift_is_not_a_heredoc() -> None:
+    assert _values("echo $((1<<2))\nrm a\n(( x = 1 << 3 ))\nrm b") == [
+        ["echo", DYNAMIC], ["rm", "a"], [], ["rm", "b"],
+    ]
+    assert [c.arithmetic for c in split_commands("echo $((1<<2)); ls")] == [True, False]
+
+
+def test_arithmetic_substitutions_are_parsed() -> None:
+    assert _values("echo $(( $(rm a) + 1 ))") == [["rm", "a"], ["echo", DYNAMIC]]
+
+
+def test_heredoc_delimiter_is_not_expanded() -> None:
+    assert _values("cat <<$X\nhello\n$X\nrm a") == [["cat"], ["rm", "a"]]
+
+
+def test_unrepresentable_ansi_c_escapes_are_dynamic() -> None:
+    (cmd,) = split_commands("rm $'\\UFFFFFFFF' $'\\ud800'")
+    assert [w.dynamic for w in cmd.words] == [False, True, True]
+
+
+def test_heredoc_and_stdin_flags() -> None:
+    heredoc, redirected, plain = split_commands("bash <<EOF\nx\nEOF\nbash < f\nbash")
+    assert heredoc.has_heredoc and not heredoc.stdin_redirected
+    assert redirected.stdin_redirected and not redirected.has_heredoc
+    assert not plain.has_heredoc and not plain.stdin_redirected
