@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [4.9.0] - 2026-11-26
+
+### Added
+
+- `ccst pdata search` finds records by text without dumping whole groups. It searches one or more record groups of a project in one call (`--group`, repeatable, with each row naming its group) by substring (`--text`) or Python regex (`--regex`), case-insensitive unless `--case-sensitive`, inverted by `--not-text`, over `content`, `file_path` and every TEXT extension field or only the `--fields` named. Repeatable `--where` clauses use exactly the `pdata query` syntax and quote handling, and `--since`/`--until` take yyyy-MM-dd dates on a `--date-field` (TEXT fields holding ISO dates, or epoch fields compared by local day). Output is JSON (default) or CSV, with `--select` (always keeping `id` and `record_group`), `--snippet N` context around the first match, `--sort FIELD` with `--desc`, `--limit` and `--count-only`. No match exits 0 with `[]`, a CSV header or `0`; contradictory or empty requests, unknown groups or fields (listing the valid ones), bad regexes and non-ISO dates exit 2 before any record is read. The search never writes to or creates a store and never returns soft-deleted records.
+- The `pm-pdata-do-update-consuming-skills`, `pm-pdata-do-update-project-docs` and `pm-pdata-design-schema` skills point sessions at `ccst pdata search` for finding records by text.
+
+### Changed
+
+- `ccst pdata list --format csv` and `ccst pdata query --format csv` end lines with LF instead of CRLF, matching the repo's CSV convention.
+
 ## [4.8.0] - 2026-11-25
 
 ### Added
