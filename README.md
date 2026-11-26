@@ -508,7 +508,8 @@ ccst ccsched-jobs install --apply
   - **It uses your Claude Code subscription login only.** API keys and tokens
     (`ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`, gateway and third-party provider
     credentials), the Bedrock/Vertex/Foundry and other provider or gateway switches, and the
-    routing variables (`ANTHROPIC_BASE_URL`, `ANTHROPIC_CUSTOM_HEADERS`, provider base URLs)
+    routing variables (`ANTHROPIC_BASE_URL`, `ANTHROPIC_UNIX_SOCKET`, `ANTHROPIC_CUSTOM_HEADERS`,
+    provider base URLs)
     are removed from its environment, so the digest only goes to the first-party API; HTTP(S)
     proxies are kept. The run is logged as failed (cost 0) when `claude auth status` shows no
     subscription login. Its cost counts against your subscription usage: at most one paying

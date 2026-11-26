@@ -23,7 +23,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
-- `auto-review` also removes `ANTHROPIC_BASE_URL`, `ANTHROPIC_CUSTOM_HEADERS`, the provider base URLs and the gateway and other third-party provider credentials and switches the `claude` CLI honours, so a gateway cannot receive the digest. `ccdapi`/`ccrapi` are unchanged.
+- `auto-review` also removes `ANTHROPIC_BASE_URL`, `ANTHROPIC_UNIX_SOCKET`, `ANTHROPIC_CUSTOM_HEADERS`, the provider base URLs and the gateway and other third-party provider credentials and switches the `claude` CLI honours, so a gateway cannot receive the digest. `ccdapi`/`ccrapi` are unchanged.
 
 ## [4.10.0] - 2026-11-26
 

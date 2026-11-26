@@ -119,7 +119,8 @@ def test_without_api_auth_keeps_subscription_token_and_drops_api_billing() -> No
 @pytest.mark.parametrize(
     "var",
     [
-        "ANTHROPIC_BASE_URL", "CLAUDE_CODE_API_BASE_URL", "ANTHROPIC_CUSTOM_HEADERS",
+        "ANTHROPIC_BASE_URL", "ANTHROPIC_UNIX_SOCKET", "CLAUDE_CODE_API_BASE_URL",
+        "ANTHROPIC_CUSTOM_HEADERS",
         "CLAUDE_CODE_GATEWAY_TOKEN", "CLAUDE_CODE_USE_GATEWAY", "ANTHROPIC_BEDROCK_BASE_URL",
         "ANTHROPIC_FOUNDRY_API_KEY", "CLAUDE_CODE_USE_ANTHROPIC_AWS",
     ],
