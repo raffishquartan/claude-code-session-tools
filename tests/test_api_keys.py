@@ -116,6 +116,28 @@ def test_without_api_auth_keeps_subscription_token_and_drops_api_billing() -> No
     assert env == {"CLAUDE_CODE_OAUTH_TOKEN": "sub", "X": "1"}
 
 
+@pytest.mark.parametrize(
+    "var",
+    [
+        "ANTHROPIC_BASE_URL", "CLAUDE_CODE_API_BASE_URL", "ANTHROPIC_CUSTOM_HEADERS",
+        "CLAUDE_CODE_GATEWAY_TOKEN", "CLAUDE_CODE_USE_GATEWAY", "ANTHROPIC_BEDROCK_BASE_URL",
+        "ANTHROPIC_FOUNDRY_API_KEY", "CLAUDE_CODE_USE_ANTHROPIC_AWS",
+    ],
+)
+def test_without_api_auth_drops_routing_and_gateway_variables(var: str) -> None:
+    env = {var: "x", "CLAUDE_CODE_OAUTH_TOKEN": "sub", "HTTPS_PROXY": "http://proxy"}
+    api_keys.without_api_auth(env)
+    assert env == {"CLAUDE_CODE_OAUTH_TOKEN": "sub", "HTTPS_PROXY": "http://proxy"}
+
+
+def test_with_api_key_keeps_a_base_url() -> None:
+    # An API-key launch may deliberately go through a gateway; only the subscription-only list
+    # removes routing variables.
+    env = {"ANTHROPIC_BASE_URL": "https://gateway.example"}
+    api_keys.with_api_key(env, SECRET)
+    assert env == {"ANTHROPIC_BASE_URL": "https://gateway.example", "ANTHROPIC_API_KEY": SECRET}
+
+
 def test_template_parses_to_zero_entries() -> None:
     template = Path(api_keys.__file__).parents[1] / "config" / "api-keys.example"
     assert api_keys.parse_keys(template.read_text()) == {}
