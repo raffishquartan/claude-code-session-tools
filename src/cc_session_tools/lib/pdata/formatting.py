@@ -10,22 +10,29 @@ from collections.abc import Mapping
 _FORMATS = ("table", "json", "csv")
 
 
-def render(rows: list[dict[str, object]], *, fmt: str) -> str:
+def render(
+    rows: list[dict[str, object]], *, fmt: str, columns: list[str] | None = None,
+) -> str:
+    """columns, when given, fixes the CSV header (so an empty result still prints one) and
+    fills a column a row lacks with an empty cell; otherwise the first row's keys are used."""
     if fmt not in _FORMATS:
         raise ValueError(f"invalid format {fmt!r}: must be one of {', '.join(_FORMATS)}")
     if fmt == "json":
         return json.dumps(rows)
+    if fmt == "csv" and columns is not None:
+        return _render_csv(rows, columns)
     if not rows:
         return "No rows." if fmt == "table" else ""
     if fmt == "csv":
-        return _render_csv(rows)
+        return _render_csv(rows, list(rows[0].keys()))
     return _render_table(rows)
 
 
-def _render_csv(rows: list[dict[str, object]]) -> str:
-    fieldnames = list(rows[0].keys())
+def _render_csv(rows: list[dict[str, object]], fieldnames: list[str]) -> str:
     buf = io.StringIO()
-    writer = csv.DictWriter(buf, fieldnames=fieldnames, extrasaction="ignore")
+    writer = csv.DictWriter(
+        buf, fieldnames=fieldnames, extrasaction="ignore", restval="", lineterminator="\n",
+    )
     writer.writeheader()
     for row in rows:
         writer.writerow({k: ("" if v is None else v) for k, v in row.items()})
