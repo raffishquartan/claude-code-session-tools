@@ -19,7 +19,7 @@ def ccst(*args: str) -> subprocess.CompletedProcess[str]:
 def test_help_lists_every_verb() -> None:
     proc = ccst("--help")
     assert proc.returncode == 0
-    for verb in ("collect-signals", "auto-review", "nudge", "status"):
+    for verb in ("collect-signals", "auto-review", "nudge", "status", "init"):
         assert verb in proc.stdout
 
 
@@ -76,3 +76,65 @@ def test_auto_review_without_backlog_exits_0_and_logs(si: Env, monkeypatch: pyte
     assert proc.returncode == 0, proc.stderr
     assert proc.stdout.startswith("self-improvement auto-review: ")
     assert " mode=auto " in si.last_log()
+
+
+def test_init_creates_the_backlog_and_sets_up_the_loop(si: Env) -> None:
+    proc = ccst("init")
+    assert proc.returncode == 0, proc.stderr
+    assert "created" in proc.stdout
+    text = si.backlog.read_text()
+    assert text.splitlines()[0] == "# Self-improvement backlog"
+    assert "## Inbox" in text.splitlines() and "## Entries" in text.splitlines()
+    assert "loop: set up" in ccst("status").stdout
+
+
+def test_init_never_changes_an_existing_backlog(si: Env) -> None:
+    si.write_backlog(2, 3, 1)
+    before = si.backlog.read_bytes()
+    proc = ccst("init")
+    assert proc.returncode == 0
+    assert "already exists" in proc.stdout
+    assert si.backlog.read_bytes() == before
+
+
+def test_init_exits_1_and_leaves_a_backlog_without_an_inbox(si: Env) -> None:
+    si.backlog.write_text("# Mine\n\n## Entries\n")
+    proc = ccst("init")
+    assert proc.returncode == 1
+    assert "## Inbox" in proc.stderr
+    assert si.backlog.read_text() == "# Mine\n\n## Entries\n"
+
+
+def test_init_does_not_follow_a_dangling_symlink(si: Env) -> None:
+    target = si.root / "elsewhere" / "backlog.md"
+    si.backlog.symlink_to(target)
+    proc = ccst("init")
+    assert proc.returncode == 1
+    assert "cannot be read" in proc.stderr
+    assert not target.exists()
+    assert si.backlog.is_symlink()
+
+
+def test_init_reports_a_directory_at_the_backlog_path_as_unreadable(si: Env) -> None:
+    si.backlog.mkdir()
+    proc = ccst("init")
+    assert proc.returncode == 1
+    assert "cannot be read" in proc.stderr
+    assert si.backlog.is_dir()
+
+
+def test_status_says_how_to_set_up_the_loop_and_creates_nothing(si: Env) -> None:
+    proc = ccst("status")
+    assert proc.returncode == 0
+    first = proc.stdout.splitlines()[0]
+    assert first.startswith("loop: not set up - run `ccst self-improvement init`")
+    assert "interactive review: the review-session-and-improve-claude-setup skill is not installed" in proc.stdout
+    assert "remove the backlog's `## Inbox` line" in proc.stdout
+    assert not si.backlog.exists()
+    assert not si.state.exists()
+
+
+def test_status_names_the_periodic_review_when_the_skill_is_installed(si: Env) -> None:
+    si.install_review_skill()
+    out = ccst("status").stdout
+    assert "interactive review: run /review-session-and-improve-claude-setup periodic" in out

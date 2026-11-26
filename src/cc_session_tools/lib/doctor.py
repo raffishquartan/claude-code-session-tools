@@ -418,9 +418,16 @@ def check_ccsched_job_registered(
         if spec.job_id == job_id:
             if expected is not None:
                 from cc_session_tools.lib.scheduler.bundled_jobs import (
-                    diff_from_bundled_detail, render_field_diffs,
+                    diff_from_bundled_detail, render_field_diffs, replaced_script,
+                    replaced_script_hint,
                 )
 
+                script = replaced_script(spec, expected)
+                if script is not None:
+                    return CheckResult(
+                        name=name, status=Status.WARN,
+                        reason=f"registered but {replaced_script_hint(job_id, script)}",
+                    )
                 changed_detail = diff_from_bundled_detail(spec, expected)
                 if changed_detail:
                     field_word = "field differs" if len(changed_detail) == 1 else "fields differ"
@@ -442,6 +449,37 @@ def check_ccsched_job_registered(
     return CheckResult(
         name=name, status=Status.WARN,
         reason="not registered — run 'ccst ccsched-jobs install --apply'",
+    )
+
+
+def check_self_improvement_loop(backlog_path: Path) -> CheckResult:
+    """WARN when a bundled self-improvement job is registered and enabled but the loop is not
+    set up (the backlog is missing or has no ``## Inbox`` line): the jobs then run weekly and
+    do nothing. WARN, not FAIL - nothing is lost, the loop just idles until
+    ``ccst self-improvement init``."""
+    from cc_session_tools.lib.scheduler import registry
+    from cc_session_tools.lib.scheduler.bundled_jobs import SELF_IMPROVEMENT_JOB_IDS
+    from cc_session_tools.lib.self_improvement import state
+
+    name = "self-improvement:loop"
+    if state.loop_set_up(backlog_path):
+        return CheckResult(name=name, status=Status.OK, reason=f"set up ({backlog_path})")
+    try:
+        specs = registry.load_registry()
+    except registry.RegistryError as exc:
+        return CheckResult(name=name, status=Status.WARN, reason=f"ccsched.db unreadable: {exc}")
+    active = [s.job_id for s in specs if s.job_id in SELF_IMPROVEMENT_JOB_IDS and s.enabled]
+    if not active:
+        return CheckResult(name=name, status=Status.OK, reason="not set up; no job is enabled")
+    return CheckResult(
+        name=name, status=Status.WARN,
+        reason=(
+            f"{', '.join(active)} enabled but the loop is not set up ({backlog_path} is missing "
+            "or has no '## Inbox' line), so the jobs do nothing - run "
+            "'ccst self-improvement init' to turn the loop on; if you do not want it, run "
+            "'ccst doctor --mute self-improvement:loop' (or disable both jobs and mute their "
+            "ccsched-job checks)"
+        ),
     )
 
 
@@ -1234,6 +1272,7 @@ def run_all_checks(
     synced_version: str | None = None,
     failed_attempt: FailedAttempt | None = None,
     claude_md_path: Path | None = None,
+    self_improvement_backlog: Path | None = None,
 ) -> list[CheckResult]:
     """Run the full doctor suite and return results.
 
@@ -1279,6 +1318,8 @@ def run_all_checks(
     claude_md_path:
         The global CLAUDE.md to check for hand-edited managed blocks; when None, that check
         is skipped.
+    self_improvement_backlog:
+        The self-improvement backlog; when None, the loop set-up check is skipped.
     """
     results: list[CheckResult] = []
 
@@ -1352,6 +1393,8 @@ def run_all_checks(
 
     for job in bundled_jobs.BUNDLED_CCSCHED_JOBS:
         results.append(check_ccsched_job_registered(job.job_id, expected=job))
+    if self_improvement_backlog is not None:
+        results.append(check_self_improvement_loop(self_improvement_backlog))
 
     # Data stores
     if store_paths is not None:

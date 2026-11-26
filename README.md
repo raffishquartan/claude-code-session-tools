@@ -323,8 +323,10 @@ ccsched sweep          # reconcile, run anything due, surface results (also auto
 - **Bundled jobs**: CCST registers its own upkeep with `ccst ccsched-jobs install` (part of
   `install-everything`): `pdata` verification and multi-machine sync, a weekly `doctor`
   drift check, a weekly orphan report, telemetry trimming, session-output reconciliation, a
-  fortnightly reminder to curate the command-review cache, and a weekly sweep of hook-review
-  sessions.
+  fortnightly reminder to curate the command-review cache, a weekly sweep of hook-review
+  sessions, and the two weekly self-improvement jobs (which do nothing until you run
+  `ccst self-improvement init`; see
+  [below](#configuration-self-improvement-loop-ccst-self-improvement)).
 
 You can also just ask Claude: _"run this every weekday at 09:00 and tell me if it fails"_ -
 the `manage-recurring-cc-jobs-using-ccsched` skill translates that into a `ccsched add`.
@@ -454,10 +456,42 @@ it. The automated parts only count and propose; every change still goes through 
 interactive review you approve item by item.
 
 ```sh
+ccst self-improvement init              # turn the loop on: create the backlog (never overwrites)
 ccst self-improvement collect-signals   # counts-only snapshot, health PASS/FAIL, one summary line
 ccst self-improvement auto-review       # one headless, proposal-only review (at most once a week)
 ccst self-improvement nudge             # would a review be nudged now? (records nothing)
-ccst self-improvement status            # snapshot, last reviews, headless cost since the last review
+ccst self-improvement status            # set up or not, snapshot, last reviews, headless cost
+```
+
+**The loop is off until you run `ccst self-improvement init`.** It creates
+`~/.claude/self-improvement-backlog.md` with empty `## Inbox` and `## Entries` sections. Until
+a backlog with a `## Inbox` line exists, the nudge is silent, `auto-review` logs `skipped`
+with cost 0 without calling the model or notifying anyone, and `collect-signals` still writes
+its counts but sends no Telegram message and ends its line with `loop not set up (run ccst
+self-improvement init)`. Nothing but `init` creates the backlog.
+
+**Two weekly jobs are bundled and enabled by default** (registered by
+`ccst ccsched-jobs install`, part of every install sync):
+
+| Job | Runs | Schedule |
+| --- | ---- | -------- |
+| `self-improvement-signals` | `ccst self-improvement collect-signals` | every 7 days, catch-up 14 days, timeout 60 s |
+| `self-improvement-auto-review` | `ccst self-improvement auto-review` | every 7 days, catch-up 14 days, timeout 300 s |
+
+Once the loop is set up, `self-improvement-auto-review` uses your Claude Code subscription
+usage: at most one paying run per 7 days, capped at USD 0.50, and none when there are no
+signals and no new transcripts. To stop it, `ccsched disable self-improvement-auto-review`.
+Until the loop is set up, each job still shows one line a week in the session-start digest
+(`loop not set up`), with no model call and no Telegram message.
+
+If another tool already registered jobs with these ids that run its own
+`collect-signals.sh` / `run-headless-review.sh` scripts, CCST leaves them in place and
+reports them in `ccst ccsched-jobs install` and `ccst doctor`. To switch to the bundled jobs:
+
+```sh
+ccsched remove self-improvement-signals
+ccsched remove self-improvement-auto-review
+ccst ccsched-jobs install --apply
 ```
 
 - **`collect-signals`** counts backlog Inbox lines and their age, open backlog entries,
@@ -473,20 +507,21 @@ ccst self-improvement status            # snapshot, last reviews, headless cost 
   `claude -p --model sonnet --max-budget-usd 0.50 --tools ""` call over it and appends the
   validated `- [date] [auto-review] <lever>: <friction> -> <proposal>` lines to the backlog
   Inbox. It never edits configuration.
-  - **It uses your Claude Code subscription login only.** `ANTHROPIC_API_KEY`,
-    `ANTHROPIC_AUTH_TOKEN` and the Bedrock/Vertex/Foundry switches are removed from its
-    environment, and the run is logged as failed (cost 0) when `claude auth status` shows no
+  - **It uses your Claude Code subscription login only.** API keys and tokens
+    (`ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`, gateway and third-party provider
+    credentials), the Bedrock/Vertex/Foundry and other provider or gateway switches, and the
+    routing variables (`ANTHROPIC_BASE_URL`, `ANTHROPIC_UNIX_SOCKET`, `ANTHROPIC_CUSTOM_HEADERS`,
+    provider base URLs)
+    are removed from its environment, so the digest only goes to the first-party API; HTTP(S)
+    proxies are kept. The run is logged as failed (cost 0) when `claude auth status` shows no
     subscription login. Its cost counts against your subscription usage: at most one paying
     run per 7 days, capped at USD 0.50 each, and none at all when there are no signals and no
     new transcripts. Every attempt is logged with its cost; a failed or over-budget run sends
     one Telegram message.
-- **The `self-improvement-nudge` hook** stays silent until the loop is in use (its state
-  directory or the backlog exists). Then it shows one line at session start, at most once a
+- **The `self-improvement-nudge` hook** stays silent until the loop is set up. Then it shows one line at session start, at most once a
   day, when a review is due: the last interactive review is 30 or more days old (or none is
   recorded), the signal total is 10 or more, or the last review is 14 or more days old and a
   signal is non-zero.
-
-Neither command is scheduled by default; run them yourself or register them with `ccsched`.
 
 **State** lives in `~/.local/share/claude/self-improvement/` as flat files with a fixed format
 that other tools may also read and write:
@@ -501,10 +536,17 @@ that other tools may also read and write:
 
 The backlog is `~/.claude/self-improvement-backlog.md` (a symlink is followed). It needs a
 `## Inbox` section for proposals and a `## Entries` section with `- status: <status>` lines;
-without it the Inbox counts are `unavailable` and `auto-review` does not call the model. The
+without it the Inbox counts are `unavailable` and the loop counts as not set up. The
 interactive review that writes `mode=B`/`mode=C` lines and turns proposals into changes is
-not bundled with CCST; the nudge names it as `/review-session-and-improve-claude-setup
-periodic`.
+not bundled with CCST. When a `review-session-and-improve-claude-setup` skill is installed,
+the nudge and the FAIL message name `/review-session-and-improve-claude-setup periodic`;
+otherwise they name `ccst self-improvement status`. Without that skill nothing records an
+interactive review, so once the loop is set up loop health stays FAIL and the nudge repeats
+daily; `status` says so, and removing the backlog's `## Inbox` line turns the loop off again.
+
+`ccst doctor` WARNs (`self-improvement:loop`) while either job is enabled and the loop is not
+set up. If you do not want the loop, `ccst doctor --mute self-improvement:loop` keeps that
+WARN out of the weekly drift report.
 
 ## Bundled skills
 
@@ -581,7 +623,7 @@ flag.
 | `telemetry`          | `query` and `trim` the hook log; `recover` a command from its hash        |
 | `migrate`            | one-shot migrations from legacy flat-file stores to SQLite                |
 | `context-override`   | toggle the context-window warning for the current session                 |
-| `self-improvement`   | signal snapshot, headless review, nudge preview and status (see above)    |
+| `self-improvement`   | init, signal snapshot, headless review, nudge preview, status (see above) |
 
 Other commands: `ccd`, `ccr`, `ccs`/`ccl`, `ccdapi`, `ccrapi`, `ccmsg`, `ccsched`,
 `claude-code-usage`, `cccs-stats`. Every command has `--help` and `--version`.

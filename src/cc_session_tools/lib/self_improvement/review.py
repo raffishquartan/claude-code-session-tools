@@ -55,6 +55,7 @@ SUBSCRIPTION_AUTH_METHODS = frozenset({"claude.ai", "oauth_token"})
 HEADLESS_MARKER = '"entrypoint":"sdk-cli"'
 NOT_STARTED_RC = 127
 TIMEOUT_RC = 124
+NOT_SET_UP = "loop not set up: run ccst self-improvement init"
 
 _BODY_PREFIX_RE = re.compile(r"^- \[[0-9-]+\] ")
 _BACKLOG_AUTO_RE = re.compile(r"^- \[[0-9-]+\] \[auto-review\] ")
@@ -295,10 +296,6 @@ def valid_proposals(result: str, levers: tuple[str, ...], backlog_text: str) -> 
     return kept
 
 
-def has_inbox(backlog_text: str) -> bool:
-    return "## Inbox" in backlog_text.split("\n")
-
-
 def insert_into_inbox(backlog_text: str, new_lines: list[str]) -> str:
     """Insert after the last non-blank line of the Inbox section, so blank separator lines
     before the next heading stay where they are. Every other byte is unchanged."""
@@ -471,6 +468,13 @@ def run(
 ) -> str:
     """One headless review attempt. Returns the summary line; every outcome is logged."""
     job = _Run(notify)
+
+    # 0. Nothing to do, and nothing to tell anyone, until the user has set up the loop: the
+    # backlog Inbox is where proposals go. Not a paid run, so it never blocks a later one.
+    if not state.loop_set_up():
+        job.log(Outcome("skipped", 0, 0, "0"))
+        return f"self-improvement auto-review: skipped ({NOT_SET_UP})"
+
     lines = state.read_log_lines(job.state_dir)
 
     # 1. Run limit: a run that may have spent money within RUN_LIMIT_DAYS blocks another model
@@ -505,11 +509,8 @@ def run(
         job.log(Outcome("skipped", 0, 0, "0"))
         return "self-improvement auto-review: skipped (no signals, no new sessions)"
 
-    # Proposals have nowhere to go without a backlog Inbox, so do not spend on a call.
     backlog = state.backlog_path().resolve()
     backlog_text = state.read_text(backlog) or ""
-    if not has_inbox(backlog_text):
-        return job.finish(Outcome("failed", n_sessions, 0, "0"), "no backlog Inbox")
 
     budget_s = _env_seconds(JOB_BUDGET_ENV, DEFAULT_JOB_BUDGET_S)
     model_timeout_s = _env_seconds(MODEL_TIMEOUT_ENV, DEFAULT_MODEL_TIMEOUT_S)
@@ -565,7 +566,7 @@ def run(
         if result is not None and status in ("ran", "over-budget"):
             current = state.read_text(backlog) or ""
             kept = valid_proposals(result.text, prompt.actionable_levers(prompt_text), current)
-            if kept and not has_inbox(current):
+            if kept and not state.has_inbox(current):
                 status = "failed"
             elif kept:
                 try:

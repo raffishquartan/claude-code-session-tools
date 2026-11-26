@@ -226,6 +226,7 @@ def test_a_sensitive_subject_never_appears_in_state_or_output(si: Env) -> None:
 
 def test_escalates_once_on_loop_health_fail_and_not_again_within_7_days(si: Env) -> None:
     si.write_backlog(0)
+    si.install_review_skill()
     si.interactive_review(40)
     si.review_line(
         f"{iso_days_ago(1)} mode=auto status=ran sessions=1 proposals=0 cost_usd=0.10 duration_s=30"
@@ -238,6 +239,31 @@ def test_escalates_once_on_loop_health_fail_and_not_again_within_7_days(si: Env)
     assert (si.state / "last-escalation").read_text() == f"{days_ago(0)}\n"
     collect(si)
     assert len(si.notify.messages) == 1
+
+
+def test_escalation_names_the_status_command_without_the_review_skill(si: Env) -> None:
+    si.write_backlog(0)
+    collect(si)
+    assert len(si.notify.messages) == 1
+    assert si.notify.messages[0].endswith(". Run ccst self-improvement status")
+
+
+@pytest.mark.parametrize("backlog", [None, "# Backlog\n\n## Entries\n"])
+def test_no_escalation_and_a_setup_hint_until_the_loop_is_set_up(si: Env, backlog: str | None) -> None:
+    if backlog is not None:
+        si.backlog.write_text(backlog)
+    line = collect(si)
+    assert si.snapshot_value("LOOP_HEALTH") == "FAIL"
+    assert si.notify.messages == []
+    assert not (si.state / "last-escalation").exists()
+    assert line.endswith(", loop not set up (run ccst self-improvement init)")
+    assert "\n" not in line
+    assert si.backlog.exists() is (backlog is not None)
+
+
+def test_no_setup_hint_once_the_loop_is_set_up(si: Env) -> None:
+    si.write_backlog(0)
+    assert "loop not set up" not in collect(si)
 
 
 def test_escalates_on_auto_review_fail_alone(si: Env) -> None:

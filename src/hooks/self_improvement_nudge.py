@@ -1,9 +1,9 @@
 """SessionStart hook: nudge a periodic self-improvement review when the signals warrant one.
 
 Shows one line, to the user as ``systemMessage`` and to the assistant as ``additionalContext``,
-at most once per local calendar day, and nothing otherwise, including on an install that has
-never used the loop. Stays silent when the config
-repository's own bash nudge is registered in the same settings file. Reads files only (plus
+at most once per local calendar day, and nothing otherwise, including on an install where the
+loop is not set up (no backlog with an Inbox). Stays silent when the config repository's own
+bash nudge is registered in the same settings file. Reads files only (plus
 the ``last-nudge`` stamp it writes) and always exits 0: it is advisory and must never fail a
 session start. See ``cc_session_tools.lib.self_improvement.nudge`` for the rule.
 """

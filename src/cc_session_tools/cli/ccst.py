@@ -104,11 +104,12 @@ Current subcommands:
   context-override [on|off|status]  Toggle the /context-override flag for the current
                                  session (default: on). See ccst hooks run
                                  context-window-warning.
-  self-improvement collect-signals|auto-review|nudge|status
+  self-improvement collect-signals|auto-review|nudge|status|init
                                  The configuration self-improvement loop: counts-only
                                  signal snapshot, weekly headless proposal-only review
-                                 (subscription login, USD 0.50 cap), nudge preview and
-                                 state summary (see ccst self-improvement --help).
+                                 (subscription login, USD 0.50 cap), nudge preview,
+                                 state summary and init (creates the backlog that turns
+                                 the bundled weekly jobs on; see --help).
 """
 from __future__ import annotations
 
@@ -801,6 +802,7 @@ def _cmd_doctor(args: argparse.Namespace) -> int:
     from cc_session_tools.lib.pdata import verify as _pdata_verify
     from cc_session_tools.lib.pdata.init_paths import default_projects_root
     from cc_session_tools.lib import install_sync
+    from cc_session_tools.lib.self_improvement import state as self_improvement_state
 
     results = run_all_checks(
         installed_version=__version__,
@@ -818,6 +820,7 @@ def _cmd_doctor(args: argparse.Namespace) -> int:
         synced_version=install_sync.get_synced_version(),
         failed_attempt=install_sync.get_failed_attempt(),
         claude_md_path=Path.home() / ".claude" / "CLAUDE.md",
+        self_improvement_backlog=self_improvement_state.backlog_path(),
     )
 
     if args.drift or getattr(args, "mode", None) == "drift":
@@ -2787,7 +2790,12 @@ def _cmd_ccsched_jobs_install(args: argparse.Namespace) -> int:
     the operator deliberately removed it, not that this machine has simply never seen it; it is
     reported as "deleted" and never silently re-added — re-adding an intentional deletion on
     every version bump would defeat the point of removing it. `--reinstall JOB_ID` (repeatable)
-    is the explicit override that brings one back."""
+    is the explicit override that brings one back.
+
+    A registered job whose command runs a script its bundled definition replaces
+    (`BundledJob.replaces_scripts`, e.g. another tool's bash version of a self-improvement job)
+    is reported as a conflicting definition with the migration steps and never recorded as
+    installed by CCST."""
     from cc_session_tools.lib.scheduler import bundled_jobs, registry, state
     from cc_session_tools.lib.scheduler.jobspec import validate_job_fields
 
@@ -2798,6 +2806,16 @@ def _cmd_ccsched_jobs_install(args: argparse.Namespace) -> int:
 
     for job in bundled_jobs.BUNDLED_CCSCHED_JOBS:
         spec = existing.get(job.job_id)
+        script = None if spec is None else bundled_jobs.replaced_script(spec, job)
+        if script is not None:
+            # Another tool's version of this job, not a customised copy of ours: left alone,
+            # and not recorded as installed by CCST, so removing it lets the next install
+            # register the bundled job without --reinstall.
+            print(
+                f"  conflicting definition (not touched): {job.job_id} - "
+                f"{bundled_jobs.replaced_script_hint(job.job_id, script)}"
+            )
+            continue
         if spec is not None:
             changed_detail = bundled_jobs.diff_from_bundled_detail(spec, job)
             if changed_detail:
@@ -3008,9 +3026,38 @@ def _cmd_self_improvement(args: argparse.Namespace) -> int:
     if args.verb == "nudge":
         print(nudge.due_message(state.state_dir()) or "no review due")
         return 0
+    if args.verb == "init":
+        return _self_improvement_init()
     for line in report.status_lines(state.state_dir()):
         print(line)
     return 0
+
+
+def _self_improvement_init() -> int:
+    """ccst self-improvement init: create the backlog, never touching an existing one."""
+    from cc_session_tools.lib.self_improvement import state
+
+    path = state.backlog_path()
+    result = state.init_backlog()
+    if result is state.InitResult.CREATED:
+        print(f"created {path} - the self-improvement loop is set up")
+        return 0
+    if result is state.InitResult.ALREADY_SET_UP:
+        print(f"{path} already exists with an Inbox - the loop is set up; nothing changed")
+        return 0
+    if result is state.InitResult.UNREADABLE:
+        print(
+            f"{path} exists but cannot be read (a dangling symlink, a directory or no read "
+            "permission); nothing was changed - fix or move it, then run init again",
+            file=sys.stderr,
+        )
+        return 1
+    print(
+        f"{path} exists but has no line that is exactly `## Inbox`; add one (nothing was "
+        "changed) to set up the loop",
+        file=sys.stderr,
+    )
+    return 1
 
 
 def _cmd_context_override(args: argparse.Namespace) -> int:
@@ -4191,7 +4238,8 @@ def _build_parser() -> argparse.ArgumentParser:
             "validated proposal lines to the backlog Inbox. Uses only the Claude Code "
             "subscription login: API-key and third-party provider variables are removed, and "
             "the run fails (logged, cost 0) when no subscription login is available. Its cost "
-            "counts against your subscription usage. Never edits configuration."
+            "counts against your subscription usage. Never edits configuration. Until "
+            "`ccst self-improvement init` has created the backlog it only logs `skipped`."
         ),
     )
     si_review.add_argument(
@@ -4204,7 +4252,17 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     si_sub.add_parser(
         "status",
-        help="Print the snapshot, last reviews and headless cost since the last review",
+        help="Print whether the loop is set up, the snapshot, last reviews and headless cost",
+    )
+    si_sub.add_parser(
+        "init",
+        help="Set up the loop: create ~/.claude/self-improvement-backlog.md (never overwrites)",
+        description=(
+            "Create ~/.claude/self-improvement-backlog.md with empty `## Inbox` and `## Entries` "
+            "sections. Until it exists with an Inbox, the bundled weekly jobs make no model call "
+            "and send nothing, and the nudge stays silent. An existing file is never changed; "
+            "exits 1 when it has no `## Inbox` line."
+        ),
     )
 
     # ---- context-override ----

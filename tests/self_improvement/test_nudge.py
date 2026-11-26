@@ -54,7 +54,10 @@ def system_message(output: str) -> str:
 
 @pytest.fixture
 def hook(si: Env, monkeypatch: pytest.MonkeyPatch) -> Callable[[], str]:
+    """The hook on an install where the loop is set up and the review skill is installed."""
     si.state.mkdir(parents=True, exist_ok=True)
+    si.write_backlog(0)
+    si.install_review_skill()
     return lambda: run_hook(monkeypatch)
 
 
@@ -125,6 +128,31 @@ def test_no_review_recorded_when_only_the_backlog_exists(si: Env, monkeypatch: p
 def test_silent_on_an_install_that_never_used_the_loop(si: Env, monkeypatch: pytest.MonkeyPatch) -> None:
     assert run_hook(monkeypatch) == ""
     assert not si.state.exists()
+
+
+def test_silent_when_only_the_state_directory_exists(si: Env, monkeypatch: pytest.MonkeyPatch) -> None:
+    # The bundled collector creates the state directory on every install; that alone is not
+    # an opt-in.
+    si.interactive_review(40)
+    assert run_hook(monkeypatch) == ""
+    assert not (si.state / "last-nudge").exists()
+    assert not si.backlog.exists()
+
+
+def test_silent_when_the_backlog_has_no_inbox(si: Env, monkeypatch: pytest.MonkeyPatch) -> None:
+    si.interactive_review(40)
+    si.backlog.write_text("# Backlog\n\n## Entries\n")
+    assert run_hook(monkeypatch) == ""
+
+
+def test_names_the_status_command_when_the_review_skill_is_missing(
+    si: Env, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    si.write_backlog(0)
+    si.interactive_review(40)
+    msg = system_message(run_hook(monkeypatch))
+    assert msg.endswith(" - run ccst self-improvement status")
+    assert "review-session-and-improve-claude-setup" not in msg
 
 
 def test_malformed_snapshot_is_missing_when_review_recent(si: Env, hook: Callable[[], str]) -> None:
@@ -258,6 +286,7 @@ def test_a_future_dated_review_counts_as_no_review(si: Env, hook: Callable[[], s
 
 
 def test_preview_does_not_consume_the_daily_nudge(si: Env) -> None:
+    si.write_backlog(0)
     si.interactive_review(20)
     write_snapshot(si, 3, 3)
     text = nudge.due_message(si.state)
@@ -266,6 +295,7 @@ def test_preview_does_not_consume_the_daily_nudge(si: Env) -> None:
 
 
 def test_hook_runs_through_the_ccst_dispatcher(si: Env) -> None:
+    si.write_backlog(0)
     si.interactive_review(40)
     proc = subprocess.run(
         [sys.executable, "-m", "cc_session_tools.cli.ccst", "hooks", "run", "self-improvement-nudge"],

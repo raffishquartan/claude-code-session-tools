@@ -90,8 +90,54 @@ _PROVIDER_SWITCH_VARS = (
 # from, ANTHROPIC_API_KEY.
 _COMPETING_AUTH_VARS = ("CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_AUTH_TOKEN", *_PROVIDER_SWITCH_VARS)
 
-# API-billed credentials / provider switches that would take precedence over a subscription login.
-API_AUTH_VARS = ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", *_PROVIDER_SWITCH_VARS)
+# Everything below is the subscription-only list: variables the claude CLI (checked against
+# 2.1.332) honours that would bill the call elsewhere or send the request somewhere other than
+# the first-party API. CLAUDE_CODE_OAUTH_TOKEN is a subscription token and is kept; HTTP(S)
+# proxies are kept too (the traffic stays TLS to the first-party API).
+
+# API-billed, gateway and third-party credentials.
+_API_CREDENTIAL_VARS = (
+    "ANTHROPIC_API_KEY",
+    "ANTHROPIC_AUTH_TOKEN",
+    "CLAUDE_CODE_API_KEY_FILE_DESCRIPTOR",
+    "CLAUDE_CODE_GATEWAY_TOKEN",
+    "CLAUDE_CODE_GATEWAY_TOKEN_FILE_DESCRIPTOR",
+    "ANTHROPIC_FOUNDRY_API_KEY",
+    "ANTHROPIC_FOUNDRY_AUTH_TOKEN",
+    "ANTHROPIC_AWS_API_KEY",
+    "ANTHROPIC_IDENTITY_TOKEN",
+    "ANTHROPIC_IDENTITY_TOKEN_FILE",
+)
+
+# Provider and gateway switches beyond the three with_api_key also clears.
+_OTHER_PROVIDER_SWITCH_VARS = (
+    "CLAUDE_CODE_USE_ANTHROPIC_AWS",
+    "CLAUDE_CODE_USE_ANTHROPIC_GOOGLE_CLOUD",
+    "CLAUDE_CODE_USE_GATEWAY",
+    "CLAUDE_CODE_USE_MANTLE",
+)
+
+# Where requests go, and extra headers sent with them: a gateway set here would receive the
+# request body.
+_ROUTING_VARS = (
+    "ANTHROPIC_BASE_URL",
+    "ANTHROPIC_UNIX_SOCKET",
+    "CLAUDE_CODE_API_BASE_URL",
+    "ANTHROPIC_CUSTOM_HEADERS",
+    "ANTHROPIC_BEDROCK_BASE_URL",
+    "ANTHROPIC_BEDROCK_MANTLE_BASE_URL",
+    "ANTHROPIC_VERTEX_BASE_URL",
+    "ANTHROPIC_FOUNDRY_BASE_URL",
+    "ANTHROPIC_FOUNDRY_RESOURCE",
+    "ANTHROPIC_AWS_BASE_URL",
+    "ANTHROPIC_GOOGLE_CLOUD_BASE_URL",
+    "CLAUDE_CODE_CUSTOM_OAUTH_URL",
+)
+
+# Removed by without_api_auth: the single list for a subscription-only claude call.
+API_AUTH_VARS = (
+    *_API_CREDENTIAL_VARS, *_PROVIDER_SWITCH_VARS, *_OTHER_PROVIDER_SWITCH_VARS, *_ROUTING_VARS,
+)
 
 
 def with_api_key(env: dict[str, str], key: str) -> None:

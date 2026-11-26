@@ -268,3 +268,58 @@ def test_render_field_diffs_shows_dash_bundled_plus_current_per_field():
     assert "timeout:" in out
     assert "- bundled: 300s" in out
     assert "+ current: 30s" in out
+
+
+# ---------- self-improvement jobs ----------
+
+
+def test_self_improvement_signals_job_definition():
+    job = _job("self-improvement-signals")
+    assert (job.cadence, job.coalesce, job.catchup_window, job.timeout, job.surface) == (
+        "every:7d", "one", "14d", "60s", True,
+    )
+    assert job.command == ("ccst", "self-improvement", "collect-signals")
+    assert job.replaces_scripts == ("collect-signals.sh",)
+
+
+def test_self_improvement_auto_review_job_definition():
+    job = _job("self-improvement-auto-review")
+    assert (job.cadence, job.coalesce, job.catchup_window, job.timeout, job.surface) == (
+        "every:7d", "one", "14d", "300s", True,
+    )
+    assert job.command == ("ccst", "self-improvement", "auto-review")
+    assert job.replaces_scripts == ("run-headless-review.sh",)
+
+
+def test_auto_review_job_budget_fits_inside_the_job_timeout():
+    from cc_session_tools.lib.scheduler.duration import parse_duration
+    from cc_session_tools.lib.self_improvement import review
+
+    timeout = parse_duration(_job("self-improvement-auto-review").timeout).total_seconds()
+    assert review.DEFAULT_JOB_BUDGET_S < timeout
+
+
+def test_other_bundled_jobs_replace_no_script():
+    for job in bundled_jobs.BUNDLED_CCSCHED_JOBS:
+        if not job.job_id.startswith("self-improvement-"):
+            assert job.replaces_scripts == ()
+
+
+def test_replaced_script_matches_a_separate_or_joined_script_argument():
+    job = _job("self-improvement-signals")
+    for command in (
+        ["bash", "/example/repos/config/scripts/self-improvement/collect-signals.sh"],
+        ["bash /example/repos/config/scripts/self-improvement/collect-signals.sh"],
+        ["/example/scripts/self-improvement/collect-signals.sh", "--flag"],
+        ["bash -c \"/example/scripts/self-improvement/collect-signals.sh\""],
+        ["bash '/example/scripts/self-improvement/collect-signals.sh'"],
+    ):
+        assert bundled_jobs.replaced_script(_spec_for(job, command=command), job) == "collect-signals.sh"
+
+
+def test_replaced_script_is_none_for_the_bundled_or_an_unrelated_command():
+    job = _job("self-improvement-signals")
+    assert bundled_jobs.replaced_script(_spec_for(job), job) is None
+    other = _spec_for(job, command=["bash", "/example/run-headless-review.sh"])
+    assert bundled_jobs.replaced_script(other, job) is None
+    assert bundled_jobs.replaced_script(_spec_for(job, command=["echo", "collect-signals.shx"]), job) is None
