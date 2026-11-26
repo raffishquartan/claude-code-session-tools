@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [4.12.0] - 2026-11-26
+
+### Added
+
+- The `review-session-and-improve-claude-setup` skill is bundled: the interactive half of the self-improvement loop. Mode A notes friction as one Inbox line, Mode B reviews one session, Mode C (`/review-session-and-improve-claude-setup periodic`) reviews the accumulated signals; every change still waits for your approval at a checkpoint table. It reads the loop state with `ccst self-improvement status` and calls no shell scripts.
+- `ccst self-improvement record-review --mode B|C --findings N --applied N --deferred N` appends one interactive review line to `reviews.log` in the state directory CCST uses (it follows `CCST_DATA_HOME`). The skill runs it at the end of every review.
+
+### Changed
+
+- The nudge, the FAIL message and `ccst self-improvement status` always name `/review-session-and-improve-claude-setup periodic`; the fallback to `ccst self-improvement status` when no such skill was installed is gone.
+
+### Upgrade note
+
+- If `~/.claude/skills/review-session-and-improve-claude-setup` is a real directory (a copy another tool installed), the install sync will not replace it: `ccst install-everything --apply` exits 1 and `ccst doctor` reports `skill:review-session-and-improve-claude-setup` FAIL. Delete that directory, then run `ccst install-everything --apply`. `ccst skills install --apply --force` moves it to a `.bak-<timestamp>` directory instead; delete that backup too, since Claude Code would still load its `SKILL.md`.
+
 ## [4.11.0] - 2026-11-26
 
 ### Added
