@@ -4231,7 +4231,8 @@ def _build_parser() -> argparse.ArgumentParser:
             "validated proposal lines to the backlog Inbox. Uses only the Claude Code "
             "subscription login: API-key and third-party provider variables are removed, and "
             "the run fails (logged, cost 0) when no subscription login is available. Its cost "
-            "counts against your subscription usage. Never edits configuration."
+            "counts against your subscription usage. Never edits configuration. Until "
+            "`ccst self-improvement init` has created the backlog it only logs `skipped`."
         ),
     )
     si_review.add_argument(
