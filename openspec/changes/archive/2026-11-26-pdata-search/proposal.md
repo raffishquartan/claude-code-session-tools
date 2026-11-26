@@ -26,5 +26,5 @@
 
 - New `src/cc_session_tools/lib/pdata/search.py`; `repository.py` (shared `--where` SQL building), `service.py` (the `--where` parser becomes public for reuse), `formatting.py` (LF CSV, header for an empty result), `cli/ccst.py` (parser, handler, module docstring).
 - Tests under `tests/pdata/` and `tests/test_ccst_pdata_cli.py`.
-- Skills: `pm-pdata-do-update-consuming-skills`, `pm-pdata-do-update-project-docs`.
+- Skills: `pm-pdata-do-update-consuming-skills`, `pm-pdata-do-update-project-docs`, `pm-pdata-design-schema`.
 - No on-disk change, no migration, no new doctor check. The verb is subject to the same format gate as `query`.
