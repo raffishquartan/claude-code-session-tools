@@ -68,7 +68,7 @@ that sustainable.
 | See what Claude Code costs you                    | `claude-code-usage`: tokens and dollars by project, session, model, tool, MCP server, plugin                                   |
 | Avoid context bloat                               | A warning hook when the context window gets large, plus `/compact-smart` and `/context-override`                               |
 | Get Claude to follow these conventions unprompted | Managed, human-editable sections installed into your global `CLAUDE.md`                                                        |
-| Start from sensible workflows                     | 26 bundled skills (session hygiene, `pdata` workflows, document extraction, agent patterns)                                    |
+| Start from sensible workflows                     | 27 bundled skills (session hygiene, `pdata` workflows, document extraction, agent patterns)                                    |
 | Know it all still works                           | `ccst doctor`, a single health check across every subsystem, also run weekly by a bundled job                                  |
 
 ## Install
@@ -453,7 +453,11 @@ command-review cache.
 
 Keeps your Claude Code configuration improving without anyone having to remember to review
 it. The automated parts only count and propose; every change still goes through an
-interactive review you approve item by item.
+interactive review you approve item by item: the bundled
+`review-session-and-improve-claude-setup` skill. Run `/review-session-and-improve-claude-setup`
+to review the current session, or `/review-session-and-improve-claude-setup periodic` for the
+periodic review the nudge asks for; Claude also uses it on its own to note friction (a denied
+permission, a correction, a retry loop) as one Inbox line.
 
 ```sh
 ccst self-improvement init              # turn the loop on: create the backlog (never overwrites)
@@ -461,6 +465,8 @@ ccst self-improvement collect-signals   # counts-only snapshot, health PASS/FAIL
 ccst self-improvement auto-review       # one headless, proposal-only review (at most once a week)
 ccst self-improvement nudge             # would a review be nudged now? (records nothing)
 ccst self-improvement status            # set up or not, snapshot, last reviews, headless cost
+ccst self-improvement record-review --mode C --findings 3 --applied 1 --deferred 2
+                                        # record an interactive review (the skill runs this)
 ```
 
 **The loop is off until you run `ccst self-improvement init`.** It creates
@@ -529,7 +535,7 @@ that other tools may also read and write:
 | File | Written by | Content |
 | ---- | ---------- | ------- |
 | `signals.env` | `collect-signals` | `KEY=value` counts, health results and the collection time |
-| `reviews.log` | `auto-review`, and your interactive review | one line per review: `<ISO time> mode=<B\|C> findings=<n> applied=<n> deferred=<n>` or `<ISO time> mode=auto status=<ran\|skipped\|failed\|over-budget> sessions=<n> proposals=<n> cost_usd=<x\|unknown> duration_s=<n>` |
+| `reviews.log` | `auto-review` and `record-review` | one line per review: `<ISO time> mode=<B\|C> findings=<n> applied=<n> deferred=<n>` or `<ISO time> mode=auto status=<ran\|skipped\|failed\|over-budget> sessions=<n> proposals=<n> cost_usd=<x\|unknown> duration_s=<n>` |
 | `drift-push-count` | any tool that tracks unpushed config changes | one integer; `unavailable` in the snapshot when absent |
 | `last-nudge`, `last-escalation` | the hook, `collect-signals` | one `yyyy-MM-dd` date |
 | `last-auto-review` | `auto-review` | modification time = start of the last completed run |
@@ -537,12 +543,23 @@ that other tools may also read and write:
 The backlog is `~/.claude/self-improvement-backlog.md` (a symlink is followed). It needs a
 `## Inbox` section for proposals and a `## Entries` section with `- status: <status>` lines;
 without it the Inbox counts are `unavailable` and the loop counts as not set up. The
-interactive review that writes `mode=B`/`mode=C` lines and turns proposals into changes is
-not bundled with CCST. When a `review-session-and-improve-claude-setup` skill is installed,
-the nudge and the FAIL message name `/review-session-and-improve-claude-setup periodic`;
-otherwise they name `ccst self-improvement status`. Without that skill nothing records an
-interactive review, so once the loop is set up loop health stays FAIL and the nudge repeats
-daily; `status` says so, and removing the backlog's `## Inbox` line turns the loop off again.
+review skill consolidates Inbox lines into entries, shows a checkpoint table, applies only the
+rows you approve and ends every review with `ccst self-improvement record-review`, which writes
+the `mode=B`/`mode=C` line loop health reads. The nudge and the FAIL message name
+`/review-session-and-improve-claude-setup periodic`. Removing the backlog's `## Inbox` line
+turns the loop off again.
+
+**Upgrading with an older copy of the skill.** If
+`~/.claude/skills/review-session-and-improve-claude-setup` is a real directory rather than a
+symlink (for example a copy another tool installed before CCST bundled the skill), the skills
+step of the install sync refuses to replace it: `ccst skills install --apply` and
+`ccst install-everything --apply` exit 1, and `ccst doctor` reports
+`skill:review-session-and-improve-claude-setup` (and, after a failed automatic sync,
+`install:synced`) as FAIL. Delete that directory (or move it outside `~/.claude/skills/`), stop
+whatever tool copied it from copying it again, then run `ccst install-everything --apply`.
+`ccst skills install --apply --force` instead moves it to a `.bak-<timestamp>` directory next to
+it, which still holds a `SKILL.md` that Claude Code would load as a second copy, so delete that
+backup afterwards.
 
 `ccst doctor` WARNs (`self-improvement:loop`) while either job is enabled and the loop is not
 set up. If you do not want the loop, `ccst doctor --mute self-improvement:loop` keeps that
@@ -550,7 +567,7 @@ WARN out of the weekly drift report.
 
 ## Bundled skills
 
-26 skills are installed into `~/.claude/skills/` by `ccst skills install --apply` (part of
+27 skills are installed into `~/.claude/skills/` by `ccst skills install --apply` (part of
 `install-everything`). Claude loads each one when its description matches what you ask for.
 Each lives in `src/cc_session_tools/skills/<name>/SKILL.md`.
 
@@ -572,6 +589,8 @@ Each lives in `src/cc_session_tools/skills/<name>/SKILL.md`.
 - **Document extraction**: `extract-to-text` (docx, doc, rtf, odt, pptx, eml, msg, pdf
   including scanned pages via OCR, xlsx, xls) and `extract-pptx`
 - **Safety**: `generate-8digit-code`, `update-command-cache`
+- **Configuration review**: `review-session-and-improve-claude-setup` (the interactive half of
+  the [self-improvement loop](#configuration-self-improvement-loop-ccst-self-improvement))
 
 `ccst skills install` and `ccst skills uninstall` manage them individually if you want a
 subset.

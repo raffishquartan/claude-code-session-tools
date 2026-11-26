@@ -15,6 +15,6 @@
 
 ## 4. Docs and release
 
-- [ ] 4.1 README (loop section and bundled skills list, upgrade step for an existing copied directory), CLI help
+- [x] 4.1 README (loop section and bundled skills list, upgrade step for an existing copied directory), CLI help
 - [ ] 4.2 CHANGELOG 4.12.0; bump `pyproject.toml` to 4.12.0 and run `uv lock` in the same commit
 - [ ] 4.3 `uv run pytest -q`, `uv run mypy src` and `openspec validate --specs` exit 0

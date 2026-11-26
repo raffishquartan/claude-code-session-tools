@@ -4219,7 +4219,8 @@ def _build_parser() -> argparse.ArgumentParser:
             "The configuration self-improvement loop. State lives in "
             "~/.local/share/claude/self-improvement/ (signals.env, reviews.log, "
             "drift-push-count, last-nudge, last-escalation, last-auto-review). The SessionStart "
-            "nudge is the hook `ccst hooks run self-improvement-nudge`."
+            "nudge is the hook `ccst hooks run self-improvement-nudge`. The interactive review "
+            "is the bundled skill: /review-session-and-improve-claude-setup periodic."
         ),
     )
     si_sub = si_parser.add_subparsers(dest="verb", metavar="<verb>")
