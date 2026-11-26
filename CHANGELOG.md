@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [4.8.0] - 2026-11-25
+
+### Added
+
+- `bash-hard-deny` allows deletes inside the calling session's own Claude Code scratchpad (`<CLAUDE_CODE_TMPDIR or /tmp>/claude-<uid>/<encoded project dir>/<session id>/scratchpad`, pinned from the hook payload's `session_id` and `transcript_path`): `rm`, `rmdir`, `unlink`, `shred`, `find -delete`/`-exec rm` and inline `python`/`node` deletes pass when every target is a literal path strictly inside it. The scratchpad itself, other sessions' scratchpads, a session's `working/` and `out/` folders and everything else stay blocked, as do targets that use variables, substitutions, `~`, brace expansion, globs at or above the scratchpad, or `..`/symlinks leading out of it, and any command that also runs `ln`, `mv`, `cp`, `git` or similar. Every deletion block message now names the scratchpad path next to the deletion-list guidance.
+
+### Changed
+
+- `bash-hard-deny` parses the command and matches delete verbs only in real command positions, so a `grep` pattern, an `echo`/`printf` body, a commit message, a comment or a data heredoc that mentions `rm` is no longer blocked.
+- `bash-hard-deny` now also blocks deletes it previously missed: inside `bash -c`/`sh -c`/`eval` strings and `<<<` here-strings, a pipe into a bare `sh`/`bash` whose text mentions a delete verb, `xargs rm`, `find -delete`, `find -exec rm`, `RM` and `rm${IFS}x`, the `g`-prefixed coreutils names (`grm` etc.), and a direct `mv` nested in a shell string. `/private/tmp`, `/private/var/tmp` and Claude Code's per-uid temp root count as delete-by-move destinations, so a file cannot be moved into the scratchpad and deleted there. A command that runs code the hook cannot read - a variable or glob as the command, a dynamic `-c`/`eval` argument, a shell reading stdin, `source`, `trap`, `ssh`, `su`, `watch`, `awk`, `perl`, `make`, arithmetic, a function definition, a heredoc-written script that the same command runs, or text the parser cannot read - gets no scratchpad allowance and is blocked whenever it mentions a delete. Any error while analysing a command now blocks it instead of letting it run unchecked.
+
 ## [4.7.0] - 2026-11-25
 
 ### Added
