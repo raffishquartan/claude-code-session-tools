@@ -22,7 +22,7 @@ _WHERE_CLAUSE_RE = _re.compile(
 )
 
 
-def _parse_where_clause(raw: str) -> tuple[str, str, str]:
+def parse_where_clause(raw: str) -> tuple[str, str, str]:
     match = _WHERE_CLAUSE_RE.match(raw.strip())
     if not match:
         raise ValueError(
@@ -34,7 +34,7 @@ def _parse_where_clause(raw: str) -> tuple[str, str, str]:
     # Shell-style quoting around the value is syntax, not data: `corr_key = 'x'` means x.
     if len(value) >= 2 and value[0] == value[-1] and value[0] in "'\"":
         value = value[1:-1]
-    if op not in repository._WHERE_OPS:
+    if op not in repository.WHERE_OPS:
         raise ValueError(f"invalid --where operator {op!r}: {raw!r}")
     return field_name, op, value
 
@@ -201,7 +201,7 @@ def query_records(
     include_deleted: bool = False,
 ) -> list[Record]:
     naming.validate_record_group(record_group)
-    conditions = [_parse_where_clause(clause) for clause in where]
+    conditions = [parse_where_clause(clause) for clause in where]
     conn = repository.connect(project)
     try:
         rows = repository.query_records(
@@ -233,7 +233,7 @@ def find_records_by_file_path_prefix(*, project: str, prefix: str) -> list[Recor
 
     Goes straight to repository.query_records() with an already-parsed (field, op, value)
     condition, one connection reused across every record_group, rather than routing through
-    this module's own query_records()/_parse_where_clause() string DSL: that DSL's
+    this module's own query_records()/parse_where_clause() string DSL: that DSL's
     `\\s+`-based regex would silently strip any leading whitespace off prefix on the round
     trip through it (a real, if narrow, correctness bug for a prefix that legitimately starts
     with a space), and re-resolving a fresh connection per record_group here would be needless

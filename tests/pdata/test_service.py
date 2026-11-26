@@ -304,11 +304,11 @@ def test_query_where_ignores_surrounding_value_quotes_on_extension_field(
 
 @pytest.mark.parametrize("raw", ["'abc\"", "'abc", "abc'", "'"])
 def test_where_value_with_mismatched_or_lone_quotes_is_kept_as_written(raw):
-    assert service._parse_where_clause(f"content = {raw}")[2] == raw
+    assert service.parse_where_clause(f"content = {raw}")[2] == raw
 
 
 def test_where_value_wrapped_twice_matches_a_value_that_has_quotes():
-    assert service._parse_where_clause("content = \"'x'\"")[2] == "'x'"
+    assert service.parse_where_clause("content = \"'x'\"")[2] == "'x'"
 
 
 def test_query_records_rejects_bad_where_syntax(monkeypatch, tmp_path):
@@ -521,7 +521,7 @@ def test_find_records_by_file_path_prefix_rejects_empty_prefix(monkeypatch, tmp_
 def test_find_records_by_file_path_prefix_preserves_leading_whitespace(monkeypatch, tmp_path):
     """Regression test: querying via repository.query_records() with an already-parsed
     condition tuple (not this module's own string-DSL query_records()) means a prefix
-    starting with whitespace isn't silently stripped by _parse_where_clause's \\s+ regex."""
+    starting with whitespace isn't silently stripped by parse_where_clause's \\s+ regex."""
     monkeypatch.setenv("CCST_PROJECT_DB_DIR", str(tmp_path))
     service.add_record(
         project="demo", record_group="letters", content="a",
