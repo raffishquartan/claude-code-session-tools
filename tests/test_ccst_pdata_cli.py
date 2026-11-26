@@ -353,3 +353,84 @@ def test_pdata_update_warns_on_non_iso_date_but_still_writes(base_env):
     assert r.returncode == 0, r.stderr
     assert "key-events.event_date" in r.stderr and "5 October 2026" in r.stderr
     assert f"updated record {record_id}" in r.stdout
+
+
+def _seed_search(base_env):
+    for i, content in enumerate(("Met Alice today", "lunch with bob", "alice again")):
+        r = _run(base_env, "pdata", "add", "--project", "testproj", "--group", "notes",
+                 "--content", content, "--created-at", str(1000 + i))
+        assert r.returncode == 0, r.stderr
+
+
+def test_pdata_search_json(base_env):
+    import json
+    _seed_search(base_env)
+    r = _run(base_env, "pdata", "search", "--project", "testproj", "--group", "notes",
+             "--text", "alice", "--select", "content")
+    assert r.returncode == 0, r.stderr
+    parsed = json.loads(r.stdout)
+    assert [row["content"] for row in parsed] == ["Met Alice today", "alice again"]
+    assert list(parsed[0]) == ["id", "record_group", "content"]
+
+
+def test_pdata_search_csv_is_lf_with_header(base_env):
+    _seed_search(base_env)
+    r = _run(base_env, "pdata", "search", "--project", "testproj", "--group", "notes",
+             "--regex", "^lunch", "--select", "content", "--format", "csv")
+    assert r.returncode == 0, r.stderr
+    assert "\r" not in r.stdout
+    lines = r.stdout.splitlines()
+    assert lines[0] == "id,record_group,content"
+    assert lines[1].endswith(",notes,lunch with bob")
+
+
+def test_pdata_search_no_match_outputs(base_env):
+    _seed_search(base_env)
+    common = ("pdata", "search", "--project", "testproj", "--group", "notes", "--text", "zzz")
+    r = _run(base_env, *common)
+    assert (r.returncode, r.stdout) == (0, "[]\n")
+    r = _run(base_env, *common, "--format", "csv", "--select", "content")
+    assert (r.returncode, r.stdout) == (0, "id,record_group,content\n")
+    r = _run(base_env, *common, "--count-only")
+    assert (r.returncode, r.stdout) == (0, "0\n")
+    r = _run(base_env, *common, "--count-only", "--format", "csv")
+    assert (r.returncode, r.stdout) == (0, "count\n0\n")
+
+
+def test_pdata_search_count_only(base_env):
+    _seed_search(base_env)
+    r = _run(base_env, "pdata", "search", "--project", "testproj", "--group", "notes",
+             "--text", "alice", "--count-only")
+    assert (r.returncode, r.stdout) == (0, "2\n")
+
+
+def test_pdata_search_flags_reach_the_search(base_env):
+    import json
+    _seed_search(base_env)
+    r = _run(base_env, "pdata", "search", "--project", "testproj", "--group", "notes",
+             "--text", "Alice", "--case-sensitive", "--not-text", "--fields", "content",
+             "--where", "content LIKE '%b%'", "--date-field", "created_at",
+             "--since", "1969-12-31", "--until", "2999-12-31", "--sort", "content", "--desc",
+             "--limit", "1")
+    assert r.returncode == 0, r.stderr
+    assert [row["content"] for row in json.loads(r.stdout)] == ["lunch with bob"]
+    r = _run(base_env, "pdata", "search", "--project", "testproj", "--group", "notes",
+             "--text", "bob", "--snippet", "2")
+    assert json.loads(r.stdout)[0]["content"] == "...h bob"
+
+
+def test_pdata_search_invalid_request_exits_2(base_env):
+    _seed_search(base_env)
+    r = _run(base_env, "pdata", "search", "--project", "testproj", "--group", "notes")
+    assert r.returncode == 2
+    assert "requires a predicate" in r.stderr
+    r = _run(base_env, "pdata", "search", "--project", "testproj", "--group", "nosuch",
+             "--text", "a")
+    assert r.returncode == 2
+    assert "existing groups: notes" in r.stderr
+
+
+def test_pdata_search_help_has_worked_example(base_env):
+    r = _run(base_env, "pdata", "search", "--help")
+    assert r.returncode == 0
+    assert "ccst pdata search --project example --group notes --group letters" in r.stdout

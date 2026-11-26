@@ -42,6 +42,9 @@ Current subcommands:
                                  is never mid-race deleted.
   pdata add                      Insert a new record into a project's SQLite data store (see
                                  ccst pdata --help for the full records/schema subcommand set).
+  pdata search                   Find records by text, regex, --where and date range across one
+                                 or more groups of a project (read-only; see
+                                 ccst pdata search --help).
   pdata reconcile-session-output Backfill the session-output index from cc-sessions/*/out/ on
                                  disk for one project (--project NAME) or every discovered
                                  project (--all-projects). Provisioned as a 7-day ccsched job by
@@ -1202,6 +1205,8 @@ def _run_pdata_verb(args: argparse.Namespace) -> int:
         return _cmd_pdata_list(args)
     if args.verb == "query":
         return _cmd_pdata_query(args)
+    if args.verb == "search":
+        return _cmd_pdata_search(args)
     if args.verb == "update":
         return _cmd_pdata_update(args)
     if args.verb == "delete":
@@ -1386,6 +1391,41 @@ def _cmd_pdata_query(args: argparse.Namespace) -> int:
         print(f"ccst pdata: {exc}", file=sys.stderr)
         return 2
     print(formatting.render([service.record_to_dict(r) for r in records], fmt=args.format))
+    return 0
+
+
+def _comma_list(raw: str | None) -> tuple[str, ...] | None:
+    """`--fields a,b` / `--select a,b` as a tuple of names, or None when the flag was absent."""
+    if raw is None:
+        return None
+    return tuple(name.strip() for name in raw.split(",") if name.strip())
+
+
+def _cmd_pdata_search(args: argparse.Namespace) -> int:
+    import json
+
+    from cc_session_tools.lib.pdata import formatting, search
+
+    try:
+        result = search.run(search.SearchRequest(
+            project=args.project, groups=tuple(args.group), text=args.text, regex=args.regex,
+            case_sensitive=args.case_sensitive, not_text=args.not_text,
+            fields=_comma_list(args.fields), where=tuple(args.where), date_field=args.date_field,
+            since=args.since, until=args.until, select=_comma_list(args.select),
+            snippet=args.snippet, sort=args.sort, desc=args.desc, limit=args.limit,
+            count_only=args.count_only,
+        ))
+    except ValueError as exc:
+        print(f"ccst pdata search: {exc}", file=sys.stderr)
+        return 2
+    if args.count_only:
+        sys.stdout.write(
+            f"count\n{result.count}\n" if args.format == "csv" else f"{json.dumps(result.count)}\n"
+        )
+    elif args.format == "csv":
+        sys.stdout.write(formatting.render(result.rows, fmt="csv", columns=result.columns))
+    else:
+        print(formatting.render(result.rows, fmt="json"))
     return 0
 
 
@@ -3536,6 +3576,87 @@ def _build_parser() -> argparse.ArgumentParser:
     pdata_query_parser.add_argument("--include-deleted", action="store_true")
     pdata_query_parser.add_argument(
         "--format", choices=("table", "json", "csv"), default="table",
+    )
+
+    pdata_search_parser = pdata_sub.add_parser(
+        "search",
+        help="Find records by text, regex, --where and date range across groups (read-only)",
+        description=(
+            "Search one or more record groups of a project. Predicates are ANDed: --text or "
+            "--regex (case-insensitive unless --case-sensitive; --not-text inverts), any "
+            "--where clauses (same syntax as 'pdata query'), and --since/--until on "
+            "--date-field. At least one predicate is required. Soft-deleted records are never "
+            "returned. No match prints [] (json), a header row (csv) or 0 (--count-only), "
+            "and exits 0; an invalid request exits 2."
+        ),
+        epilog=(
+            "example: every note or letter mentioning alice since February, newest\n"
+            "first, with 40 characters of context:\n"
+            "  ccst pdata search --project example --group notes --group letters \\\n"
+            "    --text alice --date-field created_at --since 2026-02-01 \\\n"
+            "    --sort created_at --desc --select content --snippet 40"
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    pdata_search_parser.add_argument("--project", required=True, metavar="NAME")
+    pdata_search_parser.add_argument(
+        "--group", required=True, action="append", metavar="RECORD_GROUP",
+        help="Group to search; repeat to search several in one call (each row names its group)",
+    )
+    pdata_search_parser.add_argument(
+        "--text", default=None, metavar="SUBSTRING", help="Match rows containing SUBSTRING",
+    )
+    pdata_search_parser.add_argument(
+        "--regex", default=None, metavar="PATTERN",
+        help="Match rows where the Python regular expression PATTERN finds a match",
+    )
+    pdata_search_parser.add_argument(
+        "--case-sensitive", action="store_true", help="Match --text/--regex case-sensitively",
+    )
+    pdata_search_parser.add_argument(
+        "--not-text", action="store_true",
+        help="Invert --text/--regex: match rows where no searched field matches",
+    )
+    pdata_search_parser.add_argument(
+        "--fields", default=None, metavar="F1,F2",
+        help="Fields --text/--regex searches (default: content, file_path and every TEXT "
+             "extension field)",
+    )
+    pdata_search_parser.add_argument(
+        "--where", action="append", default=[], metavar="'<field> <op> <value>'",
+        help="May repeat; same syntax and quote handling as 'ccst pdata query --where'",
+    )
+    pdata_search_parser.add_argument(
+        "--date-field", default=None, metavar="NAME",
+        help="Field --since/--until compare: a TEXT field holding ISO dates, or created_at, "
+             "updated_at or a numeric field holding Unix epochs (compared in local time)",
+    )
+    pdata_search_parser.add_argument(
+        "--since", default=None, metavar="yyyy-MM-dd", help="Keep rows on or after this date",
+    )
+    pdata_search_parser.add_argument(
+        "--until", default=None, metavar="yyyy-MM-dd", help="Keep rows on or before this date",
+    )
+    pdata_search_parser.add_argument(
+        "--format", choices=("json", "csv"), default="json", help="Output format (default: json)",
+    )
+    pdata_search_parser.add_argument(
+        "--select", default=None, metavar="F1,F2",
+        help="Output only these fields; id and record_group are always included",
+    )
+    pdata_search_parser.add_argument(
+        "--snippet", type=int, default=None, metavar="N",
+        help="Show searched fields as the first match with N characters either side ('...' "
+             "marks a cut)",
+    )
+    pdata_search_parser.add_argument(
+        "--sort", default=None, metavar="FIELD", help="Order rows by FIELD (default: group "
+        "order, then created_at)",
+    )
+    pdata_search_parser.add_argument("--desc", action="store_true", help="Sort descending")
+    pdata_search_parser.add_argument("--limit", type=int, default=None, metavar="N")
+    pdata_search_parser.add_argument(
+        "--count-only", action="store_true", help="Print only the number of matching records",
     )
 
     pdata_update_parser = pdata_sub.add_parser("update", help="Update a record (version-checked)")
