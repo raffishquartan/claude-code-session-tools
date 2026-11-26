@@ -44,7 +44,9 @@ creates the backlog and never overwrites one) and stop until they have.
 - End of any substantive session where friction was observed
 
 **Do NOT use for:**
-- Clean sessions with no friction - output "no actionable findings" and stop
+- Finding problems in a clean session - when there is no friction, output
+  "no actionable findings", write nothing to the backlog and still record the
+  review (Mode B Step 9)
 - Pure read/exploration sessions that produced no state changes
 - Static token-footprint / context-size optimisation - that is owned by the
   `reduce-persistent-context` skill
@@ -65,10 +67,16 @@ interrupt the session beyond the single append.
 - [yyyy-MM-dd] [session-tag] <one-line observation>
 ```
 
-Get the date with: `date +%Y-%m-%d`
+Get the date with: `date -u +%Y-%m-%d` (the loop ages Inbox lines in UTC days).
 
 **Location:** `~/.claude/self-improvement-backlog.md` -> `## Inbox` section.
 Append below any existing Inbox lines (newest at the bottom of the section).
+
+**Only when the loop is set up.** Append only if the backlog exists and has a
+line that is exactly `## Inbox`. Never create the backlog or add that heading:
+it is the user's opt-in to the loop, which starts the weekly headless review
+(subscription usage) and the nudge. If it is missing, mention the friction in
+chat and that `ccst self-improvement init` would start recording such notes.
 
 > The backlog may be a symlink (for example into a repository that keeps the
 > Claude configuration under version control), and the Edit tool refuses to
@@ -248,8 +256,8 @@ accumulated signals rather than one session.
    are handled in those projects.
 4. **Reliability logs.** Read the markdown table rows with a cell starting
    "Open - none fixed" in `~/.claude/skills/*/references/*.md`.
-5. **Hook denies.** `ccst telemetry query --decision deny --since 14d` and look
-   for repeated blocks of the same kind.
+5. **Hook denies.** `ccst telemetry query --decision deny --since 14d --limit 500`
+   and look for repeated blocks of the same kind.
 6. **Classify and decide.** Run Steps 3-7 of Mode B unchanged on these
    findings, so every item still goes through the Step 6 checkpoint table. A
    `claude-md` lever item must show the exact replacement text and wait for
@@ -343,7 +351,7 @@ to the backlog, but still record the review (Step 9) with `--findings 0
 - About to apply a `CLAUDE.md` edit without showing the diff - **STOP**, present the checkpoint table first
 - About to write a backlog entry for a one-off environmental issue - **DROP it as `none`**
 - About to create a second backlog entry for a signature that already exists - **STOP**, bump `recurrence` instead
-- Manufacturing findings on a clean session - **STOP**, output "no actionable findings" and write nothing
+- Manufacturing findings on a clean session - **STOP**, output "no actionable findings", write nothing to the backlog, and still run `record-review`
 - Handing back a bare `file://` path instead of inline content - **STOP**, summarise the artefact in chat
 - Clearing the Inbox before consolidating the lines into Entries - **STOP**, consolidate first, then clear
 - Reporting wrap-up complete without having checked the backlog for Inbox lines from this session - **STOP**, run Step 2 first

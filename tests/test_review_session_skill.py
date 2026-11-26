@@ -25,6 +25,34 @@ def _ccst(*args: str) -> subprocess.CompletedProcess[str]:
     )
 
 
+def _self_improvement_verbs() -> set[str]:
+    """The real subcommand names of `ccst self-improvement`, from the parser itself."""
+    import argparse
+
+    from cc_session_tools.cli import ccst
+
+    def subparsers(parser: argparse.ArgumentParser) -> dict[str, argparse.ArgumentParser]:
+        for action in parser._actions:
+            if isinstance(action, argparse._SubParsersAction):
+                return dict(action.choices)
+        raise AssertionError("no subcommands")
+
+    return set(subparsers(subparsers(ccst._build_parser())["self-improvement"]))
+
+
+def test_skill_mode_a_never_creates_the_backlog() -> None:
+    mode_a = SKILL.read_text(encoding="utf-8").split("## Mode A", 1)[1].split("## Mode B", 1)[0]
+    assert "Never create the backlog" in mode_a
+    assert "date -u +%Y-%m-%d" in mode_a
+
+
+def test_skill_always_records_a_clean_review() -> None:
+    text = SKILL.read_text(encoding="utf-8")
+    assert '"no actionable findings" and stop' not in text
+    assert 'and write nothing\n' not in text
+    assert text.count("still record the") + text.count("still run `record-review`") >= 2
+
+
 def test_skill_is_bundled_with_matching_frontmatter_name() -> None:
     text = SKILL.read_text(encoding="utf-8")
     assert text.startswith("---\n")
@@ -58,9 +86,7 @@ def test_skill_names_only_existing_self_improvement_verbs_and_no_scripts() -> No
     text = SKILL.read_text(encoding="utf-8")
     verbs = set(re.findall(r"ccst self-improvement ([a-z-]+)", text))
     assert {"status", "init", "record-review"} <= verbs
-    help_text = _ccst("self-improvement", "--help").stdout
-    for verb in verbs:
-        assert verb in help_text, verb
+    assert verbs <= _self_improvement_verbs()
     assert ".sh" not in text
     assert "printf" not in text and "awk" not in text
 

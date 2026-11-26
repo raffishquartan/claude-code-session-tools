@@ -1,9 +1,11 @@
 """Paths, date helpers and review-log parsing shared by the collector, the nudge and the
 headless review.
 
-The state directory and its flat-file formats are a contract shared with other tools (an
-interactive review skill appends interactive lines to ``reviews.log``; a config-drift hook
-writes ``drift-push-count``), so the formats here must stay byte-compatible:
+The state directory and its flat-file formats are a contract shared with other tools (the
+bundled interactive review skill records its reviews with ``ccst self-improvement
+record-review``, and older copies of it appended interactive lines to ``reviews.log``
+directly; a config-drift hook writes ``drift-push-count``), so the formats here must stay
+byte-compatible:
 
 - ``signals.env``: ``KEY=value`` lines, written by the collector
 - ``reviews.log``: one line per review. Interactive lines look like

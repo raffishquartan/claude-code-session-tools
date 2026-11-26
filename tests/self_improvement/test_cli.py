@@ -133,6 +133,13 @@ def test_status_says_how_to_set_up_the_loop_and_creates_nothing(si: Env) -> None
     assert not si.state.exists()
 
 
+def test_status_says_how_to_turn_the_loop_off_once_set_up(si: Env) -> None:
+    si.write_backlog(0)
+    first = ccst("status").stdout.splitlines()[0]
+    assert first.startswith("loop: set up (backlog ")
+    assert "remove the backlog's `## Inbox` line" in first
+
+
 def test_not_set_up_job_lines_name_init_and_fit_the_digest(si: Env, monkeypatch: pytest.MonkeyPatch) -> None:
     # The scheduler keeps the first 1000 characters of a job's stdout for the weekly digest.
     empty = si.root / "empty-bin"

@@ -10,7 +10,10 @@ def setup_line() -> str:
     """Whether the loop is set up, and how to set it up when it is not."""
     backlog = state.backlog_path()
     if state.loop_set_up():
-        return f"loop: set up (backlog {backlog})"
+        return (
+            f"loop: set up (backlog {backlog}); to turn it off, remove the backlog's "
+            "`## Inbox` line (or the backlog)"
+        )
     return (
         f"loop: not set up - run `ccst self-improvement init` to create {backlog} with a "
         "`## Inbox` section; until then the nudge, the headless review and the FAIL "
