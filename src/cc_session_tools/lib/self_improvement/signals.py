@@ -104,11 +104,14 @@ class Snapshot:
         )
 
 
+def review_skill_installed() -> bool:
+    return (Path.home() / ".claude" / "skills" / REVIEW_SKILL / "SKILL.md").is_file()
+
+
 def review_command() -> str:
     """The command messages point at: the interactive review skill when it is installed,
     otherwise the status command, so a message never names something the install lacks."""
-    skill = Path.home() / ".claude" / "skills" / REVIEW_SKILL / "SKILL.md"
-    return PERIODIC_REVIEW_COMMAND if skill.is_file() else STATUS_COMMAND
+    return PERIODIC_REVIEW_COMMAND if review_skill_installed() else STATUS_COMMAND
 
 
 # --- sources -----------------------------------------------------------------------------
@@ -279,7 +282,7 @@ def collect(now: dt.datetime | None = None) -> Snapshot:
         days_since_review=days_since_review,
         loop_health=loop_health,
         auto_review_health=auto_health,
-        loop_set_up=backlog_text is not None and state.has_inbox(backlog_text),
+        loop_set_up=state.sets_up_loop(backlog_text),
     )
 
 

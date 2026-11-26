@@ -108,9 +108,19 @@ def test_init_exits_1_and_leaves_a_backlog_without_an_inbox(si: Env) -> None:
 def test_init_does_not_follow_a_dangling_symlink(si: Env) -> None:
     target = si.root / "elsewhere" / "backlog.md"
     si.backlog.symlink_to(target)
-    assert ccst("init").returncode == 1
+    proc = ccst("init")
+    assert proc.returncode == 1
+    assert "cannot be read" in proc.stderr
     assert not target.exists()
     assert si.backlog.is_symlink()
+
+
+def test_init_reports_a_directory_at_the_backlog_path_as_unreadable(si: Env) -> None:
+    si.backlog.mkdir()
+    proc = ccst("init")
+    assert proc.returncode == 1
+    assert "cannot be read" in proc.stderr
+    assert si.backlog.is_dir()
 
 
 def test_status_says_how_to_set_up_the_loop_and_creates_nothing(si: Env) -> None:
@@ -118,6 +128,13 @@ def test_status_says_how_to_set_up_the_loop_and_creates_nothing(si: Env) -> None
     assert proc.returncode == 0
     first = proc.stdout.splitlines()[0]
     assert first.startswith("loop: not set up - run `ccst self-improvement init`")
-    assert "review command: ccst self-improvement status" in proc.stdout
+    assert "interactive review: the review-session-and-improve-claude-setup skill is not installed" in proc.stdout
+    assert "remove the backlog's `## Inbox` line" in proc.stdout
     assert not si.backlog.exists()
     assert not si.state.exists()
+
+
+def test_status_names_the_periodic_review_when_the_skill_is_installed(si: Env) -> None:
+    si.install_review_skill()
+    out = ccst("status").stdout
+    assert "interactive review: run /review-session-and-improve-claude-setup periodic" in out

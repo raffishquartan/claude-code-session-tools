@@ -63,3 +63,12 @@ Follow-up (d), left as is: the shared spec says `ran` or `skipped` within 8 days
 ## Migration Plan
 
 The next sync after upgrading registers both jobs, or reports the existing bash registrations. To move from the bash versions: `ccsched remove self-improvement-signals`, `ccsched remove self-improvement-auto-review`, then `ccst ccsched-jobs install --apply`. To opt in on a fresh install: `ccst self-improvement init`. Rollback: `ccsched remove` the two ids (they will be reported as deleted, not re-added).
+
+## Review follow-ups (PR review)
+
+- `init` reports a backlog path it cannot read (dangling symlink, directory, no permission) separately from one without an Inbox; both exit 1 and change nothing.
+- `state.loop_set_up(path)` / `state.sets_up_loop(text)` are the one predicate; doctor and the collector call them.
+- `replaced_script` strips quotes from each token, so `bash '/x/collect-signals.sh'` is detected.
+- The doctor WARN on installs that have not run `init` is kept (maintainer decision); its hint and the README name `ccst doctor --mute self-improvement:loop`, which keeps it out of the weekly drift report.
+- Without the review skill, `status` explains that nothing records an interactive review, that the nudge then repeats daily, and that removing the backlog's `## Inbox` line turns the loop off again (a hook uninstall would be re-added by the next install sync).
+- Until `init`, each job still shows one weekly digest line (`surface=True` is the maintainer's choice); no model call, no Telegram message.

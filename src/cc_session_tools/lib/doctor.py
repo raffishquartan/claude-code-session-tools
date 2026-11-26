@@ -462,8 +462,7 @@ def check_self_improvement_loop(backlog_path: Path) -> CheckResult:
     from cc_session_tools.lib.self_improvement import state
 
     name = "self-improvement:loop"
-    text = state.read_text(backlog_path)
-    if text is not None and state.has_inbox(text):
+    if state.loop_set_up(backlog_path):
         return CheckResult(name=name, status=Status.OK, reason=f"set up ({backlog_path})")
     try:
         specs = registry.load_registry()
@@ -477,7 +476,9 @@ def check_self_improvement_loop(backlog_path: Path) -> CheckResult:
         reason=(
             f"{', '.join(active)} enabled but the loop is not set up ({backlog_path} is missing "
             "or has no '## Inbox' line), so the jobs do nothing - run "
-            "'ccst self-improvement init' to turn the loop on, or disable the jobs"
+            "'ccst self-improvement init' to turn the loop on; if you do not want it, run "
+            "'ccst doctor --mute self-improvement:loop' (or disable both jobs and mute their "
+            "ccsched-job checks)"
         ),
     )
 

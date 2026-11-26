@@ -2365,3 +2365,22 @@ def test_run_all_checks_includes_the_loop_check_when_given_a_backlog(monkeypatch
         self_improvement_backlog=tmp_path / "backlog.md",
     )
     assert [r.name for r in results].count("self-improvement:loop") == 1
+
+
+def test_self_improvement_loop_warns_when_the_registry_is_unreadable(monkeypatch, tmp_path) -> None:
+    from cc_session_tools.lib.scheduler import registry
+
+    def broken() -> list[object]:
+        raise registry.RegistryError("corrupt")
+
+    monkeypatch.setattr(registry, "load_registry", broken)
+    result = check_self_improvement_loop(tmp_path / "backlog.md")
+    assert result.status == Status.WARN
+    assert "ccsched.db unreadable: corrupt" in result.reason
+
+
+def test_self_improvement_loop_hint_names_the_mute(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("CCST_DATA_HOME", str(tmp_path))
+    _register("self-improvement-signals", ["ccst", "self-improvement", "collect-signals"])
+    reason = check_self_improvement_loop(tmp_path / "backlog.md").reason
+    assert "ccst doctor --mute self-improvement:loop" in reason

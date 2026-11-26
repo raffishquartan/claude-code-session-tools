@@ -3045,9 +3045,16 @@ def _self_improvement_init() -> int:
     if result is state.InitResult.ALREADY_SET_UP:
         print(f"{path} already exists with an Inbox - the loop is set up; nothing changed")
         return 0
+    if result is state.InitResult.UNREADABLE:
+        print(
+            f"{path} exists but cannot be read (a dangling symlink, a directory or no read "
+            "permission); nothing was changed - fix or move it, then run init again",
+            file=sys.stderr,
+        )
+        return 1
     print(
-        f"{path} exists but has no `## Inbox` line; add one (nothing was changed) to set up "
-        "the loop",
+        f"{path} exists but has no line that is exactly `## Inbox`; add one (nothing was "
+        "changed) to set up the loop",
         file=sys.stderr,
     )
     return 1

@@ -481,6 +481,8 @@ self-improvement init)`. Nothing but `init` creates the backlog.
 Once the loop is set up, `self-improvement-auto-review` uses your Claude Code subscription
 usage: at most one paying run per 7 days, capped at USD 0.50, and none when there are no
 signals and no new transcripts. To stop it, `ccsched disable self-improvement-auto-review`.
+Until the loop is set up, each job still shows one line a week in the session-start digest
+(`loop not set up`), with no model call and no Telegram message.
 
 If another tool already registered jobs with these ids that run its own
 `collect-signals.sh` / `run-headless-review.sh` scripts, CCST leaves them in place and
@@ -539,7 +541,12 @@ interactive review that writes `mode=B`/`mode=C` lines and turns proposals into 
 not bundled with CCST. When a `review-session-and-improve-claude-setup` skill is installed,
 the nudge and the FAIL message name `/review-session-and-improve-claude-setup periodic`;
 otherwise they name `ccst self-improvement status`. Without that skill nothing records an
-interactive review, so loop health stays FAIL once the loop is set up.
+interactive review, so once the loop is set up loop health stays FAIL and the nudge repeats
+daily; `status` says so, and removing the backlog's `## Inbox` line turns the loop off again.
+
+`ccst doctor` WARNs (`self-improvement:loop`) while either job is enabled and the loop is not
+set up. If you do not want the loop, `ccst doctor --mute self-improvement:loop` keeps that
+WARN out of the weekly drift report.
 
 ## Bundled skills
 
