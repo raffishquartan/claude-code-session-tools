@@ -187,3 +187,11 @@ def test_context_warning_cache_read_prices_match_usage_pricing(model: str) -> No
     assert pricing.lookup(model)["cache_read"] * _MTOK == pytest.approx(
         model_info.cache_read_price_per_mtok(model)
     )
+
+
+@pytest.mark.parametrize("model", sorted(model_info._CACHE_WRITE_PRICE))
+@pytest.mark.parametrize(("ttl", "key"), [("5m", "cache_creation_5m"), ("1h", "cache_creation_1h")])
+def test_context_warning_cache_write_prices_match_usage_pricing(model: str, ttl: str, key: str) -> None:
+    assert pricing.lookup(model)[key] * _MTOK == pytest.approx(
+        model_info.cache_write_price_per_mtok(model, ttl)
+    )

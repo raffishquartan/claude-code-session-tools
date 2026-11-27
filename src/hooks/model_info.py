@@ -1,20 +1,21 @@
-"""Model id -> context window size, cache-read price, display name.
+"""Model id -> context window size, cache-read and cache-write prices, display name.
 
 Consumed by context_window_warning to phrase its nudge in terms of "% of the
-model's actual window" and to estimate a per-turn cache-read cost.
+model's actual window" and to estimate a per-turn cost with a warm cache (cache
+reads) and with a cold one (the whole context written back to the cache).
 
 Context windows as of 2026-09-29: Fable 5 / Mythos 5 / Opus 5 / Opus 4.6-4.8 /
 Sonnet 5 / Sonnet 5.5 / Opus 5.5 / Fable 5.1 / Mythos 5.1 / Sonnet 4.6 all 1,000,000 tokens
 (the default, not a beta long-context mode); Haiku 4.5 stays at 200,000.
 Prices are each model's published first-party cache-read ("cache hits and
-refreshes") rate per million tokens, from
+refreshes") and cache-write (5-minute and 1-hour) rates per million tokens, from
 https://platform.claude.com/docs/en/about-claude/pricing (checked 2026-09-29).
 They are not a fixed fraction of the input price: Fable 5.1 and Mythos 5.1 read at 0.025x
 and Opus 5.5 at 0.05x, every other model here at 0.1x.
 
 Re-check this table whenever a new model ships. A model not matched by any
-case (`is_known` is False) falls through to the default window and price
-(200000 tokens / $0.50 per MTok) - deliberately the same window as every
+case (`is_known` is False) falls through to the default window and prices
+(200000 tokens / $0.50 per MTok read / $6.25 and $10.00 per MTok write) - deliberately the same window as every
 pre-Claude-5 model, so an unknown model degrades to conservative,
 already-correct-for-most-history behaviour rather than going quiet or firing
 too early. Those defaults are assumptions, and the warning says so; only
@@ -22,7 +23,7 @@ too early. Those defaults are assumptions, and the warning says so; only
 
 Deliberately not `claude_code_usage.pricing`: that module imports pandas, too
 heavy for a hook that runs on every Stop event. tests/test_pricing.py asserts
-that every cache-read price here matches that module's table.
+that every cache-read and cache-write price here matches that module's table.
 """
 from __future__ import annotations
 
@@ -41,6 +42,17 @@ _CACHE_READ_PRICE = {
     "claude-sonnet-5-5": 0.20, "claude-sonnet-5": 0.20, "claude-sonnet-4-6": 0.30,
     "claude-haiku-4-5": 0.10,
 }
+# (5-minute write, 1-hour write) per MTok.
+_CACHE_WRITE_PRICE = {
+    "claude-fable-5-1": (12.50, 20.00), "claude-mythos-5-1": (12.50, 20.00),
+    "claude-fable-5": (12.50, 20.00), "claude-mythos-5": (12.50, 20.00),
+    "claude-opus-5-5": (5.00, 8.00),
+    "claude-opus-5": (6.25, 10.00), "claude-opus-4-8": (6.25, 10.00),
+    "claude-opus-4-7": (6.25, 10.00), "claude-opus-4-6": (6.25, 10.00),
+    "claude-sonnet-5-5": (2.50, 4.00), "claude-sonnet-5": (2.50, 4.00),
+    "claude-sonnet-4-6": (3.75, 6.00),
+    "claude-haiku-4-5": (1.25, 2.00),
+}
 _NAME = {
     "claude-fable-5": "Fable 5", "claude-mythos-5": "Mythos 5",
     "claude-opus-5": "Opus 5", "claude-opus-4-8": "Opus 4.8",
@@ -52,6 +64,7 @@ _NAME = {
 }
 _DEFAULT_WINDOW = 200_000
 _DEFAULT_CACHE_READ_PRICE = 0.50
+_DEFAULT_CACHE_WRITE_PRICE = (6.25, 10.00)
 
 
 _DATED_SNAPSHOT = re.compile(r"(.+)-\d{8}")
@@ -72,6 +85,12 @@ def context_window(model_id: str) -> int:
 
 def cache_read_price_per_mtok(model_id: str) -> float:
     return _CACHE_READ_PRICE.get(_canonical(model_id), _DEFAULT_CACHE_READ_PRICE)
+
+
+def cache_write_price_per_mtok(model_id: str, ttl: str) -> float:
+    """Price of writing a prompt to the cache for `ttl` ("5m" or "1h")."""
+    five_minute, one_hour = _CACHE_WRITE_PRICE.get(_canonical(model_id), _DEFAULT_CACHE_WRITE_PRICE)
+    return one_hour if ttl == "1h" else five_minute
 
 
 def is_known(model_id: str) -> bool:
