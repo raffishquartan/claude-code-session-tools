@@ -28,6 +28,7 @@ import datetime
 import json
 import re
 import sys
+from dataclasses import dataclass
 from decimal import ROUND_DOWN, Decimal
 from pathlib import Path
 
@@ -43,12 +44,46 @@ class TranscriptError(Exception):
 
 
 SYNTHETIC_MODEL = "<synthetic>"
+_TTL_MINUTES = {"5m": 5, "1h": 60}
 
 
-def _current_context_tokens(transcript_path: Path) -> tuple[int, str]:
-    """(token count, model id) from the last non-sidechain assistant message's
-    usage. (0, "") for a fresh session with no assistant usage yet - that is a
-    legitimate state, not an error. Entries whose model is `<synthetic>` are
+@dataclass(frozen=True, slots=True)
+class ContextUsage:
+    """The context size and the prompt cache's state after the last API response.
+
+    `cache_ttl` is "1h" or "5m": the lifetime of the most recent cache write in the
+    transcript (a write of both kinds counts as 1h; a write with no breakdown as 5m, the
+    API default), or "5m" if the session never wrote to the cache."""
+
+    tokens: int
+    model: str
+    responded_at: datetime.datetime | None
+    cache_ttl: str
+
+
+def _write_lifetime(usage: dict) -> str | None:
+    """The cache lifetime this response wrote to, or None if it wrote nothing."""
+    if not int(usage.get("cache_creation_input_tokens", 0) or 0):
+        return None
+    breakdown = usage.get("cache_creation")
+    if isinstance(breakdown, dict) and int(breakdown.get("ephemeral_1h_input_tokens", 0) or 0):
+        return "1h"
+    return "5m"
+
+
+def _parse_timestamp(value: object) -> datetime.datetime:
+    if not isinstance(value, str):
+        raise TranscriptError("last assistant entry has no timestamp")
+    try:
+        return datetime.datetime.fromisoformat(value)
+    except ValueError as exc:
+        raise TranscriptError(f"unparseable timestamp {value!r}") from exc
+
+
+def _current_context_tokens(transcript_path: Path) -> ContextUsage:
+    """Context size, model id and cache state from the last non-sidechain assistant
+    message's usage. Zero tokens and an empty model for a fresh session with no
+    assistant usage yet - that is a legitimate state, not an error. Entries whose model is `<synthetic>` are
     skipped: Claude Code writes them (with all-zero usage) for things that are
     not API responses, such as a usage-limit notice, so they say nothing about
     the context size."""
@@ -59,6 +94,8 @@ def _current_context_tokens(transcript_path: Path) -> tuple[int, str]:
     parsed = 0
     last_usage: dict | None = None
     last_model = ""
+    last_timestamp: object = None
+    cache_ttl = "5m"
     try:
         with transcript_path.open("r", encoding="utf-8") as fh:
             for raw_line in fh:
@@ -79,6 +116,8 @@ def _current_context_tokens(transcript_path: Path) -> tuple[int, str]:
                 if isinstance(usage, dict) and model != SYNTHETIC_MODEL:
                     last_usage = usage
                     last_model = model
+                    last_timestamp = obj.get("timestamp")
+                    cache_ttl = _write_lifetime(usage) or cache_ttl
     except OSError as exc:
         raise TranscriptError(f"cannot read transcript: {exc}") from exc
 
@@ -86,14 +125,14 @@ def _current_context_tokens(transcript_path: Path) -> tuple[int, str]:
         raise TranscriptError("transcript present but no parseable JSON lines")
 
     if last_usage is None:
-        return 0, ""
+        return ContextUsage(0, "", None, cache_ttl)
 
     tokens = (
         int(last_usage.get("input_tokens", 0) or 0)
         + int(last_usage.get("cache_creation_input_tokens", 0) or 0)
         + int(last_usage.get("cache_read_input_tokens", 0) or 0)
     )
-    return tokens, last_model
+    return ContextUsage(tokens, last_model, _parse_timestamp(last_timestamp), cache_ttl)
 
 
 def _k_tokens(tokens: int) -> int:
@@ -110,9 +149,9 @@ def _window_label(window: int) -> str:
     return f"{(window + 500) // 1000}k"
 
 
-def _format_cost(*, tokens: int, cache_read_price_per_mtok: float) -> str:
-    """Cost of reading `tokens` from the prompt cache at the model's cache-read
-    price, truncated (not rounded) to 2dp - matches `bc`'s `scale=2`
+def _format_cost(*, tokens: int, price_per_mtok: float) -> str:
+    """Cost of `tokens` at `price_per_mtok` (cache-read for a warm cache, cache-write
+    for a cold one), truncated (not rounded) to 2dp - matches `bc`'s `scale=2`
     semantics from the bash original. Uses Decimal rather than native float
     arithmetic: a naive math.floor(raw * 100) / 100 on a float hits
     representation error for ordinary inputs (e.g. tokens=350_000,
@@ -121,8 +160,15 @@ def _format_cost(*, tokens: int, cache_read_price_per_mtok: float) -> str:
     float-representation problem by round-tripping the price through its
     float form first.
     """
-    raw = Decimal(tokens) / Decimal(1_000_000) * Decimal(str(cache_read_price_per_mtok))
+    raw = Decimal(tokens) / Decimal(1_000_000) * Decimal(str(price_per_mtok))
     return str(raw.quantize(Decimal("0.01"), rounding=ROUND_DOWN))
+
+
+def _expiry_label(responded_at: datetime.datetime, cache_ttl: str) -> str:
+    """Local HH:MM at which the cache lapses. An estimate that errs early: the warning's own
+    continuation response refreshes the cache a few seconds after `responded_at`."""
+    expiry = responded_at + datetime.timedelta(minutes=_TTL_MINUTES[cache_ttl])
+    return expiry.astimezone().strftime("%H:%M")
 
 
 def _is_overridden(session_id: str) -> bool:
@@ -137,11 +183,14 @@ def _is_overridden(session_id: str) -> bool:
     return context_overrides.get_override(session_id)
 
 
-def _reason(*, tokens: int, window: int, price: float, name: str, now: str, red: bool) -> str:
+def _reason(
+    *, tokens: int, window: int, price: float, cold_price: float, name: str, now: str, expiry: str, red: bool,
+) -> str:
     k = _k_tokens(tokens)
     pct = _pct_of_window(tokens, window)
     label = _window_label(window)
-    cost = _format_cost(tokens=tokens, cache_read_price_per_mtok=price)
+    cost = _format_cost(tokens=tokens, price_per_mtok=price)
+    cold = _format_cost(tokens=tokens, price_per_mtok=cold_price)
     emoji = "🔴" if red else "🟠"
     when = "when you get a natural break" if red else "whenever convenient"
     return (
@@ -149,8 +198,8 @@ def _reason(*, tokens: int, window: int, price: float, name: str, now: str, red:
         f"{label}-token window. THIS IS A WARNING ONLY - output the two lines below at the "
         f"start of your response, then end your turn as you normally would. Do not restart "
         f"or repeat any work.\n"
-        f"'{emoji} CONTEXT ({now}): ~{k}k tokens - ~{pct}% of the {label}-token window "
-        f"({name}, ~${cost}/turn in cache reads). This is a nudge, not a limit - keep going; "
+        f"'{emoji} CONTEXT ({now}, cached till {expiry}): ~{k}k tokens - ~{pct}% of the "
+        f"{label}-token window ({name}, ~${cost}/turn cache reads, ~${cold}/turn uncached). This is a nudge, not a limit - keep going; "
         f"/compact {when}.'\n"
         f"'(To silence this warning for the rest of the session, run /context-override.)'"
     )
@@ -174,13 +223,17 @@ def _model_phrase(model_id: str) -> str:
     return f"model `{_ID_DISALLOWED.sub('?', model_id)}`"
 
 
-def _reason_unknown(*, tokens: int, window: int, price: float, model_id: str, now: str, red: bool) -> str:
+def _reason_unknown(
+    *, tokens: int, window: int, price: float, cold_price: float, model_id: str, now: str, expiry: str,
+    red: bool,
+) -> str:
     """Message for a model id missing from model_info's table: the window and price are
     assumptions and the text says so, instead of presenting them as facts."""
     k = _k_tokens(tokens)
     pct = _pct_of_window(tokens, window)
     label = _window_label(window)
-    cost = _format_cost(tokens=tokens, cache_read_price_per_mtok=price)
+    cost = _format_cost(tokens=tokens, price_per_mtok=price)
+    cold = _format_cost(tokens=tokens, price_per_mtok=cold_price)
     model = _model_phrase(model_id)
     emoji = "🔴" if red else "🟠"
     when = "when you get a natural break" if red else "whenever convenient"
@@ -190,9 +243,10 @@ def _reason_unknown(*, tokens: int, window: int, price: float, model_id: str, no
         f"larger (1M for current models) and any percentage may be wrong. THIS IS A WARNING ONLY - "
         f"output the two lines below at the start of your response, then end your turn as you "
         f"normally would. Do not restart or repeat any work.\n"
-        f"'{emoji} CONTEXT ({now}): ~{k}k tokens used; window size ASSUMED ({label}) for {model} - "
-        f"the real window may be much larger, so ~{pct}% is unreliable. ~${cost}/turn assumes the "
-        f"default ${price:.2f}/MTok cache-read price. This is a nudge, not a limit - keep going; "
+        f"'{emoji} CONTEXT ({now}, cached till {expiry}): ~{k}k tokens used; window size ASSUMED "
+        f"({label}) for {model} - the real window may be much larger, so ~{pct}% is unreliable. "
+        f"~${cost}/turn cache reads assumes the default ${price:.2f}/MTok cache-read price and "
+        f"~${cold}/turn uncached assumes the default ${cold_price:.2f}/MTok cache-write price. This is a nudge, not a limit - keep going; "
         f"/compact {when}. {REMEDIATION_HINT}'\n"
         f"'(To silence this warning for the rest of the session, run /context-override.)'"
     )
@@ -214,11 +268,12 @@ def main(argv: list[str] | None = None) -> int:
     session_id = stdin_obj.get("session_id") or Path(transcript_path_str).stem
 
     try:
-        tokens, model_id = _current_context_tokens(Path(transcript_path_str))
+        usage = _current_context_tokens(Path(transcript_path_str))
     except TranscriptError as exc:
         print(f"context-window-warning: {exc}", file=sys.stderr)
         return 1
 
+    tokens, model_id = usage.tokens, usage.model
     if tokens < THRESHOLD_ORANGE:
         return 0
     if _is_overridden(session_id):
@@ -226,17 +281,20 @@ def main(argv: list[str] | None = None) -> int:
 
     window = model_info.context_window(model_id)
     price = model_info.cache_read_price_per_mtok(model_id)
+    cold_price = model_info.cache_write_price_per_mtok(model_id, usage.cache_ttl)
+    expiry = _expiry_label(usage.responded_at, usage.cache_ttl)
     now = datetime.datetime.now().strftime("%H:%M")
     red = tokens >= THRESHOLD_RED
 
     if model_info.is_known(model_id):
         reason = _reason(
-            tokens=tokens, window=window, price=price, name=model_info.display_name(model_id),
-            now=now, red=red,
+            tokens=tokens, window=window, price=price, cold_price=cold_price,
+            name=model_info.display_name(model_id), now=now, expiry=expiry, red=red,
         )
     else:
         reason = _reason_unknown(
-            tokens=tokens, window=window, price=price, model_id=model_id, now=now, red=red,
+            tokens=tokens, window=window, price=price, cold_price=cold_price, model_id=model_id,
+            now=now, expiry=expiry, red=red,
         )
     print(json.dumps({"decision": "block", "reason": reason}))
     return 0

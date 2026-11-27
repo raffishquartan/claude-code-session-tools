@@ -81,3 +81,26 @@ def test_id_that_merely_starts_with_a_known_id_is_not_recognised():
     `claude-sonnet-5-9` must not inherit `claude-sonnet-5`'s row."""
     assert model_info.context_window("claude-sonnet-5-9") == 200_000
     assert model_info.is_known("claude-sonnet-5-9") is False
+
+
+@pytest.mark.parametrize(
+    ("model_id", "write_5m", "write_1h"),
+    [
+        ("claude-sonnet-5-5", 2.50, 4.00),
+        ("claude-opus-5-5", 5.00, 8.00),
+        ("claude-fable-5-1", 12.50, 20.00),
+        ("claude-haiku-4-5-20251001", 1.25, 2.00),
+    ],
+)
+def test_cache_write_prices(model_id, write_5m, write_1h):
+    assert model_info.cache_write_price_per_mtok(model_id, "5m") == write_5m
+    assert model_info.cache_write_price_per_mtok(model_id, "1h") == write_1h
+
+
+def test_unknown_model_cache_write_price_defaults():
+    assert model_info.cache_write_price_per_mtok("claude-nonexistent-9", "5m") == 6.25
+    assert model_info.cache_write_price_per_mtok("claude-nonexistent-9", "1h") == 10.00
+
+
+def test_every_known_model_has_write_prices():
+    assert set(model_info._CACHE_WRITE_PRICE) == set(model_info._NAME)

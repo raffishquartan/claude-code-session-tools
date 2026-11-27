@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [4.12.1] - 2026-11-27
+
+### Changed
+
+- The context-window warning now says when the prompt cache expires and what a turn costs with a cold cache: `CONTEXT (15:13, cached till 16:13) ... (Sonnet 5.5, ~$0.10/turn cache reads, ~$2.00/turn uncached)`. The expiry is the last response's time plus the cache lifetime recorded in the transcript (1 hour or 5 minutes). "Uncached" is the whole context written back to the cache at the model's cache-write price for that lifetime. The unknown-model message states the default cache-write price it assumed.
+
 ## [4.12.0] - 2026-11-26
 
 ### Added
